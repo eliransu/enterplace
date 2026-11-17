@@ -1,16 +1,16 @@
 ---
 title: LibreChat
-description: Add Gantry as a custom endpoint in LibreChat, with each person entering their own Gantry key.
+description: Add Enterplace as a custom endpoint in LibreChat, with each person entering their own Enterplace key.
 sidebar:
   order: 19
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-LibreChat sends to Gantry as a custom endpoint in `librechat.yaml`. With `apiKey: user_provided`, each person enters their own Gantry key in LibreChat, so Gantry records each request under that person.
+LibreChat sends to Enterplace as a custom endpoint in `librechat.yaml`. With `apiKey: user_provided`, each person enters their own Enterplace key in LibreChat, so Enterplace records each request under that person.
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -18,9 +18,9 @@ You need a running Gantry and a Gantry key. `gantry start` gives both in one com
 ```yaml title="librechat.yaml"
 endpoints:
   custom:
-    - name: Gantry
+    - name: Enterplace
       apiKey: user_provided
-      baseURL: https://gantry.example.com/v1
+      baseURL: https://enterplace.example.com/v1
       models:
         default: [gpt-4o-mini]
         fetch: true
@@ -28,25 +28,25 @@ endpoints:
       titleModel: gpt-4o-mini
 ```
 
-LibreChat adds `/chat/completions` to `baseURL`, so requests go to `POST /v1/chat/completions`. With `fetch: true` it lists models from `GET /v1/models`, which returns the models the key may use; `default` must still name at least one. For Claude models over `POST /v1/messages`, add `provider: anthropic` and set `baseURL` to Gantry's address without `/v1`.
+LibreChat adds `/chat/completions` to `baseURL`, so requests go to `POST /v1/chat/completions`. With `fetch: true` it lists models from `GET /v1/models`, which returns the models the key may use; `default` must still name at least one. For Claude models over `POST /v1/messages`, add `provider: anthropic` and set `baseURL` to Enterplace's address without `/v1`.
 
-Each person gets their key with `gantry login` or from an admin, and enters it the first time they pick the Gantry endpoint. LibreChat stores it encrypted.
+Each person gets their key with `enterplace login` or from an admin, and enters it the first time they pick the Enterplace endpoint. LibreChat stores it encrypted.
 
-## What Gantry governs
+## What Enterplace governs
 
-- Every chat request and conversation title. LibreChat calls Gantry from its server, so Gantry sees the LibreChat server's address as `client`.
+- Every chat request and conversation title. LibreChat calls Enterplace from its server, so Enterplace sees the LibreChat server's address as `client`.
 
-## What Gantry does not see
+## What Enterplace does not see
 
 - LibreChat's own features that use other endpoints or services (search, file storage, other configured endpoints).
 
 <Aside type="caution">
-A single shared key (`apiKey: ${GANTRY_KEY}`) makes every person one identity in Gantry's records and budgets. Use `user_provided`.
+A single shared key (`apiKey: ${ENTERPLACE_KEY}`) makes every person one identity in Enterplace's records and budgets. Use `user_provided`.
 </Aside>
 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Personal keys through gantry login." />
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Personal keys through enterplace login." />
 	<LinkCard title="Open WebUI" href="/integrations/open-webui/" description="The same idea in Open WebUI." />
 </CardGrid>

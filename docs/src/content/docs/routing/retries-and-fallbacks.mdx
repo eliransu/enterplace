@@ -11,7 +11,7 @@ A provider can retry a failed request and then hand it to a fallback provider. C
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: anthropic
@@ -45,7 +45,7 @@ Both change without a restart.
 
 ## What is retried
 
-Before the first byte of an answer reaches the caller, Gantry tries again after:
+Before the first byte of an answer reaches the caller, Enterplace tries again after:
 
 - a connection failure,
 - a timeout (120 seconds without an answer by default; see [Timeouts](/routing/timeouts/)),
@@ -73,17 +73,17 @@ The fallback must take the same requests as the provider it backs:
 
 It must also serve each model of the provider it backs: under the same name on `openai` and `anthropic`, or through its `deployments` or `model_ids` on `azure` and `bedrock`. It does not list those models in its `models`, because a model is served by one provider.
 
-`gantry check` refuses a fallback that does not exist, names itself, speaks another API, or has no name for one of the models:
+`enterplace check` refuses a fallback that does not exist, names itself, speaks another API, or has no name for one of the models:
 
 ```text
-gantry.policy.yaml:22: fallback names provider "bedrok", and there is none. The providers are: groq, azure, anthropic, bedrock.
+enterplace.policy.yaml:22: fallback names provider "bedrok", and there is none. The providers are: groq, azure, anthropic, bedrock.
 ```
 
 ## Alias fallbacks
 
 An [alias](/routing/aliases/) can name `fallbacks`: models or other aliases tried in turn when every deployment of the alias failed in a way `fallback_on` names. Each fallback is a chain of its own: an alias's deployments with their balance and cooldowns, or a model's provider with its retries and `fallback`.
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -113,13 +113,13 @@ rules:
 | `fallbacks` | list | none | Models or aliases, tried in the order written. |
 | `fallback_on` | list | `[rate_limit, server_error, timeout, unreachable]` | Which failures move the request on. Any of `rate_limit` (429), `server_error` (5xx), `timeout` (`upstream_timeout`), `unreachable` (`upstream_unreachable`, `upstream_failed`), `context_window` and `content_policy` (read from a 4xx answer as for the named fallbacks below). |
 
-- **Across APIs.** A fallback may speak the other API. A chat completions request falls back to a messages model (Anthropic, Bedrock, Vertex AI for Claude) and a messages request to a chat model, translated as it is sent and answered in the caller's format, with the [translation](/routing/translation/) Gantry already uses. A request whose fields cannot be carried across skips that fallback, and the attempts record says `untranslatable`.
+- **Across APIs.** A fallback may speak the other API. A chat completions request falls back to a messages model (Anthropic, Bedrock, Vertex AI for Claude) and a messages request to a chat model, translated as it is sent and answered in the caller's format, with the [translation](/routing/translation/) Enterplace already uses. A request whose fields cannot be carried across skips that fallback, and the attempts record says `untranslatable`.
 - **Never wider access.** The caller's rule must allow each fallback by name, or it is not taken. A fallback stopped by a kill switch is not taken either. A rule's `regions` apply to a fallback alias's deployments.
 - **Charged as served.** The usage record names the provider and model that answered, at that model's price. An answer from the other API is not stored in the answer cache.
 
 ### Fallbacks in the request
 
-A request may name its own `fallbacks`, as LiteLLM's clients send them: `{"model": "gpt-4o", "fallbacks": ["claude-sonnet-5-5"], ...}`. They are tried after the alias's own fallbacks, on the alias's `fallback_on` (or the default list for a model that is not an alias). Each must be allowed by the caller's rule: one that is not is refused with `model_not_allowed`, naming it, before anything is sent. `fallbacks` is Gantry's field and is taken out of the body before it reaches a provider. A `fallbacks` that is not a list of names is refused with `invalid_request`.
+A request may name its own `fallbacks`, as LiteLLM's clients send them: `{"model": "gpt-4o", "fallbacks": ["claude-sonnet-5-5"], ...}`. They are tried after the alias's own fallbacks, on the alias's `fallback_on` (or the default list for a model that is not an alias). Each must be allowed by the caller's rule: one that is not is refused with `model_not_allowed`, naming it, before anything is sent. `fallbacks` is Enterplace's field and is taken out of the body before it reaches a provider. A `fallbacks` that is not a list of names is refused with `invalid_request`.
 
 The named fallbacks `context_window_fallback` and `content_policy_fallback` (see [Aliases](/routing/aliases/#behavior)) are taken first, and may cross APIs the same way.
 
@@ -131,10 +131,10 @@ The request record is written before anything is sent, so it names the first pro
 {"n":12,"event":"attempts","id":"01M7...","time":"2026-11-13T03:30:02.114Z","attempts":[{"provider":"anthropic","outcome":"529"},{"provider":"anthropic","outcome":"529"},{"provider":"anthropic","outcome":"529"},{"provider":"bedrock","outcome":"200"}],"prev":"...","hash":"..."}
 ```
 
-`outcome` is the provider's status, or the refusal code for a try that got no answer: `upstream_unreachable`, `upstream_failed` or `upstream_timeout`. A try with a pool key carries `key`, the key's hash prefix. An alias's deployment is named `provider/model`. The usage record follows when the answer ends, and names the provider that answered. `gantry audit verify` counts attempts records apart.
+`outcome` is the provider's status, or the refusal code for a try that got no answer: `upstream_unreachable`, `upstream_failed` or `upstream_timeout`. A try with a pool key carries `key`, the key's hash prefix. An alias's deployment is named `provider/model`. The usage record follows when the answer ends, and names the provider that answered. `enterplace audit verify` counts attempts records apart.
 
 <Aside type="tip">
-Clients retry on their own too. Gantry sets `x-should-retry: true` only on `busy`, `rate_limited` and the `upstream_*` codes, so Claude Code and the SDKs resend only what may clear. Codex needs `stream_max_retries = 0`; see [Codex](/integrations/codex/#retries).
+Clients retry on their own too. Enterplace sets `x-should-retry: true` only on `busy`, `rate_limited` and the `upstream_*` codes, so Claude Code and the SDKs resend only what may clear. Codex needs `stream_max_retries = 0`; see [Codex](/integrations/codex/#retries).
 </Aside>
 
 ## Related

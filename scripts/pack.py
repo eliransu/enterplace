@@ -28,7 +28,7 @@ def main():
             name = os.path.basename(path)
             with open(path, "rb") as f:
                 data = f.read()
-            add(f"{folder}/{name}", data, 0o755 if os.access(path, os.X_OK) and name == "gantry" else 0o644)
+            add(f"{folder}/{name}", data, 0o755 if os.access(path, os.X_OK) and name == "enterplace" else 0o644)
     with open(out, "wb") as f, gzip.GzipFile(filename="", mode="wb", fileobj=f, mtime=0, compresslevel=9) as gz:
         gz.write(raw.getvalue())
 

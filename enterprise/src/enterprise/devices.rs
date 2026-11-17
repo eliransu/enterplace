@@ -1,4 +1,4 @@
-//! Devices (license feature `devices`): enrolment tokens for the device agent (`gantry device`), the device
+//! Devices (license feature `devices`): enrolment tokens for the device agent (`enterplace device`), the device
 //! profile it reads, the reports it sends, and the console's Devices page, which merges those reports with the audit
 //! log's traffic per person: tools seen, enrolled devices, and devices with a tool calling a provider directly.
 //!
@@ -20,12 +20,12 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use gantry_console::{
+use enterplace_console::{
     Admin, Console, Form, Tls, bare_page, foreign,
     html::{self, esc},
     redirect, same_origin,
 };
-use gantry_core::{config, coverage, id::sha256_hex};
+use enterplace_core::{config, coverage, id::sha256_hex};
 use serde_json::{Value, json};
 
 use super::Db;
@@ -116,7 +116,7 @@ CREATE TABLE enterprise_device_mcp (
     server text NOT NULL,
     transport text NOT NULL,
     target text NOT NULL,
-    via_gantry boolean NOT NULL,
+    via_enterplace boolean NOT NULL,
     PRIMARY KEY (device_id, tool, file, server)
 );
 CREATE TABLE enterprise_mcp_decisions (
@@ -130,7 +130,7 @@ CREATE TABLE enterprise_mcp_decisions (
 ";
 
 /// What a profile says beyond the tools to manage: the AI apps it allows and denies (comma lists of
-/// `device::app_names`), and whether approved MCP servers are pointed at Gantry's MCP gateway. What each device
+/// `device::app_names`), and whether approved MCP servers are pointed at Enterplace's MCP gateway. What each device
 /// found of those apps, and each blocked MCP server the agent took out of a tool's file or sent through the gateway.
 pub const MIGRATION_5: &str = "
 ALTER TABLE enterprise_device_profiles ADD COLUMN apps_allowed text NOT NULL DEFAULT '';
@@ -162,29 +162,29 @@ pub const MIGRATION_6: &str = "
 ALTER TABLE enterprise_device_profiles ADD COLUMN mcp_enforcement text NOT NULL DEFAULT 'report';
 ";
 
-/// The header the agent sends the person's Gantry key in (the one `gantry login` saved), beside the enrolment token.
-pub const PERSON_HEADER: &str = "x-gantry-key";
+/// The header the agent sends the person's Enterplace key in (the one `enterplace login` saved), beside the enrolment token.
+pub const PERSON_HEADER: &str = "x-enterplace-key";
 
 const NAV: &str = "Devices";
-const PREFIX: &str = "gantry_dev_";
+const PREFIX: &str = "enterplace_dev_";
 const DEFAULT_DAYS: i32 = 90;
 const MAX_DAYS: i32 = 365;
-const STATES: [&str; 4] = ["not_installed", "installed", "gantry", "direct"];
+const STATES: [&str; 4] = ["not_installed", "installed", "enterplace", "direct"];
 const TIME: &str = r#"'YYYY-MM-DD"T"HH24:MI:SS"Z"'"#;
 
 #[derive(Clone)]
 struct Devices {
     db: Arc<Db>,
     keys: PathBuf,
-    policy: gantry_server::PolicyNow,
+    policy: enterplace_server::PolicyNow,
 }
 
 /// Adds the device routes the agent calls and the console's Devices page and API.
 pub fn register(
-    extension: &mut gantry_server::Extension,
+    extension: &mut enterplace_server::Extension,
     db: Arc<Db>,
     keys: PathBuf,
-    policy: gantry_server::PolicyNow,
+    policy: enterplace_server::PolicyNow,
 ) {
     let devices = Devices { db, keys, policy };
     let agent = Router::new()
@@ -205,7 +205,7 @@ pub fn register(
 }
 
 /// Without the feature the page and the agent's routes say why, and there is no nav entry.
-pub fn locked(extension: &mut gantry_server::Extension, status: &Status) {
+pub fn locked(extension: &mut enterplace_server::Extension, status: &Status) {
     let Err(refused) = status.require(FEATURE) else {
         return;
     };
@@ -292,7 +292,7 @@ pub(super) fn key_holder(keys: &std::path::Path, key: &str) -> Option<config::Ke
     }
     let text = config::read_keys(keys).ok()??;
     let sha = sha256_hex(key.as_bytes());
-    let now = gantry_core::audit::timestamp();
+    let now = enterplace_core::audit::timestamp();
     config::key_entries(keys, &text)
         .ok()?
         .into_iter()
@@ -300,7 +300,7 @@ pub(super) fn key_holder(keys: &std::path::Path, key: &str) -> Option<config::Ke
         .filter(|e| {
             e.expires
                 .as_deref()
-                .is_none_or(|at| !gantry_core::policy::expiry_passed(at, &now))
+                .is_none_or(|at| !enterplace_core::policy::expiry_passed(at, &now))
         })
 }
 
@@ -309,7 +309,7 @@ impl Devices {
         key_holder(&self.keys, key)
     }
 
-    /// The person at the device, from the Gantry key it sent in `x-gantry-key`, never from what the report says.
+    /// The person at the device, from the Enterplace key it sent in `x-enterplace-key`, never from what the report says.
     /// `Err` is the refusal's code and message.
     fn person(
         &self,
@@ -323,12 +323,12 @@ impl Devices {
         if key.is_empty() {
             return Err((
                 "person_key_required",
-                "Send the person's Gantry key in the x-gantry-key header, as the device agent does once someone has run `gantry login` on the machine. The gateway takes the person from that key, not from the report.",
+                "Send the person's Enterplace key in the x-enterplace-key header, as the device agent does once someone has run `enterplace login` on the machine. The gateway takes the person from that key, not from the report.",
             ));
         }
         self.holder(key).ok_or((
             "invalid_person_key",
-            "The key in x-gantry-key is not a Gantry key, or it expired or was revoked. Run `gantry login` again on the machine.",
+            "The key in x-enterplace-key is not a Enterplace key, or it expired or was revoked. Run `enterplace login` again on the machine.",
         ))
     }
 
@@ -339,7 +339,7 @@ impl Devices {
             fail(
                 StatusCode::UNAUTHORIZED,
                 "invalid_token",
-                "Send the enrolment token as Authorization: Bearer gantry_dev_... (set GANTRY_DEVICE_TOKEN). An owner or admin creates one on the console's Devices page; a revoked token stops working.",
+                "Send the enrolment token as Authorization: Bearer enterplace_dev_... (set ENTERPLACE_DEVICE_TOKEN). An owner or admin creates one on the console's Devices page; a revoked token stops working.",
             )
         };
         if !token.starts_with(PREFIX) {
@@ -401,7 +401,7 @@ impl Devices {
             .collect())
     }
 
-    /// The devices `admin` may see as last reported, as `gantry_core::coverage::Device` reads it: every one, or
+    /// The devices `admin` may see as last reported, as `enterplace_core::coverage::Device` reads it: every one, or
     /// those of their role's teams enrolled with a token of their role's organization.
     async fn devices(&self, admin: &Admin) -> Result<Vec<Value>, String> {
         let client = self.db.client().await?;
@@ -462,7 +462,7 @@ impl Devices {
         }
         let servers = client
             .query(
-                "SELECT m.device_id, m.tool, m.server, m.transport, m.target, m.via_gantry, coalesce(x.decision, 'pending') \
+                "SELECT m.device_id, m.tool, m.server, m.transport, m.target, m.via_enterplace, coalesce(x.decision, 'pending') \
                  FROM enterprise_device_mcp m LEFT JOIN enterprise_mcp_decisions x ON x.transport = m.transport AND x.target = m.target \
                  ORDER BY m.device_id, m.tool, m.server",
                 &[],
@@ -479,7 +479,7 @@ impl Devices {
             {
                 list.push(json!({
                     "tool": get(1), "server": get(2), "transport": get(3), "target": get(4),
-                    "via_gantry": r.try_get::<_, bool>(5).unwrap_or(false), "decision": get(6),
+                    "via_enterplace": r.try_get::<_, bool>(5).unwrap_or(false), "decision": get(6),
                 }));
             }
         }
@@ -487,7 +487,7 @@ impl Devices {
     }
 
     /// Every MCP server some device reported, once per transport and target: its names, the tools and devices that
-    /// have it, whether it goes through Gantry, and the admin's decision. Decided servers no device lists any more
+    /// have it, whether it goes through Enterplace, and the admin's decision. Decided servers no device lists any more
     /// are kept, so a block outlives the configuration it was made for. An admin whose role keeps them to part of
     /// the install is shown the servers of the devices they may see, counted over those devices alone.
     async fn mcp_servers(&self, admin: &Admin) -> Result<Vec<Value>, String> {
@@ -506,7 +506,7 @@ impl Devices {
         let rows = client
             .query(
                 &format!("SELECT k.transport, k.target, coalesce(string_agg(DISTINCT m.server, ', '), ''), coalesce(string_agg(DISTINCT m.tool, ', '), ''), \
-                 count(DISTINCT m.device_id), coalesce(bool_and(m.via_gantry), false), coalesce(x.decision, 'pending'), coalesce(x.decided_by, ''), \
+                 count(DISTINCT m.device_id), coalesce(bool_and(m.via_enterplace), false), coalesce(x.decision, 'pending'), coalesce(x.decided_by, ''), \
                  coalesce(to_char(x.decided_at AT TIME ZONE 'UTC', {TIME}), '') \
                  FROM (SELECT transport, target FROM enterprise_device_mcp WHERE $1::text[] IS NULL OR device_id = ANY($1) \
                  UNION SELECT transport, target FROM enterprise_mcp_decisions WHERE $1::text[] IS NULL) k \
@@ -523,7 +523,7 @@ impl Devices {
                 let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
                 json!({
                     "transport": get(0), "target": get(1), "servers": get(2), "tools": get(3),
-                    "devices": r.try_get::<_, i64>(4).unwrap_or(0), "via_gantry": r.try_get::<_, bool>(5).unwrap_or(false),
+                    "devices": r.try_get::<_, i64>(4).unwrap_or(0), "via_enterplace": r.try_get::<_, bool>(5).unwrap_or(false),
                     "decision": get(6), "decided_by": get(7), "decided_at": get(8),
                 })
             })
@@ -795,7 +795,7 @@ async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls) -> Response
         Ok(token) => token,
         Err(refused) => return refused,
     };
-    // A team token decides the team; otherwise the person's key does. A device without one (nobody ran `gantry
+    // A team token decides the team; otherwise the person's key does. A device without one (nobody ran `enterplace
     // login` yet) gets the profile for every team: what it says about its person is not taken.
     let holder = d.person(&headers).ok();
     let person = holder.as_ref().map(|h| h.name.clone()).unwrap_or_default();
@@ -883,7 +883,7 @@ struct McpServer {
     server: String,
     transport: String,
     target: String,
-    via_gantry: bool,
+    via_enterplace: bool,
 }
 
 impl McpServer {
@@ -896,7 +896,7 @@ impl McpServer {
             server: text_of(row, "server", 200)?,
             target: bare_target(&text_of(row, "target", 500)?),
             transport,
-            via_gantry: row["via_gantry"].as_bool().unwrap_or(false),
+            via_enterplace: row["via_enterplace"].as_bool().unwrap_or(false),
         })
     }
 }
@@ -928,7 +928,7 @@ async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Respo
         return fail(
             StatusCode::BAD_REQUEST,
             "invalid_report",
-            "The report needs device_id, hostname and os_user as strings of at most 200 characters. Send it as the device agent does (gantry device).",
+            "The report needs device_id, hostname and os_user as strings of at most 200 characters. Send it as the device agent does (enterplace device).",
         );
     };
     let holder = match d.person(&headers) {
@@ -952,7 +952,7 @@ async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Respo
         let state = match t["state"].as_str() {
             Some(s) if STATES.contains(&s) => s,
             _ if !installed => "not_installed",
-            _ if t["configured"].as_bool().unwrap_or(false) => "gantry",
+            _ if t["configured"].as_bool().unwrap_or(false) => "enterplace",
             _ => "installed",
         };
         let endpoints: Vec<String> = t["endpoints"]
@@ -1079,9 +1079,9 @@ async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Respo
             .map_err(db_error)?;
             for m in mcp {
                 tx.execute(
-                    "INSERT INTO enterprise_device_mcp (device_id, tool, file, server, transport, target, via_gantry) \
+                    "INSERT INTO enterprise_device_mcp (device_id, tool, file, server, transport, target, via_enterplace) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
-                    &[&device_id, &m.tool, &m.file, &m.server, &m.transport, &m.target, &m.via_gantry],
+                    &[&device_id, &m.tool, &m.file, &m.server, &m.transport, &m.target, &m.via_enterplace],
                 )
                 .await
                 .map_err(db_error)?;
@@ -1232,7 +1232,7 @@ pub(super) fn not_admin() -> Response {
     fail(
         StatusCode::UNAUTHORIZED,
         "admin_required",
-        "Send an admin key (admin: true in the keys file) as Authorization: Bearer gantry_..., or sign in to the console.",
+        "Send an admin key (admin: true in the keys file) as Authorization: Bearer enterplace_..., or sign in to the console.",
     )
 }
 
@@ -1273,7 +1273,7 @@ async fn create_token_api(
     {
         Ok((id, token, expires)) => (
             StatusCode::CREATED,
-            Json(json!({ "id": id, "token": token, "expires_at": expires, "note": "Gantry keeps only the token's hash and cannot show it again." })),
+            Json(json!({ "id": id, "token": token, "expires_at": expires, "note": "Enterplace keeps only the token's hash and cannot show it again." })),
         )
             .into_response(),
         Err((status, code, message)) => fail(status, code, &message),
@@ -1467,7 +1467,7 @@ fn form(action: &str, inner: &str) -> String {
     )
 }
 
-/// Per person: the tools their traffic came from, their enrolled devices, the tools set to go through Gantry, and
+/// Per person: the tools their traffic came from, their enrolled devices, the tools set to go through Enterplace, and
 /// a tag for each tool going direct, each denied app installed and each blocked MCP server still configured. Then
 /// why each tool found that no documented file configures stays `installed`.
 fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
@@ -1508,11 +1508,11 @@ fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
         return html::empty(
             "",
             "Nothing seen yet",
-            "No request has reached Gantry and no device has reported. Run the device agent with an enrolment token.",
+            "No request has reached Enterplace and no device has reported. Run the device agent with an enrolment token.",
             "",
         );
     }
-    // The same sums `gantry audit coverage --devices` prints.
+    // The same sums `enterplace audit coverage --devices` prints.
     let reported: Vec<coverage::Device> =
         serde_json::from_value(Value::Array(devices.to_vec())).unwrap_or_default();
     let mut sums = coverage::people(&reported);
@@ -1534,8 +1534,8 @@ fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
         if p.stale > 0 {
             meta += &format!(" · {} not seen in 24 hours", p.stale);
         }
-        if !sum.gantry.is_empty() {
-            meta += &format!(" · set to Gantry: {}", join(&sum.gantry));
+        if !sum.enterplace.is_empty() {
+            meta += &format!(" · set to Enterplace: {}", join(&sum.enterplace));
         }
         if !p.by_hand.is_empty() {
             meta += &format!(" · installed, set by hand: {}", join(&p.by_hand));
@@ -1563,7 +1563,7 @@ fn people(traffic: &coverage::Coverage, devices: &[Value]) -> String {
     out
 }
 
-/// Each MCP server devices reported, with the tools and devices that have it, whether it goes through Gantry's MCP
+/// Each MCP server devices reported, with the tools and devices that have it, whether it goes through Enterplace's MCP
 /// gateway, its decision, and the buttons that change it.
 fn mcp_list(servers: &[Value], can_edit: bool) -> String {
     if servers.is_empty() {
@@ -1579,10 +1579,10 @@ fn mcp_list(servers: &[Value], can_edit: bool) -> String {
             s("transport"),
             s("tools"),
             if devices == 1 { "" } else { "s" },
-            if m["via_gantry"] == true {
-                "via Gantry"
+            if m["via_enterplace"] == true {
+                "via Enterplace"
             } else {
-                "not via Gantry"
+                "not via Enterplace"
             }
         );
         if !s("decided_by").is_empty() {
@@ -1626,7 +1626,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
         let rows = client
             .query(
                 &format!("SELECT coalesce(labels->'person'->>0, '-'), coalesce(labels->'agent'->>0, 'unknown'), min(coalesce(labels->'team'->>0, '-')), \
-                 count(*), count(*) FILTER (WHERE verdict <> 'allow'), to_char(max(time) AT TIME ZONE 'UTC', {TIME}) FROM gantry_requests GROUP BY 1, 2"),
+                 count(*), count(*) FILTER (WHERE verdict <> 'allow'), to_char(max(time) AT TIME ZONE 'UTC', {TIME}) FROM enterplace_requests GROUP BY 1, 2"),
                 &[],
             )
             .await
@@ -1679,11 +1679,11 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
     // ponytail: their people's traffic is cut to those with such a device, and the recent refusals and drift to
     // those among the install's last 20. Filter in the queries if a kept role needs the rest.
     let (traffic, profiles, drift, refusals, actions) = if admin.confined() {
-        let mine = |row: &gantry_server::store::tokio_postgres::Row, i: usize| {
+        let mine = |row: &enterplace_server::store::tokio_postgres::Row, i: usize| {
             let id = row.try_get::<_, String>(i).unwrap_or_default();
             devices.iter().any(|d| d["device_id"] == id.as_str())
         };
-        let team = |row: &gantry_server::store::tokio_postgres::Row| {
+        let team = |row: &enterplace_server::store::tokio_postgres::Row| {
             admin
                 .teams
                 .contains(&row.try_get::<_, String>(0).unwrap_or_default())
@@ -1703,7 +1703,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
     };
     let mut out = html::head(
         NAV,
-        "Each person's coding tools: which reached Gantry, which devices are enrolled, which tools there call a provider directly, and which denied apps and blocked MCP servers are on them. The device agent points the tools a profile names at the gateway, puts them back when someone changes them, and reports blocked MCP servers, or takes them out of the tools' MCP files when the profile says remove.",
+        "Each person's coding tools: which reached Enterplace, which devices are enrolled, which tools there call a provider directly, and which denied apps and blocked MCP servers are on them. The device agent points the tools a profile names at the gateway, puts them back when someone changes them, and reports blocked MCP servers, or takes them out of the tools' MCP files when the profile says remove.",
         &html::link(
             "Download devices.json",
             "quiet",
@@ -1715,7 +1715,11 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
         out += &banner(notice, error);
     }
     if devices.is_empty() {
-        out += &gantry_console::empty_page("Devices", &gantry_console::request_base(), can_edit);
+        out += &enterplace_console::empty_page(
+            "Devices",
+            &enterplace_console::request_base(),
+            can_edit,
+        );
     }
     out += &section("Coverage", &people(&traffic, &devices));
     out += &section(
@@ -1797,7 +1801,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
             }
         }
         if r.try_get::<_, bool>(6).unwrap_or(false) {
-            meta += " · approved MCP servers go through Gantry";
+            meta += " · approved MCP servers go through Enterplace";
         }
         if get(7) == "remove" {
             meta += " · removes blocked MCP servers";
@@ -1851,7 +1855,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
                 ),
                 input(
                     "mcp_via_gateway",
-                    "Approved MCP servers through Gantry",
+                    "Approved MCP servers through Enterplace",
                     "no",
                     "",
                     "yes or no. With yes, the agent points each approved HTTP server at this gateway's /mcp: list those servers under mcp: in the policy first."
@@ -1908,7 +1912,7 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
     }
     list += "</section>";
     out += &section(
-        "MCP enforcement: servers removed or sent through Gantry",
+        "MCP enforcement: servers removed or sent through Enterplace",
         &list,
     );
 
@@ -1964,7 +1968,7 @@ async fn act(
                         html::head(
                             "Enrolment token created",
                             &esc(&format!(
-                                "Valid until {expires}. Put it in your MDM now, never in chat: Gantry keeps only its hash and cannot show it again."
+                                "Valid until {expires}. Put it in your MDM now, never in chat: Enterplace keeps only its hash and cannot show it again."
                             )),
                             ""
                         ),
@@ -2073,7 +2077,7 @@ async fn save_profile(
             format!("{team:?} is not a team name: use letters, digits, dot, dash or underscore."),
         ))
     } else if !valid_gateway(&gateway) {
-        Some(("invalid_request", "The gateway URL is an https address without a query, such as https://gantry.example.com.".to_string()))
+        Some(("invalid_request", "The gateway URL is an https address without a query, such as https://enterplace.example.com.".to_string()))
     } else if let Some(t) = tools.iter().find(|t| !MANAGEABLE.contains(&t.as_str())) {
         Some((
             "invalid_request",
@@ -2105,7 +2109,7 @@ async fn save_profile(
     } else if via_gateway.is_none() {
         Some((
             "invalid_request",
-            "Approved MCP servers through Gantry is yes or no.".to_string(),
+            "Approved MCP servers through Enterplace is yes or no.".to_string(),
         ))
     } else if enforcement.is_none() {
         Some((

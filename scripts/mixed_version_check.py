@@ -1,6 +1,6 @@
 """Two versions on one Postgres at the same time, as during a rolling upgrade.
 
-Usage: DATABASE_URL=postgres://... python3 scripts/mixed_version_check.py <old gantry binary> <new gantry binary>
+Usage: DATABASE_URL=postgres://... python3 scripts/mixed_version_check.py <old enterplace binary> <new enterplace binary>
 DATABASE_URL names an empty database (or one only these versions have used); the check makes its tables there.
 
 The old version starts first and creates the store's tables. Traffic runs against it without a break while the new
@@ -23,13 +23,13 @@ import http.server  # noqa: E402
 def schema(url):
     if not shutil.which("psql"):
         return "unknown (psql not on PATH)"
-    out = subprocess.run(["psql", url, "-tAc", "SELECT max(version) FROM gantry_schema"], capture_output=True, text=True)
+    out = subprocess.run(["psql", url, "-tAc", "SELECT max(version) FROM enterplace_schema"], capture_output=True, text=True)
     return out.stdout.strip() or out.stderr.strip()
 
 
 def skip_or_fail(name, said):
     """An old binary from before the one-minor-version rule refuses any newer schema: that is a SKIP, not a FAIL."""
-    if "newer Gantry" in said and "one minor version apart" not in said:
+    if "newer Enterplace" in said and "one minor version apart" not in said:
         print(f"SKIP  {name}: the old version predates the one-minor-version rule and refuses any newer schema")
     else:
         check(name, False, said)
@@ -63,9 +63,9 @@ def main():
 
     # One folder per replica, as each pod has its own volume: its own audit chain, the same policy and database.
     def replica(name):
-        folder = pathlib.Path(tempfile.mkdtemp(prefix=f"gantry-mixed-{name}-"))
-        (folder / "gantry.policy.yaml").write_text(f"""version: 1
-audit: {{ path: {folder / 'gantry-audit.jsonl'} }}
+        folder = pathlib.Path(tempfile.mkdtemp(prefix=f"enterplace-mixed-{name}-"))
+        (folder / "enterplace.policy.yaml").write_text(f"""version: 1
+audit: {{ path: {folder / 'enterplace-audit.jsonl'} }}
 store: {{ postgres_url_env: DATABASE_URL }}
 providers:
   - name: mock
@@ -84,8 +84,8 @@ rules:
     a, b = replica("old"), replica("new")
 
     def key(binary, folder, name):
-        out = run(binary, "key", "new", name, "--team", "eng", "--keys", str(folder / "gantry.keys.yaml"),
-                  "--policy", str(folder / "gantry.policy.yaml"), "--quiet", check=False)
+        out = run(binary, "key", "new", name, "--team", "eng", "--keys", str(folder / "enterplace.keys.yaml"),
+                  "--policy", str(folder / "enterplace.policy.yaml"), "--quiet", check=False)
         if out.returncode:
             raise SystemExit(f"{binary} key new failed:\n{out.stdout}{out.stderr}")
         return out.stdout.strip()
@@ -135,7 +135,7 @@ rules:
     g_new.stop()
 
     for name, binary, folder in (("old", old, a), ("new", new, b)):
-        v = run(binary, "audit", "verify", str(folder / "gantry-audit.jsonl"), check=False)
+        v = run(binary, "audit", "verify", str(folder / "enterplace-audit.jsonl"), check=False)
         check(f"the {name} version verifies its chain", v.returncode == 0, v.stdout + v.stderr)
     provider.shutdown()
     print("\nall passed" if not FAILED else f"\nFAILED: {', '.join(FAILED)}")

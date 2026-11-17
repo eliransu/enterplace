@@ -1,16 +1,16 @@
 ---
 title: Zed
-description: Send Zed's agent and inline assistant through Gantry as an OpenAI-compatible or Anthropic-compatible provider.
+description: Send Zed's agent and inline assistant through Enterplace as an OpenAI-compatible or Anthropic-compatible provider.
 sidebar:
   order: 13
 ---
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Zed takes extra providers under `language_models` in its `settings.json`. Add Gantry as one, and the Zed Agent, the inline assistant, commit messages and thread summaries send through it.
+Zed takes extra providers under `language_models` in its `settings.json`. Add Enterplace as one, and the Zed Agent, the inline assistant, commit messages and thread summaries send through it.
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -22,10 +22,10 @@ You need a running Gantry and a Gantry key. `gantry start` gives both in one com
 {
   "language_models": {
     "openai_compatible": {
-      "gantry": {
+      "enterplace": {
         "api_url": "http://127.0.0.1:8080/v1",
         "available_models": [
-          { "name": "gpt-4o-mini", "display_name": "gpt-4o-mini via Gantry", "max_tokens": 128000 }
+          { "name": "gpt-4o-mini", "display_name": "gpt-4o-mini via Enterplace", "max_tokens": 128000 }
         ]
       }
     }
@@ -42,10 +42,10 @@ Requests go to `POST /v1/chat/completions`. A model with `"capabilities": { "cha
 {
   "language_models": {
     "anthropic_compatible": {
-      "gantry": {
+      "enterplace": {
         "api_url": "http://127.0.0.1:8080",
         "available_models": [
-          { "name": "claude-sonnet-4-5", "display_name": "Claude via Gantry", "max_tokens": 200000, "max_output_tokens": 32000 }
+          { "name": "claude-sonnet-4-5", "display_name": "Claude via Enterplace", "max_tokens": 200000, "max_output_tokens": 32000 }
         ]
       }
     }
@@ -58,25 +58,25 @@ Requests go to `POST /v1/messages`, where refusals use Anthropic's error shape.
 </TabItem>
 </Tabs>
 
-Enter the Gantry key in the Agent panel's settings (**Add Provider** under LLM Providers), which keeps it in the system keychain, or set it in the variable Zed derives from the provider ID: `GANTRY_API_KEY` for the ID `gantry`. Zed's docs say not to put keys in `settings.json`.
+Enter the Enterplace key in the Agent panel's settings (**Add Provider** under LLM Providers), which keeps it in the system keychain, or set it in the variable Zed derives from the provider ID: `ENTERPLACE_API_KEY` for the ID `enterplace`. Zed's docs say not to put keys in `settings.json`.
 
-## What Gantry governs
+## What Enterplace governs
 
 - Every request from the features that use `language_models`: the Zed Agent, the inline assistant, Git commit messages and thread summaries.
 
-## What Gantry does not see
+## What Enterplace does not see
 
-- Edit predictions. They have their own provider under `edit_predictions`, Zed's hosted Zeta model by default. The `open_ai_compatible_api` option there uses `POST /v1/completions`, which Gantry serves for models on an `openai` provider. This setup is untried.
-- External agents and terminal threads, which use their own configuration. Point those agents at Gantry in their own settings, for example [Claude Code](/integrations/claude-code/).
+- Edit predictions. They have their own provider under `edit_predictions`, Zed's hosted Zeta model by default. The `open_ai_compatible_api` option there uses `POST /v1/completions`, which Enterplace serves for models on an `openai` provider. This setup is untried.
+- External agents and terminal threads, which use their own configuration. Point those agents at Enterplace in their own settings, for example [Claude Code](/integrations/claude-code/).
 - Zed's hosted models and Copilot in Zed.
 
 <Aside type="note">
-This follows Zed's AI documentation (LLM providers, API access, edit prediction). It was not run through Gantry.
+This follows Zed's AI documentation (LLM providers, API access, edit prediction). It was not run through Enterplace.
 </Aside>
 
 ## Related
 
 <CardGrid>
 	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Anthropic's coding agent over the messages API." />
-	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="Every code Gantry returns and what to do about it." />
+	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="Every code Enterplace returns and what to do about it." />
 </CardGrid>

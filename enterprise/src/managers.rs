@@ -1,14 +1,14 @@
-//! Secret managers for `gantry serve` (licensed feature `secrets`): a `*_env` variable whose value is
+//! Secret managers for `enterplace serve` (licensed feature `secrets`): a `*_env` variable whose value is
 //! `vault://`, `aws-sm://`, `gcp-sm://` or `azure-kv://` is read from that manager at start and on each refresh
-//! (`gantry_core::secrets`). Each manager is signed in to with its platform's own chain, so a workload with an
+//! (`enterplace_core::secrets`). Each manager is signed in to with its platform's own chain, so a workload with an
 //! identity needs no static credential:
 //!
 //! - HashiCorp Vault (<https://developer.hashicorp.com/vault/api-docs>): `VAULT_ADDR`; a token from `VAULT_TOKEN`,
 //!   else `~/.vault-token`, else the Kubernetes auth method with `VAULT_K8S_ROLE` and the pod's service account
 //!   token; `VAULT_NAMESPACE` when set. `vault://<path>#<field>` reads `GET /v1/<path>`, KV v2 or v1.
-//! - AWS Secrets Manager (`GetSecretValue`): the AWS SDKs' default chain as `gantry_server::cloud` reads it (access
+//! - AWS Secrets Manager (`GetSecretValue`): the AWS SDKs' default chain as `enterplace_server::cloud` reads it (access
 //!   keys, IRSA, ECS and Pod Identity, IMDSv2), never the aws command. `aws-sm://<name or ARN>[#field]`.
-//! - Google Secret Manager (`versions.access`): Application Default Credentials as `gantry_server::cloud` reads
+//! - Google Secret Manager (`versions.access`): Application Default Credentials as `enterplace_server::cloud` reads
 //!   them. `gcp-sm://projects/<p>/secrets/<s>[/versions/<v>][#field]`, latest unless a version is named.
 //! - Azure Key Vault (Get Secret, api-version 7.4): a client secret (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
 //!   `AZURE_CLIENT_SECRET`), workload identity (`AZURE_FEDERATED_TOKEN_FILE`), the App Service and Container Apps
@@ -23,7 +23,7 @@
 //!   (`aws-kms://<key id or ARN>#<base64 ciphertext>`, Decrypt), Google Cloud KMS
 //!   (`gcp-kms://projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>#<base64 ciphertext>`, decrypt) and Azure
 //!   Key Vault keys (`azure-kv-key://<vault>/<key>[/<version>]#<base64url wrapped key>`, unwrapKey RSA-OAEP-256).
-//!   This is how a master key is kept wrapped: `GANTRY_MASTER_KEY=aws-kms://...`.
+//!   This is how a master key is kept wrapped: `ENTERPLACE_MASTER_KEY=aws-kms://...`.
 //!
 //! Errors name the reference and the fix, never a secret.
 
@@ -33,7 +33,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gantry_server::cloud;
+use enterplace_server::cloud;
 use serde_json::Value;
 
 use crate::secrets::{aws_get, aws_json, aws_value, http_error};
@@ -44,7 +44,7 @@ pub type Env = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 pub struct Managers {
     env: Env,
     agent: ureq::Agent,
-    aws: Mutex<HashMap<String, cloud::Live<gantry_core::sigv4::Credentials>>>,
+    aws: Mutex<HashMap<String, cloud::Live<enterplace_core::sigv4::Credentials>>>,
     google: Mutex<Option<cloud::Live<axum::http::HeaderValue>>>,
     /// Azure and Vault tokens, until they expire.
     azure: Mutex<Option<(String, Instant)>>,
@@ -178,7 +178,7 @@ impl Managers {
             .ok_or_else(|| "no AWS region: use the ARN, or set AWS_REGION".to_string())
     }
 
-    fn aws_credentials(&self, region: &str) -> Result<gantry_core::sigv4::Credentials, String> {
+    fn aws_credentials(&self, region: &str) -> Result<enterplace_core::sigv4::Credentials, String> {
         let live = {
             let mut cache = self.aws.lock().map_err(|_| "the AWS lock was poisoned")?;
             match cache.get(region) {
@@ -376,7 +376,7 @@ impl Managers {
         let raw = answer
             .into_string()
             .map_err(|err| format!("Conjur's sign-in answer could not be read: {err}"))?;
-        let token = gantry_core::x509::base64_encode(raw.trim().as_bytes());
+        let token = enterplace_core::x509::base64_encode(raw.trim().as_bytes());
         // Conjur's access tokens last 8 minutes.
         if let Ok(mut slot) = self.conjur.lock() {
             *slot = Some((token.clone(), expiry(8 * 60)));
@@ -410,7 +410,7 @@ impl Managers {
         let data = body
             .pointer("/payload/data")
             .and_then(Value::as_str)
-            .and_then(gantry_core::x509::base64_decode)
+            .and_then(enterplace_core::x509::base64_decode)
             .and_then(|b| String::from_utf8(b).ok())
             .ok_or("the Google secret has no text payload. Store the key as text")?;
         text_or_field(&data, field, "Google secret")
@@ -533,7 +533,7 @@ impl Managers {
         };
         let answer = answer.map_err(|err| {
             format!(
-                "Gantry could not sign in to Azure: {err}{}. Run Gantry with a managed identity or workload identity that may read the vault's secrets, or set AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET",
+                "Enterplace could not sign in to Azure: {err}{}. Run Enterplace with a managed identity or workload identity that may read the vault's secrets, or set AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET",
                 tried.first().map(|t| format!(" ({t})")).unwrap_or_default()
             )
         })?;
@@ -556,7 +556,7 @@ impl Managers {
     }
 }
 
-impl gantry_core::secrets::Source for Managers {
+impl enterplace_core::secrets::Source for Managers {
     fn fetch(&self, reference: &str) -> Result<String, String> {
         let value = if let Some(rest) = reference.strip_prefix("vault://") {
             self.vault(rest)
@@ -577,7 +577,7 @@ impl gantry_core::secrets::Source for Managers {
         } else {
             Err(format!(
                 "the reference is not one of {}",
-                gantry_core::secrets::SCHEMES.join(", ")
+                enterplace_core::secrets::SCHEMES.join(", ")
             ))
         }?;
         let value = value.trim();
@@ -604,7 +604,7 @@ fn ciphertext<'a>(rest: &'a str, shape: &str) -> Result<(&'a str, &'a str), Stri
 /// key's 64 hex characters then are).
 fn plaintext(base64: Option<&str>, what: &str) -> Result<String, String> {
     let bytes = base64
-        .and_then(gantry_core::x509::base64_decode)
+        .and_then(enterplace_core::x509::base64_decode)
         .ok_or_else(|| format!("{what} sent no plaintext"))?;
     let text = std::str::from_utf8(&bytes)
         .ok()
@@ -638,11 +638,11 @@ fn split_field(rest: &str) -> (&str, Option<&str>) {
 
 /// A token goes to the address only over https, or plain http to this machine.
 fn safe_url(url: &str, name: &str) -> Result<(), String> {
-    if gantry_core::config::secure_url(url) {
+    if enterplace_core::config::secure_url(url) {
         Ok(())
     } else {
         Err(format!(
-            "{name} is {url}, which is not https. Gantry sends a token there: use https, or http only to this machine"
+            "{name} is {url}, which is not https. Enterplace sends a token there: use https, or http only to this machine"
         ))
     }
 }

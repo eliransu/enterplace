@@ -1,14 +1,14 @@
 name: release
 # Package 7.2: a release is built twice and must be the same bytes, rolls back onto its own data, and is signed.
 # On a v* tag the signed files go to a GitHub Release of this repository, with the CHANGELOG section as its
-# notes, and the Homebrew formula goes to the tap eliransu/homebrew-tap. Every push to main of eliransu/gantry replaces
+# notes, and the Homebrew formula goes to the tap eliransu/homebrew-tap. Every push to main of eliransu/enterplace replaces
 # the rolling pre-release `edge` with that commit's signed files (install.sh falls back to it before the first stable
-# release). Run by hand on main of eliransu/gantry it publishes edge too; on any other branch it is a dry run: every
+# release). Run by hand on main of eliransu/enterplace it publishes edge too; on any other branch it is a dry run: every
 # step but the publishing.
 # The binaries: linux amd64 and arm64 (static musl, built twice and compared byte for byte) and macOS arm64 and amd64
 # (built once on their own runners: not checked for reproducibility).
 # How to release: RELEASING.md. image.yml adds the image digest to the same release.
-# The Helm chart goes to ghcr.io/<owner>/charts/gantry as an OCI artifact, signed with cosign keyless (this workflow's
+# The Helm chart goes to ghcr.io/<owner>/charts/enterplace as an OCI artifact, signed with cosign keyless (this workflow's
 # GitHub OIDC identity). scripts/verify_release.sh checks it beside the image.
 on:
   push:
@@ -27,7 +27,7 @@ permissions:
 jobs:
   version:
     # Pushes to main publish edge on the public repository only; elsewhere they start nothing.
-    if: github.event_name != 'push' || github.ref_type == 'tag' || github.repository == 'eliransu/gantry'
+    if: github.event_name != 'push' || github.ref_type == 'tag' || github.repository == 'eliransu/enterplace'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,13 +83,13 @@ jobs:
         run: |
           export RUSTFLAGS="--remap-path-prefix=$PWD=. --remap-path-prefix=$HOME/.cargo=cargo"
           scripts/release.sh tarball
-          tar -tzf dist/gantry-*.tar.gz
+          tar -tzf dist/enterplace-*.tar.gz
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
       - uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.platform }}
-          path: dist/gantry-*
+          path: dist/enterplace-*
           if-no-files-found: error
 
   rollback:
@@ -113,12 +113,12 @@ jobs:
           previous=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git rev-parse HEAD^)
           echo "previous: $previous"
           git worktree add ../previous "$previous"
-          (cd ../previous && cargo build --release --locked -q -p gantry-cli)
-          cargo build --release --locked -q -p gantry-cli
-          python3 scripts/rollback_check.py ../previous/target/release/gantry target/release/gantry
+          (cd ../previous && cargo build --release --locked -q -p enterplace-cli)
+          cargo build --release --locked -q -p enterplace-cli
+          python3 scripts/rollback_check.py ../previous/target/release/enterplace target/release/enterplace
           # A rolling upgrade: the previous version and this one serve from one Postgres at the same time.
           DATABASE_URL='postgres://postgres:test@127.0.0.1:5432/postgres?sslmode=disable' \
-            python3 scripts/mixed_version_check.py ../previous/target/release/gantry target/release/gantry
+            python3 scripts/mixed_version_check.py ../previous/target/release/enterplace target/release/enterplace
 
   # The chart as a signed OCI artifact. A dry run packages and lints it and pushes nothing.
   chart:
@@ -142,8 +142,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          helm lint --strict deploy/helm/gantry
-          helm package deploy/helm/gantry -d chart
+          helm lint --strict deploy/helm/enterplace
+          helm package deploy/helm/enterplace -d chart
           ls -l chart
           if [ "${{ github.ref_type }}" != tag ]; then
             echo "dry run: would push chart/*.tgz to oci://$CHARTS and sign it"
@@ -151,13 +151,13 @@ jobs:
           fi
           echo "$GH_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           echo "$GH_TOKEN" | cosign login ghcr.io -u "${{ github.actor }}" --password-stdin
-          out=$(helm push chart/gantry-*.tgz "oci://$CHARTS" 2>&1); echo "$out"
+          out=$(helm push chart/enterplace-*.tgz "oci://$CHARTS" 2>&1); echo "$out"
           digest=$(sed -n 's/^Digest: //p' <<< "$out")
           [ -n "$digest" ] || { echo "::error::helm push printed no digest"; exit 1; }
-          cosign sign --yes "$CHARTS/gantry@$digest"
-          cosign verify "$CHARTS/gantry@$digest" --certificate-identity "${{ github.server_url }}/${{ github.workflow_ref }}" \
+          cosign sign --yes "$CHARTS/enterplace@$digest"
+          cosign verify "$CHARTS/enterplace@$digest" --certificate-identity "${{ github.server_url }}/${{ github.workflow_ref }}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
-          echo "signed $CHARTS/gantry@$digest"
+          echo "signed $CHARTS/enterplace@$digest"
 
   sign:
     needs: [build, rollback]
@@ -206,13 +206,13 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           ls -l dist
-          # main of eliransu/gantry, pushed or run by hand (push triggers do not fire there yet): the rolling
+          # main of eliransu/enterplace, pushed or run by hand (push triggers do not fire there yet): the rolling
           # pre-release edge, deleted and made again on this commit with its files.
-          if [ "${{ github.ref }}" = refs/heads/main ] && [ "$REPO" = eliransu/gantry ]; then
+          if [ "${{ github.ref }}" = refs/heads/main ] && [ "$REPO" = eliransu/enterplace ]; then
             gh release delete edge --repo "$REPO" --cleanup-tag --yes 2> /dev/null || true
             gh release create edge dist/* --repo "$REPO" --target "$GITHUB_SHA" --prerelease --latest=false \
-              --title "Gantry edge (main ${GITHUB_SHA::12})" \
-              --notes "Rolling pre-release, rebuilt on every push to main: commit $GITHUB_SHA. Not a stable release; pin a vX.Y.Z tag in production. Install: GANTRY_VERSION=edge, see install.sh."
+              --title "Enterplace edge (main ${GITHUB_SHA::12})" \
+              --notes "Rolling pre-release, rebuilt on every push to main: commit $GITHUB_SHA. Not a stable release; pin a vX.Y.Z tag in production. Install: ENTERPLACE_VERSION=edge, see install.sh."
             exit 0
           fi
           if [ "${{ github.ref_type }}" != tag ]; then
@@ -225,10 +225,10 @@ jobs:
             gh release upload "$TAG" dist/* --repo "${{ github.repository }}" --clobber
           else
             gh release create "$TAG" dist/* --repo "${{ github.repository }}" --verify-tag \
-              --title "Gantry ${TAG#v}" --notes-file release-notes.md
+              --title "Enterplace ${TAG#v}" --notes-file release-notes.md
           fi
 
-  # The Homebrew formula of a stable release, rendered from packaging/homebrew/gantry.rb with this release's URLs and
+  # The Homebrew formula of a stable release, rendered from packaging/homebrew/enterplace.rb with this release's URLs and
   # hashes and pushed to the tap eliransu/homebrew-tap. A dry run renders and prints it. Edge has no formula.
   homebrew:
     needs: publish
@@ -245,23 +245,23 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           if [ "${{ github.ref_type }}" = tag ]; then tag=${{ github.ref_name }}; else tag=v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1); fi
-          packaging/homebrew/render.sh dist "$tag" > gantry.rb
-          cat gantry.rb
+          packaging/homebrew/render.sh dist "$tag" > enterplace.rb
+          cat enterplace.rb
           if [ "${{ github.ref_type }}" != tag ]; then
-            echo "dry run: would push Formula/gantry.rb to eliransu/homebrew-tap"
+            echo "dry run: would push Formula/enterplace.rb to eliransu/homebrew-tap"
             exit 0
           fi
           if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
-            echo "::notice::HOMEBREW_TAP_TOKEN is not set, so the formula was not pushed. Create the public repo eliransu/homebrew-tap, then: gh secret set HOMEBREW_TAP_TOKEN --repo eliransu/gantry (a fine-grained token with contents write on the tap)."
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set, so the formula was not pushed. Create the public repo eliransu/homebrew-tap, then: gh secret set HOMEBREW_TAP_TOKEN --repo eliransu/enterplace (a fine-grained token with contents write on the tap)."
             exit 0
           fi
           git clone -q "https://x-access-token:$HOMEBREW_TAP_TOKEN@github.com/eliransu/homebrew-tap.git" tap
           mkdir -p tap/Formula
-          cp gantry.rb tap/Formula/gantry.rb
+          cp enterplace.rb tap/Formula/enterplace.rb
           cd tap
-          git add Formula/gantry.rb
+          git add Formula/enterplace.rb
           if git diff --cached --quiet; then echo "the tap already has this formula"; exit 0; fi
-          git -c user.name="gantry release" -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
-            commit -qm "gantry ${tag#v}"
+          git -c user.name="enterplace release" -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+            commit -qm "enterplace ${tag#v}"
           git push -q origin HEAD
-          echo "pushed Formula/gantry.rb for ${tag#v}: brew install eliransu/tap/gantry"
+          echo "pushed Formula/enterplace.rb for ${tag#v}: brew install eliransu/tap/enterplace"

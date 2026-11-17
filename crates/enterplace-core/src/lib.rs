@@ -1,0 +1,48 @@
+//! Core of the Enterplace AI gateway. Embeddable as a library.
+
+pub mod audit;
+pub mod catalog;
+pub mod chat;
+pub mod cohere;
+pub mod config;
+pub mod converse;
+pub mod coverage;
+pub mod embed;
+pub mod events;
+pub mod eventstream;
+pub mod fntools;
+pub mod gemini;
+pub mod gitleaks;
+pub mod guard;
+pub mod id;
+pub mod insights;
+pub mod keyfile;
+pub mod kill;
+pub mod litellm;
+pub mod mcp;
+pub mod media;
+pub mod metrics;
+pub mod policy;
+pub mod replicate;
+pub mod responses;
+pub mod secrets;
+pub mod sigv4;
+pub mod store;
+pub mod transform;
+pub mod translate;
+pub mod usage;
+pub mod vendors;
+pub mod versions;
+pub mod x509;
+
+/// Version of the gateway, shared by the server and the CLI.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// "1 record", "2 records": a count with its noun, for messages.
+pub fn count(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}

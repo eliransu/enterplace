@@ -1,0 +1,25 @@
+# The kind test in .github/workflows/helm.yml: the image built in CI, a mock provider in the cluster.
+image:
+  repository: enterplace
+  tag: ci
+  pullPolicy: Never
+envFromSecrets:
+  - enterplace-secrets
+keys:
+  existingSecret: enterplace-keys
+metrics:
+  enabled: true
+policy: |
+  version: 1
+  providers:
+    - name: mock
+      kind: openai
+      url: http://mock-provider:8000/v1
+      allow_private: true
+      key_env: MOCK_PROVIDER_KEY
+      models: [gpt-4o-mini]
+  rules:
+    - name: everyone
+      principals: { any: true }
+      models: [gpt-4o-mini]
+  audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }

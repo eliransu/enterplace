@@ -4,18 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Local and self-hosted models: Ollama, vLLM, on-prem and air-gapped</title>
-<meta name="description" content="Serve models from Ollama, vLLM or LM Studio through Gantry, on-prem or in an air-gapped network. The same keys, rules, budgets and audit log as hosted models, with the exact policy lines.">
+<meta name="description" content="Serve models from Ollama, vLLM or LM Studio through Enterplace, on-prem or in an air-gapped network. The same keys, rules, budgets and audit log as hosted models, with the exact policy lines.">
 <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<link rel="canonical" href="https://gantry.enterplace.dev/use-cases/local-models/">
+<link rel="canonical" href="https://enterplace.dev/use-cases/local-models/">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Gantry">
-<meta property="og:url" content="https://gantry.enterplace.dev/use-cases/local-models/">
+<meta property="og:site_name" content="Enterplace">
+<meta property="og:url" content="https://enterplace.dev/use-cases/local-models/">
 <meta property="og:title" content="Local and self-hosted models: Ollama, vLLM, on-prem and air-gapped">
-<meta property="og:description" content="Serve models from Ollama, vLLM or LM Studio through Gantry, on-prem or in an air-gapped network. The same keys, rules, budgets and audit log as hosted models, with the exact policy lines.">
-<meta property="og:image" content="https://gantry.enterplace.dev/og.png">
+<meta property="og:description" content="Serve models from Ollama, vLLM or LM Studio through Enterplace, on-prem or in an air-gapped network. The same keys, rules, budgets and audit log as hosted models, with the exact policy lines.">
+<meta property="og:image" content="https://enterplace.dev/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
@@ -30,10 +30,10 @@
 
 <header class="hdr" id="hdr">
   <div class="wrap hdr-in">
-    <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
-gantry</a>
+    <a class="brand" href="/" aria-label="Enterplace, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+enterplace</a>
 
-    <a class="theme gh-phone" href="https://github.com/eliransu/gantry" aria-label="Gantry on GitHub, open source"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
+    <a class="theme gh-phone" href="https://github.com/eliransu/enterplace" aria-label="Enterplace on GitHub, open source"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
 
     <button class="burger" type="button" aria-expanded="false" aria-controls="nav" aria-label="Menu"><span></span></button>
 
@@ -44,8 +44,8 @@ gantry</a>
         <div class="menu" id="menu-product">
           <a href="/product/"><strong>How it works</strong><span>The request path, the controls, the audit log and the console</span></a>
           <a href="/deploy/"><strong>Deploy</strong><span>Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare</span></a>
-          <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops</span></a>
-          <a href="/compare/"><strong>Compare</strong><span>Gantry next to LiteLLM and Bifrost, with sources</span></a>
+          <a href="/security/"><strong>Security</strong><span>What Enterplace protects, and where it stops</span></a>
+          <a href="/compare/"><strong>Compare</strong><span>Enterplace next to LiteLLM and Bifrost, with sources</span></a>
         </div>
       </div>
 
@@ -86,11 +86,11 @@ gantry</a>
       </div>
 
       <a class="nav-link" data-group="enterprise" href="/enterprise/">Enterprise</a>
-      <a class="nav-link" href="https://gantry-docs.enterplace.dev/">Docs</a>
+      <a class="nav-link" href="https://docs.enterplace.dev/">Docs</a>
 
       <div class="nav-actions">
-        <a class="btn btn-main btn-sm" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Get started</a>
-        <a class="theme gh-wide" href="https://github.com/eliransu/gantry" aria-label="Gantry on GitHub, open source">
+        <a class="btn btn-main btn-sm" href="https://docs.enterplace.dev/getting-started/quickstart/">Get started</a>
+        <a class="theme gh-wide" href="https://github.com/eliransu/enterplace" aria-label="Enterplace on GitHub, open source">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
         </a>
         <button class="theme" type="button" aria-label="Switch between light and dark">
@@ -109,7 +109,7 @@ gantry</a>
 </section>
 
 <section class="wrap sec" style="padding-top: 40px">
-<figure class="gate" data-gate aria-label="Four callers send requests through Gantry. Requests to local models pass. A request from the legal team for a hosted model is refused because the rule lists local models only.">
+<figure class="gate" data-gate aria-label="Four callers send requests through Enterplace. Requests to local models pass. A request from the legal team for a hosted model is refused because the rule lists local models only.">
 <div class="gate-lanes" aria-hidden="true">
 <div class="lane"><span class="lane-from">chris.walker<i>legal</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">vLLM, on-prem</span></div>
 <div class="lane"><span class="lane-from">sarah.miller<i>payments</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Ollama, on-prem</span></div>
@@ -146,11 +146,11 @@ gantry</a>
     <li>
       <div class="guide-text">
         <h3>Add the local server as a provider</h3>
-        <p>A provider on a private address needs <code>allow_private: true</code>. Without it, <code>gantry check</code> refuses the file and says why. Ollama takes no key, so Gantry sends none, and never the caller's Gantry key.</p>
-        <a class="more" href="https://gantry-docs.enterplace.dev/providers/local-models/">Local models in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <p>A provider on a private address needs <code>allow_private: true</code>. Without it, <code>enterplace check</code> refuses the file and says why. Ollama takes no key, so Enterplace sends none, and never the caller's Enterplace key.</p>
+        <a class="more" href="https://docs.enterplace.dev/providers/local-models/">Local models in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>providers:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>providers:
   - name: ollama
     kind: openai
     url: http://127.0.0.1:11434/v1
@@ -168,7 +168,7 @@ gantry</a>
         <h3>Keep a team on local models</h3>
         <p>A rule lists the models its people may use. Team legal gets the local model and nothing else. A request for a hosted model is refused with <code>model_not_allowed</code> before anything is sent.</p>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>rules:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>rules:
   - name: legal-local
     principals: { team: legal }
     models: [local-llm]
@@ -180,21 +180,21 @@ gantry</a>
       <div class="guide-text">
         <h3>Give local models a price</h3>
         <p>A budget needs a price to count. Set zero so a rule with a budget can still reach the local model, or set your own cost per token to charge teams for GPU time.</p>
-        <a class="more" href="https://gantry-docs.enterplace.dev/routing/pricing/">Pricing in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <a class="more" href="https://docs.enterplace.dev/routing/pricing/">Pricing in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>prices:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>prices:
   gpt-oss:20b: { input: 0, output: 0 }
   local-llm: { input: 0, output: 0 }</pre></figure>
     </li>
     <li>
       <div class="guide-text">
         <h3>Run coding agents on the local model</h3>
-        <p>Claude Code speaks Anthropic's messages API. With <code>accept_messages: true</code> on the provider, Gantry translates its requests to chat completions, so Claude Code can run on a model you serve.</p>
-        <a class="more" href="https://gantry-docs.enterplace.dev/routing/translation/">Translation in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <p>Claude Code speaks Anthropic's messages API. With <code>accept_messages: true</code> on the provider, Enterplace translates its requests to chat completions, so Claude Code can run on a model you serve.</p>
+        <a class="more" href="https://docs.enterplace.dev/routing/translation/">Translation in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>providers:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>providers:
   - name: vllm
     kind: openai
     url: http://127.0.0.1:8000
@@ -208,23 +208,23 @@ gantry</a>
 <section class="wrap sec">
   <div class="sec-head">
     <h2>In an air-gapped network</h2>
-    <p>Gantry was built to run with no connection out. These are the parts that matter there.</p>
+    <p>Enterplace was built to run with no connection out. These are the parts that matter there.</p>
   </div>
   <dl class="facts">
     <div><dt>One image to bring in</dt><dd>A single static binary in an image built from scratch. The image also carries the Helm chart and the Terraform modules for its version, so you copy them out of the image you already approved.</dd></div>
     <div><dt>The license is checked offline</dt><dd>The Enterprise license is verified against a public key built into the binary. The check never uses the network. A lapsed license turns Enterprise features off and never stops model traffic.</dd></div>
-    <div><dt>Nothing calls home</dt><dd>Self-hosted Gantry sends nothing to the Gantry project. Prometheus metrics are off by default, and traces and audit records go only to the systems you name.</dd></div>
-    <div><dt>Guardrails that run inside</dt><dd>The built-in secrets and personal data detectors run inside Gantry and send no text anywhere. Vendor guardrails call the vendor's API, so leave those out, or use the ones you host yourself.</dd></div>
-    <div><dt>A release you can verify</dt><dd>Images are signed and ship with an SBOM and provenance. <a href="https://gantry-docs.enterplace.dev/operations/verify-release/">Verify a release</a></dd></div>
+    <div><dt>Nothing calls home</dt><dd>Self-hosted Enterplace sends nothing to the Enterplace project. Prometheus metrics are off by default, and traces and audit records go only to the systems you name.</dd></div>
+    <div><dt>Guardrails that run inside</dt><dd>The built-in secrets and personal data detectors run inside Enterplace and send no text anywhere. Vendor guardrails call the vendor's API, so leave those out, or use the ones you host yourself.</dd></div>
+    <div><dt>A release you can verify</dt><dd>Images are signed and ship with an SBOM and provenance. <a href="https://docs.enterplace.dev/operations/verify-release/">Verify a release</a></dd></div>
   </dl>
 </section>
 
 <section class="wrap sec doc">
   <h2>Limits to know before you start</h2>
   <ul class="ticks out">
-    <li><strong>The local servers were configured from their docs and tested against local mocks.</strong> Each base URL was checked against the vendor's documentation, and the path Gantry calls was confirmed against a mock. <a href="https://gantry-docs.enterplace.dev/getting-started/status/">Project status</a></li>
+    <li><strong>The local servers were configured from their docs and tested against local mocks.</strong> Each base URL was checked against the vendor's documentation, and the path Enterplace calls was confirmed against a mock. <a href="https://docs.enterplace.dev/getting-started/status/">Project status</a></li>
     <li><strong>Inside a container, <code>127.0.0.1</code> is the container.</strong> Use the host's address for a model server on the same machine.</li>
-    <li><strong>Gantry does not serve models.</strong> It sits in front of the servers that do.</li>
+    <li><strong>Enterplace does not serve models.</strong> It sits in front of the servers that do.</li>
   </ul>
 </section>
 
@@ -235,7 +235,7 @@ gantry</a>
 </a>
     <a href="/use-cases/regulated-data/"><strong>Regulated data and residency</strong><span>Keep requests in the regions a rule allows.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
-    <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+    <a href="/security/"><strong>Security</strong><span>What Enterplace protects, and where it stops.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
   </nav>
 </section>
@@ -244,7 +244,7 @@ gantry</a>
   <div class="cta-box">
     <h2>Start with step one. Block nothing, and find out what is in use.</h2>
     <div class="actions">
-      <a class="btn btn-ink" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink" href="https://docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
       <a class="btn btn-ink-line" href="/learn/five-steps/">See the five steps</a>
       <a class="btn btn-ink-line" href="/deploy/">Deploy in your cloud</a>
     </div>
@@ -257,8 +257,8 @@ gantry</a>
 <footer class="ftr">
   <div class="wrap ftr-top">
     <div class="ftr-about">
-      <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
-gantry</a>
+      <a class="brand" href="/" aria-label="Enterplace, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+enterplace</a>
       <p>A self-hosted AI gateway, governance first. One Docker image plus Postgres, in your cloud.</p>
     </div>
     <nav class="ftr-cols" aria-label="Site map">
@@ -296,15 +296,15 @@ gantry</a>
       </div>
       <div>
         <h2>Project</h2>
-        <a href="https://gantry-docs.enterplace.dev/">Docs</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/status/">Project status</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/changelog/">Changelog</a>
-        <a href="https://github.com/eliransu/gantry">GitHub</a>
+        <a href="https://docs.enterplace.dev/">Docs</a>
+        <a href="https://docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
+        <a href="https://docs.enterplace.dev/getting-started/status/">Project status</a>
+        <a href="https://docs.enterplace.dev/getting-started/changelog/">Changelog</a>
+        <a href="https://github.com/eliransu/enterplace">GitHub</a>
       </div>
     </nav>
   </div>
-  <p class="wrap ftr-legal">Open source core under MIT, <a href="https://github.com/eliransu/gantry">on GitHub</a>. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
+  <p class="wrap ftr-legal">Open source core under MIT, <a href="https://github.com/eliransu/enterplace">on GitHub</a>. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
 </footer>
 </body>
 </html>

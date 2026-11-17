@@ -1,6 +1,6 @@
 """Upgrade and rollback on the same data: the acceptance check of package 7.2.
 
-Usage: python3 scripts/rollback_check.py <old gantry binary> <new gantry binary>
+Usage: python3 scripts/rollback_check.py <old enterplace binary> <new enterplace binary>
 Runs the old version, upgrades to the new one, then rolls back to the old one, all on one folder holding the
 policy, the keys file and the audit log, as a deployment's volume does. Each version serves governed requests
 through a local mock provider. Passes when every request succeeds, a key issued by the new version still works
@@ -45,7 +45,7 @@ def run(binary, *args, check=True):
 class Serving:
     def __init__(self, binary, folder):
         self.port = free_port()
-        self.proc = subprocess.Popen([binary, "serve", str(folder / "gantry.policy.yaml"), "--keys", str(folder / "gantry.keys.yaml"), "--listen", f"127.0.0.1:{self.port}"],
+        self.proc = subprocess.Popen([binary, "serve", str(folder / "enterplace.policy.yaml"), "--keys", str(folder / "enterplace.keys.yaml"), "--listen", f"127.0.0.1:{self.port}"],
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env={**os.environ, "MOCK_PROVIDER_KEY": "mock"})
         for _ in range(100):
             try:
@@ -79,9 +79,9 @@ def main():
     print(f"old: {run(old, 'version').stdout.strip()}\nnew: {run(new, 'version').stdout.strip()}")
     provider = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     threading.Thread(target=provider.serve_forever, daemon=True).start()
-    folder = pathlib.Path(tempfile.mkdtemp(prefix="gantry-rollback-"))
-    audit = folder / "gantry-audit.jsonl"
-    (folder / "gantry.policy.yaml").write_text(f"""version: 1
+    folder = pathlib.Path(tempfile.mkdtemp(prefix="enterplace-rollback-"))
+    audit = folder / "enterplace-audit.jsonl"
+    (folder / "enterplace.policy.yaml").write_text(f"""version: 1
 audit: {{ path: {audit} }}
 providers:
   - name: mock
@@ -95,7 +95,7 @@ rules:
     principals: {{ any: true }}
     models: [model-a]
 """)
-    keys = folder / "gantry.keys.yaml"
+    keys = folder / "enterplace.keys.yaml"
     first = run(old, "key", "new", "first@example.com", "--team", "eng", "--keys", str(keys), "--quiet").stdout.strip()
 
     g = Serving(old, folder)

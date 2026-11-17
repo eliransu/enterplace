@@ -1,17 +1,15 @@
 {
   "$schema": "../docs/node_modules/wrangler/config-schema.json",
-  // The website: public/ is built from src/ by build.py and served at gantry.enterplace.dev.
-  "name": "gantry-site",
+  // The website: public/ is built from src/ by build.py and served at enterplace.dev.
+  "name": "enterplace-site",
   "compatibility_date": "2026-11-01",
   "main": "./worker.js",
   // Page views, agent fetches, installs and clicks: site/worker.js writes them, scripts/web_stats.sh reads them.
-  "d1_databases": [{ "binding": "WEB", "database_name": "gantry-web", "database_id": "a149c188-5bcf-4184-86b2-203b52bcd183" }],
+  "d1_databases": [{ "binding": "WEB", "database_name": "enterplace-web", "database_id": "df62be93-8840-45f4-ac35-88f65a30591d" }],
   "assets": { "directory": "./public", "not_found_handling": "404-page", "binding": "ASSETS", "run_worker_first": true },
-  // The old hostname keeps serving: install commands people saved and the docs links inside binaries
-  // already installed name it.
   "routes": [
-    { "pattern": "gantry.enterplace.dev", "custom_domain": true },
-    { "pattern": "gantry.eliran.me", "custom_domain": true }
+    { "pattern": "enterplace.dev", "custom_domain": true },
+    { "pattern": "www.enterplace.dev", "custom_domain": true }
   ],
   "workers_dev": false
 }

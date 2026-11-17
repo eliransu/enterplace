@@ -1,13 +1,13 @@
 """Drives the console's editing pages in a real headless Chrome against Postgres, and saves a screenshot of each.
 
-Usage: python3 scripts/console_edit_check.py --database postgres://... [--fresh] [--gantry target/debug/gantry] [--out DIR]
+Usage: python3 scripts/console_edit_check.py --database postgres://... [--fresh] [--enterplace target/debug/enterplace] [--out DIR]
 
 The policy is kept in the store (`policy_from: store`, `approval: true`). The script issues an admin key and a
-second admin, serves Gantry, signs in through the browser form, adds a model, edits a key, saves a version for
+second admin, serves Enterplace, signs in through the browser form, adds a model, edits a key, saves a version for
 approval, approves it as the second admin, runs a dry run, and screenshots Models, Teams, the key editor, the
 editor with a dry run, Policy and Policy versions at 1440 wide (and Models at 390). The database must be empty or
 one this script made: it imports its policy as version 1. With --fresh it makes its own: psql drops and creates the
-database gantry_console_edit on the server --database names, and the check runs there. Uses browser_check.py's Chrome driver, the standard
+database enterplace_console_edit on the server --database names, and the check runs there. Uses browser_check.py's Chrome driver, the standard
 library only. Exits 1 on the first check that fails.
 """
 import argparse, json, os, pathlib, re, subprocess, sys, tempfile, time, urllib.parse, urllib.request
@@ -16,27 +16,27 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from browser_check import CHROME, ROOT, Chrome, check, stop  # noqa: E402
 
 
-def key_new(gantry: str, folder: pathlib.Path, env: dict, name: str) -> str:
-    out = subprocess.run([gantry, "key", "new", name, "--team", "platform", "--admin", "--quiet",
-                          "--policy", str(folder / "gantry.policy.yaml")],
+def key_new(enterplace: str, folder: pathlib.Path, env: dict, name: str) -> str:
+    out = subprocess.run([enterplace, "key", "new", name, "--team", "platform", "--admin", "--quiet",
+                          "--policy", str(folder / "enterplace.policy.yaml")],
                          cwd=folder, env=env, capture_output=True, text=True)
     if out.returncode != 0:
-        raise SystemExit(f"gantry key new failed: {out.stderr}")
+        raise SystemExit(f"enterplace key new failed: {out.stderr}")
     out = out.stdout
-    found = re.search(r"gantry_[0-9a-zA-Z_]+", out)
+    found = re.search(r"enterplace_[0-9a-zA-Z_]+", out)
     if not found:
-        raise SystemExit(f"gantry key new printed no key: {out}")
+        raise SystemExit(f"enterplace key new printed no key: {out}")
     return found.group(0)
 
 
 def fresh(url: str) -> str:
-    """Drops and creates gantry_console_edit on the server `url` names, with psql, and returns its URL."""
+    """Drops and creates enterplace_console_edit on the server `url` names, with psql, and returns its URL."""
     parts = urllib.parse.urlsplit(url)
-    for sql in ("DROP DATABASE IF EXISTS gantry_console_edit", "CREATE DATABASE gantry_console_edit"):
+    for sql in ("DROP DATABASE IF EXISTS enterplace_console_edit", "CREATE DATABASE enterplace_console_edit"):
         out = subprocess.run(["psql", url, "-v", "ON_ERROR_STOP=1", "-q", "-c", sql], capture_output=True, text=True)
         if out.returncode != 0:
             raise SystemExit(f"psql could not run {sql}: {out.stderr.strip()}. Check --database and that psql is installed.")
-    return urllib.parse.urlunsplit(parts._replace(path="/gantry_console_edit"))
+    return urllib.parse.urlunsplit(parts._replace(path="/enterplace_console_edit"))
 
 
 def api(base: str, key: str, method: str, path: str, body: str = "", headers: dict | None = None):
@@ -52,8 +52,8 @@ def api(base: str, key: str, method: str, path: str, body: str = "", headers: di
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--database", required=True)
-    parser.add_argument("--fresh", action="store_true", help="run in a new database gantry_console_edit (needs psql)")
-    parser.add_argument("--gantry", default=str(ROOT / "target" / "debug" / "gantry"))
+    parser.add_argument("--fresh", action="store_true", help="run in a new database enterplace_console_edit (needs psql)")
+    parser.add_argument("--enterplace", default=str(ROOT / "target" / "debug" / "enterplace"))
     parser.add_argument("--chrome", default=CHROME)
     parser.add_argument("--port", type=int, default=20660)
     parser.add_argument("--out", default=str(ROOT / "target" / "console-edit-screens"))
@@ -61,13 +61,13 @@ def main():
     server = args.database if args.fresh else None
     if args.fresh:
         args.database = fresh(args.database)
-    gantry = str(pathlib.Path(args.gantry).resolve())
+    enterplace = str(pathlib.Path(args.enterplace).resolve())
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    folder = pathlib.Path(tempfile.mkdtemp(prefix="gantry-edit-"))
+    folder = pathlib.Path(tempfile.mkdtemp(prefix="enterplace-edit-"))
     base = f"http://127.0.0.1:{args.port}"
-    (folder / "gantry.policy.yaml").write_text(f"""version: 1
-store: {{ postgres_url_env: GANTRY_DATABASE_URL, policy_from: store, approval: true }}
+    (folder / "enterplace.policy.yaml").write_text(f"""version: 1
+store: {{ postgres_url_env: ENTERPLACE_DATABASE_URL, policy_from: store, approval: true }}
 providers:
   - name: local
     kind: openai
@@ -85,15 +85,15 @@ rules:
 prices:
   local-model: {{ input: 0.2, output: 0.8 }}
   local-large: {{ input: 2.5, output: 10 }}
-audit: {{ path: gantry-audit.jsonl }}
+audit: {{ path: enterplace-audit.jsonl }}
 """)
-    env = {**os.environ, "GANTRY_DATABASE_URL": args.database}
-    admin = key_new(gantry, folder, env, "ops.admin")
-    second = key_new(gantry, folder, env, "noa.bar")
-    subprocess.run([gantry, "key", "new", "maya.cohen", "--team", "payments", "--quiet", "--policy",
-                    str(folder / "gantry.policy.yaml")], cwd=folder, env=env, capture_output=True, check=True)
-    proc = subprocess.Popen([gantry, "serve", str(folder / "gantry.policy.yaml"), "--listen", f"127.0.0.1:{args.port}"],
-                            cwd=folder, env=env, stdout=open(folder / "gantry.log", "w"), stderr=subprocess.STDOUT)
+    env = {**os.environ, "ENTERPLACE_DATABASE_URL": args.database}
+    admin = key_new(enterplace, folder, env, "ops.admin")
+    second = key_new(enterplace, folder, env, "noa.bar")
+    subprocess.run([enterplace, "key", "new", "maya.cohen", "--team", "payments", "--quiet", "--policy",
+                    str(folder / "enterplace.policy.yaml")], cwd=folder, env=env, capture_output=True, check=True)
+    proc = subprocess.Popen([enterplace, "serve", str(folder / "enterplace.policy.yaml"), "--listen", f"127.0.0.1:{args.port}"],
+                            cwd=folder, env=env, stdout=open(folder / "enterplace.log", "w"), stderr=subprocess.STDOUT)
     chrome = None
     try:
         for _ in range(100):
@@ -159,7 +159,7 @@ audit: {{ path: gantry-audit.jsonl }}
         chrome.shot(out / "policy-versions.png")
         print(f"console edit check passed; screenshots in {out}")
     except AssertionError as failed:
-        print(f"FAILED: {failed}\nGantry's output: {folder / 'gantry.log'}", file=sys.stderr)
+        print(f"FAILED: {failed}\nEnterplace's output: {folder / 'enterplace.log'}", file=sys.stderr)
         sys.exit(1)
     finally:
         if chrome:
@@ -167,7 +167,7 @@ audit: {{ path: gantry-audit.jsonl }}
         stop(proc)
         if server:
             # The database --fresh made goes with the run, so a test Postgres does not grow by one a run.
-            subprocess.run(["psql", server, "-q", "-c", "DROP DATABASE IF EXISTS gantry_console_edit WITH (FORCE)"],
+            subprocess.run(["psql", server, "-q", "-c", "DROP DATABASE IF EXISTS enterplace_console_edit WITH (FORCE)"],
                            capture_output=True, text=True)
 
 

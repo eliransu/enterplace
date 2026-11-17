@@ -1,5 +1,5 @@
 {
-  "name": "gantry",
+  "name": "enterplace",
   "env": {
     "OPENAI_API_KEY": {
       "description": "Your OpenAI API key. Fill at least one of the three provider keys.",
@@ -27,14 +27,14 @@
   "hooks": {
     "prebuild": {
       "commands": [
-        "docker pull ghcr.io/eliransu/gantry:latest",
-        "docker tag ghcr.io/eliransu/gantry:latest $IMAGE_URL",
+        "docker pull ghcr.io/eliransu/enterplace:latest",
+        "docker tag ghcr.io/eliransu/enterplace:latest $IMAGE_URL",
         "docker push $IMAGE_URL"
       ]
     },
     "postcreate": {
       "commands": [
-        "GANTRY_SERVICE=$K_SERVICE GANTRY_IMAGE=$IMAGE_URL bash ./deploy.sh"
+        "ENTERPLACE_SERVICE=$K_SERVICE ENTERPLACE_IMAGE=$IMAGE_URL bash ./deploy.sh"
       ]
     }
   }

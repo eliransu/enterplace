@@ -1,0 +1,37 @@
+[package]
+name = "enterplace-console"
+description = "Admin console of the Enterplace AI gateway: server-rendered pages mounted at /console."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+enterplace-core.workspace = true
+axum.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+serde_json.workspace = true
+getrandom.workspace = true
+# Single sign-on calls the identity provider (discovery, keys, token), over the same TLS client the server uses.
+hyper-util.workspace = true
+hyper-rustls.workspace = true
+# Only to make ring the rustls default: posthog-rs brings aws-lc-rs into the build too. Already in the build.
+tokio-rustls.workspace = true
+http-body-util.workspace = true
+# Verifies ID token signatures (RS256, ES256). Already in the build through rustls; named here to call it directly.
+ring = "0.17"
+# SAML responses are XML: a namespace-aware tree for exclusive canonicalization and signature checks. No
+# dependencies of its own, no unsafe code, and DTDs refused by default.
+roxmltree = "0.21.2"
+# SAML instants are xs:dateTime; already in the build through enterplace-core.
+jiff.workspace = true
+
+[dev-dependencies]
+tower.workspace = true
+# Pauses the clock to close a minute of refused sign-ins without waiting for it.
+tokio = { workspace = true, features = ["test-util"] }
+# The mock identity provider makes an RSA key in the test; ring signs with RSA keys but cannot make one.
+num-bigint = "0.4"
+
+[lints]
+workspace = true

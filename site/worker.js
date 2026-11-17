@@ -1,5 +1,5 @@
 // The Worker in front of the website and the docs. It records page views, agent fetches, install.sh downloads and
-// clicks in the gantry-web D1 database, then serves the static files. No cookie is set and no IP address is stored.
+// clicks in the enterplace-web D1 database, then serves the static files. No cookie is set and no IP address is stored.
 // It also serves /_t.js, the click script both sites load. Query it with scripts/web_stats.sh. The schema is in site/web-schema.sql.
 
 // Matched in order against the lowercased user agent; the first hit names the agent.
@@ -118,7 +118,7 @@ export default {
     const country = request.cf?.country || '';
 
     if (url.pathname === '/_stats') {
-      if (!allowed(request, env)) return new Response('Password needed', { status: 401, headers: { 'www-authenticate': 'Basic realm="Gantry stats"' } });
+      if (!allowed(request, env)) return new Response('Password needed', { status: 401, headers: { 'www-authenticate': 'Basic realm="Enterplace stats"' } });
       return stats(url, env);
     }
 

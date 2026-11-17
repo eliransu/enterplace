@@ -10,7 +10,7 @@
 //!
 //! Retention: once a day each replica seals its log into a segment; segments older than the retention period (and
 //! the start of this month, so spend is replayed whole) are retired with an `audit_retired` record that names them,
-//! so `gantry audit verify` still proves the rest. Never under legal hold, and never before every destination has
+//! so `enterplace audit verify` still proves the rest. Never under legal hold, and never before every destination has
 //! the records. Legal hold is set by an owner with a reason, and recorded.
 
 #[cfg(test)]
@@ -30,12 +30,12 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use gantry_console::{
+use enterplace_console::{
     Admin, Console, Form, Via, bare_page, foreign,
     html::{self, Field, esc},
     redirect, same_origin,
 };
-use gantry_core::audit::{self, AuditLog};
+use enterplace_core::audit::{self, AuditLog};
 use serde_json::{Value, json};
 
 use super::{Db, alerts, capture};
@@ -107,8 +107,8 @@ const RETENTION_EVERY: Duration = Duration::from_secs(3600);
 /// How often each replica reads legal hold for the gateway's kept bodies, which it may delete every 2 seconds.
 const HOLD_EVERY: Duration = Duration::from_secs(2);
 /// The environment variable with the key that encrypts destination secrets in the database.
-const KEY_ENV: &str = "GANTRY_EXPORT_KEY";
-const NO_KEY: &str = "Destination secrets are kept encrypted in the database, and GANTRY_EXPORT_KEY is not set. Set it on every replica to the same 64 hex characters (openssl rand -hex 32) and restart.";
+const KEY_ENV: &str = "ENTERPLACE_EXPORT_KEY";
+const NO_KEY: &str = "Destination secrets are kept encrypted in the database, and ENTERPLACE_EXPORT_KEY is not set. Set it on every replica to the same 64 hex characters (openssl rand -hex 32) and restart.";
 
 /// What the export runs on.
 pub struct Setup {
@@ -164,7 +164,7 @@ struct Export {
 
 /// Adds the audit export page, the pull API and the exporter that runs beside the gateway.
 pub fn register(
-    extension: &mut gantry_server::Extension,
+    extension: &mut enterplace_server::Extension,
     setup: Setup,
 ) -> Result<Arc<Exporter>, String> {
     let exporter = chain(setup)?;
@@ -201,7 +201,7 @@ pub fn chain(setup: Setup) -> Result<Arc<Exporter>, String> {
             format!("{KEY_ENV} is set but is not 64 hex characters. Make one with `openssl rand -hex 32`, set the same value on every replica, and restart.")
         })?),
     };
-    let tick = (setup.env)("GANTRY_EXPORT_TICK_MS")
+    let tick = (setup.env)("ENTERPLACE_EXPORT_TICK_MS")
         .and_then(|ms| ms.parse().ok())
         .map_or(Duration::from_secs(1), Duration::from_millis);
     let exporter = Arc::new(Exporter {
@@ -233,7 +233,7 @@ pub fn chain(setup: Setup) -> Result<Arc<Exporter>, String> {
 }
 
 /// Without either feature the page and the pull API say why, and there is no nav entry.
-pub fn locked(extension: &mut gantry_server::Extension, status: &Status) {
+pub fn locked(extension: &mut enterplace_server::Extension, status: &Status) {
     let Err(refused) = status.require(SIEM) else {
         return;
     };
@@ -275,13 +275,13 @@ fn replica_id(path: &FilePath, env: &Env) -> Result<String, String> {
     name.push(".replica");
     let file = PathBuf::from(name);
     let host: String = env("HOSTNAME")
-        .unwrap_or_else(|| "gantry".into())
+        .unwrap_or_else(|| "enterplace".into())
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'))
         .take(48)
         .collect();
     let host = if host.is_empty() {
-        "gantry".into()
+        "enterplace".into()
     } else {
         host
     };
@@ -308,7 +308,7 @@ fn replica_id(path: &FilePath, env: &Env) -> Result<String, String> {
         }
     };
     std::fs::write(&file, format!("{id}\n")).map_err(|err| {
-        format!("{} cannot be written: {err}. Gantry keeps the replica's name beside its audit log; check that it may write there.", file.display())
+        format!("{} cannot be written: {err}. Enterplace keeps the replica's name beside its audit log; check that it may write there.", file.display())
     })?;
     Ok(id)
 }
@@ -346,8 +346,8 @@ pub(crate) fn seal_secret(key: &[u8; 32], plain: &str) -> Result<String, String>
         .map_err(|_| "the secret could not be encrypted".to_string())?;
     Ok(format!(
         "v1:{}{}",
-        gantry_core::id::hex(&nonce),
-        gantry_core::id::hex(&data)
+        enterplace_core::id::hex(&nonce),
+        enterplace_core::id::hex(&data)
     ))
 }
 
@@ -357,7 +357,7 @@ pub(crate) fn open_secret(key: Option<&[u8; 32]>, sealed: &str) -> Result<String
         return Ok(String::new());
     }
     let key = key.ok_or(NO_KEY)?;
-    let wrong = "the destination's secret does not open with GANTRY_EXPORT_KEY: the key changed since it was saved. Set the old key back, or save the destination again.";
+    let wrong = "the destination's secret does not open with ENTERPLACE_EXPORT_KEY: the key changed since it was saved. Set the old key back, or save the destination again.";
     let bytes = sealed
         .strip_prefix("v1:")
         .and_then(unhex)
@@ -443,7 +443,7 @@ fn read_after(
         let text = String::from_utf8_lossy(&line[..line.len() - 1]).into_owned();
         let value: Value = serde_json::from_str(&text).map_err(|_| {
             format!(
-                "a line of {} is not a record. Run gantry audit verify {}.",
+                "a line of {} is not a record. Run enterplace audit verify {}.",
                 file.display(),
                 path.display()
             )
@@ -812,7 +812,7 @@ impl Exporter {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *said != line {
-            eprintln!("gantry: {line}");
+            eprintln!("enterplace: {line}");
             *said = line.to_string();
         }
     }
@@ -939,7 +939,7 @@ impl Exporter {
             if self.retention && held.is_none_or(|at| at.elapsed() >= HOLD_EVERY) {
                 held = Some(Instant::now());
                 match self.settings().await {
-                    Ok(settings) => gantry_core::insights::hold(&self.path, settings.hold),
+                    Ok(settings) => enterplace_core::insights::hold(&self.path, settings.hold),
                     Err(err) => self.say(&format!("legal hold: {err}")),
                 }
             }
@@ -1270,14 +1270,14 @@ async fn destinations_section(export: &Export, edit: bool) -> Result<String, Str
                         "URL",
                         "",
                         " required",
-                        "https only. Splunk: https://splunk:8088/services/collector/event. Datadog: https://http-intake.logs.datadoghq.com/api/v2/logs. Elasticsearch: the index, https://es:9200/gantry-audit. OTLP: https://collector:4318/v1/logs. Sentinel: the data collection endpoint's stream URL. S3: https://s3.eu-west-1.amazonaws.com/bucket/prefix. GCS: https://storage.googleapis.com/bucket/prefix. Azure: https://account.blob.core.windows.net/container/prefix. LLM traces: https://phoenix:6006/v1/traces, or http://localhost:4318/v1/traces for a Datadog Agent. Langfuse: https://cloud.langfuse.com. Callback: your HTTPS endpoint."
+                        "https only. Splunk: https://splunk:8088/services/collector/event. Datadog: https://http-intake.logs.datadoghq.com/api/v2/logs. Elasticsearch: the index, https://es:9200/enterplace-audit. OTLP: https://collector:4318/v1/logs. Sentinel: the data collection endpoint's stream URL. S3: https://s3.eu-west-1.amazonaws.com/bucket/prefix. GCS: https://storage.googleapis.com/bucket/prefix. Azure: https://account.blob.core.windows.net/container/prefix. LLM traces: https://phoenix:6006/v1/traces, or http://localhost:4318/v1/traces for a Datadog Agent. Langfuse: https://cloud.langfuse.com. Callback: your HTTPS endpoint."
                     ),
                     input(
                         "token",
                         "Secret",
                         "",
                         r#" type="password" autocomplete="off""#,
-                        "Splunk HEC token, Datadog API key, Elasticsearch API key, OTLP header value, Sentinel client secret, S3 secret access key, GCS service account JSON key, or an Azure SAS token. Leave empty for a webhook (Gantry makes its signing secret) or to use the replica's cloud identity."
+                        "Splunk HEC token, Datadog API key, Elasticsearch API key, OTLP header value, Sentinel client secret, S3 secret access key, GCS service account JSON key, or an Azure SAS token. Leave empty for a webhook (Enterplace makes its signing secret) or to use the replica's cloud identity."
                     ),
                     input(
                         "header",
@@ -1322,7 +1322,7 @@ async fn destinations_section(export: &Export, edit: bool) -> Result<String, Str
                         "Sentinel app registration, or a user-assigned managed identity."
                     ),
                     String::from(
-                        r#"<label class="t-body"><input type="checkbox" name="text"> Send prompt and answer text, redacted</label><p class="t-small g-muted" style="margin: 0">Trace and callback destinations only. Off by default. Text is captured at request time from then on, redacted by Gantry's secrets and PII detectors, kept encrypted and apart from the audit log for the hours set below, and sent only here. The choice is recorded in the audit log.</p>"#
+                        r#"<label class="t-body"><input type="checkbox" name="text"> Send prompt and answer text, redacted</label><p class="t-small g-muted" style="margin: 0">Trace and callback destinations only. Off by default. Text is captured at request time from then on, redacted by Enterplace's secrets and PII detectors, kept encrypted and apart from the audit log for the hours set below, and sent only here. The choice is recorded in the audit log.</p>"#
                     ) + &input(
                         "text_teams",
                         "Text for teams",
@@ -1430,7 +1430,7 @@ async fn retention_section(
     }
     let days = settings.days;
     let mut retention = format!(
-        r#"<p class="t-body" style="margin: 0">Each replica seals its log once a day. Sealed segments older than <span class="t-mono-sm" id="retention-days">{days}</span> days (and older than this month) are deleted every hour{}, after every destination has them. Each deletion is a record in the chain naming what went, so <span class="t-mono-sm">gantry audit verify</span> still proves the rest.</p>"#,
+        r#"<p class="t-body" style="margin: 0">Each replica seals its log once a day. Sealed segments older than <span class="t-mono-sm" id="retention-days">{days}</span> days (and older than this month) are deleted every hour{}, after every destination has them. Each deletion is a record in the chain naming what went, so <span class="t-mono-sm">enterplace audit verify</span> still proves the rest.</p>"#,
         if settings.hold {
             ", but not while legal hold is on"
         } else {
@@ -1571,7 +1571,7 @@ async fn change(
             crate::license::LICENSE_REQUIRED,
             json!({ "feature": needs.0 }),
             format!(
-                "This install's license does not include {}. Ask Gantry to add it.",
+                "This install's license does not include {}. Ask Enterplace to add it.",
                 needs.0
             ),
         )
@@ -1679,7 +1679,7 @@ async fn change(
             .await?;
             // Added as of now on this process's clock, the one records are stamped with: Postgres's now() runs on
             // another machine's clock, and a few milliseconds behind would ship the record above as a new one.
-            let created = gantry_core::audit::timestamp();
+            let created = enterplace_core::audit::timestamp();
             let client = ex.db.client().await?;
             let row = client
                 .query_one(
@@ -1693,7 +1693,7 @@ async fn change(
                 section(
                     "Signing secret",
                     &format!(
-                        r#"<p class="t-body" style="margin: 0">Verify each POST with an HMAC-SHA256 of the raw body under this secret, sent as <span class="t-mono-sm">x-gantry-signature: sha256=&lt;hex&gt;</span>. It is shown once.</p><span class="g-command g-command--value"><span class="g-command__text t-mono" id="signing-secret">{}</span></span>"#,
+                        r#"<p class="t-body" style="margin: 0">Verify each POST with an HMAC-SHA256 of the raw body under this secret, sent as <span class="t-mono-sm">x-enterplace-signature: sha256=&lt;hex&gt;</span>. It is shown once.</p><span class="g-command g-command--value"><span class="g-command__text t-mono" id="signing-secret">{}</span></span>"#,
                         esc(&secret)
                     ),
                 )
@@ -1793,7 +1793,7 @@ async fn change(
             client
                 .execute(
                     "UPDATE enterprise_export_settings SET pull_sha256 = $1",
-                    &[&gantry_core::id::sha256_hex(token.as_bytes())],
+                    &[&enterplace_core::id::sha256_hex(token.as_bytes())],
                 )
                 .await
                 .map_err(db_error)?;
@@ -1883,7 +1883,7 @@ async fn change(
                 .await
                 .map_err(db_error)?;
             // At once on this replica; the others read it within HOLD_EVERY.
-            gantry_core::insights::hold(&ex.path, on);
+            enterplace_core::insights::hold(&ex.path, on);
             Ok((
                 if on {
                     "Legal hold is on. Retention deletes nothing until it is turned off.".into()
@@ -1902,7 +1902,7 @@ pub(crate) fn random_hex(bytes: usize) -> Result<String, String> {
     ring::rand::SystemRandom::new()
         .fill(&mut out)
         .map_err(|_| "The system gave no randomness. Try again in a moment.".to_string())?;
-    Ok(gantry_core::id::hex(&out))
+    Ok(enterplace_core::id::hex(&out))
 }
 
 /// Sends the newest records of the last `days` days, every replica's, each replica's in runs of consecutive records
@@ -1920,7 +1920,7 @@ async fn backfill(ex: &Exporter, dest: &Dest, days: i32) -> Result<usize, (usize
             .map_err(db_error)?;
         rows.iter()
             .map(|r| Ok((r.try_get::<_, String>(0)?, r.try_get::<_, i64>(1)?, r.try_get::<_, String>(2)?)))
-            .collect::<Result<Vec<_>, gantry_server::store::tokio_postgres::Error>>()
+            .collect::<Result<Vec<_>, enterplace_server::store::tokio_postgres::Error>>()
             .map_err(db_error)
     }
     .await
@@ -1994,7 +1994,7 @@ async fn pull(Ext(export): Ext<Export>, headers: HeaderMap, uri: Uri) -> Respons
     // Hashes are compared, so timing says nothing about the token.
     let matches = !wanted.is_empty()
         && token.starts_with("gpull_")
-        && gantry_core::id::sha256_hex(token.as_bytes()) == wanted;
+        && enterplace_core::id::sha256_hex(token.as_bytes()) == wanted;
     if !matches {
         return api_error(
             StatusCode::UNAUTHORIZED,
@@ -2102,7 +2102,7 @@ async fn archive(
         return refuse("The download could not be recorded in the audit log, so it was not made.")
             .await;
     }
-    let file = format!("gantry-audit-{from}-{to}.ndjson");
+    let file = format!("enterplace-audit-{from}-{to}.ndjson");
     // Pages of 1000 rows, so a long range is streamed rather than held.
     let state = (ex, from, to, String::new(), 0i64, false);
     let stream = futures_util::stream::unfold(

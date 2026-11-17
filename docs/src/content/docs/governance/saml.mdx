@@ -7,25 +7,25 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gantry is a SAML 2.0 service provider for the admin console, beside [OpenID Connect sign-in](/governance/single-sign-on/). People sign in at your identity provider and get the console role and the team their groups say. Gantry takes only signed assertions, and checks each one against the certificate you paste into the policy.
+Enterplace is a SAML 2.0 service provider for the admin console, beside [OpenID Connect sign-in](/governance/single-sign-on/). People sign in at your identity provider and get the console role and the team their groups say. Enterplace takes only signed assertions, and checks each one against the certificate you paste into the policy.
 
 ## Example
 
 {/* not checked: the certificate is a placeholder */}
-```yaml title="gantry.policy.yaml (fragment)"
+```yaml title="enterplace.policy.yaml (fragment)"
 console:
   saml:
     idp_entity_id: http://www.okta.com/exk1a2b3c4d5e6f7g8h9
-    idp_sso_url: https://example.okta.com/app/example_gantry_1/exk1a2b3c4d5e6f7g8h9/sso/saml
+    idp_sso_url: https://example.okta.com/app/example_enterplace_1/exk1a2b3c4d5e6f7g8h9/sso/saml
     idp_certificate: |
       -----BEGIN CERTIFICATE-----
       MIIDqDCCApCgAwIBAgIGAY...
       -----END CERTIFICATE-----
-    sp_entity_id: https://gantry.example.com/console/saml/metadata
-    acs_url: https://gantry.example.com/console/saml/acs
+    sp_entity_id: https://enterplace.example.com/console/saml/metadata
+    acs_url: https://enterplace.example.com/console/saml/acs
     role_attribute: groups
-    admin_values: [gantry-admins]
-    read_only_values: [gantry-viewers]
+    admin_values: [enterplace-admins]
+    read_only_values: [enterplace-viewers]
     allowed_domains: [example.com]
 ```
 
@@ -34,13 +34,13 @@ console:
 <Steps>
 
 1. At your identity provider, create a SAML 2.0 application with:
-   - **ACS URL** (single sign-on URL, reply URL): `https://<your gantry>/console/saml/acs`, HTTP-POST binding.
-   - **Audience** (SP entity ID, identifier): `https://<your gantry>/console/saml/metadata`.
+   - **ACS URL** (single sign-on URL, reply URL): `https://<your enterplace>/console/saml/acs`, HTTP-POST binding.
+   - **Audience** (SP entity ID, identifier): `https://<your enterplace>/console/saml/metadata`.
    - **NameID format**: email address, or an `email` attribute (set `email_attribute`).
    - An attribute that holds the person's groups, named as `role_attribute` says.
    - Assertion signing on, with RSA-SHA256. Assertion encryption off.
 
-   An identity provider that imports metadata can read it from `https://<your gantry>/console/saml/metadata`.
+   An identity provider that imports metadata can read it from `https://<your enterplace>/console/saml/metadata`.
 
 2. Copy the identity provider's entity ID (its issuer), its SSO URL (HTTP-Redirect binding) and its signing certificate into `console.saml`.
 
@@ -59,7 +59,7 @@ The policy is read on every console page, so a change to `console.saml` needs no
 | `idp_entity_id` | string | required | The identity provider's entity ID. The `Issuer` of each assertion must equal it. |
 | `idp_sso_url` | string | required | The identity provider's single sign-on URL for the HTTP-Redirect binding. https (plain http only to this machine). |
 | `idp_certificate` | string | required | The identity provider's signing certificate, PEM. List two PEM blocks while the provider rotates its certificate: an assertion signed by either is taken. |
-| `sp_entity_id` | string | required | Gantry's entity ID. Every assertion must name it as its audience. |
+| `sp_entity_id` | string | required | Enterplace's entity ID. Every assertion must name it as its audience. |
 | `acs_url` | string | required | The console's `/console/saml/acs` at its public address. Assertions must be addressed to it. |
 | `email_attribute` | string | none | The attribute holding the email. Without it the subject's NameID is used, and must be an email. |
 | `role_attribute` | string | required | The attribute whose values give the role and the team. Matched by `Name` or `FriendlyName`. |
@@ -67,15 +67,15 @@ The policy is read on every console page, so a change to `console.saml` needs no
 | `read_only_values` | list | `[]` | Values that give the read-only role. |
 | `allowed_domains` | list | `[]` | Email domains let in. |
 | `allowed_emails` | list | `[]` | Whole addresses let in. |
-| `self_issue` | map | none | Turns on `gantry login` over SAML. Same fields as [`console.sso.self_issue`](/governance/single-sign-on/#self_issue-fields). See [below](#gantry-login-over-saml). |
+| `self_issue` | map | none | Turns on `enterplace login` over SAML. Same fields as [`console.sso.self_issue`](/governance/single-sign-on/#self_issue-fields). See [below](#enterplace-login-over-saml). |
 
 Roles work as with OpenID Connect: an admin value, then the first [policy role](/governance/policy/#console-roles) whose `sso_values` match, then a read-only value. The person's team is the [team](/governance/teams/) that lists their email, else the first whose `sso_values` match a group.
 
-## What Gantry checks
+## What Enterplace checks
 
 Every check fails closed, with a message that names the cause and the fix.
 
-- **Started here.** The sign-in starts at the console: Gantry sends an `AuthnRequest` with a random ID and keeps that ID only in a sealed cookie in the browser. The response must answer that request (`InResponseTo`), in that browser, within 10 minutes. A sign-in started from the identity provider's app list is refused.
+- **Started here.** The sign-in starts at the console: Enterplace sends an `AuthnRequest` with a random ID and keeps that ID only in a sealed cookie in the browser. The response must answer that request (`InResponseTo`), in that browser, within 10 minutes. A sign-in started from the identity provider's app list is refused.
 - **Signature.** The assertion, or the response that holds it, carries an enveloped XML signature with exclusive canonicalization, SHA-256 or SHA-512 digests and RSA-SHA256, RSA-SHA512 or ECDSA-SHA256, that verifies with `idp_certificate`. SHA-1 is refused.
 - **What is read is what is signed.** The response holds exactly one assertion, the signature's reference names it by an ID no other element carries, and every value is read from that element. A second assertion, or a signed one moved elsewhere, is refused.
 - **Issuer, audience, recipient.** `Issuer` is `idp_entity_id`, an `AudienceRestriction` names `sp_entity_id`, the response's `Destination` and a bearer `SubjectConfirmationData`'s `Recipient` are `acs_url`.
@@ -89,10 +89,10 @@ A sign-in or refusal is an `admin` record with `action: console_sign_in` and `ta
 
 | Code | Cause |
 |---|---|
-| `saml_response` | The response is not base64, not UTF-8, not XML Gantry takes (a DTD), not a SAML 2.0 response, or holds other than one assertion. |
+| `saml_response` | The response is not base64, not UTF-8, not XML Enterplace takes (a DTD), not a SAML 2.0 response, or holds other than one assertion. |
 | `saml_status` | The identity provider did not sign the person in (status not Success). |
 | `saml_unsigned` | Neither the assertion nor the response is signed. |
-| `saml_signature` | The signature does not verify with `idp_certificate`, the content changed after signing, or the algorithm, canonicalization or reference is not one Gantry takes. |
+| `saml_signature` | The signature does not verify with `idp_certificate`, the content changed after signing, or the algorithm, canonicalization or reference is not one Enterplace takes. |
 | `saml_issuer` | The issuer is not `idp_entity_id`. |
 | `saml_audience` | No audience, or not `sp_entity_id`. |
 | `saml_recipient` | `Destination` or the bearer confirmation's `Recipient` is not `acs_url`. |
@@ -102,16 +102,16 @@ A sign-in or refusal is an `admin` record with `action: console_sign_in` and `ta
 | `sso_email` | No email, or one outside the allowed lists. |
 | `sso_role` | No group value gives a role. |
 | `sso_config` | `console.saml` is not set, or the policy has problems. |
-| `sso_self_issue` | `gantry login` with no `self_issue` section, or an email not on its lists. |
-| `sso_team` | `gantry login`, and `teams:` places the person in no team. |
-| `cli_login` | A `gantry login` link that is incomplete or was changed. |
+| `sso_self_issue` | `enterplace login` with no `self_issue` section, or an email not on its lists. |
+| `sso_team` | `enterplace login`, and `teams:` places the person in no team. |
+| `cli_login` | A `enterplace login` link that is incomplete or was changed. |
 
-## gantry login over SAML
+## enterplace login over SAML
 
-With `console.saml.self_issue` set and no `console.sso`, `gantry login` signs in through SAML, the same way it does through [OpenID Connect](/governance/single-sign-on/#developer-keys-with-gantry-login):
+With `console.saml.self_issue` set and no `console.sso`, `enterplace login` signs in through SAML, the same way it does through [OpenID Connect](/governance/single-sign-on/#developer-keys-with-enterplace-login):
 
 {/* not checked: an excerpt, the other console.saml fields are left out */}
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 console:
   saml:
     # ... the fields above ...
@@ -123,11 +123,11 @@ console:
 
 The CLI opens the browser at the console, which starts a SAML sign-in at the identity provider. The assertion is checked as for a console sign-in, then the browser goes back to the CLI's listener on `127.0.0.1` with a one-use code, never the key, and the CLI trades the code for the key with a PKCE verifier only it holds. No console session is opened. The key is named by the email and put in the team that lists the email, else the first whose `sso_values` match a `role_attribute` value, else `self_issue.team`, and recorded as an `admin` record with `action: self_issue_key`. No console role is needed.
 
-With both `console.sso` and `console.saml` set, `gantry login` uses OpenID Connect.
+With both `console.sso` and `console.saml` set, `enterplace login` uses OpenID Connect.
 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Single sign-on (OpenID Connect)" href="/governance/single-sign-on/" description="Console sign-in and gantry login through OpenID Connect." />
+	<LinkCard title="Single sign-on (OpenID Connect)" href="/governance/single-sign-on/" description="Console sign-in and enterplace login through OpenID Connect." />
 	<LinkCard title="Teams" href="/governance/teams/" description="Teams with owners and members, and the groups that place people." />
 </CardGrid>

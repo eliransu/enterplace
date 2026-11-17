@@ -9,7 +9,7 @@ output "service_name" {
 }
 
 output "revision" {
-  description = "The current revision, and the Filestore folder (under /gantry) holding its audit log."
+  description = "The current revision, and the Filestore folder (under /enterplace) holding its audit log."
   value       = local.revision
 }
 
@@ -30,15 +30,15 @@ output "filestore_ip" {
 
 output "service_account" {
   description = "The service account the gateway runs as, and Vertex AI providers sign in as."
-  value       = google_service_account.gantry.email
+  value       = google_service_account.enterplace.email
 }
 
 output "master_key_secret" {
-  description = "The secret the gateway reads GANTRY_MASTER_KEY from."
-  value       = local.secrets["GANTRY_MASTER_KEY"]
+  description = "The secret the gateway reads ENTERPLACE_MASTER_KEY from."
+  value       = local.secrets["ENTERPLACE_MASTER_KEY"]
 }
 
 output "export_key_secret" {
-  description = "The secret the gateway reads GANTRY_EXPORT_KEY from."
-  value       = local.secrets["GANTRY_EXPORT_KEY"]
+  description = "The secret the gateway reads ENTERPLACE_EXPORT_KEY from."
+  value       = local.secrets["ENTERPLACE_EXPORT_KEY"]
 }

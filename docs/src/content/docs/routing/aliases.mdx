@@ -8,11 +8,11 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-An alias is a model name callers send that Gantry serves from one or more deployments. Each deployment is a provider and the model name sent to it. Use aliases to spread load, rename models, and send failed requests elsewhere.
+An alias is a model name callers send that Enterplace serves from one or more deployments. Each deployment is a provider and the model name sent to it. Use aliases to spread load, rename models, and send failed requests elsewhere.
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai-east
@@ -73,7 +73,7 @@ Aliases change without a restart, as rules do.
 
 **Rules decide on the name the caller sent.** A rule lists `smart`, not each deployment, and `/v1/models` lists `smart` to whoever the rule allows. To let a person reach only one deployment, give them a model name, not the alias.
 
-**Picking.** `round_robin` takes deployments in turn, each as often as its `weight`. `least_busy` takes the one with the fewest requests in flight through this Gantry process, counted until the answer has been passed on. The other deployments follow in the order written.
+**Picking.** `round_robin` takes deployments in turn, each as often as its `weight`. `least_busy` takes the one with the fewest requests in flight through this Enterplace process, counted until the answer has been passed on. The other deployments follow in the order written.
 
 **Cooldown.** A deployment that fails (no connection, a [timeout](/routing/timeouts/), a 429 or a 5xx, or a failed [health probe](/routing/health-probes/)) is passed over for `cooldown_seconds`, and the request goes on to the next deployment at once, with each provider's own `retries`. When every deployment is cooling down, they are still tried in order: an alias never refuses a request only because each deployment failed once.
 
@@ -94,12 +94,12 @@ Aliases change without a restart, as rules do.
 
 A kill switch on a model also stops every alias that can send to it. See [Kill switches](/governance/kill-switches/).
 
-## Errors from gantry check
+## Errors from enterplace check
 
-`gantry check` refuses a mix of APIs, an unknown provider, a missing map entry, a weight out of range, and an alias with the name of a model a provider lists:
+`enterplace check` refuses a mix of APIs, an unknown provider, a missing map entry, a weight out of range, and an alias with the name of a model a provider lists:
 
 ```text
-gantry.policy.yaml:20: alias "smart": weight is how often a deployment is picked against the others, 1 to 1000.
+enterplace.policy.yaml:20: alias "smart": weight is how often a deployment is picked against the others, 1 to 1000.
 ```
 
 <Aside type="note">

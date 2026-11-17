@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A deployment is a provider and model an [alias](/routing/aliases/) names. Gantry keeps a circuit for each: it cools down after a failure, a [health probe](/routing/health-probes/) can check it, and its limits and latency steer the alias's routing. The console's **Deployments** page and `GET /admin/deployments` show that state, and each provider with its [key pool](/routing/key-pools/).
+A deployment is a provider and model an [alias](/routing/aliases/) names. Enterplace keeps a circuit for each: it cools down after a failure, a [health probe](/routing/health-probes/) can check it, and its limits and latency steer the alias's routing. The console's **Deployments** page and `GET /admin/deployments` show that state, and each provider with its [key pool](/routing/key-pools/).
 
 ## What every replica shows
 
@@ -28,7 +28,7 @@ With a [store](/operations/store/), every gateway writes what it knows of each d
 Each provider lists the keys of its pool by fingerprint, never the key: `ready` or `resting` (set aside after a 401, 403 or 429) with the seconds left, and how often each was used. A key resting on any gateway is resting.
 
 ```bash
-curl http://127.0.0.1:8080/admin/deployments -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+curl http://127.0.0.1:8080/admin/deployments -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY"
 ```
 
 ```json title="200"
@@ -41,14 +41,14 @@ curl http://127.0.0.1:8080/admin/deployments -H "Authorization: Bearer $GANTRY_A
    "keys":[{"key":"9f2c11aa","state":"ready","resting_seconds":0,"uses":812},{"key":"03be7c5d","state":"resting","resting_seconds":38,"uses":790}]}]}
 ```
 
-Any admin role reads it. State is kept in memory and in the store's routing tables, so it starts over when every gateway restarts. For state over time, graph `gantry_deployment_up`, `gantry_deployment_cooldowns_total`, `gantry_upstream_responses_total` and `gantry_deployment_rate_headroom_ratio` from [`/metrics`](/operations/observability/).
+Any admin role reads it. State is kept in memory and in the store's routing tables, so it starts over when every gateway restarts. For state over time, graph `enterplace_deployment_up`, `enterplace_deployment_cooldowns_total`, `enterplace_upstream_responses_total` and `enterplace_deployment_rate_headroom_ratio` from [`/metrics`](/operations/observability/).
 
 ## Test a provider's connection
 
 **Test connection** beside a provider, or `POST /admin/providers/<name>/test`, sends the cheapest call a provider documents: `GET /v1/models`, its model list, which bills nothing. Any 2xx means the address, the key and the network between hold.
 
 ```bash
-curl -X POST http://127.0.0.1:8080/admin/providers/openai/test -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+curl -X POST http://127.0.0.1:8080/admin/providers/openai/test -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY"
 ```
 
 ```json title="200"
@@ -62,7 +62,7 @@ curl -X POST http://127.0.0.1:8080/admin/providers/openai/test -H "Authorization
 | 401, 403 | `false` | The provider refused the key. Check its `key_env` or its entry on the [Credentials](/governance/provider-credentials/) page |
 | 404 | `false` | No model list at this address. Check the provider's `url`; a provider that serves no model list can only be tested with a request |
 | 429 | `false` | The address and key work; the key is out of quota or rate limited now |
-| `upstream_unreachable`, `upstream_timeout` | `false` | Gantry could not reach it. Check the `url` and the network |
+| `upstream_unreachable`, `upstream_timeout` | `false` | Enterplace could not reach it. Check the `url` and the network |
 
 The test needs the `edit_policy` permission and a role not kept to part of the install. Each test is recorded in the audit log as `test_provider` with its outcome and latency; the record never holds the key or the provider's answer. A provider with a key pool is tested with the pool's next key, named by its fingerprint in `key`.
 

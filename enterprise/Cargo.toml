@@ -1,23 +1,23 @@
 [package]
-name = "gantry-enterprise"
-description = "Commercial edition of the Gantry AI gateway."
+name = "enterplace-enterprise"
+description = "Commercial edition of the Enterplace AI gateway."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license-file = "LICENSE"
 publish = false
 
-# The image ships this binary as /gantry. The cargo target keeps the package's name so a workspace build does not
-# collide with the open source `gantry` binary of gantry-cli, which `cargo install gantry-cli` still installs.
+# The image ships this binary as /enterplace. The cargo target keeps the package's name so a workspace build does not
+# collide with the open source `enterplace` binary of enterplace-cli, which `cargo install enterplace-cli` still installs.
 [[bin]]
-name = "gantry-enterprise"
+name = "enterplace-enterprise"
 path = "src/main.rs"
 
 [dependencies]
-gantry-core.workspace = true
-gantry-server.workspace = true
+enterplace-core.workspace = true
+enterplace-server.workspace = true
 # Every open source command (key new, audit verify, check...) runs from this binary too, so the image needs no other.
-gantry-cli.workspace = true
+enterplace-cli.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
 # The node talks to the control plane from plain threads; a blocking client keeps that code short.
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
@@ -27,10 +27,10 @@ ring = "0.17"
 # Licenses travel as base64url text; already in the build through the open crates.
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
-# The enterprise console pages are axum handlers on the console's router; already in the build through gantry-server.
+# The enterprise console pages are axum handlers on the console's router; already in the build through enterplace-server.
 axum = { version = "0.8", default-features = false }
 # Members and every later feature write audit records and hash tokens with the open source helpers.
-gantry-console.workspace = true
+enterplace-console.workspace = true
 # The audit archive streams pages of rows as the response body; already in the build through axum.
 futures-util = { version = "0.3", default-features = false }
 
@@ -42,12 +42,12 @@ webpki-roots = "0.26"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [dev-dependencies]
-# The feature tests drive the gateway's router in process; both are already in the build through gantry-server.
+# The feature tests drive the gateway's router in process; both are already in the build through enterplace-server.
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 
 [features]
-# Gantry staff only: `license keygen` and `license issue`. Customer builds cannot sign licenses.
+# Enterplace staff only: `license keygen` and `license issue`. Customer builds cannot sign licenses.
 issuer = []
 
 [lints]

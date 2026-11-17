@@ -5,25 +5,25 @@ sidebar:
   order: 9
 ---
 
-With a license that includes `siem` (see [License key](/operations/license/)), Gantry adds an **Audit export** page to the console. Every replica reads its own [audit log](/governance/audit-log/) as it is written and sends the records on. Nothing about it is on the request path: a destination that is down never slows or refuses a request.
+With a license that includes `siem` (see [License key](/operations/license/)), Enterplace adds an **Audit export** page to the console. Every replica reads its own [audit log](/governance/audit-log/) as it is written and sends the records on. Nothing about it is on the request path: a destination that is down never slows or refuses a request.
 
 The audit log holds no prompt or answer text, no keys and no text a guardrail matched, so none of that is ever exported. For Langfuse, Arize Phoenix, Datadog traces and an HTTP callback, with prompt text only on opt-in, see [Observability integrations](/operations/observability-integrations/).
 
 ## Before you start
 
 - The policy needs a `store:` section: export state lives in the same Postgres as the [store](/operations/store/).
-- Set `GANTRY_EXPORT_KEY` on every replica to the same 64 hex characters (`openssl rand -hex 32`). Destination secrets (tokens, API keys, the webhook signing secret) are kept encrypted with it in the database. A destination that signs in with the replica's cloud identity needs no secret.
+- Set `ENTERPLACE_EXPORT_KEY` on every replica to the same 64 hex characters (`openssl rand -hex 32`). Destination secrets (tokens, API keys, the webhook signing secret) are kept encrypted with it in the database. A destination that signs in with the replica's cloud identity needs no secret.
 
 ## Destinations
 
 | Kind | URL | Secret | Sent as |
 |---|---|---|---|
-| Webhook | Your HTTPS endpoint | Made by Gantry, shown once | One JSON POST per batch, signed `x-gantry-signature: sha256=<HMAC-SHA256 of the raw body>` |
-| Splunk HTTP Event Collector | `https://splunk:8088/services/collector/event` | HEC token | One event per record, `sourcetype` `gantry:audit`, the range in indexed `fields` |
+| Webhook | Your HTTPS endpoint | Made by Enterplace, shown once | One JSON POST per batch, signed `x-enterplace-signature: sha256=<HMAC-SHA256 of the raw body>` |
+| Splunk HTTP Event Collector | `https://splunk:8088/services/collector/event` | HEC token | One event per record, `sourcetype` `enterplace:audit`, the range in indexed `fields` |
 | Datadog logs | `https://http-intake.logs.datadoghq.com/api/v2/logs` (your site's) | API key | One log per record, the record line as `message`, the range in `ddtags` |
-| Elasticsearch | The index, `https://es:9200/gantry-audit` | API key | The bulk API, `create` with ID `<replica>-<n>`, so a batch sent twice is stored once |
+| Elasticsearch | The index, `https://es:9200/enterplace-audit` | API key | The bulk API, `create` with ID `<replica>-<n>`, so a batch sent twice is stored once |
 | OpenTelemetry logs | `https://collector:4318/v1/logs` | Optional; sent as `Authorization: Bearer`, or in the header you name | OTLP/HTTP JSON, one log record per audit record, the range as resource attributes |
-| Microsoft Sentinel | The data collection rule's stream URL, `https://<dce>.ingest.monitor.azure.com/dataCollectionRules/<dcr-id>/streams/Custom-GantryAudit_CL?api-version=2023-01-01` | Client secret, or none for managed or workload identity | Logs Ingestion API rows |
+| Microsoft Sentinel | The data collection rule's stream URL, `https://<dce>.ingest.monitor.azure.com/dataCollectionRules/<dcr-id>/streams/Custom-EnterplaceAudit_CL?api-version=2023-01-01` | Client secret, or none for managed or workload identity | Logs Ingestion API rows |
 | Amazon S3 or S3-compatible (MinIO, Cloudflare R2, Google Cloud Storage's interoperability API) | `https://s3.<region>.amazonaws.com/<bucket>/<prefix>`, path style | Secret access key with an access key ID, or none | One NDJSON object per batch |
 | Google Cloud Storage | `https://storage.googleapis.com/<bucket>/<prefix>` | A service account's JSON key, or none | One NDJSON object per batch |
 | Azure Blob Storage | `https://<account>.blob.core.windows.net/<container>/<prefix>` | A SAS token, or none | One NDJSON block blob per batch |
@@ -47,18 +47,18 @@ Create a custom table and a data collection rule whose stream has these columns:
 Each replica sends its own records, in chain order, up to 500 per batch. Every batch says which part of the chain it holds:
 
 ```json
-{"replica":"gantry-0-84347ac2b1f0","count":3,"first_n":1201,"last_n":1203,"prev":"6d07...","first_hash":"91ab...","last_hash":"1ae3...","records":[{"n":1201,...},...]}
+{"replica":"enterplace-0-84347ac2b1f0","count":3,"first_n":1201,"last_n":1203,"prev":"6d07...","first_hash":"91ab...","last_hash":"1ae3...","records":[{"n":1201,...},...]}
 ```
 
-That is the webhook body; the other formats carry the same fields as attributes, tags or fields, and object names hold them: `<replica>/<first n>-<last n>-<first hash>-<last hash>.ndjson`. Each record is sent exactly as the log wrote it, so a SIEM can check its copy without trusting Gantry:
+That is the webhook body; the other formats carry the same fields as attributes, tags or fields, and object names hold them: `<replica>/<first n>-<last n>-<first hash>-<last hash>.ndjson`. Each record is sent exactly as the log wrote it, so a SIEM can check its copy without trusting Enterplace:
 
 1. Each record's `hash` is the SHA-256 of its line up to and including `prev`, closed with `}`.
 2. Each record's `prev` is the `hash` of the one before; across batches of one replica, a batch's `prev` is the last batch's `last_hash`. A gap or a change shows at once.
-3. Any `last_hash` can be checked against the replica's log with `gantry audit verify --expect-last <hash>`.
+3. Any `last_hash` can be checked against the replica's log with `enterplace audit verify --expect-last <hash>`.
 
-A replica is named by its host name and the start of its chain's first hash, kept beside the log in `gantry-audit.jsonl.replica`.
+A replica is named by its host name and the start of its chain's first hash, kept beside the log in `enterplace-audit.jsonl.replica`.
 
-With [a chain per organization](/governance/audit-log/#a-chain-per-organization) (`audit: { per_org: true }`), each organization's chain is a replica of its own, named the same way from its file (`gantry-audit.jsonl.orgs/acme.jsonl.replica`): its batches carry its own `first_n`, `prev` and hashes, a SIEM checks them as it checks any replica, and `gantry audit verify gantry-audit.jsonl --org acme --expect-last <hash>` checks a `last_hash` of it.
+With [a chain per organization](/governance/audit-log/#a-chain-per-organization) (`audit: { per_org: true }`), each organization's chain is a replica of its own, named the same way from its file (`enterplace-audit.jsonl.orgs/acme.jsonl.replica`): its batches carry its own `first_n`, `prev` and hashes, a SIEM checks them as it checks any replica, and `enterplace audit verify enterplace-audit.jsonl --org acme --expect-last <hash>` checks a `last_hash` of it.
 
 ## Delivery
 
@@ -74,11 +74,11 @@ The records are also kept in the `enterprise_audit` table for the pull API, back
 For a SIEM that cannot receive a POST. An owner creates the token on the page; it is shown once and kept only as its SHA-256. Creating another revokes the first.
 
 ```bash
-curl -H "Authorization: Bearer gpull_..." "https://gantry.example.com/export/records?after=0&limit=500"
+curl -H "Authorization: Bearer gpull_..." "https://enterplace.example.com/export/records?after=0&limit=500"
 ```
 
 ```json
-{"records":[{"replica":"gantry-0-84347ac2b1f0","received_at":"2026-11-13T09:14:03.002Z","line":"{\"n\":1,...}","record":{"n":1,...}}],"next":1}
+{"records":[{"replica":"enterplace-0-84347ac2b1f0","received_at":"2026-11-13T09:14:03.002Z","line":"{\"n\":1,...}","record":{"n":1,...}}],"next":1}
 ```
 
 Pass `next` as the next call's `after`. An empty `records` means you are up to date. `limit` is 1 to 1000. Any replica answers for all of them. A missing or wrong token is a 401 `invalid_token`.

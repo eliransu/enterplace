@@ -4,7 +4,7 @@
 # stand-in provider and verify the audit chain, all with the one published image.
 #
 # Usage: run.sh <path to docs/src/content/docs/deploy/docker.mdx>
-# GANTRY_IMAGE, when set, is written into .env in place of the docs' image, as a customer pins a version.
+# ENTERPLACE_IMAGE, when set, is written into .env in place of the docs' image, as a customer pins a version.
 set -eu
 page=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 dir=$(mktemp -d)
@@ -31,16 +31,16 @@ grep -q 'image: python:3.12-alpine' docker-compose.override.yml || { echo "the f
 # Filled in as the page says.
 sed -i.bak "s/^POSTGRES_PASSWORD=\$/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
 # The two optional keys, made as the page says: the master key turns provider credentials on.
-sed -i.bak "s/^GANTRY_MASTER_KEY=\$/GANTRY_MASTER_KEY=$(openssl rand -hex 32)/" .env
-sed -i.bak "s/^GANTRY_EXPORT_KEY=\$/GANTRY_EXPORT_KEY=$(openssl rand -hex 32)/" .env
-for k in GANTRY_MASTER_KEY GANTRY_EXPORT_KEY; do
+sed -i.bak "s/^ENTERPLACE_MASTER_KEY=\$/ENTERPLACE_MASTER_KEY=$(openssl rand -hex 32)/" .env
+sed -i.bak "s/^ENTERPLACE_EXPORT_KEY=\$/ENTERPLACE_EXPORT_KEY=$(openssl rand -hex 32)/" .env
+for k in ENTERPLACE_MASTER_KEY ENTERPLACE_EXPORT_KEY; do
   grep -Eq "^$k=[0-9a-f]{64}\$" .env || { echo "the page's .env has no empty $k= line"; exit 1; }
 done
-sed -i.bak "s/^GANTRY_PORT=.*/GANTRY_PORT=${GANTRY_PORT:-18080}/" .env
-[ -z "${GANTRY_IMAGE:-}" ] || sed -i.bak "s|^GANTRY_IMAGE=.*|GANTRY_IMAGE=$GANTRY_IMAGE|" .env
+sed -i.bak "s/^ENTERPLACE_PORT=.*/ENTERPLACE_PORT=${ENTERPLACE_PORT:-18080}/" .env
+[ -z "${ENTERPLACE_IMAGE:-}" ] || sed -i.bak "s|^ENTERPLACE_IMAGE=.*|ENTERPLACE_IMAGE=$ENTERPLACE_IMAGE|" .env
 rm -f .env.bak
 chmod 600 .env
-port=$(sed -n 's/^GANTRY_PORT=//p' .env)
+port=$(sed -n 's/^ENTERPLACE_PORT=//p' .env)
 echo "--- files"
 ls -la
 
@@ -57,25 +57,25 @@ docker compose up -d
 url="http://127.0.0.1:$port"
 i=0
 until curl -fsS "$url/healthz" >/dev/null 2>&1; do
-  i=$((i + 1)); [ $i -lt 90 ] || { echo "gantry did not answer /healthz within 90 s"; exit 1; }
+  i=$((i + 1)); [ $i -lt 90 ] || { echo "enterplace did not answer /healthz within 90 s"; exit 1; }
   sleep 1
 done
 echo "healthz: $(curl -fsS "$url/healthz")"
 
 # The master key reached the gateway: the first gateway on a store seals a check value with it.
-sealed=$(docker compose exec -T postgres psql -U gantry -d gantry -tAc 'SELECT count(*) FROM gantry_master')
-[ "$sealed" = 1 ] || { echo "the master key did not reach the gateway: gantry_master has $sealed rows"; exit 1; }
+sealed=$(docker compose exec -T postgres psql -U enterplace -d enterplace -tAc 'SELECT count(*) FROM enterplace_master')
+[ "$sealed" = 1 ] || { echo "the master key did not reach the gateway: enterplace_master has $sealed rows"; exit 1; }
 echo "master key: provider credentials are on"
 # And the export key is in its environment (only a siem license reads it).
-docker inspect "$(docker compose ps -q gantry)" --format '{{range .Config.Env}}{{println .}}{{end}}' \
-  | grep -Eq '^GANTRY_EXPORT_KEY=[0-9a-f]{64}$' || { echo "GANTRY_EXPORT_KEY did not reach the gateway"; exit 1; }
+docker inspect "$(docker compose ps -q enterplace)" --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -Eq '^ENTERPLACE_EXPORT_KEY=[0-9a-f]{64}$' || { echo "ENTERPLACE_EXPORT_KEY did not reach the gateway"; exit 1; }
 echo "export key: set on the gateway"
 
-docker compose logs gantry | grep 'First run' || { echo "no first-run setup link in the log"; exit 1; }
+docker compose logs enterplace | grep 'First run' || { echo "no first-run setup link in the log"; exit 1; }
 
-key=$(docker compose run --rm -T gantry key new maya.cohen --team payments --policy /etc/gantry/gantry.policy.yaml --quiet | tail -n 1)
-case "$key" in gantry_*) ;; *) echo "key new printed no key: $key"; exit 1 ;; esac
-echo "key new: a key, from the gantry image"
+key=$(docker compose run --rm -T enterplace key new maya.cohen --team payments --policy /etc/enterplace/enterplace.policy.yaml --quiet | tail -n 1)
+case "$key" in enterplace_*) ;; *) echo "key new printed no key: $key"; exit 1 ;; esac
+echo "key new: a key, from the enterplace image"
 
 i=0
 while :; do
@@ -96,6 +96,6 @@ code=$(curl -sS -o /dev/null -w '%{http_code}' "$url/v1/chat/completions" -H 'Co
 [ "$code" = 401 ] || { echo "a call without a key got $code, not 401"; exit 1; }
 echo "call without a key: 401"
 
-docker compose run --rm -T gantry check /etc/gantry/gantry.policy.yaml
-docker compose run --rm -T gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+docker compose run --rm -T enterplace check /etc/enterplace/enterplace.policy.yaml
+docker compose run --rm -T enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl
 echo "compose test passed"

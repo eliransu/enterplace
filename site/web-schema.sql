@@ -1,8 +1,8 @@
--- The gantry-web D1 database, written by site/worker.js.
--- Apply: npx --prefix docs wrangler d1 execute gantry-web --remote --file site/web-schema.sql
+-- The enterplace-web D1 database, written by site/worker.js.
+-- Apply: npx --prefix docs wrangler d1 execute enterplace-web --remote --file site/web-schema.sql
 CREATE TABLE IF NOT EXISTS hits (
   t TEXT NOT NULL,          -- UTC time, ISO 8601
-  site TEXT NOT NULL,       -- host name: gantry.enterplace.dev, gantry-docs.enterplace.dev, or an old host
+  site TEXT NOT NULL,       -- host name: enterplace.dev, docs.enterplace.dev, or an old host
   kind TEXT NOT NULL,       -- view (a browser), agent (a bot, an AI agent or a script), install (install.sh), click
   path TEXT NOT NULL,
   event TEXT NOT NULL,      -- clicks: data-track, else the button or link text; "copy"; or a name passed to track()

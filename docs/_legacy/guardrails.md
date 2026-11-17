@@ -4,9 +4,9 @@ A rule names the guardrails that check the text of each request it allows, after
 
 Every guardrail is one of three kinds:
 
-- **Built in**, run inside Gantry: `secrets` and `pii`. See [Policy file](policy.html#guardrails).
-- **Webhook**: any service that speaks Gantry's contract. See [Guardrail webhooks](guardrail-webhook.html).
-- **Vendor**, a service Gantry speaks to in its own API, so no adapter is needed: `openai_moderation`, `presidio`, `lakera`, `bedrock_guardrail`, `azure_content_safety`, `azure_prompt_shield` and `llama_guard`.
+- **Built in**, run inside Enterplace: `secrets` and `pii`. See [Policy file](policy.html#guardrails).
+- **Webhook**: any service that speaks Enterplace's contract. See [Guardrail webhooks](guardrail-webhook.html).
+- **Vendor**, a service Enterplace speaks to in its own API, so no adapter is needed: `openai_moderation`, `presidio`, `lakera`, `bedrock_guardrail`, `azure_content_safety`, `azure_prompt_shield` and `llama_guard`.
 
 ## What every remote guardrail shares
 
@@ -17,11 +17,11 @@ Every guardrail is one of three kinds:
 | `action` | `block` (the default) obeys the service: it refuses, or masks when the service masks. `warn` only records what the service found. `mask` is taken by `presidio` only. |
 | `url` | The service. `https://`, or `http://` on 127.0.0.1 or localhost only, because prompts in clear text across a network are a leak of their own. Optional where the vendor has one public address. |
 | `timeout_ms` | 1 to 30000, default 1000. It covers every call the guardrail makes for one request. |
-| `on_failure` | Required. `fail_closed` refuses the request when the service cannot answer in time, answers with an error status, or answers something Gantry cannot read; `fail_open` sends the request and records that the check did not run (`kind: unavailable`, `action: skipped`). |
+| `on_failure` | Required. `fail_closed` refuses the request when the service cannot answer in time, answers with an error status, or answers something Enterplace cannot read; `fail_open` sends the request and records that the check did not run (`kind: unavailable`, `action: skipped`). |
 | `key_env` | The name of the environment variable that holds the vendor's API key. The key itself never goes in the policy file. |
 | `headers_env` | Extra headers from environment variables, for a proxy in front of the vendor. Same rules as for a webhook. |
 
-Credentials are read from the environment when a call is made. Gantry does not start, and a reload is refused, while a variable a guardrail names is unset. No credential, no matched text and no vendor message reaches a record, a log line or a refusal: a record holds the guardrail, the vendor (`detector`), the kind of finding, the action and a count.
+Credentials are read from the environment when a call is made. Enterplace does not start, and a reload is refused, while a variable a guardrail names is unset. No credential, no matched text and no vendor message reaches a record, a log line or a refusal: a record holds the guardrail, the vendor (`detector`), the kind of finding, the action and a count.
 
 ```yaml
 guardrails:
@@ -40,10 +40,10 @@ OpenAI's moderation endpoint, `POST {url}/moderations`, default `url` `https://a
 
 ### presidio
 
-Microsoft Presidio, self-hosted. `url` is the analyzer (`POST {url}/analyze`), required. No key: run it next to Gantry or behind a proxy that adds one through `headers_env`. The messages are sent as one text, in English. Each entity found is a finding of its type, lowercased (`email_address`, `person`, `phone_number`).
+Microsoft Presidio, self-hosted. `url` is the analyzer (`POST {url}/analyze`), required. No key: run it next to Enterplace or behind a proxy that adds one through `headers_env`. The messages are sent as one text, in English. Each entity found is a finding of its type, lowercased (`email_address`, `person`, `phone_number`).
 
 - `action: block` refuses when anything is found; `warn` records it.
-- `action: mask` needs `anonymizer_url`: Gantry sends the text and the analyzer's results to `POST {anonymizer_url}/anonymize`, which replaces each entity with `[MASKED email_address]` and the like, and forwards the masked request.
+- `action: mask` needs `anonymizer_url`: Enterplace sends the text and the analyzer's results to `POST {anonymizer_url}/anonymize`, which replaces each entity with `[MASKED email_address]` and the like, and forwards the masked request.
 
 ```yaml
 guardrails:
@@ -55,7 +55,7 @@ guardrails:
     on_failure: fail_closed
 ```
 
-A message that holds the character U+001E cannot be checked (Gantry joins the messages with it) and counts as a failure of the service.
+A message that holds the character U+001E cannot be checked (Enterplace joins the messages with it) and counts as a failure of the service.
 
 ### lakera
 
@@ -203,7 +203,7 @@ rules:
     buffer_stream: true
 ```
 
-Gantry then holds the whole stream (up to 64 MiB), reads the text its events carry (chat chunks' `delta.content` and tool call arguments, messages' text deltas, Responses' `output_text` deltas, joined, so a secret split across events is found), and runs the answer guardrails on it. Allowed, the events go out exactly as the provider sent them. Masked, they go out as a stream with the masked text in the first event of each text and the later events of that text empty. Blocked, the caller gets the same 403 `guardrail_blocked` refusal as for a whole answer, in its own error shape, and none of the stream. The cost is latency: the caller sees no token until the model has written its last, so a long answer that would have started streaming in under a second arrives all at once. `gantry check` refuses `buffer_stream: true` on a rule whose guardrails have no `on: [answer]`.
+Enterplace then holds the whole stream (up to 64 MiB), reads the text its events carry (chat chunks' `delta.content` and tool call arguments, messages' text deltas, Responses' `output_text` deltas, joined, so a secret split across events is found), and runs the answer guardrails on it. Allowed, the events go out exactly as the provider sent them. Masked, they go out as a stream with the masked text in the first event of each text and the later events of that text empty. Blocked, the caller gets the same 403 `guardrail_blocked` refusal as for a whole answer, in its own error shape, and none of the stream. The cost is latency: the caller sees no token until the model has written its last, so a long answer that would have started streaming in under a second arrives all at once. `enterplace check` refuses `buffer_stream: true` on a rule whose guardrails have no `on: [answer]`.
 
 ## What is not checked
 

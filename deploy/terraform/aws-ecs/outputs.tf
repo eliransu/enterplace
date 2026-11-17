@@ -34,7 +34,7 @@ output "database_url_secret_arn" {
 }
 
 output "efs_file_system_id" {
-  description = "The file system holding each gateway's audit log, at /gantry-<n>."
+  description = "The file system holding each gateway's audit log, at /enterplace-<n>."
   value       = aws_efs_file_system.this.id
 }
 
@@ -54,11 +54,11 @@ output "bedrock_role_arn" {
 }
 
 output "master_key_secret_arn" {
-  description = "The secret the gateways read GANTRY_MASTER_KEY from."
+  description = "The secret the gateways read ENTERPLACE_MASTER_KEY from."
   value       = local.master_key_secret_arn
 }
 
 output "export_key_secret_arn" {
-  description = "The secret the gateways read GANTRY_EXPORT_KEY from."
+  description = "The secret the gateways read ENTERPLACE_EXPORT_KEY from."
   value       = local.export_key_secret_arn
 }

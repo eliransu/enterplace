@@ -1,17 +1,17 @@
-"""LangChain against a local Gantry: the check behind docs/src/content/docs/integrations/langchain.mdx.
+"""LangChain against a local Enterplace: the check behind docs/src/content/docs/integrations/langchain.mdx.
 
 Usage:
-  uv run --with langchain-openai --with langchain-anthropic python3 scripts/langchain_check.py [gantry binary] [--js]
+  uv run --with langchain-openai --with langchain-anthropic python3 scripts/langchain_check.py [enterplace binary] [--js]
 
 Starts a mock provider (OpenAI chat completions and Anthropic messages, standard library), writes a policy and a keys
-file, runs `gantry serve` on them, and drives LangChain's ChatOpenAI and ChatAnthropic through it: a plain call, a
+file, runs `enterplace serve` on them, and drives LangChain's ChatOpenAI and ChatAnthropic through it: a plain call, a
 streamed call, a tool call, a model the rule does not allow (refused with model_not_allowed) and a function tool it
 does not allow (refused with tool_not_allowed). With --js it also runs scripts/langchain_check.mjs with Node, after
 installing @langchain/openai and @langchain/anthropic in a temporary folder. No provider key is needed.
 """
 import hashlib, http.server, json, os, pathlib, socket, subprocess, sys, tempfile, threading, time, urllib.request
 
-KEY = "gantry_langchain_check_0123456789abcdef"
+KEY = "enterplace_langchain_check_0123456789abcdef"
 
 
 class Provider(http.server.BaseHTTPRequestHandler):
@@ -120,28 +120,28 @@ def python_checks(base):
 
 
 def js_checks(base):
-    work = pathlib.Path(tempfile.mkdtemp(prefix="gantry-langchain-js-"))
+    work = pathlib.Path(tempfile.mkdtemp(prefix="enterplace-langchain-js-"))
     subprocess.run(["npm", "install", "--silent", "--no-audit", "--no-fund", "@langchain/openai@1", "@langchain/anthropic@1", "@langchain/core@1", "zod@3"],
                    cwd=work, check=True)
     script = pathlib.Path(__file__).resolve().parent / "langchain_check.mjs"
     (work / "check.mjs").write_text(script.read_text())
-    subprocess.run(["node", "check.mjs"], cwd=work, check=True, env={**os.environ, "GANTRY_URL": base, "GANTRY_KEY": KEY})
+    subprocess.run(["node", "check.mjs"], cwd=work, check=True, env={**os.environ, "ENTERPLACE_URL": base, "ENTERPLACE_KEY": KEY})
 
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    gantry = str(pathlib.Path(args[0] if args else "target/release/gantry").resolve())
+    enterplace = str(pathlib.Path(args[0] if args else "target/release/enterplace").resolve())
     provider = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     threading.Thread(target=provider.serve_forever, daemon=True).start()
-    folder = pathlib.Path(tempfile.mkdtemp(prefix="gantry-langchain-"))
-    (folder / "gantry.policy.yaml").write_text(policy(provider.server_address[1]))
+    folder = pathlib.Path(tempfile.mkdtemp(prefix="enterplace-langchain-"))
+    (folder / "enterplace.policy.yaml").write_text(policy(provider.server_address[1]))
     digest = hashlib.sha256(KEY.encode()).hexdigest()
-    (folder / "gantry.keys.yaml").write_text(f"keys:\n  - name: langchain.app\n    team: apps\n    sha256: {digest}\n")
+    (folder / "enterplace.keys.yaml").write_text(f"keys:\n  - name: langchain.app\n    team: apps\n    sha256: {digest}\n")
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     base = f"http://127.0.0.1:{port}"
-    serve = subprocess.Popen([gantry, "serve", str(folder / "gantry.policy.yaml"), "--listen", f"127.0.0.1:{port}"],
+    serve = subprocess.Popen([enterplace, "serve", str(folder / "enterplace.policy.yaml"), "--listen", f"127.0.0.1:{port}"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
                              env={**os.environ, "OPENAI_PROVIDER_KEY": "mock", "ANTHROPIC_PROVIDER_KEY": "mock"})
     try:

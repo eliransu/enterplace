@@ -3,19 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Security: what Gantry protects, and where it stops</title>
-<meta name="description" content="How Gantry protects keys, credentials and the audit log, what it does not cover, where your data goes, and the subprocessors.">
+<title>Security: what Enterplace protects, and where it stops</title>
+<meta name="description" content="How Enterplace protects keys, credentials and the audit log, what it does not cover, where your data goes, and the subprocessors.">
 <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<link rel="canonical" href="https://gantry.enterplace.dev/security/">
+<link rel="canonical" href="https://enterplace.dev/security/">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Gantry">
-<meta property="og:url" content="https://gantry.enterplace.dev/security/">
-<meta property="og:title" content="Security: what Gantry protects, and where it stops">
-<meta property="og:description" content="How Gantry protects keys, credentials and the audit log, what it does not cover, where your data goes, and the subprocessors.">
-<meta property="og:image" content="https://gantry.enterplace.dev/og.png">
+<meta property="og:site_name" content="Enterplace">
+<meta property="og:url" content="https://enterplace.dev/security/">
+<meta property="og:title" content="Security: what Enterplace protects, and where it stops">
+<meta property="og:description" content="How Enterplace protects keys, credentials and the audit log, what it does not cover, where your data goes, and the subprocessors.">
+<meta property="og:image" content="https://enterplace.dev/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
@@ -30,10 +30,10 @@
 
 <header class="hdr" id="hdr">
   <div class="wrap hdr-in">
-    <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
-gantry</a>
+    <a class="brand" href="/" aria-label="Enterplace, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+enterplace</a>
 
-    <a class="theme gh-phone" href="https://github.com/eliransu/gantry" aria-label="Gantry on GitHub, open source"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
+    <a class="theme gh-phone" href="https://github.com/eliransu/enterplace" aria-label="Enterplace on GitHub, open source"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
 
     <button class="burger" type="button" aria-expanded="false" aria-controls="nav" aria-label="Menu"><span></span></button>
 
@@ -44,8 +44,8 @@ gantry</a>
         <div class="menu" id="menu-product">
           <a href="/product/"><strong>How it works</strong><span>The request path, the controls, the audit log and the console</span></a>
           <a href="/deploy/"><strong>Deploy</strong><span>Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare</span></a>
-          <a href="/security/" aria-current="page"><strong>Security</strong><span>What Gantry protects, and where it stops</span></a>
-          <a href="/compare/"><strong>Compare</strong><span>Gantry next to LiteLLM and Bifrost, with sources</span></a>
+          <a href="/security/" aria-current="page"><strong>Security</strong><span>What Enterplace protects, and where it stops</span></a>
+          <a href="/compare/"><strong>Compare</strong><span>Enterplace next to LiteLLM and Bifrost, with sources</span></a>
         </div>
       </div>
 
@@ -86,11 +86,11 @@ gantry</a>
       </div>
 
       <a class="nav-link" data-group="enterprise" href="/enterprise/">Enterprise</a>
-      <a class="nav-link" href="https://gantry-docs.enterplace.dev/">Docs</a>
+      <a class="nav-link" href="https://docs.enterplace.dev/">Docs</a>
 
       <div class="nav-actions">
-        <a class="btn btn-main btn-sm" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Get started</a>
-        <a class="theme gh-wide" href="https://github.com/eliransu/gantry" aria-label="Gantry on GitHub, open source">
+        <a class="btn btn-main btn-sm" href="https://docs.enterplace.dev/getting-started/quickstart/">Get started</a>
+        <a class="theme gh-wide" href="https://github.com/eliransu/enterplace" aria-label="Enterplace on GitHub, open source">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
         </a>
         <button class="theme" type="button" aria-label="Switch between light and dark">
@@ -103,21 +103,21 @@ gantry</a>
 
 <main id="main">
 <section class="wrap head">
-  <h1>What Gantry protects, and where it stops.</h1>
-  <p class="lead">Gantry exists so that no AI request leaves without a known caller, a policy decision and a record. This page says how it does that, what it does not cover, and where your data goes.</p>
-  <p class="note"><strong>Status.</strong> Pre-1.0, version 0.1.0. Gantry has not yet had an independent security audit.</p>
+  <h1>What Enterplace protects, and where it stops.</h1>
+  <p class="lead">Enterplace exists so that no AI request leaves without a known caller, a policy decision and a record. This page says how it does that, what it does not cover, and where your data goes.</p>
+  <p class="note"><strong>Status.</strong> Pre-1.0, version 0.1.0. Enterplace has not yet had an independent security audit.</p>
 </section>
 
 <section class="wrap sec doc" id="protects">
-  <h2>What Gantry protects</h2>
+  <h2>What Enterplace protects</h2>
   <ul class="ticks">
-    <li><strong>Gantry keys are stored hashed.</strong> Each key is 256 random bits from the operating system, shown once. Only its SHA-256 is kept, in a keys file created with mode <code>0600</code>, and keys are looked up by hash.</li>
-    <li><strong>Provider keys never reach callers.</strong> Gantry reads them from environment variables, holds them in memory marked as sensitive, never prints or records them, and sends each only to the provider that needs it.</li>
-    <li><strong>Caller credentials are stripped.</strong> Before forwarding, Gantry removes any header whose name contains <code>authorization</code>, <code>key</code>, <code>token</code>, <code>secret</code>, <code>organization</code> or <code>project</code> (except <code>idempotency-key</code>), every <code>x-amz</code> header, proxy and CDN headers that carry the caller's address (<code>x-forwarded-*</code>, <code>forwarded</code>, <code>via</code>, <code>cf-*</code>, <code>x-envoy-*</code> and any name ending in <code>-ip</code> or containing <code>client-ip</code> or <code>remote-addr</code>), any header carrying the caller's Gantry key, <code>Cookie</code>, <code>Host</code> and the hop-by-hop headers.</li>
-    <li><strong>Fail closed.</strong> The audit record is written before anything is forwarded. If the log cannot be written, every request is refused with <code>audit_unavailable</code> and <code>/healthz</code> answers 503 until an admin restarts Gantry. An unreadable kill switch file refuses every request with <code>kills_unreadable</code>.</li>
-    <li><strong>A hash-chained audit log.</strong> Each record holds the hash of the one before it. <code>gantry audit verify</code> names the first changed, inserted, removed or reordered record, and Gantry refuses to start on a log whose chain does not hold. Records hold no prompt text, answer text or keys.</li>
+    <li><strong>Enterplace keys are stored hashed.</strong> Each key is 256 random bits from the operating system, shown once. Only its SHA-256 is kept, in a keys file created with mode <code>0600</code>, and keys are looked up by hash.</li>
+    <li><strong>Provider keys never reach callers.</strong> Enterplace reads them from environment variables, holds them in memory marked as sensitive, never prints or records them, and sends each only to the provider that needs it.</li>
+    <li><strong>Caller credentials are stripped.</strong> Before forwarding, Enterplace removes any header whose name contains <code>authorization</code>, <code>key</code>, <code>token</code>, <code>secret</code>, <code>organization</code> or <code>project</code> (except <code>idempotency-key</code>), every <code>x-amz</code> header, proxy and CDN headers that carry the caller's address (<code>x-forwarded-*</code>, <code>forwarded</code>, <code>via</code>, <code>cf-*</code>, <code>x-envoy-*</code> and any name ending in <code>-ip</code> or containing <code>client-ip</code> or <code>remote-addr</code>), any header carrying the caller's Enterplace key, <code>Cookie</code>, <code>Host</code> and the hop-by-hop headers.</li>
+    <li><strong>Fail closed.</strong> The audit record is written before anything is forwarded. If the log cannot be written, every request is refused with <code>audit_unavailable</code> and <code>/healthz</code> answers 503 until an admin restarts Enterplace. An unreadable kill switch file refuses every request with <code>kills_unreadable</code>.</li>
+    <li><strong>A hash-chained audit log.</strong> Each record holds the hash of the one before it. <code>enterplace audit verify</code> names the first changed, inserted, removed or reordered record, and Enterplace refuses to start on a log whose chain does not hold. Records hold no prompt text, answer text or keys.</li>
     <li><strong>What was checked is what is sent.</strong> Two credentials on one request, a second spelling of the <code>model</code> key, a compressed body or an unknown query parameter is refused rather than guessed at.</li>
-    <li><strong>TLS.</strong> <code>--tls-cert</code> and <code>--tls-key</code> serve HTTPS with TLS 1.2 and 1.3. Gantry binds <code>127.0.0.1</code> unless told otherwise and warns when it listens elsewhere without TLS.</li>
+    <li><strong>TLS.</strong> <code>--tls-cert</code> and <code>--tls-key</code> serve HTTPS with TLS 1.2 and 1.3. Enterplace binds <code>127.0.0.1</code> unless told otherwise and warns when it listens elsewhere without TLS.</li>
   </ul>
 </section>
 
@@ -125,39 +125,39 @@ gantry</a>
   <h2>What it does not protect</h2>
   <ul class="ticks">
     <li><strong>Whoever can write the policy or keys file</strong> decides who may do what. Whoever can write the audit log can rewrite the whole chain consistently. Protect these files like provider keys.</li>
-    <li><strong>Records removed from the end</strong> leave an unbroken chain. Keep the last hash where the Gantry host cannot write, and check it with <code>--expect-last</code>.</li>
+    <li><strong>Records removed from the end</strong> leave an unbroken chain. Keep the last hash where the Enterplace host cannot write, and check it with <code>--expect-last</code>.</li>
     <li><strong>Up to one second of records</strong> can be lost on a power failure. Records are synced to disk once a second.</li>
-    <li><strong>Plain HTTP</strong> carries keys in the clear unless Gantry serves TLS itself or sits behind a TLS proxy.</li>
+    <li><strong>Plain HTTP</strong> carries keys in the clear unless Enterplace serves TLS itself or sits behind a TLS proxy.</li>
     <li><strong>Built-in guardrails match plain text.</strong> Anything encoded, split across messages or translated is not found, and they do not find passwords, names or addresses. A webhook guardrail set to <code>fail_open</code> forwards unchecked while it is down.</li>
     <li><strong>A public host name that resolves to a private address</strong> is not caught by the private-address check on provider URLs.</li>
     <li><strong>A key removed from the file by hand</strong> keeps working for up to 2 seconds, until the reload. Revoking through the console or admin API stops it at once.</li>
     <li><strong>One node, or a store.</strong> Without a Postgres store, budgets, rate limits, the cache and console sessions live in one process. With one, keys, kill switches, budgets and rate limits are shared by every replica. The answer cache stays per replica.</li>
   </ul>
-  <p class="doc-more"><a href="https://gantry-docs.enterplace.dev/operations/security/">The full security model</a> lists every limit.</p>
+  <p class="doc-more"><a href="https://docs.enterplace.dev/operations/security/">The full security model</a> lists every limit.</p>
 </section>
 
 <section class="wrap sec doc" id="data">
   <h2>Where your data goes</h2>
   <ul class="ticks">
-    <li><strong>Gantry is self-hosted.</strong> It runs on your machines, in your network or cloud account. There is no hosted Gantry service in the path.</li>
-    <li><strong>Prompts and answers</strong> go from your callers, through Gantry, to the providers your policy names, and back. Gantry does not store them.</li>
+    <li><strong>Enterplace is self-hosted.</strong> It runs on your machines, in your network or cloud account. There is no hosted Enterplace service in the path.</li>
+    <li><strong>Prompts and answers</strong> go from your callers, through Enterplace, to the providers your policy names, and back. Enterplace does not store them.</li>
     <li><strong>The audit log, the policy and the keys file</strong> live on your disk. Keys, kill switches and spend live in your Postgres when you use a store.</li>
-    <li><strong>Nothing is sent to the Gantry project.</strong> The Enterprise license is checked against a public key in the binary, with no network call.</li>
+    <li><strong>Nothing is sent to the Enterplace project.</strong> The Enterprise license is checked against a public key in the binary, with no network call.</li>
   </ul>
 </section>
 
 <section class="wrap sec doc" id="subprocessors">
   <h2>Subprocessors</h2>
   <div class="doc-list-wrap">
-    <p>None. Self-hosted Gantry sends no data to anyone on Gantry's behalf.</p>
-    <p class="note">The model providers your policy names (OpenAI, Anthropic and others) receive your requests under your own provider account. They are your providers, not Gantry's subprocessors.</p>
+    <p>None. Self-hosted Enterplace sends no data to anyone on Enterplace's behalf.</p>
+    <p class="note">The model providers your policy names (OpenAI, Anthropic and others) receive your requests under your own provider account. They are your providers, not Enterplace's subprocessors.</p>
   </div>
 </section>
 
 <section class="wrap sec">
   <div class="sec-head solo"><h2>Read next</h2></div>
   <nav class="rows tight" aria-label="Read next">
-    <a href="https://gantry-docs.enterplace.dev/operations/security/"><strong>The full security model</strong><span>Every protection and every limit, in the docs.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+    <a href="https://docs.enterplace.dev/operations/security/"><strong>The full security model</strong><span>Every protection and every limit, in the docs.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
     <a href="/deploy/"><strong>Deploy</strong><span>What you deploy, and what stays in your network.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
@@ -170,7 +170,7 @@ gantry</a>
   <div class="cta-box">
     <h2>Start with step one. Block nothing, and find out what is in use.</h2>
     <div class="actions">
-      <a class="btn btn-ink" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink" href="https://docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
       <a class="btn btn-ink-line" href="/learn/five-steps/">See the five steps</a>
       <a class="btn btn-ink-line" href="/deploy/">Deploy in your cloud</a>
     </div>
@@ -183,8 +183,8 @@ gantry</a>
 <footer class="ftr">
   <div class="wrap ftr-top">
     <div class="ftr-about">
-      <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
-gantry</a>
+      <a class="brand" href="/" aria-label="Enterplace, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+enterplace</a>
       <p>A self-hosted AI gateway, governance first. One Docker image plus Postgres, in your cloud.</p>
     </div>
     <nav class="ftr-cols" aria-label="Site map">
@@ -222,15 +222,15 @@ gantry</a>
       </div>
       <div>
         <h2>Project</h2>
-        <a href="https://gantry-docs.enterplace.dev/">Docs</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/status/">Project status</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/changelog/">Changelog</a>
-        <a href="https://github.com/eliransu/gantry">GitHub</a>
+        <a href="https://docs.enterplace.dev/">Docs</a>
+        <a href="https://docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
+        <a href="https://docs.enterplace.dev/getting-started/status/">Project status</a>
+        <a href="https://docs.enterplace.dev/getting-started/changelog/">Changelog</a>
+        <a href="https://github.com/eliransu/enterplace">GitHub</a>
       </div>
     </nav>
   </div>
-  <p class="wrap ftr-legal">Open source core under MIT, <a href="https://github.com/eliransu/gantry">on GitHub</a>. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
+  <p class="wrap ftr-legal">Open source core under MIT, <a href="https://github.com/eliransu/enterplace">on GitHub</a>. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
 </footer>
 </body>
 </html>

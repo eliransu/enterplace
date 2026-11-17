@@ -1,20 +1,20 @@
 ---
 title: Vertex AI
-description: Serve Claude and Gemini on Google Cloud Vertex AI through Gantry, with kinds vertex_anthropic and vertex.
+description: Serve Claude and Gemini on Google Cloud Vertex AI through Enterplace, with kinds vertex_anthropic and vertex.
 sidebar:
   order: 6
 ---
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gantry reaches two model families on Vertex AI. `kind: vertex_anthropic` serves Claude through the messages route. `kind: vertex` serves Gemini through the chat completions route, translated.
+Enterplace reaches two model families on Vertex AI. `kind: vertex_anthropic` serves Claude through the messages route. `kind: vertex` serves Gemini through the chat completions route, translated.
 
 ## Setup
 
 <Tabs>
 <TabItem label="Claude">
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: claude-vertex
@@ -32,7 +32,7 @@ The `url` must end in `/publishers/anthropic`.
 </TabItem>
 <TabItem label="Gemini">
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: vertex
@@ -52,7 +52,7 @@ The `url` must end in `/publishers/google`.
 
 ## Credentials
 
-Without `key_env`, Gantry signs in to Google Cloud itself, in the order of Application Default Credentials, and the first source that answers is used:
+Without `key_env`, Enterplace signs in to Google Cloud itself, in the order of Application Default Credentials, and the first source that answers is used:
 
 | Order | Source | Set up by |
 |---|---|---|
@@ -60,42 +60,42 @@ Without `key_env`, Gantry signs in to Google Cloud itself, in the order of Appli
 | 2 | `~/.config/gcloud/application_default_credentials.json` (under `CLOUDSDK_CONFIG` when set) | `gcloud auth application-default login` |
 | 3 | The metadata server | Compute Engine, GKE Workload Identity, Cloud Run |
 
-A service account key is signed into a token with a JWT (RS256) at Google's token endpoint; the metadata server hands out the token of the service account the workload runs as. Either way the token lasts about an hour, and Gantry renews it in the background five minutes before it expires, so requests never wait and nothing restarts. The start line names the source, never the token:
+A service account key is signed into a token with a JWT (RS256) at Google's token endpoint; the metadata server hands out the token of the service account the workload runs as. Either way the token lasts about an hour, and Enterplace renews it in the background five minutes before it expires, so requests never wait and nothing restarts. The start line names the source, never the token:
 
 ```text
-gantry: provider "claude-vertex" signs in to Google Cloud with the metadata server at 169.254.169.254 (the service account of the GCE VM, GKE pod with Workload Identity, or Cloud Run service).
+enterplace: provider "claude-vertex" signs in to Google Cloud with the metadata server at 169.254.169.254 (the service account of the GCE VM, GKE pod with Workload Identity, or Cloud Run service).
 ```
 
-When no source answers, Gantry does not start and names each source it tried. The service account needs the Vertex AI User role (`roles/aiplatform.user`) in the project of the `url`. Gantry asks for the `cloud-platform` scope.
+When no source answers, Enterplace does not start and names each source it tried. The service account needs the Vertex AI User role (`roles/aiplatform.user`) in the project of the `url`. Enterplace asks for the `cloud-platform` scope.
 
 ### Cloud Run
 
 Run the service as a service account with `roles/aiplatform.user`. Nothing else is needed: the metadata server answers inside every Cloud Run instance.
 
 ```bash
-gcloud run deploy gantry --service-account gantry@my-project.iam.gserviceaccount.com ...
+gcloud run deploy enterplace --service-account enterplace@my-project.iam.gserviceaccount.com ...
 ```
 
 ### GKE with Workload Identity
 
-Let the Kubernetes service account Gantry runs as act for a Google service account with `roles/aiplatform.user`:
+Let the Kubernetes service account Enterplace runs as act for a Google service account with `roles/aiplatform.user`:
 
 ```yaml
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: gantry
+  name: enterplace
   annotations:
-    iam.gke.io/gcp-service-account: gantry@my-project.iam.gserviceaccount.com
+    iam.gke.io/gcp-service-account: enterplace@my-project.iam.gserviceaccount.com
 ```
 
 ```bash
-gcloud iam service-accounts add-iam-policy-binding gantry@my-project.iam.gserviceaccount.com \
+gcloud iam service-accounts add-iam-policy-binding enterplace@my-project.iam.gserviceaccount.com \
   --role roles/iam.workloadIdentityUser \
-  --member "serviceAccount:my-project.svc.id.goog[gantry/gantry]"
+  --member "serviceAccount:my-project.svc.id.goog[enterplace/enterplace]"
 ```
 
-Granting `roles/aiplatform.user` to the Kubernetes service account's principal directly (`principal://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/my-project.svc.id.goog/subject/ns/gantry/sa/gantry`) works the same way.
+Granting `roles/aiplatform.user` to the Kubernetes service account's principal directly (`principal://iam.googleapis.com/projects/<number>/locations/global/workloadIdentityPools/my-project.svc.id.goog/subject/ns/enterplace/sa/enterplace`) works the same way.
 
 ### Compute Engine
 
@@ -106,15 +106,15 @@ Attach a service account with `roles/aiplatform.user` to the VM, with the `cloud
 Outside Google Cloud, point `GOOGLE_APPLICATION_CREDENTIALS` at a JSON key:
 
 ```bash
-export GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gantry-vertex.json
-gantry serve gantry.policy.yaml
+export GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/enterplace-vertex.json
+enterplace serve enterplace.policy.yaml
 ```
 
-A workload identity federation file (`external_account`) is not read yet: Gantry refuses it at start and says so.
+A workload identity federation file (`external_account`) is not read yet: Enterplace refuses it at start and says so.
 
 ### An access token, for local use
 
-`key_env` still takes an OAuth access token, which Google issues for about an hour. Gantry reads it at start and does not renew it, so an expired token means a restart with a new one:
+`key_env` still takes an OAuth access token, which Google issues for about an hour. Enterplace reads it at start and does not renew it, so an expired token means a restart with a new one:
 
 ```yaml
     key_env: VERTEX_ACCESS_TOKEN     # export VERTEX_ACCESS_TOKEN=$(gcloud auth print-access-token)
@@ -122,7 +122,7 @@ A workload identity federation file (`external_account`) is not read yet: Gantry
 
 ## Claude on Vertex AI
 
-Claude Code or any messages client reaches these models through `POST /v1/messages`. Gantry sends the body to `<url>/models/<model>:rawPredict`, or `:streamRawPredict` when the body says `"stream": true`, with `Authorization: Bearer <token>`.
+Claude Code or any messages client reaches these models through `POST /v1/messages`. Enterplace sends the body to `<url>/models/<model>:rawPredict`, or `:streamRawPredict` when the body says `"stream": true`, with `Authorization: Bearer <token>`.
 
 - `model` is removed from the body, because the path carries it.
 - `"anthropic_version": "vertex-2023-10-16"` is added.
@@ -147,7 +147,7 @@ See [Aliases](/routing/aliases/).
 
 ## Gemini on Vertex AI
 
-Callers use `POST /v1/chat/completions`. Gantry applies the same translation as the [`gemini` kind](/providers/gemini/) and sends it to `<url>/models/<model>:generateContent`, or `:streamGenerateContent?alt=sse` for a stream, with `Authorization: Bearer <token>`.
+Callers use `POST /v1/chat/completions`. Enterplace applies the same translation as the [`gemini` kind](/providers/gemini/) and sends it to `<url>/models/<model>:generateContent`, or `:streamGenerateContent?alt=sse` for a stream, with `Authorization: Bearer <token>`.
 
 A `vertex` provider can fall back to a `gemini` or another `vertex` provider. With `accept_messages: true`, Claude Code can use these Gemini models too. `POST /v1/responses` reaches them translated.
 
@@ -191,22 +191,22 @@ A provider of `kind: vertex_openai` reaches the models Model Garden serves behin
 
 ## Passthrough
 
-`/vertex/<path>` reaches Vertex AI's own API with the provider's Google token, on paths a rule lists under `passthrough:` for the provider: for example `/vertex/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-2.5-flash:countTokens`. The path starts at the host. The model in the path is decided by the rule, and the call is recorded and metered like any other. With several Google Cloud providers, name one in `x-gantry-provider`. See [Passthrough](/governance/policy/#passthrough).
+`/vertex/<path>` reaches Vertex AI's own API with the provider's Google token, on paths a rule lists under `passthrough:` for the provider: for example `/vertex/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-2.5-flash:countTokens`. The path starts at the host. The model in the path is decided by the rule, and the call is recorded and metered like any other. With several Google Cloud providers, name one in `x-enterplace-provider`. See [Passthrough](/governance/policy/#passthrough).
 
 ## Batches
 
-With a `batch:` section naming a bucket, `/v1/files` and `/v1/batches` run as Vertex AI batch prediction, for Gemini and Claude, on files Gantry keeps in Cloud Storage, owned, checked, reserved and metered per line like OpenAI batches. See [Bedrock and Vertex AI batches](/providers/batches-and-realtime/#bedrock-and-vertex-ai-batches).
+With a `batch:` section naming a bucket, `/v1/files` and `/v1/batches` run as Vertex AI batch prediction, for Gemini and Claude, on files Enterplace keeps in Cloud Storage, owned, checked, reserved and metered per line like OpenAI batches. See [Bedrock and Vertex AI batches](/providers/batches-and-realtime/#bedrock-and-vertex-ai-batches).
 
-## Errors from gantry check
+## Errors from enterplace check
 
 ```text
-gantry.policy.yaml:5: a vertex provider's url ends in /publishers/google, for example https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google.
-gantry.policy.yaml:9: a vertex_openai provider's url ends in /endpoints/openapi, for example https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/endpoints/openapi.
+enterplace.policy.yaml:5: a vertex provider's url ends in /publishers/google, for example https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google.
+enterplace.policy.yaml:9: a vertex_openai provider's url ends in /endpoints/openapi, for example https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/endpoints/openapi.
 ```
 
 ## Related
 
 <CardGrid>
 	<LinkCard title="Gemini" href="/providers/gemini/" description="The Gemini API and the full translation table." />
-	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Run Claude Code on Vertex AI through Gantry." />
+	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Run Claude Code on Vertex AI through Enterplace." />
 </CardGrid>

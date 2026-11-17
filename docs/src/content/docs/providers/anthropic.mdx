@@ -7,11 +7,11 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A provider of `kind: anthropic` serves Anthropic's messages API. Claude Code and the Anthropic SDKs reach it through Gantry's `POST /v1/messages`.
+A provider of `kind: anthropic` serves Anthropic's messages API. Claude Code and the Anthropic SDKs reach it through Enterplace's `POST /v1/messages`.
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: anthropic
@@ -26,7 +26,7 @@ rules:
 ```
 
 <Aside type="caution">
-Name the key variable something other than `ANTHROPIC_API_KEY`. Claude Code reads that variable for its own key, which must be a Gantry key.
+Name the key variable something other than `ANTHROPIC_API_KEY`. Claude Code reads that variable for its own key, which must be a Enterplace key.
 </Aside>
 
 ## Behavior
@@ -60,7 +60,7 @@ See [Translation](/routing/translation/) for what is carried across and what is 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Point Claude Code at Gantry." />
+	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Point Claude Code at Enterplace." />
 	<LinkCard title="Amazon Bedrock" href="/providers/bedrock/" description="The same models on AWS, as a fallback or alias deployment." />
 	<LinkCard title="Vertex AI" href="/providers/vertex/" description="Claude on Google Cloud." />
 </CardGrid>

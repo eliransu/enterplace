@@ -1,15 +1,15 @@
-# Gantry on Fly.io, from the published image. Steps: https://gantry-docs.enterplace.dev/deploy/one-click/#flyio
+# Enterplace on Fly.io, from the published image. Steps: https://docs.enterplace.dev/deploy/one-click/#flyio
 #   fly launch --copy-config --no-deploy --name <app>
 #   fly postgres create --name <app>-db && fly postgres attach <app>-db --app <app>   (sets DATABASE_URL)
 #   fly secrets set OPENAI_API_KEY=sk-... --app <app>
 #   fly deploy --app <app> && fly logs --app <app>   (the admin key, printed once)
 # Keys and the policy live in Postgres. The audit log is on the Machine's own disk and starts a new chain at each
 # deploy. No volume: Fly volumes belong to root and the image runs as an unprivileged user.
-app = "gantry"
+app = "enterplace"
 primary_region = "iad"
 
 [build]
-  image = "ghcr.io/eliransu/gantry:latest"
+  image = "ghcr.io/eliransu/enterplace:latest"
 
 [env]
   # Used only when DATABASE_URL names no sslmode. Fly's private network between Machines is WireGuard, and its

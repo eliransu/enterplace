@@ -1,14 +1,14 @@
 <!--
-title: Gantry for platform teams: one endpoint, one policy file
+title: Enterplace for platform teams: one endpoint, one policy file
 description: For platform teams. One endpoint for OpenAI, Anthropic, Azure OpenAI, Bedrock, Vertex AI, Gemini and local models. Keys per person and workload, a policy file checked in CI, and one image plus Postgres to run.
 nav: use-cases
 -->
 <section class="wrap head">
   <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>For platform</span></nav>
   <h1>"How do 300 people get model access without provider keys on laptops?"</h1>
-  <p class="lead">You are the team that gets asked for keys, quota and a new provider every week. Gantry gives you one endpoint to hand out, one file to review, and one service to run.</p>
-  <figure class="code cmd"><pre>curl -fsSL https://gantry.enterplace.dev/install.sh | sh
-gantry start</pre></figure>
+  <p class="lead">You are the team that gets asked for keys, quota and a new provider every week. Enterplace gives you one endpoint to hand out, one file to review, and one service to run.</p>
+  <figure class="code cmd"><pre>curl -fsSL https://enterplace.dev/install.sh | sh
+enterplace start</pre></figure>
 </section>
 
 <section class="wrap sec" style="padding-top: 48px">
@@ -17,15 +17,15 @@ gantry start</pre></figure>
       <h2>What you get</h2>
       <dl class="facts">
         <div><dt>One endpoint</dt><dd>OpenAI, Anthropic, Azure OpenAI, Amazon Bedrock, Vertex AI, Gemini and local servers behind the APIs your tools already speak.</dd></div>
-        <div><dt>Keys you can hand out</dt><dd>Per person and per workload, with expiry, budget and model list. Developers issue their own through single sign-on with <code>gantry login</code>.</dd></div>
-        <div><dt>Policy as code</dt><dd>One YAML file in git. <code>gantry check</code> runs in CI and names the line and the fix for every mistake.</dd></div>
+        <div><dt>Keys you can hand out</dt><dd>Per person and per workload, with expiry, budget and model list. Developers issue their own through single sign-on with <code>enterplace login</code>.</dd></div>
+        <div><dt>Policy as code</dt><dd>One YAML file in git. <code>enterplace check</code> runs in CI and names the line and the fix for every mistake.</dd></div>
         <div><dt>Routing</dt><dd>Aliases over several deployments, retries, fallbacks, a circuit breaker per deployment and session affinity for coding agents.</dd></div>
         <div><dt>Little to operate</dt><dd>One static binary in one image, plus Postgres. No Redis. Policy and keys reload within 2 seconds, without a restart.</dd></div>
       </dl>
     </div>
     <div class="stack">
-      <figure class="code"><figcaption>In CI</figcaption><pre><span class="c">$</span> gantry check gantry.policy.yaml
-<span class="no">gantry.policy.yaml:5:</span> the provider url points at
+      <figure class="code"><figcaption>In CI</figcaption><pre><span class="c">$</span> enterplace check enterplace.policy.yaml
+<span class="no">enterplace.policy.yaml:5:</span> the provider url points at
 this machine or a private network. If that is
 intended, for example a local model server, add
 `allow_private: true` to the provider.</pre></figure>
@@ -60,10 +60,10 @@ intended, for example a local model server, add
 <section class="wrap sec doc">
   <h2>Where it stops</h2>
   <ul class="ticks out">
-    <li>Gantry is pre-1.0. The docs list what is built and what is planned.</li>
+    <li>Enterplace is pre-1.0. The docs list what is built and what is planned.</li>
     <li>The answer cache is per replica. Budgets, rate limits and kill switches are shared through the store.</li>
     <li>Most provider integrations were built from public docs and tested against local mocks. The docs publish a live matrix per route and provider.</li>
-    <li>Moving from LiteLLM: <code>gantry import litellm</code> turns a LiteLLM proxy config into a Gantry policy. Read the result before you use it.</li>
+    <li>Moving from LiteLLM: <code>enterplace import litellm</code> turns a LiteLLM proxy config into a Enterplace policy. Read the result before you use it.</li>
   </ul>
 </section>
 
@@ -72,7 +72,7 @@ intended, for example a local model server, add
   <nav class="rows tight" aria-label="Read next">
     <a href="/product/"><strong>How it works</strong><span>The twelve stages every request passes.</span>{{> arrow}}</a>
     <a href="/deploy/"><strong>Deploy</strong><span>Compose, Helm and Terraform for AWS, Google Cloud and Azure.</span>{{> arrow}}</a>
-    <a href="/compare/"><strong>Compare</strong><span>Gantry next to LiteLLM and Bifrost, including where they lead.</span>{{> arrow}}</a>
+    <a href="/compare/"><strong>Compare</strong><span>Enterplace next to LiteLLM and Bifrost, including where they lead.</span>{{> arrow}}</a>
   </nav>
 </section>
 

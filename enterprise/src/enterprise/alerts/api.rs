@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use gantry_console::Form;
-use gantry_core::{policy::Permission, store::Pending};
-use gantry_server::{AdminApi, AdminCall, AdminRoute};
+use enterplace_console::Form;
+use enterplace_core::{policy::Permission, store::Pending};
+use enterplace_server::{AdminApi, AdminCall, AdminRoute};
 use serde_json::{Value, json};
 
 use super::{Engine, Rule, RuleKind, db_error};
@@ -80,7 +80,7 @@ fn routes() -> Vec<AdminRoute> {
 fn refusal(status: StatusCode, code: &str, message: impl Into<String>) -> (StatusCode, Value) {
     (
         status,
-        json!({ "error": { "message": format!("Refused: {}", message.into()), "type": "gantry_error", "code": code } }),
+        json!({ "error": { "message": format!("Refused: {}", message.into()), "type": "enterplace_error", "code": code } }),
     )
 }
 

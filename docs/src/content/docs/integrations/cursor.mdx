@@ -1,20 +1,20 @@
 ---
 title: Cursor
-description: Send Cursor's chat and agent requests through a public Gantry with the OpenAI base URL override.
+description: Send Cursor's chat and agent requests through a public Enterplace with the OpenAI base URL override.
 sidebar:
   order: 3
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Cursor reaches Gantry through its "Override OpenAI Base URL" setting. Its chat and agent requests then go to `POST /v1/chat/completions` on Gantry, identified by a Gantry key.
+Cursor reaches Enterplace through its "Override OpenAI Base URL" setting. Its chat and agent requests then go to `POST /v1/chat/completions` on Enterplace, identified by a Enterplace key.
 
 <Aside type="caution">
-Cursor's own servers build the final prompt and send the request, also when you give it your own key and base URL. Gantry must have a public HTTPS address, and every Gantry key travels through Cursor's servers. A Gantry on `127.0.0.1` or a private network cannot be reached from Cursor. See [Deployment](/operations/deployment/) for TLS.
+Cursor's own servers build the final prompt and send the request, also when you give it your own key and base URL. Enterplace must have a public HTTPS address, and every Enterplace key travels through Cursor's servers. A Enterplace on `127.0.0.1` or a private network cannot be reached from Cursor. See [Deployment](/operations/deployment/) for TLS.
 </Aside>
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -22,52 +22,52 @@ You need a running Gantry and a Gantry key. `gantry start` gives both in one com
 <Steps>
 
 1. Open Cursor Settings, then Models, then the OpenAI API key section.
-2. In **OpenAI API Key**, enter the Gantry key.
-3. Turn on **Override OpenAI Base URL** and enter Gantry's public address with `/v1`.
+2. In **OpenAI API Key**, enter the Enterplace key.
+3. Turn on **Override OpenAI Base URL** and enter Enterplace's public address with `/v1`.
 4. Add the model as the policy names it.
 
 </Steps>
 
 ```text
-OpenAI API Key:            gantry_...
-Override OpenAI Base URL:  https://gantry.example.com/v1
+OpenAI API Key:            enterplace_...
+Override OpenAI Base URL:  https://enterplace.example.com/v1
 Model name:                gpt-4o-mini
 ```
 
 ## Try it from your laptop with a tunnel
 
-Cursor cannot reach `127.0.0.1`, so a Gantry on your laptop needs a public address. A Cloudflare quick tunnel gives one, with no account, for as long as the command runs:
+Cursor cannot reach `127.0.0.1`, so a Enterplace on your laptop needs a public address. A Cloudflare quick tunnel gives one, with no account, for as long as the command runs:
 
 <Steps>
 
-1. Start Gantry: `gantry start`. It serves `127.0.0.1:8080`.
+1. Start Enterplace: `enterplace start`. It serves `127.0.0.1:8080`.
 2. In another terminal: `cloudflared tunnel --url http://127.0.0.1:8080`. It prints an address such as `https://words-words-words.trycloudflare.com`.
-3. In Cursor, set **Override OpenAI Base URL** to that address with `/v1`, and the Gantry key as the OpenAI API key.
-4. Send a chat message. **Requests** in the console shows it, and its record in `gantry-audit.jsonl` has a `user_agent` naming Cursor.
+3. In Cursor, set **Override OpenAI Base URL** to that address with `/v1`, and the Enterplace key as the OpenAI API key.
+4. Send a chat message. **Requests** in the console shows it, and its record in `enterplace-audit.jsonl` has a `user_agent` naming Cursor.
 
 </Steps>
 
 <Aside type="caution">
-A quick tunnel is public: anyone with the address reaches your Gantry, and only a valid Gantry key gets through. Stop it when you are done, and use a named tunnel or a real deployment for a team.
+A quick tunnel is public: anyone with the address reaches your Enterplace, and only a valid Enterplace key gets through. Stop it when you are done, and use a named tunnel or a real deployment for a team.
 </Aside>
 
 ## What Cursor sends
 
-From Cursor's documentation: the key as the OpenAI API key, sent as a bearer token, and the base URL with `/v1`. Cursor checks the key with `GET /v1/models`, then sends chat and agent requests to `POST /v1/chat/completions`, streamed, with the model name exactly as you added it. Gantry's test `crates/gantry-server/tests/cursor.rs` sends those requests with `User-Agent: Cursor/1.0` and checks the answers and the record.
+From Cursor's documentation: the key as the OpenAI API key, sent as a bearer token, and the base URL with `/v1`. Cursor checks the key with `GET /v1/models`, then sends chat and agent requests to `POST /v1/chat/completions`, streamed, with the model name exactly as you added it. Enterplace's test `crates/enterplace-server/tests/cursor.rs` sends those requests with `User-Agent: Cursor/1.0` and checks the answers and the record.
 
 <Aside type="note">
-Not run with Cursor itself: the CI has no public address for Cursor's servers to call, so this page follows Cursor's documentation and statements by Cursor staff. How Cursor shows a Gantry refusal is not documented.
+Not run with Cursor itself: the CI has no public address for Cursor's servers to call, so this page follows Cursor's documentation and statements by Cursor staff. How Cursor shows a Enterplace refusal is not documented.
 </Aside>
 
 ## Behavior
 
-- Tab completion always uses Cursor's own models and never reaches Gantry. Only chat and agent requests do.
-- With the override on, every OpenAI-family request goes to Gantry, including models picked from Cursor's built-in list. Those are refused unless the policy allows them. Cursor has no per-model base URL.
-- Cursor shows no base URL override for its Anthropic key, so Claude models reach Gantry only over chat completions. Set `accept_chat: true` on the `anthropic` provider for that; without it they are refused with `wrong_route`. See [Translation](/routing/translation/).
+- Tab completion always uses Cursor's own models and never reaches Enterplace. Only chat and agent requests do.
+- With the override on, every OpenAI-family request goes to Enterplace, including models picked from Cursor's built-in list. Those are refused unless the policy allows them. Cursor has no per-model base URL.
+- Cursor shows no base URL override for its Anthropic key, so Claude models reach Enterplace only over chat completions. Set `accept_chat: true` on the `anthropic` provider for that; without it they are refused with `wrong_route`. See [Translation](/routing/translation/).
 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Deployment" href="/operations/deployment/" description="Serve Gantry over HTTPS with --tls-cert and --tls-key." />
+	<LinkCard title="Deployment" href="/operations/deployment/" description="Serve Enterplace over HTTPS with --tls-cert and --tls-key." />
 	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue a key per person, with expiry and a budget." />
 </CardGrid>

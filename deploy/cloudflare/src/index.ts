@@ -1,14 +1,14 @@
-// Gantry on Cloudflare: this Worker routes every request to a gateway container (the gantry image, one gateway per
+// Enterplace on Cloudflare: this Worker routes every request to a gateway container (the enterplace image, one gateway per
 // instance) and keeps each gateway's audit chain in R2, because a container's disk does not survive a restart.
 //
 // - Routing: each request goes to one of GATEWAYS instances, named gateway-0 to gateway-(N-1). They share the store
 //   (Postgres at DATABASE_URL), so any of them can answer any request.
-// - Audit: the gateway seals its log every GANTRY_AUDIT_SEAL_SECONDS and writes each sealed segment to R2 through the
+// - Audit: the gateway seals its log every ENTERPLACE_AUDIT_SEAL_SECONDS and writes each sealed segment to R2 through the
 //   handler below, which speaks the three S3 calls the gateway makes (PUT, GET, ListObjectsV2) against the AUDIT
 //   bucket binding. No R2 access key exists: the handler is reachable only from this application's containers, and
 //   it keeps each instance under audit/<its Durable Object id>/, so one gateway cannot write another's chain. It
 //   never overwrites a segment with other bytes and has no delete.
-// - Secrets: Workers secrets and vars named GANTRY_*, DATABASE_URL, AWS_* or *_PROVIDER_KEY are passed to the
+// - Secrets: Workers secrets and vars named ENTERPLACE_*, DATABASE_URL, AWS_* or *_PROVIDER_KEY are passed to the
 //   container as environment variables when it starts.
 
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
@@ -16,15 +16,15 @@ import { Container, ContainerProxy, getContainer } from "@cloudflare/containers"
 export { ContainerProxy };
 
 export interface Env {
-  GATEWAY: DurableObjectNamespace<GantryGateway>;
+  GATEWAY: DurableObjectNamespace<EnterplaceGateway>;
   AUDIT: R2Bucket;
   GATEWAYS?: string;
-  GANTRY_AUDIT_READ_TOKEN?: string;
+  ENTERPLACE_AUDIT_READ_TOKEN?: string;
   [name: string]: unknown;
 }
 
 // Not a real host: the container's HTTP requests to it are answered by `segments` below.
-const AUDIT_HOST = "audit.gantry.internal";
+const AUDIT_HOST = "audit.enterplace.internal";
 
 const root = (containerId: string) => `audit/${containerId}/`;
 
@@ -73,7 +73,7 @@ async function segments(req: Request, env: Env, ctx: { containerId: string }): P
   return new Response("not allowed\n", { status: 405 });
 }
 
-export class GantryGateway extends Container<Env> {
+export class EnterplaceGateway extends Container<Env> {
   defaultPort = 8080;
   // /healthz answers without an audit record, so probes do not fill the chain.
   pingEndpoint = "localhost/healthz";
@@ -82,9 +82,9 @@ export class GantryGateway extends Container<Env> {
 }
 // Assigned, not declared as a static field: a class field would define its own property and skip the setter that
 // registers the handler, and the container's requests to AUDIT_HOST would then be refused.
-GantryGateway.outboundByHost = { [AUDIT_HOST]: segments };
+EnterplaceGateway.outboundByHost = { [AUDIT_HOST]: segments };
 
-const PASSED = /^(GANTRY_[A-Z0-9_]+|DATABASE_URL|AWS_[A-Z0-9_]+|[A-Z0-9_]+_PROVIDER_KEY)$/;
+const PASSED = /^(ENTERPLACE_[A-Z0-9_]+|DATABASE_URL|AWS_[A-Z0-9_]+|[A-Z0-9_]+_PROVIDER_KEY)$/;
 
 function startEnv(env: Env, instance: string): Record<string, string> {
   const vars: Record<string, string> = {};
@@ -92,7 +92,7 @@ function startEnv(env: Env, instance: string): Record<string, string> {
     if (typeof value === "string" && PASSED.test(name)) vars[name] = value;
   }
   vars.HOSTNAME = instance;
-  vars.GANTRY_AUDIT_SEGMENTS_URL = `http://${AUDIT_HOST}/segments`;
+  vars.ENTERPLACE_AUDIT_SEGMENTS_URL = `http://${AUDIT_HOST}/segments`;
   return vars;
 }
 
@@ -102,13 +102,13 @@ async function gateway(env: Env, instance: string) {
   return stub;
 }
 
-// GET /_gantry/audit/<instance> with the read token: that gateway's whole chain, the R2 segments in order and then
-// the records not yet sealed, as one file for `gantry audit verify`.
+// GET /_enterplace/audit/<instance> with the read token: that gateway's whole chain, the R2 segments in order and then
+// the records not yet sealed, as one file for `enterplace audit verify`.
 async function chain(env: Env, instance: string): Promise<Response> {
   const stub = await gateway(env, instance);
   // The tail first: a segment sealed after this read starts at or after its first record and is left out.
   const tail = await stub.fetch(
-    new Request("http://gateway/audit/tail", { headers: { authorization: `Bearer ${env.GANTRY_AUDIT_READ_TOKEN}` } }),
+    new Request("http://gateway/audit/tail", { headers: { authorization: `Bearer ${env.ENTERPLACE_AUDIT_READ_TOKEN}` } }),
   );
   if (!tail.ok) return new Response(`the gateway answered ${tail.status} for its tail: ${await tail.text()}`, { status: 502 });
   const tailText = await tail.text();
@@ -145,11 +145,11 @@ async function chain(env: Env, instance: string): Promise<Response> {
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-    const audit = /^\/_gantry\/audit\/(gateway-\d+)$/.exec(url.pathname);
+    const audit = /^\/_enterplace\/audit\/(gateway-\d+)$/.exec(url.pathname);
     if (audit) {
-      const token = env.GANTRY_AUDIT_READ_TOKEN;
+      const token = env.ENTERPLACE_AUDIT_READ_TOKEN;
       if (!token || req.headers.get("authorization") !== `Bearer ${token}`) {
-        return new Response("Send the GANTRY_AUDIT_READ_TOKEN secret as Authorization: Bearer <token>.\n", { status: 401 });
+        return new Response("Send the ENTERPLACE_AUDIT_READ_TOKEN secret as Authorization: Bearer <token>.\n", { status: 401 });
       }
       return chain(env, audit[1]);
     }
@@ -163,7 +163,7 @@ export default {
       return new Response(
         JSON.stringify({
           error: {
-            type: "gantry_refused",
+            type: "enterplace_refused",
             code: "gateway_not_ready",
             message: "The gateway container did not start. Run `npx wrangler tail` to see why (a policy it cannot use, or a missing secret), fix it and deploy again.",
           },

@@ -1,0 +1,1231 @@
+# enterplace-detectors-v1: a labelled corpus for Enterplace's built-in secrets and pii detectors.
+# Made by scripts/make_detector_corpus.py (seeded, so it is reproducible). Each line is one JSON object:
+# target is the kind the line was written to test (or mixed), text is the text scanned, expect lists every
+# kind a careful reader would report in it, once per value. An empty expect is a hard negative.
+# Every value is synthetic or a published example value: AWS's documented example key, card networks' test
+# numbers, RFC 2606 mail domains, fictional phone ranges, random numbers with valid or broken checksums.
+# No real secret and no real person's data. License: MIT, as the rest of the repository.
+# Measured by crates/enterplace-core/tests/detector_corpus.rs; published in docs/src/content/docs/governance/guardrails.mdx.
+{"id": 1, "target": "private_key", "text": "-----BEGIN RSA PRIVATE KEY-----\nwcqUb6iqmgYgoNdM/bM3Hg+YQKrvjT9YIYOg41T7mKJdauuqj8VsBXOEA1PlluF3\nircaw0rA+NgNaBYTVgNn1DuqSFfAjPBq0uRjYEcIiALU/MDxYgO8qumiM2Sove5/\nh+vktGx0p3tQdlnblKMzDAqWHwON+n/sX0KizIvanirZgdZQBUwgSGqZ0Rza3cQg\n-----END RSA PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 2, "target": "private_key", "text": "Here's the deploy key, please add it to the runner:\n-----BEGIN EC PRIVATE KEY-----\nRxAnjcyT/SuqTdkP4PsmDoLF2sxV/MENKvPO03qY7lDeckbTeeZMUKDRUCz/aalS\n7NsZR6r5JdlW6KdQVSJ51SQFjWG5V9aDjtDuCWlu2iKcd8INJCZ1sHBFKmYSqbvS\nzaKutrQEem99HsyMmh6ymePgMha1jgas0WWAafZwQYgZQu3g9P0RPDUT7zeP1XJv\nqcghH19zZn3IRGBCWfQirNQ1mxrts6mG4gKlFz4FWPDBhpcPye8Pi8XjFPbvYiEx\n-----END EC PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 3, "target": "private_key", "text": "{\"type\": \"service_account\", \"private_key\": \"-----BEGIN DSA PRIVATE KEY-----\\nZ/TvMj4qdmWm1OeDHvAF9Prno/ll+KOi1AZiSSRgrE38s/5gKxRKgJ3rj7QAMp37\\n9SLDJ5LvkQUfrfb9Ni62JabktwFJ2AhffQcZAWVfQYZgbA7Ibm+G2MyXR3YR2fu+\\nadbyaX4ukLrwxl0w3nqX5tmL5fbA0pUVNB8+oAJwk4qg81E9HG3o1ab0Jgu4bdrr\\nNcdcGM3ZsE/3FrDOFyI9jmzEQjzzt/Cyrq34Ov3TcKeetAqDYQzpHDgaIzSEVrcD\\nXjGSTlyPiWq0JPZnDMGHwEKStfn6Q16bHKV6OPNZBiUb84GS7iw7iTEZNN7cjDfh\\n-----END DSA PRIVATE KEY-----\\n\", \"client_id\": \"ci-runner\"}", "expect": ["private_key"]}
+{"id": 4, "target": "private_key", "text": "PRIVATE_KEY=\"-----BEGIN OPENSSH PRIVATE KEY-----\na9kVKX1VYf3wKYTdxjhhsBozV+ByS+g+hx/uPUQIQ2eQ1pcuXQSr8zG9PuUwzWbg\noNL3gzlemwXN2ktMsWPB2VMUstBvWdLPMN6/Ubv09X/Ul0hyIatDXKSErBTvP2Ne\n9pG1W4v7j3AXehoFINRUXDjhSrBZetWhspbX/7OjXvdotvH38vZDPqOV2ufuYxD/\njkjGOg2YVgMKLWZXJ750QMQp8AEUAFpxoa/Nyrh0CdN/rsgZOtcj/xfjUghe6iRr\nP7pfNtGlA4ZyJELACOlkBvK1vvF28/WtG/EyHnUR3tjtYdxp7sDMKCDbThzuIkKu\nM12cilHGInBn/UVNpHt7Tb+3MXnYW44lNpaI7p7OZf12sonpLUsNV7dJ6j8qFs/0\n-----END OPENSSH PRIVATE KEY-----\"", "expect": ["private_key"]}
+{"id": 5, "target": "private_key", "text": "tls:\n  key: |\n    -----BEGIN ENCRYPTED PRIVATE KEY-----\n    aGOw9zY/JaSpoAbE+a3FrtvFunVuGn7PZw8XaD8+/jAgnJk9T8YV/PHgv8Prv/FP\n    JeUhDY0E6Lovs6k7ux3ZVBFmBdAc/6xGmY1EDJIhcKxdzBV/ZxgLLe/K9TER03v4\n    wK97mLrCklx1P6hYWLOsHBPymRktDsTBFIveSCtYHI2qax0At2Irs6yJVlOoX3nb\n    -----END ENCRYPTED PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 6, "target": "private_key", "text": "User: why does ssh reject this?\n```\n-----BEGIN PRIVATE KEY-----\nfTxWfE+m3ouV1AqaYGd8DNMfV7y14VdXiKgVDf5TS+yEcjIRJywMWRh+X62Tjh3K\nADPokl5Y1yNAf2vP0pFNbWp0uDOnRC/771VEuJATI8/OFOQVSR7491ruW9QkOqqu\n/FcMk6zS+dLF3QvIjOXMKZMgEYAqWaENs50k795jGaspfP/X0I5BTxJ2aOWSFDjl\n3A1JarsAji8ytmU94PJciwVWfKbmpLG7rS0uTQfFU43LUkO355BXknlqzrMJy8uE\n-----END PRIVATE KEY-----\n```", "expect": ["private_key"]}
+{"id": 7, "target": "private_key", "text": "-----BEGIN RSA PRIVATE KEY-----\nu2GTCKfraiY13d2ZcvLNLWCTAemxoEvzaD0pYoeBrF1bTVnZRHvWJ2Mh5rDhSC23\n+K+i1LyJF1MkNBHPpUpeqogyMLX849fOB0XZxczZtHyVx1nKoj37r7pdjl162WQN\nC9XXr4kBzGUZ9Yi0h9N9kSwhaXnXNw4YEl1oSS8+bJZao8PXJo5AswsTkHFDawWv\npjF8R8SYkCz+7iSkmX5SwNLuEK//Gbc9UpGs6pz73f1rkPb7babNLrbamLfN+ug8\nt2pntFKhLYa9Ojh1qDRw8Zlpyx2K3k7qffUAD9+I7MZpXDwLWltjDOBYTGUuyDZN\n-----END RSA PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 8, "target": "private_key", "text": "Here's the deploy key, please add it to the runner:\n-----BEGIN EC PRIVATE KEY-----\nc9Tl1YfmIwozY4SsynLhUCM/JqFbT9X35b1Q4Nr2BQrc9elI9dHZ03jdloFoRtgx\nTK3Xb8l0KTNmQL/sNiCRCn/YkYgdFA637aVut+KFqLxBlJuESwElmqWzjJ9kFp7f\nMxfxQNVE17V4MXfEx/CoeoIBa/02oR8/3dmRJcD6yqAJ2nu3bhJymGybTSWUUndh\neaA9V/uE9CNxu6ZLOqdNtk/e2dMPncJl1jAeMU1SNoai8o0wyh4tcB/RiMrLETTt\nZVBxz9qmp3Rc1FsU39mUDFZJjSFAZ9RxBq15/GhzqTL84cxQbW5UyO2qkr7BPlZx\n94wzg3VXhulxJl85yexKQU50fu/fr9CUA9hkWs/sjPx6It3XE6r9kqhxUOaK3W2e\n-----END EC PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 9, "target": "private_key", "text": "{\"type\": \"service_account\", \"private_key\": \"-----BEGIN DSA PRIVATE KEY-----\\n5BNQyljgG+9d4lAe3SCGhV5ZJB6Npzquh/QOHGE5KrkZTJInibJt5tQPoVnWX+NT\\nrW8CA8iaLl4i4DhSgXeU9RSswLTvXXDa3i+ra3WJ6G6z1Q0pty79kL4i3CPzu9Is\\ntSV+rabp+iOSD9n7vAx4MHiNDQaqXQtfdnFg9A732V1skyj6embFqPqQOOkDACzy\\n-----END DSA PRIVATE KEY-----\\n\", \"client_id\": \"ci-runner\"}", "expect": ["private_key"]}
+{"id": 10, "target": "private_key", "text": "PRIVATE_KEY=\"-----BEGIN OPENSSH PRIVATE KEY-----\n1mWtLBodTVKHiF8b123zITJ00/uzYFIWkjdXniCZlBXehOWOeW/yCMKoodalu0k7\nGan+JYOUO3VrkQbqWON5Wg6RRXmxAQm8K9WT+/5Ocoz/H12nli+idqBL/3T6UdGU\nqL9tIh2QPCcBnintacQdliEKjCMuJVKaTIdDsBQ6jjPZJvWqAhck+gpi+AznVd3c\n2dXrhJpFqqx1fNFUFTnyMZy4WvPmLtux2D5OF37vSkuLCIj+Mxkexs+F9ZLF1wIK\n-----END OPENSSH PRIVATE KEY-----\"", "expect": ["private_key"]}
+{"id": 11, "target": "private_key", "text": "tls:\n  key: |\n    -----BEGIN ENCRYPTED PRIVATE KEY-----\n    Rhl8JsyIcSxykSFfUMn8RsSk1MJC93V7VVR2ClCvsK7WFw/BPQyYzwcf2A95WzAQ\n    d6pP754uWByQcwNvNcFTYGwVRfjFKvPg0e3vXcZwTJQjlS5IsKCoQN30S2lKnvrt\n    IwpF6vt/B+XIUEcEZmMyD/tsztBFzylpQO8HNs3EQH6czDdWSQFZqzdIWy7uCISV\n    mjAnnL888oHsktXg4WXm7J5Fz4m/rBpmTn2petjYo1RYmHaQRa9irdgvCcrI26gp\n    1WX4jwIjjidmNrptsyWdfEJWfDy41j0i1/od3tZLQbgePemNP/uZP9ZphRvWonwr\n    -----END ENCRYPTED PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 12, "target": "private_key", "text": "User: why does ssh reject this?\n```\n-----BEGIN PRIVATE KEY-----\nhrNP9vLe9+mbUi+xQCrhgF8VejQ81z6zgk1iKkCTRaWu82wO+Wx2zq8a8sP8e/G1\nFyn8XtBqxIU5gP1nbft3tFl9yUQm5twSQ4YocvzttK8SdrDwqCr2wE7iUghi4cv1\na2v89o03VbymNeQkdEi5pErJvErVZp15iCuJtr2zg5ytiZaHRjJZlSuSuofBwzjo\nTOGBktrBzUu27d4Jdph2P2SfrcACNJwarEapawXYCu+XinMMyBuJpkAd1+X1royO\nyIPr2Z9ze2foLIOqNNCsamhHyyddcGkNLOoBgKZemqJFe/XR1TDChsSRQ8UhIxDr\nZ33a6UYRPzZByzMG80fcoWPJnwmD3r4l6y7Z+LxdZiaZtW25zxqPrAzOM4R+BLZJ\n-----END PRIVATE KEY-----\n```", "expect": ["private_key"]}
+{"id": 13, "target": "private_key", "text": "-----BEGIN RSA PRIVATE KEY-----\nHVgxhcZK/FGrfR21WzdzM75PzF+DAvlyRm5Dc5gW4Bp+WGvi2117cYHL6jT8MRnx\nx+2T44I4nfgLegeXRosAxxn9WslNWoTRUJ0ovfxWY1Vl5b0TBJr6Ka9XRYFb2CFN\nvw8YpL/t3jUzwBEvI6KuJsypsoTR7s/FfPtx6sgHH067I69t2RfW7yBGjbYzuXnB\n-----END RSA PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 14, "target": "private_key", "text": "Here's the deploy key, please add it to the runner:\n-----BEGIN EC PRIVATE KEY-----\nLJPcpAZGnb2c9gSHkYuDUYIEN/1NOYXjP1vaip0hoUkb7AviJs3fmqEzcRH67UWV\nZ9A4HP3lkB8ucDny83ltCOTBeK5ttYysl3GqFh33nUHXjHd3/FdWhq4qxOGAdW7t\naAG7OY2UaW7yof1+iUUOxePRCAORct7eSu72rKizhzygXSuKmDrxBifNpHmDelbZ\nqFqqSFvrIOgFqhIYD8jh45wv1uWfnD54JyrOM+DxvE8jbD2oAKSxerLBT5Od0HNR\n-----END EC PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 15, "target": "private_key", "text": "{\"type\": \"service_account\", \"private_key\": \"-----BEGIN DSA PRIVATE KEY-----\\nSpGaPfrUXuuup/4SWQ0MuXYFesQGQRP7iXkbRIlfdK4SXOHKzZqJPTY9v9xPOBxm\\nX9SShOwvxZJQBHJ4EppW/428MDJf3wxyTz5jua5XawobIG2gYKzrqUPkxgn4nhsf\\nW2vwroaiLrFMzaB0pT5ntG+k4jI0sU7+q6u9Ac+4VOyzRdwnZjV77h63FYXKYfau\\ni79EBhMdweZot8XsOmbOhZu/GjGRYQt6X0Rm+nO9Dnq4+cIYYPhjJiOT5wMqZay9\\n1nx/eTNbEmX78vcBACZvmfftlA5sqEqs6A8DF9m/2LFuqfQDFaH5/qlGeUXuGZHO\\n-----END DSA PRIVATE KEY-----\\n\", \"client_id\": \"ci-runner\"}", "expect": ["private_key"]}
+{"id": 16, "target": "private_key", "text": "PRIVATE_KEY=\"-----BEGIN OPENSSH PRIVATE KEY-----\nFYoCse9cwgJ11sn1w8W4lynOffESpAzfdj9ZBSNaB45r7JiCOTsAr5ITV5LYnBHw\nJHhFrbk7P/E9WhUFT2/tLXfpjLvMhvRv9CAA6hFyKsh/ACW1WsKVBrmD/HRV8ps+\ncp56pCa0Q9qcCEZ29GQoEpegNlbABFP8C/Z/Mu4US7fXx15emlBlM4i66SrhETcM\nTnb6EwYPGX+mSe54BGmcbh54/D3yh1ynnXPS+ed5ADZS9aw199g0sbrwrbM9cPWs\n4gs8EeQx6EkTdjJZ+UByQAcIAcRgcUdYxldQHCNwgbh1ZaNvuw2UwN/CxmXyxxBf\nXLJLMbuQWVZN1STR3sVGI3dRfHk6QuoIVais20cPJmZj9hGh1qoKYLYHcwA9NsFW\n-----END OPENSSH PRIVATE KEY-----\"", "expect": ["private_key"]}
+{"id": 17, "target": "private_key", "text": "tls:\n  key: |\n    -----BEGIN ENCRYPTED PRIVATE KEY-----\n    G55EpcAwh9V9PXrTIbM3MELLs3FqvrF/Qwjwvmtqsx/hCwusX+nlYC0GYdvKtLTl\n    Ya2waEabJkkyio1vMX9enXMQtIum5S5/r/hFUYUPtgq+9mXm4miTb7DrknW3Lq9+\n    8c3naJiRrotJJK71vm+Tr52j1ESqJtpBTinSjDp+D+9rnXj2r/6O/oxrJpZKkxt8\n    -----END ENCRYPTED PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 18, "target": "private_key", "text": "User: why does ssh reject this?\n```\n-----BEGIN PRIVATE KEY-----\nVwSCDkPt2navyL3C0XgpYblO5tJutacsnWk9H0m43SgA5RinnInm6qJSJwbufklD\nH/VGK0MJExARaiG8lhG4r10b/JaNnJevc6CGk9v2Dl6DDoI4iDoQ/uLRchv1fMmv\nKw/0hOrPQf0N8vZZ177LXsey/9oqIrMzmtXgaiLFSjoCoOozosZuBYfRIBuEWQ/k\nEpr7VafSI53tEI190jPsG9UIYa3/mf40jFtLPfm1RIEJheG5xfb+crTxgmyYamd0\n-----END PRIVATE KEY-----\n```", "expect": ["private_key"]}
+{"id": 19, "target": "private_key", "text": "-----BEGIN RSA PRIVATE KEY-----\nrnhsLXBRN6y5i5Yk8yBnV+LhxmBGzOvZXpcPAOed44TrzDxRqxh5Y5I0rn42uCVX\n22/wSY00XvV8qXyGqbiAZzlm0gCX/1Pa7ImU0BQ3wyJp/ZmsX3+paa2IK8Dls9I2\nux2QgiNJQ4WB3gYsbGzMXShssGunV50Y1l206Nv/38RsxOXFZQlZVFWVBeSQNJd/\nFeL0I11Z65AhcSQCZEenuRGtedAS6XvMCdqDWbY2cU96hJ6Vm7RYc/TGWu8ol6Xl\nFDqJ4oHCfAsT68aFWbcpF3SVBZfSTA7PiqKveZ/DHRU2vElNa2AzexwSbW9iE/OI\n-----END RSA PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 20, "target": "private_key", "text": "Here's the deploy key, please add it to the runner:\n-----BEGIN EC PRIVATE KEY-----\nTRyMvVMRykzrINs7OTUjZyBzOtU07fO+Xxa505GA/3azfLM2LfNRH2CH0JWVZ07V\nXFuYf0W0sy7fQMYwAKVShDLOeMdBOByuSjnLGITCwo18oIGXsSLkOSXfixiA4Nit\noVzxHIrEFeeUxltr8HwROIbNSnu6We6+KMkM8gVkkIAX+tm6MDmrTa5xgXsDwUcc\nhZYM02UZKnrjCTSZ7u/IVKKpowz4Zzndu5JaFJjYrkqhROM1lZJ24ZVQaLk+EOTg\n6lZI010P7yQQFj59/aeF7hPpibiCMxQhfTlJ1a72ItEY2j6k70Od9GOeU1xINdJJ\nN4okeT5QDEWTJRmSc1maS398rt0iTO0g6ikT4t3eyM2Pv5w54DJxCUKM/8bV98p9\n-----END EC PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 21, "target": "private_key", "text": "{\"type\": \"service_account\", \"private_key\": \"-----BEGIN DSA PRIVATE KEY-----\\n8J8AD26XRQUvTsDdMsQMtPV8T7Q3IYZCtcqi3+N7aXWseKBYfKab44imVNjttbku\\n+zgUJxTbDu2Jtbaf9/CuWIhZuut4c2eNLZWy0HrzLVFfiuTGwjLheE5e3+5iFR80\\nrzfsYqgGlcmo6YlTrxU0U+WC0omHHetcbhymV9FHRQBxqhHYeGUms87+K19giRZA\\n-----END DSA PRIVATE KEY-----\\n\", \"client_id\": \"ci-runner\"}", "expect": ["private_key"]}
+{"id": 22, "target": "private_key", "text": "PRIVATE_KEY=\"-----BEGIN OPENSSH PRIVATE KEY-----\nwVAIaHo3Lbv0jFBBI+sqjOjQPU0W9oJHXqMxszYZD+dgWFvcnzDc7qqelnnhLkY/\n7FkmhaQRZx4icZBLmjbbhl/SKRqion8o2cwpqV2WU568ZMF1uzlSMylemFYCdBgx\n+U/nQY5SwUlkAo5pjnAxky22QWyyVKo+BKqe/e9aNcD9L2RfeyMOgOW0pL2FblGk\n5ELQx/qWWfOcVKylhwoHH3eXl05PJF14W6C1dG7kweZDcvwVpCo100FTzPMrNMhA\n-----END OPENSSH PRIVATE KEY-----\"", "expect": ["private_key"]}
+{"id": 23, "target": "private_key", "text": "tls:\n  key: |\n    -----BEGIN ENCRYPTED PRIVATE KEY-----\n    j0lfOg4B+5H43yJf/xwfqV+vWC+lFk+4mRbZxBZkFZ1AXxFPchvXyrZ56MogB3Tt\n    vTh2cHCLAhbrPCO5mgIAR2S3FgitiVSKpHqRpscT8Ft8dwpqeNcitEUa6hzQEWOh\n    ehWL6GOf8rNgP6tT1YCsSC+zYG2X4DtFqYyYhP/Ae1f3LxvfK+gCzAbF2yb7tvQH\n    8PiLcPtRUlRsxDEDofI11ikb5Cltyql3IKnWj4iumbOC3tOl7NeBRQvheOOpFB39\n    LdcUsQ2A3EIKU3OkKLWK6XnjHBxz6jW7CIt1NvQwuyI5j6AtcuVuQ87nC7K/n9WV\n    -----END ENCRYPTED PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 24, "target": "private_key", "text": "User: why does ssh reject this?\n```\n-----BEGIN PRIVATE KEY-----\nARz4IrhzESMqaaUWsJ+b1mDSv36zemNjH8/TBm2ylRb4iB2rtrhCIW9vX/Q72ml0\neL6yVkOPGaI0MJNGk7pZ0PZWF2lgSEDpEBKliSXoO6WHk5n53XGIYbYDy/oyoN3O\n5mngbPj3vRt1+gGIfeMjAPs+XxTIYyYYNSnyCqJCuG+WhKCQVr8cE5MB+1depTQ/\nMjg6yyoJD/93geNcHLlFv4y7h3J72X4bDsuVfoUUZqrm0fy22tMr/CkpzY+LTW6L\nfPWpV296EFkVmnVhekmXiUbW1t+sF3yHAa03hgc8OKJzRf/2qf55EaxSVCtJha7/\nTVrudvSbkoYsEZewl0Gdk3jy+1lM9lw3mwK9ybOnekMltVvr9DHP52ToZmQSUCmm\n-----END PRIVATE KEY-----\n```", "expect": ["private_key"]}
+{"id": 25, "target": "private_key", "text": "-----BEGIN RSA PRIVATE KEY-----\nsIxfM1cigeVXhFaYkhA4SYr5ahq8E3PMoW/0LiybAfGhhX5EJeX5fxPKAYdYP2u9\nMqY7x9GaW8SQCzw5s2uiUUbOr8FuGQil02up9XXSphhOWojFqxEkmUShaf0rfeeK\nUk7XnluBRlIaanvC14OrzZo350daD6uOUAkJdjZ2znFEOwh9umyp/vXK8gozQgTa\n-----END RSA PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 26, "target": "private_key", "text": "Here's the deploy key, please add it to the runner:\n-----BEGIN EC PRIVATE KEY-----\n2Ok5Fcn5Zo8p5DGxo3q82N+q7LaS3ufiVsQggJ/8PYiwtS3xnxw+H7cU1vGOdImA\nAkzN71WuKYQ1PAZu64ISZIbGgNu2KqaS0g0OgzHhdAEb9umnZaVUePbt/n+F6Qsd\neWpyeaVEnxDNbVbNhqbCCinaTaC55IB/LiYd3dBU/d7xNwxGjvYLajHHHXR+k5fl\ngOBPt+VF+Cc40Ml3IlfQnWD9o1DYCPjp/y8Mso11WEI8dRSRfmgCSm/+hVqjo/ol\n-----END EC PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 27, "target": "private_key", "text": "{\"type\": \"service_account\", \"private_key\": \"-----BEGIN DSA PRIVATE KEY-----\\nr4UffqoAuW6YdOMmci4QuwKscVGYwTJ3f1LFoanKV3ElAsly/a4nh4JVuz6UTM6Z\\nN87XF9eFUWPwtwGukcpP79Jd4VCnJI4qnL1nLfSjw8pYFOsCkFf/6Z1O9Nr3khhb\\nACpDup+nQTlzuRkHDIbITyy0e1WdcPugsH61RyAo8IzOenROR80B7kCYSXdqENUU\\nCX4X7ayMXbFA8ZR7I2JKDumnjjwlfT96U58YpgrPgSQxWIWkcGYR7dUQLMkJ+RyT\\nCY0HE2eYbBajerhE7cnnWN0Nz1qS6pxtP7CQFb9oMAajKvMlp+w5a8TTHeBnzvYz\\n-----END DSA PRIVATE KEY-----\\n\", \"client_id\": \"ci-runner\"}", "expect": ["private_key"]}
+{"id": 28, "target": "private_key", "text": "PRIVATE_KEY=\"-----BEGIN OPENSSH PRIVATE KEY-----\nfHcmQUIxii+yVXyljxUWoxO/q6UJHjVLSIqDJ2HdtpfV1xZPb+qMFwSRdEyduz97\nO2/d3odGhb7IBLS2Rnf80ikgHL08QcWIwNsUy4Co7NqhoXiV2D3enmd/+DvvkeaA\nRiYkaaxzHrEr3TGAh69c4DIUUb+kxsgGwaxTHqOeckNUB7hkJUQeSFFLnlmEU/it\nYh3yTMTbtBpROTbM43GkbnRu05xw8qhiMuxdOqOeS6rmtxBoKyuWfELSaVA0/6R5\ncz3DhHRfZUtAr1LIagirfR7S+ERCM1rWijTeVRRbnpk305Ml5gaEn3uOotAXFJk+\ntCFdGgYrV/JcE/U7RaY9m52po0qW8w2p4aGjG2hQRBenQ1vK0BtWfgeWcXAhZ5je\n-----END OPENSSH PRIVATE KEY-----\"", "expect": ["private_key"]}
+{"id": 29, "target": "private_key", "text": "tls:\n  key: |\n    -----BEGIN ENCRYPTED PRIVATE KEY-----\n    ha+QeY0jq09DJw1HDFX1ZIaN2FMobWmwS9wUgj+5s5V3fHQKZe442Jix6Ujc37EN\n    eoskU+T9UE+BgLxUFEgnte5IYmuz99/b71DY7xjuA/otWVFfw7redJkSwpVC0oVz\n    TXzkAKPzpxvly0PlFz6d59t0kerYeJiFWAv7aENTwMh6OsKC+7uobnjOTDs2M2ZH\n    -----END ENCRYPTED PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 30, "target": "private_key", "text": "User: why does ssh reject this?\n```\n-----BEGIN PRIVATE KEY-----\nmziURbvYLtkseqwFw1+b4rTYR29BSsn9DCwhEt6HHwMrgikOa4dr9pd50ThLjNAK\n/XAlLFcve1tabyhl4qW1bZ3z/NCZpJ/sjCW337RiBnRYnpgPzV8e6zmgAPqSx3Sj\nMKSUWHHtLQQ/uMHviuz+C+vkBqaCy6m9Q2WJG80SiCFuUEuXm15mKW4YZSVeaEv7\nPMPxu7e8iD00+3suHzti45RAwq5HpHKLF0ftrxz3XDN4+UK1LRkGB4PmQss54j8i\n-----END PRIVATE KEY-----\n```", "expect": ["private_key"]}
+{"id": 31, "target": "private_key", "text": "-----BEGIN RSA PRIVATE KEY-----\n5hno6VTxwaM7zWF93QCN09sBibh+s72zREvOEC6v1QiAC6LKHzBzEIHLKSGAjayd\n2Za7U7dTkcmgIJXMnZYSGm929yxXmxkpnU/dwOgEYI+wGjIoAO/Zzbsq7TjRoeKs\njRJ+t3q58mW2QUKA6oKMsJwCzIkkiNOt//szTM5Alub5dp//ot7om9cJO7fAkJVh\nBuNm9l4QjpXkmv0zNqz+g5PG1F6bnvIBELonH1iXEBPp6DZoNk74n9VdSfrJfKuC\ndffDDeTeavSIzz9JOFgnk/pflJgGccg0pJlSMUys2R1Yomkz108xu50F4GsPip2b\n-----END RSA PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 32, "target": "private_key", "text": "Here's the deploy key, please add it to the runner:\n-----BEGIN EC PRIVATE KEY-----\nE9a2V13OfQW2+0iRyWBn9rQH3M/M+mKagdE24vBWF9fqYVmk0bbRb0rcq/4WZX4y\nm3to2TP0ho1VXZeiGEMvok3mpZGTmtQ89i8bC5zXkKt1tPUp1YVGihrrMTh6hges\nHXsxPArZQXvfkBPV5prLBHaO4xYncWk9f+oTMuKYdPcbqHY/I8B0aNhDfBdlaDxV\nWNd99jGCLQ8U14jn4VWSfmvTfBZcOsDCcVskk1tYPnIYtCvyVYRkhga27v8eT8hQ\nuZdefZB+yNMB+y/9xlnBxDcBR+b2n5wpBqWzJUCFxV2EV1H3urAxXUo7z1oX+Wk6\nzDw9/1J4FKOmJZ5MZ8T4L9/hFgCTjhNqO49LUVCQ0WT49sYmG/Ef9w44AK1w1GlK\n-----END EC PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 33, "target": "private_key", "text": "{\"type\": \"service_account\", \"private_key\": \"-----BEGIN DSA PRIVATE KEY-----\\nSABuTWE4+u03A/4UmxYgUlST029UDcxMIb+SJpjMX5C5wtsXFF119oc7BH0SLup6\\nLAH4mrseaKhGZ3rozOzVa3ZqSIkKnuKEx6N4rUAVqil8xTFu17Y/oiKa0Ow8efPT\\nndeygowWw4zZitC+S8x6ktSwYTjxOMwCZRIbc5tb8/EPHwo/2AhR5yrIK8z7X8sR\\n-----END DSA PRIVATE KEY-----\\n\", \"client_id\": \"ci-runner\"}", "expect": ["private_key"]}
+{"id": 34, "target": "private_key", "text": "PRIVATE_KEY=\"-----BEGIN OPENSSH PRIVATE KEY-----\nv1KK6iFOFZLQKx/GwXRUqsTMhZKZEmRhlBTOR9pi8ayHLNxthD8GgQwonXdLWK6U\nnu9Pwz0eI5bmfwuOJWxfGGCTB0vY40rJL4KkLst54vt5OsJOOzEbc6v6Vvqja/kB\nPheJVGHl2JdvyjEI5W/zAhI392L+7B9WBxvEYrWUDAFs/5nUFzTMzRMxt6lg/vie\nZhERi4se+P72jZvnFBch4CF3Vb2X57NUxRCmuQscdGcnwuEdL7NEuKVWCh/tT3Vj\n-----END OPENSSH PRIVATE KEY-----\"", "expect": ["private_key"]}
+{"id": 35, "target": "private_key", "text": "tls:\n  key: |\n    -----BEGIN ENCRYPTED PRIVATE KEY-----\n    wtT/byNRNpbOuj2lp7KXQLoOqhj2klG8y9gyqoxaRlagFUmmyEw/joR8olOVxkD9\n    5jRdYqhjMj+lq8wJ2qtjSTPYJyNJh7KKkE4XOrPSo/EdWSYaKwKBMJ0wqO35Lcwr\n    MmU0dSOecBQcogdC8WO9yETEclDWjeOXLHvbBWSTumbAHLVt9uoR8q8AN45w0n5y\n    qITbSZuLk5FQCq+U8VAySAiLMq1KTjV4q8YJz4t2RHBGAWIJviY6icTdt7Kg9Ajd\n    dNhIQ3/B5oZceOv1N2a0SmBndJCfRXTsO4oi+uiHfhS7q8LDLbFhhDt4T6Rn95of\n    -----END ENCRYPTED PRIVATE KEY-----", "expect": ["private_key"]}
+{"id": 36, "target": "private_key", "text": "User: why does ssh reject this?\n```\n-----BEGIN PRIVATE KEY-----\nbL4EzAk3pgNn3AyJFgfUjw6n+/dSQPw2nx045Mgq1Ah7OAmbmqoeLk9W/5ce+A5u\nL23ekC+swupAPMjxx/So2lmlUYX2r7FepTJPhooMl1AYdoQjaGR6ZCvZ8NmOucMA\nswe5TrpLl06MQUUO41gD1HHDts2D2yXPBziKT38i6FgnFmKTQCi6WMAiotGQUHmG\n5eKNDw6ThigoYmyhQ9A345OYmlKjrWBw2x12OyGsNkKd67EysfoQY52dwTtAJdel\nj1i5s7ztzBp1kfTfbi0igOI+IDj7hgaJNZxwKPY5mz7F9SgRdMXiIR4FOA7OQ4Qv\n2DCNI3tCRVkyWSA6o4i4Ufp034tytazg9N8p29TsQptn1dGcqb7yvQAZ12DH0OA1\n-----END PRIVATE KEY-----\n```", "expect": ["private_key"]}
+{"id": 37, "target": "private_key", "text": "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nhAyUj1jS3/6+hrtijxOuSpXAjyQt+5RPgHMmJfkXrKg3w1CAcy519Ul1aZayiOAF\n11dIAapSk17geW2JcRs5tmpPFrgEWKUs22uavFxlTDXtVbT21hfr+u0KJjQCaD8i\nZuracOrhoRuPkye2zIqWnOXydGCQxEx/FGDziHAW4xXtvNf7BGxZ0QYUPgsRs8sE\nURzIs+FKWEblW4S6+UsibbIa+BYoAagG8hLQ8+ec0nRrBrA/zEuwmMHmE1qHQC+U\n=JBKi\n-----END PGP PRIVATE KEY BLOCK-----", "expect": ["private_key"]}
+{"id": 38, "target": "private_key", "text": "exported with gpg --export-secret-keys:\n-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nx4QXcV4sUP6KsAd0Lz5gF5CSDQ4/CV3yAM9wCTYxYZCbVcTPJhztkvJDV/acuHDr\ndbV4rgDY4GOJJ84QIiD19ONfFgGAR85F0CQ3MQELhQMbOR2EySNGL0uYkdK1HNYb\ntrThLRzn8VuIWyGhFnR9Vx8Lj0DYnfQd29YPOwqNCGPr391FIuaE2EwtCxqNXm3m\niShYDBs88Y5n1L2sxekAgxD+cSvD404Ddcs2GGTCkseuYabCNNeVyZmkxh7f8sj+\n=6Rza\n-----END PGP PRIVATE KEY BLOCK-----", "expect": ["private_key"]}
+{"id": 39, "target": "private_key", "text": "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\ncNphPnLeihiqP0WZi9hUDtYjjlHBkpHrpyhicO9vaZm5KnAgt0CGcHnIbIsCI/P1\nj8hGl6tFZMY6RTJ+SaeRGVc2pmZGe50m+8u4jSvc+7WxTlf1qP6Sh16OBl9YCnMN\n1wuaQlEHUyAZIlIT3krg3EqAyG4e4kBCv/B59lZi0XHW3iyWpj2xuNPCxR40qDTI\nIq4qG33ZAgPKYcSG5bXU5aqyR12kuwR8YAjpL2EBznEh5FY3BazglSwEpJWkXXt/\n=hWlb\n-----END PGP PRIVATE KEY BLOCK-----", "expect": ["private_key"]}
+{"id": 40, "target": "private_key", "text": "exported with gpg --export-secret-keys:\n-----BEGIN PGP PRIVATE KEY BLOCK-----\n\n3AY5rEtZAuQa3MM3tnj0qu8Z16zitwPUibAa1rviUjptjXyqA4sOtHmanQ00hotq\npHWsaa2s8UXFkqDtQpoomGvCNDYAjfaFoyJ1V2T6XZoSnhfbvRf5FINuGo7C2CB9\nd4dUXcQFvr9Z61W1+Vj+Pxc73HDqRyTO/RjvMHqoeHsLQZuO5x9qI1CcBV+79hec\nzm9LwCr5RR+abJzuhXY4tKh1fI/MqI60yQqEFFXcjyNhar+PaWH6cDmdoNT2rSLk\n=/wSR\n-----END PGP PRIVATE KEY BLOCK-----", "expect": ["private_key"]}
+{"id": 41, "target": "private_key", "text": "two keys:\n-----BEGIN RSA PRIVATE KEY-----\ngMz2oN+WJblQL71SrPFt1UrPVfaVeBt4KK9yh4FXlOF1Q7Pgeu77/l/K7x0wlFl4\nVTVlsTydZD5j9gZwel9uilbpw9FA80w8fNjKQa87AZPhO36FfbjArl6Rr6RR15cg\n-----END RSA PRIVATE KEY-----\nand\n-----BEGIN EC PRIVATE KEY-----\nkRMFnXca3lc75Mm8zONHGS8XWXQmYgxHdU1OzHhtO9aC2JQ8rXMfnOUoaRqx5l8E\nqBPmfkvhLr8BNbG6KE59oxhyRR3qfGHlh6jBb9yyYoqfv4utJF/wg/qvILRTVcwi\n-----END EC PRIVATE KEY-----", "expect": ["private_key", "private_key"]}
+{"id": 42, "target": "private_key", "text": "-----BEGIN PUBLIC KEY-----\n16uZ2FVel59e211BDIEnXPSLbhNQBzfhRbwG2/nfxYVkcOTT310ewVi0VlSXqL8n\nE1btxx7gDhoF9OaXoNSQvRDTJwd+Ug5sF5VohK9jTvwPeHQDTB41UrNh71upe5/4\nm1XZ5ENj6TKoi06JZXz8zeVBzd5nBRCaihPXgod5VCQdWqKFe/EzLBIMhvWTgQJt\nTIDy3xv4qYu+OzZWK96aCgvFtn31n4z/ZqrJvk3r9knmtPovGfftQzRD7vzYedB7\n-----END PUBLIC KEY-----", "expect": []}
+{"id": 43, "target": "private_key", "text": "-----BEGIN CERTIFICATE-----\n8cCuUS7/0uaz22EHKFPH+A37nULMhER4OjSLzlKbAchvmzj6jrEqTjnLxsN082a1\nPfbdeSRQJMnJX6G3gsIb2J7h6v7BP+6iaXGlmVHOgPtvlmm7hBVXIWNg2nhIB/l5\nwkpNGBq3s5AcRxcXO/S/4TN2IbITxRKhaPLXLLVT7yAVGTtE2X4wr7mq74C9shJF\n5zM9d+CBgzl2pb59B9GINlrDuw+0fVEApLfbkPeZ8sZ9hXee15Zo7+gIfcgNamym\n98GeY3s25LRiSshnKf4xL5iszHalNrj0ivBytyXJIA63StgZ3z+FtHpOZirRPhi5\n0x5mvHlKVSvDhSGlhGRWWVgGB3UG9tu3BR011n8Eih5dkRy3eCQmff7Y1OKHWvta\n-----END CERTIFICATE-----", "expect": []}
+{"id": 44, "target": "private_key", "text": "-----BEGIN CERTIFICATE REQUEST-----\nTTC6aQYQad7Ml6lb2bCXcLIkVCoh7D4B388OjVu4LRnCw4CmA666kNGCn65f6Ir0\nbL2c/6M6LfM1tYjJipRAs/8iIyWoC+m1tY/wzQkjwfRxXy0rl5jsLTp85+PgH+mu\naHjddBAY2cNkK0H9pbHrNT1h+JBMXTnGt88L7GOjwl8FuVIfbgtbFumfvsxWkvp+\np08q79bt05Wrhg6FCFh3GXXv0Dpxl0Vsh/T5WMNlEphKBkHcr5LYQqcZ0QvFBq5B\n-----END CERTIFICATE REQUEST-----", "expect": []}
+{"id": 45, "target": "private_key", "text": "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nZEyE7HoUuR5MgY5V8nyhrz8PQPGHeeRUAYWORxMUp59nKdiu81tOWKiYDWu/R9/+\nUGMdLT2uS0SBKURmiP5A5hlnDuw12Nl2rw/bA97jAXX/V2z3orFrZInAfJuMERAP\nuckgLxuSx/TAvuRa7JncPoyol6Y2GCvTrTdeqX0FCOOm0XKde7Rg7VojPVU/BmNU\nv1lcTave+AM2FRwEzfEQergiYmHJCZrnRD2cEDkHhUwPGuu4M/GiOuc6tOXcGuTf\n-----END PGP PUBLIC KEY BLOCK-----", "expect": []}
+{"id": 46, "target": "private_key", "text": "-----BEGIN PGP SIGNATURE-----\n\ni4ocLlhsDOKzudd9GUWReLWdBp749QfC0QHI0SU/q9KSHrony1ZjQpfGBY+NqKPH\ndXz8Ga+QDaUJjf3jnl5jNZuwogzba8Tl5drIfUmmwzV7n1NsocBCN2wA6ItSbWPY\n-----END PGP SIGNATURE-----", "expect": []}
+{"id": 47, "target": "private_key", "text": "-----BEGIN PGP MESSAGE-----\n\nFDkWv11CoBcdy3Nckj/f61MBFNl7Bt1m4NYyQ0qL3G6Bzu73D0xOJQAfrC+QYlG8\nVo8pLp7VagqDw/8r2lq6rn4/x9xcNK/o+oVzfMvlVwZr9EJRhpEN6k/KQI+o0ukq\nEe71GZ4hNtWFpS72//Cvm6eHJ6qFPAoBk/PeLIkGBUK4ahW2Mqt73aDXwZkkwGlh\n-----END PGP MESSAGE-----", "expect": []}
+{"id": 48, "target": "private_key", "text": "-----BEGIN RSA PUBLIC KEY-----\nd2LFud4UT8uwHXO45Fv1mHaYpFfcZudobt5gWM95DmZMFu+iVI2Lq7idXy/H1Ea5\njZpoZdhepnhxKV3n1XxbbEddhS8f4KFVcK2/5Fy2hOF4EiLJgm+ovIwBvFod6A2z\nsIRNc+9Xf5dAQJXgzwLlzEYdE3p7PMlno0wHRZNmT1d6mlw4uTAqhM5Nbvx7fV2a\n-----END RSA PUBLIC KEY-----", "expect": []}
+{"id": 49, "target": "private_key", "text": "-----BEGIN X509 CRL-----\nSJ/Gjk00xzfTrSjQrO5Fo+S2Ie+7OGefygRg3avLBrh7B5HSIt6U7Bet3OiCWlBv\n9lKvxkKIB7gGxJyxwYw0xqepV0nJoGnBt0jBtm7NX5u2fgel0N1lyd+UnEOuw+lj\nUbYQgSEMXwTlF5xezqB+nEY591oP4zk8YeDX1ZCpHwkwn0jI7wfIKfBCgotm7MWp\n-----END X509 CRL-----", "expect": []}
+{"id": 50, "target": "private_key", "text": "-----BEGIN DH PARAMETERS-----\nGaSN3CsSzyXeih7lpxRSR26ZBcIwZ6I4rz3V6ulj3TkWQaC55v69GzhGJuV0xyNS\nIf43hSFim5AKjBZUeQ2N2j4bUWY3EQw54Isr0WLne9XyT4QVwN5vbYXzDF1Z/paq\nhnPJJ3V+YhZVrh6JP4kr29BeGPiI+k/HuOZXU9EfPyn2KGssuq1cr86fAOmx6FpC\n-----END DH PARAMETERS-----", "expect": []}
+{"id": 51, "target": "private_key", "text": "-----BEGIN EC PARAMETERS-----\ndSMkeDXWfrnG\n-----END EC PARAMETERS-----", "expect": []}
+{"id": 52, "target": "private_key", "text": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQOqcVCCF/bNbrzUR8hJgzAeAcoZrmHm8pnsCe6pynXxLy7/f5FPC680eOqXCCJv8pAxkl6a7qmRW3dRF5I9davXr749Eb4ujPcCwYiRcAprqANvl4TuiUB0gcQeVLBTFeIxoXfNbr39evII41tJY9YRP3ZNyEAcnJL0f1PhvT73G6mIVMmC8H4iLUK3ycYVa5AevZJ3gH dev@laptop", "expect": []}
+{"id": 53, "target": "private_key", "text": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIoK0zMBAHIhxNSkFSelbNYjZsEbk9vJCVjUQKPyHzNLj ci@runner", "expect": []}
+{"id": 54, "target": "private_key", "text": "-----END RSA PRIVATE KEY-----", "expect": []}
+{"id": 55, "target": "private_key", "text": "Never paste a private key into a chat, rotate it if you did.", "expect": []}
+{"id": 56, "target": "private_key", "text": "private_key_path: /etc/enterplace/tls/server.key", "expect": []}
+{"id": 57, "target": "private_key", "text": "ansible-playbook site.yml --private-key ./deploy.pem", "expect": []}
+{"id": 58, "target": "private_key", "text": "The file should start with BEGIN RSA PRIVATE KEY between five dashes.", "expect": []}
+{"id": 59, "target": "private_key", "text": "openssl genpkey -algorithm ed25519 -out key.pem && openssl pkey -in key.pem -pubout", "expect": []}
+{"id": 60, "target": "private_key", "text": "ssh-keygen -t ed25519 -C ci@runner -f ~/.ssh/id_ed25519", "expect": []}
+{"id": 61, "target": "private_key", "text": "Error: error:1E08010C:DECODER routines::unsupported (no PRIVATE KEY found in input)", "expect": []}
+{"id": 62, "target": "private_key", "text": "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"mXRhhbv5EsSF07smMUk7e-G2IGD5C7ozlPonvkBV1ci\"}", "expect": []}
+{"id": 63, "target": "private_key", "text": "-----BEGIN NEW CERTIFICATE REQUEST-----", "expect": []}
+{"id": 64, "target": "private_key", "text": "----- BEGIN -----\nnotes from the key ceremony\n----- END -----", "expect": []}
+{"id": 65, "target": "private_key", "text": "-----BEGIN SSH2 PUBLIC KEY-----\nComment: \"ci\"\nG9BvixqIRN8yvDlC80pE/hjIcEF+aSECIsJ43wLkd+jBpd11eqA6Fulr0PkWKpY4\nf9NIDUoGJYhr0qns//rxgSD7c9WNtiwRCsr3jTuQNux9dlCKpZu9x7X9yC++wgXE\ntWaYNhEywpMm9RqL7rqAUTD3544b7xvgDTn5O3uZQZItIg31cWe8i0NNHjSt4fRz\n-----END SSH2 PUBLIC KEY-----", "expect": []}
+{"id": 66, "target": "private_key", "text": "keyFile := flag.String(\"private-key\", \"\", \"path to the PEM private key\")", "expect": []}
+{"id": 67, "target": "private_key", "text": "PRIVATE KEY rotation is due on the first Monday of each quarter.", "expect": []}
+{"id": 68, "target": "private_key", "text": "-----BEGIN PKCS7-----\ny+pnuEkWHniC0TN5CRjgqXLxm7BJ5uaD0THrAJfCioNfx30j4P41Q+nvZRvIPTtC\nP7XK6aCyXQ1cn3KmKpa9CpB4RmCXtBc+2/jLOZXeh5Cy3Hr/sFfpCUOA7914LqlI\nERMFmaZjk4kkKEgeCOW3QgJOKJsA1YDJVFypOh6EQdf8ZGmVdJ79TPH4IwBCO2iq\n-----END PKCS7-----", "expect": []}
+{"id": 69, "target": "private_key", "text": "-----BEGIN TRUSTED CERTIFICATE-----\n21vEwn0wxzNC20g0jlH4K+J4gnTdwjQuPhhBsp6NQSYScTKL4F1k90XsL8iUM9r8\nY1sXrzkQC2OwL13dsVafQ0Fu6xQEf+uZL1pjUbmTjG1WPjNvnt63yMj5XnxaTBZw\npA2vhcmJKe46pZ78YXcK2XPyFD9AFKBOzO1irLqHBqGzGmlPpygamWGJ4SHt3d6o\n-----END TRUSTED CERTIFICATE-----", "expect": []}
+{"id": 70, "target": "private_key", "text": "grep -r 'PRIVATE KEY' . returned nothing, good.", "expect": []}
+{"id": 71, "target": "private_key", "text": "Use `-----BEGIN` markers only in test fixtures that the scanner allowlists.", "expect": []}
+{"id": 72, "target": "private_key", "text": "-----BEGIN CERTIFICATE-----\nRSrb2UUZG6vDd4jEGug6vw3YkIwMdOYw8+uYLY9x+2ef0NwAJYo4dQdhTA0x7iWn\nZR3BFPSzhuui4b0IohBthu7LaEHneFq569TbPGsN3dctPXZHQ7SG5MzHFEwvbugP\nZ2u7VcDrWem3e2v/5GrqFUmMYwr0egs8jDfOlyWaaSICnq8wBDVEi5SoPLr4otFX\n3F02CqSd4SDuDR6pPIOoVsvSixW9TTLPqayL0vxudKQexBv764uRRQdT6JG99FGZ\nh7J2XIa8dXLccrGFlVTnZJnSHDPNpAg7rVeZIqlO8IeqkuNrGRiggnfVLAMTFaLp\n-----END CERTIFICATE-----\n# chain 1", "expect": []}
+{"id": 73, "target": "private_key", "text": "-----BEGIN CERTIFICATE-----\nLUuKLcbK4yFrKHy3JmAhAq4j7MhVcwIXnrhjgrwGO1Y4Fdj6YRrq6O5FEcpYadAV\nlk7pI8JBNeBqdywcoDMxmZ60hzQEkZuToTTVg0Ddchsi8KqzIlPk7uyYuG1AsF97\nCD+rgmHmuaGEK+/I0hWosW2K4C4KSuq2I23GZEFNMLULSAODPs12LTALPauS5c2K\nQ/EDmrF6GG6BuFusAaf1bwI03PUJLhI/udGoGjcsKRUJHYEfQ02xv5oHgkbmzGOa\nFIHOjNZ9U3SN8GjymLD9xKxhYYgMYsQEle7fpzJqK3x/gNHbuyBtcAoX4lVOmhvb\n-----END CERTIFICATE-----\n# chain 2", "expect": []}
+{"id": 74, "target": "private_key", "text": "-----BEGIN CERTIFICATE-----\nWq/smA4Sr6MqCmBlDkSrHGkfEvHjjSNHd400VApTv3Z10gZ5Hg1bsKQS1MZ5E8z+\nVhvLicv1nATNf3V/cTIfFHu7EZbFgdmlkoqRUZaApuuJkNZTwJffeQSbN4w2J4x7\nt3hcLFoX9AQNAMTg1Ou8RohPkzApv2jK/OEJv0Yl8y41DeGVZj/KOhPS1kLND2GT\n0O5gm/azE+2rabsh2m7aKjwwfvJI+Hh9DFdEgd756whueY6Eu2tfAB+1AEQ13rAF\nFBAJvcBdxdW8DlSr0rwB03NIyB9y7MtgeV0JewsmZ5nBTytqIUskyYH2CVdqG35Z\n-----END CERTIFICATE-----\n# chain 3", "expect": []}
+{"id": 75, "target": "private_key", "text": "-----BEGIN CERTIFICATE-----\nCTMsB+8r48ULAVaNz7usLIu0u6bd3Duuk5OJkBDARxsIHglokiraAFKnOWTv9pA0\nZrzQoUUitPbQjGJi6tr0HrdvPmQ2sYqV7JMUwGTvk2UgvYoatQTjWJPsIyecPig+\nvymeCiDJBUCEs1cF7LBn+QZ9phIya94hsZaEJ12iRbBjoam2oI+unrWzKkiFAhZu\nrUbD30jAx6X0FLxuMHyCf79upKlqzUqATAKMfUaVUX40xZU19/B58WS4GrUPX6iC\nRiX+Pt3KIEC3eZOvvtsAWnDP7Bl1b4xztHT4/A8tEigiNijrJhEEqrhqdDBkWFfK\n-----END CERTIFICATE-----\n# chain 4", "expect": []}
+{"id": 76, "target": "private_key", "text": "-----BEGIN CERTIFICATE-----\nslK+C/BeniOKLz4+tMhJvJA7KeMoCgS3lJRmVA2uTEQr7kFDq4D4gMMEU1kSNeTt\nAvG43QPJ+5OtqcsZqGpmwwodbgIdMyJS6Im3xpj/avusDiGYOj0rh6Jk3jKJpNwu\n1AaMGSufYkibcoNIc4W3+0lCK7NF5sIu1Sdlb24nm1zdTb58vdZzYeoEpvk539TA\nkZ0vT6dr2w8+JZ4VvFfiUlYoRjQTnC56507bx42U4isavCmUJMzBzaEJppo9fL+b\nEKiWR+nUpjIAMbG9gqioyVw5LiJMI2osZwcJs0zTKcYgKobdhy7UP0zQoJdnSOFr\n-----END CERTIFICATE-----\n# chain 5", "expect": []}
+{"id": 77, "target": "private_key", "text": "-----BEGIN CERTIFICATE-----\nAMIAxWpKdg8XU68WROlO7RBSvyJhKM8v7IlLM8pNiv0ckYDEgSy3yKynEi2IZ1rZ\nT+lMsH4Aik/wapdx0fc+YKHW0UqgyyPbaxxgiF0uDcZBHgJVRKQ+lATTrC1TJ0HX\nyjOjnljPdVB5fN5u1z15zKqyXCAROcyrytJtTtorPpF4DErqcOr/TKZ/iPb1S/xz\neEnI1dUUnRyxZK4WJdq//Sw6yxxgrtQP2nH+2/bZgyOqG845jIxGyc4IGI/15vYd\ndlGXOVGI74NPXqqG8orUtuzZS8fhL9FS8TG3+vx4aezLVWXWO+H8DCTZesslt8+a\n-----END CERTIFICATE-----\n# chain 6", "expect": []}
+{"id": 78, "target": "private_key", "text": "-----BEGIN CERTIFICATE-----\nSHsyr7hqF3zMnTPm2Odf+dZipIUAXIrzywSXrZA6QLdsZXxu0clXv7ZNx8ZEV+wJ\nKqp6ILx2QodDMgQGnD9CKeR+FX0cPMmT6xtX+G1zweoT79q/olcvtOjlrpdT+jUY\nMsszMCOyq294kF9k5aau2+yJkJR7GMMGmjXWj/8oIh+M4PeB4VW2WelXpYP+atFq\noX+awAOJC1vJR4beHx/Hwml36EdRE+pRwYOHayIl3C7qlOyMoJgBqnukXowyzisd\n+GhIo9ESvxrVD1SCocCuOUEJDXTwrSSoKeZldhqJr9ZdPawsNcGp9vnjFQnuNR6H\n-----END CERTIFICATE-----\n# chain 7", "expect": []}
+{"id": 79, "target": "private_key", "text": "-----BEGIN CERTIFICATE-----\nxxzT2fhirHAU2y+xSg3ypHitQ/hP+jiFTUyjBqSM2h5Ityn2e3nTiTFkfQuG53A4\nDo3CNcQQUOEBO+5hWTY3vldak6y25wTqLx1EvWN1McJm5eBvV3QjeMY64sJpDmND\nxZLTeDrbXCWJ1L4Gx1AIXHWbNfPouFmBiUT9gBl3yvh/eX5bmckVQl2iPw1/OIG7\nat9bRRSnHef58+RRi5aelrgCh3IwaUv7gSbPZL0lYPDX0RKdIU+BYUH7y8rdwEUf\n3uivEiviW2WJd0G4alYfAw8FdYyfGaeJMQ0+aBy9ozeXgRpqrFiclrvCc6l65C8S\n-----END CERTIFICATE-----\n# chain 8", "expect": []}
+{"id": 80, "target": "private_key", "text": "-----BEGIN CERTIFICATE-----\nI8vSPypYW3C6z1uuw4uNA1mpnmr6yxZXclUkLKU3zZdy0wunXcyuKkGIAx6Z9Q7k\nSdds9FYjYvZy8Fk6bK1qdr878iLe07uAHOqFBQlPeu7lSXvVj9uS1aWq8f2TnqH5\nJF2C5AWot0X7+wd0+x12mvm/Jal6dx9cnTdvte74jzccNzpjgBs9j25nGMwnE6JA\nB+l2a9U38dV4PYd361oEj1+cKDbfj9G5FHkeA8g2XvJYG8ToaGl9q256Q0OjQ+QS\nklAUDOY3Vd2NlWYA6TmDBWdRdMdLznLkrxio1ifL/bEUP6RedM1hWuuBmRqYxRJv\n-----END CERTIFICATE-----\n# chain 9", "expect": []}
+{"id": 81, "target": "private_key", "text": "-----BEGIN CERTIFICATE-----\nx7SS/1h69Sh3XhlDawGqAF9y9Zsl8Tbu/OnkMKdFkCuUO6T7MWv36SNR6epDQN2v\n+9r44VGIysztIWuQUkpKQaq2Vr9Ob1ccBY8tRMXLbH55UrwYXxQjIf66Q+c2D1tO\nSIxLdct+QpGOjHXLE3EXuUT4eek/PVBPxNu3iSvBiS8fiL3J7VWgDNAY98NjiKqk\ngVUw9sRT5Wz2lsVtFzIbyuIEUhVr09+gJ0DgAKcNNJ0XsC9dp25ZUccd4myypRUG\ngMkJ2FLqyFmeKJf6NSCo8t/20a3Q/0yDmr6pz6M1lkW072GHntzv5oVD/jqi3d70\n-----END CERTIFICATE-----\n# chain 10", "expect": []}
+{"id": 82, "target": "aws_access_key", "text": "[default]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = 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", "expect": ["aws_access_key"]}
+{"id": 83, "target": "aws_access_key", "text": "export AWS_ACCESS_KEY_ID=ASIAWG2MYKQ4RIN4569D", "expect": ["aws_access_key"]}
+{"id": 84, "target": "aws_access_key", "text": "session = boto3.Session(aws_access_key_id=\"AKIAXWATQYO81O99J71X\", region_name=\"eu-west-1\")", "expect": ["aws_access_key"]}
+{"id": 85, "target": "aws_access_key", "text": "{\"AccessKeyId\": \"AKIAPEEW2CAG30Y97NEW\", \"Expiration\": \"2026-03-04T11:22:01Z\"}", "expect": ["aws_access_key"]}
+{"id": 86, "target": "aws_access_key", "text": "User: the pipeline prints AKIAQUYOZPOS28EXHW2Q in the build log, is that bad?", "expect": ["aws_access_key"]}
+{"id": 87, "target": "aws_access_key", "text": "2026-03-04 10:22:01 WARN s3 upload denied for key AKIA1KJ6TT9J9LI3OVK7 on bucket assets-prod", "expect": ["aws_access_key"]}
+{"id": 88, "target": "aws_access_key", "text": "aws_access_key_id: AKIA44XN8QPB410DFEN8", "expect": ["aws_access_key"]}
+{"id": 89, "target": "aws_access_key", "text": "Use AKIAYMYNRI8W1S35O3NJ with the read-only role.", "expect": ["aws_access_key"]}
+{"id": 90, "target": "aws_access_key", "text": "[default]\naws_access_key_id = ASIA2KEQGAKVEXCWXLIH\naws_secret_access_key = /iPSw4dLFBLA5IXaeI9Ryz2GyNlUrQNdy27Qqa4O", "expect": ["aws_access_key"]}
+{"id": 91, "target": "aws_access_key", "text": "export AWS_ACCESS_KEY_ID=AKIAS6Y6L76IZA4MK92O", "expect": ["aws_access_key"]}
+{"id": 92, "target": "aws_access_key", "text": "session = boto3.Session(aws_access_key_id=\"AKIAWT254GYU0BSMLQ2X\", region_name=\"eu-west-1\")", "expect": ["aws_access_key"]}
+{"id": 93, "target": "aws_access_key", "text": "{\"AccessKeyId\": \"AKIAU2WIVUUQXNM3TOPI\", \"Expiration\": \"2026-03-04T11:22:01Z\"}", "expect": ["aws_access_key"]}
+{"id": 94, "target": "aws_access_key", "text": "User: the pipeline prints AKIAADU6Y8LAZYS2K3SM in the build log, is that bad?", "expect": ["aws_access_key"]}
+{"id": 95, "target": "aws_access_key", "text": "2026-03-04 10:22:01 WARN s3 upload denied for key AKIA8A6MHJCJPTLRJDS9 on bucket assets-prod", "expect": ["aws_access_key"]}
+{"id": 96, "target": "aws_access_key", "text": "aws_access_key_id: AKIAW2N10T2JOPA9ARJV", "expect": ["aws_access_key"]}
+{"id": 97, "target": "aws_access_key", "text": "Use AKIAKGUISJIZE5G7JHFS with the read-only role.", "expect": ["aws_access_key"]}
+{"id": 98, "target": "aws_access_key", "text": "[default]\naws_access_key_id = AKIA32F9QKQXLFWJG4MM\naws_secret_access_key = cucrKgVNb56IM5qZitOi021i44Kk8QD972Jlk3i5", "expect": ["aws_access_key"]}
+{"id": 99, "target": "aws_access_key", "text": "export AWS_ACCESS_KEY_ID=ASIAC5OLR2C0BQJ3TMLP", "expect": ["aws_access_key"]}
+{"id": 100, "target": "aws_access_key", "text": "session = boto3.Session(aws_access_key_id=\"ASIA2S55EYLMF72FLV0P\", region_name=\"eu-west-1\")", "expect": ["aws_access_key"]}
+{"id": 101, "target": "aws_access_key", "text": "{\"AccessKeyId\": \"AKIAMLN4FSB800HCYXD0\", \"Expiration\": \"2026-03-04T11:22:01Z\"}", "expect": ["aws_access_key"]}
+{"id": 102, "target": "aws_access_key", "text": "User: the pipeline prints AKIAPR0L5ERJLUDUQU7L in the build log, is that bad?", "expect": ["aws_access_key"]}
+{"id": 103, "target": "aws_access_key", "text": "2026-03-04 10:22:01 WARN s3 upload denied for key ASIA10WAOQPKGNLYG07L on bucket assets-prod", "expect": ["aws_access_key"]}
+{"id": 104, "target": "aws_access_key", "text": "aws_access_key_id: AKIAWVHSYRQIDDVQVPPF", "expect": ["aws_access_key"]}
+{"id": 105, "target": "aws_access_key", "text": "Use AKIA6JBLFBE0D7SRMZOE with the read-only role.", "expect": ["aws_access_key"]}
+{"id": 106, "target": "aws_access_key", "text": "[default]\naws_access_key_id = AKIAKDFYR8RWF0NQSUEH\naws_secret_access_key = xSO2taXLQBZIARIwWedmTkGPUJd1Hx1UxvIkBUWH", "expect": ["aws_access_key"]}
+{"id": 107, "target": "aws_access_key", "text": "export AWS_ACCESS_KEY_ID=AKIA8I5CWNX7OYTX35DN", "expect": ["aws_access_key"]}
+{"id": 108, "target": "aws_access_key", "text": "session = boto3.Session(aws_access_key_id=\"ASIAD8ALZ8G5YKH4UYIC\", region_name=\"eu-west-1\")", "expect": ["aws_access_key"]}
+{"id": 109, "target": "aws_access_key", "text": "{\"AccessKeyId\": \"ASIACDMC1Q177K72965J\", \"Expiration\": \"2026-03-04T11:22:01Z\"}", "expect": ["aws_access_key"]}
+{"id": 110, "target": "aws_access_key", "text": "User: the pipeline prints AKIAFZWLRE80CCXID4K9 in the build log, is that bad?", "expect": ["aws_access_key"]}
+{"id": 111, "target": "aws_access_key", "text": "2026-03-04 10:22:01 WARN s3 upload denied for key AKIALLZXD1JPVAW0ZMID on bucket assets-prod", "expect": ["aws_access_key"]}
+{"id": 112, "target": "aws_access_key", "text": "aws_access_key_id: ASIAC5ATKXBKK0JLCLIC", "expect": ["aws_access_key"]}
+{"id": 113, "target": "aws_access_key", "text": "Use AKIAR217V2ZAMNTE0FIR with the read-only role.", "expect": ["aws_access_key"]}
+{"id": 114, "target": "aws_access_key", "text": "[default]\naws_access_key_id = AKIATVF1M1CR4F5J7Z0R\naws_secret_access_key = af82ZAZjPCB0kq/klWZk3ENxW4FO0Kc3PUJg4gDY", "expect": ["aws_access_key"]}
+{"id": 115, "target": "aws_access_key", "text": "export AWS_ACCESS_KEY_ID=AKIA9TPICV6RXDIQ7YFK", "expect": ["aws_access_key"]}
+{"id": 116, "target": "aws_access_key", "text": "session = boto3.Session(aws_access_key_id=\"AKIAE1HWRN9I6N5OV3KJ\", region_name=\"eu-west-1\")", "expect": ["aws_access_key"]}
+{"id": 117, "target": "aws_access_key", "text": "{\"AccessKeyId\": \"AKIADNTXKIGHJW45NZ7B\", \"Expiration\": \"2026-03-04T11:22:01Z\"}", "expect": ["aws_access_key"]}
+{"id": 118, "target": "aws_access_key", "text": "User: the pipeline prints AKIA9RQ1VUZBIS05YFZI in the build log, is that bad?", "expect": ["aws_access_key"]}
+{"id": 119, "target": "aws_access_key", "text": "2026-03-04 10:22:01 WARN s3 upload denied for key AKIAQ9369DN6WYQNRJO4 on bucket assets-prod", "expect": ["aws_access_key"]}
+{"id": 120, "target": "aws_access_key", "text": "aws_access_key_id: AKIA2QGB6T8SCN9VD8FQ", "expect": ["aws_access_key"]}
+{"id": 121, "target": "aws_access_key", "text": "Use AKIASBV20EZAL7QHCEFW with the read-only role.", "expect": ["aws_access_key"]}
+{"id": 122, "target": "aws_access_key", "text": "AIDAJQABLZS4A3QDU576", "expect": []}
+{"id": 123, "target": "aws_access_key", "text": "AROADBQP57FF2AEXAMPLE", "expect": []}
+{"id": 124, "target": "aws_access_key", "text": "ANPAJ2UCCR6DPCEXAMPLE", "expect": []}
+{"id": 125, "target": "aws_access_key", "text": "Access key IDs start with AKIA for long-term keys and ASIA for temporary ones.", "expect": []}
+{"id": 126, "target": "aws_access_key", "text": "akiaiosfodnn7example", "expect": []}
+{"id": 127, "target": "aws_access_key", "text": "AKIAIOSFODNN7EXAMPL", "expect": []}
+{"id": 128, "target": "aws_access_key", "text": "AKIAIOSFODNN7EXAMPLEX", "expect": []}
+{"id": 129, "target": "aws_access_key", "text": "arn:aws:iam::123456789012:user/build-bot", "expect": []}
+{"id": 130, "target": "aws_access_key", "text": "The ASIA region bucket is assets-ap-southeast-1.", "expect": []}
+{"id": 131, "target": "aws_access_key", "text": "AKIA_PLACEHOLDER_REPLACE_ME", "expect": []}
+{"id": 132, "target": "aws_access_key", "text": "export AWS_ACCESS_KEY_ID=$(vault read -field=key aws/creds/ci)", "expect": []}
+{"id": 133, "target": "aws_access_key", "text": "aws_access_key_id = ${AWS_ACCESS_KEY_ID}", "expect": []}
+{"id": 134, "target": "aws_access_key", "text": "AKIA****************", "expect": []}
+{"id": 135, "target": "aws_access_key", "text": "AKIA-IOSF-ODNN-7EXA-MPLE", "expect": []}
+{"id": 136, "target": "aws_access_key", "text": "x-amz-request-id: 4442587FB7D0A2F9", "expect": []}
+{"id": 137, "target": "aws_access_key", "text": "x-amz-id-2: vlR7PnpV2Ce81l0PRw6jlUpck7Jo5ZsQjryTjKlc5aLWGVHPZLj5NeC6qMa0emYBDXOo6QBU0Wo=", "expect": []}
+{"id": 138, "target": "aws_access_key", "text": "ETag: \"9b2cf535f27731c974343645a3985328\"", "expect": []}
+{"id": 139, "target": "aws_access_key", "text": "CloudFront distribution E2QWRUHAPOMQZL is deployed.", "expect": []}
+{"id": 140, "target": "aws_access_key", "text": "resource id E175R80TROKVHDW3E0 created", "expect": []}
+{"id": 141, "target": "aws_access_key", "text": "resource id AROARNWNCF7DPH80D11C created", "expect": []}
+{"id": 142, "target": "aws_access_key", "text": "resource id I-0N90WV8QPMHRHYXEZ created", "expect": []}
+{"id": 143, "target": "aws_access_key", "text": "resource id AIDAPR81KQ89M92VL8LN created", "expect": []}
+{"id": 144, "target": "aws_access_key", "text": "resource id ANPA476FG06WUPO3S1D0 created", "expect": []}
+{"id": 145, "target": "aws_access_key", "text": "resource id E1YFJ18ACKGO3U806Q created", "expect": []}
+{"id": 146, "target": "aws_access_key", "text": "resource id AGPABJAQHDLJ8PWYT849 created", "expect": []}
+{"id": 147, "target": "aws_access_key", "text": "resource id APKAD5T7UKA1B8MJ1BUA created", "expect": []}
+{"id": 148, "target": "aws_access_key", "text": "resource id I-0LVQ7J8CI9P4G34F3 created", "expect": []}
+{"id": 149, "target": "aws_access_key", "text": "resource id AIDAQXA98ITE9MG7O7YO created", "expect": []}
+{"id": 150, "target": "aws_access_key", "text": "resource id E1BCJVXXR9MHND7U7O created", "expect": []}
+{"id": 151, "target": "aws_access_key", "text": "resource id E10ADJBYJVAB9I00P5 created", "expect": []}
+{"id": 152, "target": "aws_access_key", "text": "resource id AIPAGVV21ZPQCVBEHQUM created", "expect": []}
+{"id": 153, "target": "aws_access_key", "text": "resource id AROA05YWD2RSTU882B7Y created", "expect": []}
+{"id": 154, "target": "aws_access_key", "text": "resource id ANPANWXF0LKPMRRPJ09R created", "expect": []}
+{"id": 155, "target": "aws_access_key", "text": "resource id AIDAZ1O2UAHDY0QIDTDT created", "expect": []}
+{"id": 156, "target": "aws_access_key", "text": "resource id I-0MC9DA7I3PW6SAREN created", "expect": []}
+{"id": 157, "target": "aws_access_key", "text": "resource id E115W6E2JRXKYS1VHC created", "expect": []}
+{"id": 158, "target": "aws_access_key", "text": "resource id AROAH3Z8SW109MVA5K9N created", "expect": []}
+{"id": 159, "target": "aws_access_key", "text": "resource id AROAD3NLBDZYS92NG17M created", "expect": []}
+{"id": 160, "target": "aws_access_key", "text": "resource id E1RDEQCRTVHM4WCL7P created", "expect": []}
+{"id": 161, "target": "aws_access_key", "text": "resource id ANPARQGVJ2KV9NT0EYTI created", "expect": []}
+{"id": 162, "target": "github_token", "text": "git remote set-url origin https://ghr_cLBDKn5jVRnpXprB0vPf7vyMd6Ku8Kua18iy@github.com/acme/infra.git", "expect": ["github_token"]}
+{"id": 163, "target": "github_token", "text": "export GITHUB_TOKEN=ghp_Nu9RLl5KIkUPQK2i0uFXbpsANjwnVjjJB41Y", "expect": ["github_token"]}
+{"id": 164, "target": "github_token", "text": "headers = {\"Authorization\": \"Bearer ghr_jgqWlHp84Z0SAH8XDlRlS9PL0MWRBnmdQiX0\"}", "expect": ["github_token"]}
+{"id": 165, "target": "github_token", "text": "{\"github\": {\"token\": \"gho_g4vJRZWWdXZdYQUGf42yFhmcs95wB3iEZfkz\"}}", "expect": ["github_token"]}
+{"id": 166, "target": "github_token", "text": "User: I set GH_TOKEN to ghu_5RvC7QKFSUrlwV44TcfmGi1wmFYTJsP3jAIj and gh auth status still fails", "expect": ["github_token"]}
+{"id": 167, "target": "github_token", "text": "2026-03-04T10:22:01Z DEBUG fetch repo with token=ghu_jp75earHF6UmIV2tuyNn7YIApLruGnDTnMRg", "expect": ["github_token"]}
+{"id": 168, "target": "github_token", "text": "//npm.pkg.github.com/:_authToken=gho_yVDnFXHbtTMBHrPpRpLwIvuO50zi8Tl7PkHt", "expect": ["github_token"]}
+{"id": 169, "target": "github_token", "text": "echo ghu_rFL5ibAl7v3BA2kiOfRnbkAcvLzpzABvD6K8 | docker login ghcr.io -u ci --password-stdin", "expect": ["github_token"]}
+{"id": 170, "target": "github_token", "text": "git remote set-url origin https://ghp_AWraIbB3KuCv8dZ1bDHXZuLu7YRPz5FBmU6B@github.com/acme/infra.git", "expect": ["github_token"]}
+{"id": 171, "target": "github_token", "text": "export GITHUB_TOKEN=ghs_lgRPLI0M1cOHzwN0n88AenzcdAZoMOqdsgjZ", "expect": ["github_token"]}
+{"id": 172, "target": "github_token", "text": "headers = {\"Authorization\": \"Bearer ghr_iqQJMEKgX8Xp267iLAVbPzN8sLahrqqEvGNn\"}", "expect": ["github_token"]}
+{"id": 173, "target": "github_token", "text": "{\"github\": {\"token\": \"ghu_RtwXN9ZIcJ9zftqLxmd0Zme2JV65VxIzOARm\"}}", "expect": ["github_token"]}
+{"id": 174, "target": "github_token", "text": "User: I set GH_TOKEN to ghu_zDfQ4R251ErtiopKBjj3AZpBE3WbHoW8aBoq and gh auth status still fails", "expect": ["github_token"]}
+{"id": 175, "target": "github_token", "text": "2026-03-04T10:22:01Z DEBUG fetch repo with token=ghs_EswsdkPh3I2Evb12HVcU4sEyfIveM6my3Gcw", "expect": ["github_token"]}
+{"id": 176, "target": "github_token", "text": "//npm.pkg.github.com/:_authToken=gho_Z8Z4kDaANpOtEN7T2MUX87eDg2tPh4cxNyOW", "expect": ["github_token"]}
+{"id": 177, "target": "github_token", "text": "echo ghr_fIm2am8RZZNdKlfe8lKvrFw3EuzvsAXHHN5f | docker login ghcr.io -u ci --password-stdin", "expect": ["github_token"]}
+{"id": 178, "target": "github_token", "text": "git remote set-url origin https://ghs_2FCAtu1DIg2z7TLgEIJqBmiaoexqFw7ffjd0@github.com/acme/infra.git", "expect": ["github_token"]}
+{"id": 179, "target": "github_token", "text": "export GITHUB_TOKEN=gho_fOdWKioNMpX8LMcisx45LiFfyaBvp2kwhgGe", "expect": ["github_token"]}
+{"id": 180, "target": "github_token", "text": "headers = {\"Authorization\": \"Bearer gho_Kotf9XHr5UTtje5RtY1nJLah9lHD98m1xE28\"}", "expect": ["github_token"]}
+{"id": 181, "target": "github_token", "text": "{\"github\": {\"token\": \"ghr_pdWSNdWr1stBaDL08JsjYCdcbpThckENXu7q\"}}", "expect": ["github_token"]}
+{"id": 182, "target": "github_token", "text": "User: I set GH_TOKEN to gho_ZvZt2zmN0otEOwR42itg2bJkt2GfehpWwExL and gh auth status still fails", "expect": ["github_token"]}
+{"id": 183, "target": "github_token", "text": "2026-03-04T10:22:01Z DEBUG fetch repo with token=ghr_A11TqYKruLD9NUtNENwU5ZyD20PhFv2X04xD", "expect": ["github_token"]}
+{"id": 184, "target": "github_token", "text": "//npm.pkg.github.com/:_authToken=ghp_Qj969pdrj6mKbz1D0uoNoPFowayXwqBnvPRE", "expect": ["github_token"]}
+{"id": 185, "target": "github_token", "text": "echo ghr_IFRJMy35coNFAzd3QejXl3tTJ5hHiMD3ovIT | docker login ghcr.io -u ci --password-stdin", "expect": ["github_token"]}
+{"id": 186, "target": "github_token", "text": "git remote set-url origin https://gho_rhUgzWABLSgtJC4ww5O4Bmze2ZJhjbumA3oy@github.com/acme/infra.git", "expect": ["github_token"]}
+{"id": 187, "target": "github_token", "text": "export GITHUB_TOKEN=gho_HIJd6WgsQDd06Qt9LR9rYcMPuXgwqCYC5OxA", "expect": ["github_token"]}
+{"id": 188, "target": "github_token", "text": "headers = {\"Authorization\": \"Bearer ghr_MoqPYTE9SPnnb064LYBsFLVjYqppzOVP7WeI\"}", "expect": ["github_token"]}
+{"id": 189, "target": "github_token", "text": "{\"github\": {\"token\": \"gho_WkUVT2Cl58H85ZG5bREKfY8AwTRmGP0sFq1A\"}}", "expect": ["github_token"]}
+{"id": 190, "target": "github_token", "text": "User: I set GH_TOKEN to ghu_q944RbsCzPBlO585eOEwFgHU7KK8LTkQDfD3 and gh auth status still fails", "expect": ["github_token"]}
+{"id": 191, "target": "github_token", "text": "2026-03-04T10:22:01Z DEBUG fetch repo with token=gho_WWgjCC85UPdo6s3ycmai61ONphecHzbpN5lf", "expect": ["github_token"]}
+{"id": 192, "target": "github_token", "text": "//npm.pkg.github.com/:_authToken=ghr_m3dAFlF0VoNcLtGxbCb03umxTi2I0a4qwTvP", "expect": ["github_token"]}
+{"id": 193, "target": "github_token", "text": "echo ghp_9dXEzFxArXVfwsIoMzWLO3MIBN1Udv4Q22m7 | docker login ghcr.io -u ci --password-stdin", "expect": ["github_token"]}
+{"id": 194, "target": "github_token", "text": "git remote set-url origin https://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@github.com/acme/infra.git", "expect": ["github_token"]}
+{"id": 195, "target": "github_token", "text": "export GITHUB_TOKEN=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", "expect": ["github_token"]}
+{"id": 196, "target": "github_token", "text": "headers = {\"Authorization\": \"Bearer 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\"}", "expect": ["github_token"]}
+{"id": 197, "target": "github_token", "text": "{\"github\": {\"token\": \"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\"}}", "expect": ["github_token"]}
+{"id": 198, "target": "github_token", "text": "User: I set GH_TOKEN to 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 and gh auth status still fails", "expect": ["github_token"]}
+{"id": 199, "target": "github_token", "text": "2026-03-04T10:22:01Z DEBUG fetch repo with token=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", "expect": ["github_token"]}
+{"id": 200, "target": "github_token", "text": "//npm.pkg.github.com/:_authToken=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", "expect": ["github_token"]}
+{"id": 201, "target": "github_token", "text": "echo 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 | docker login ghcr.io -u ci --password-stdin", "expect": ["github_token"]}
+{"id": 202, "target": "github_token", "text": "Personal access tokens start with ghp_ and fine-grained ones with github_pat_.", "expect": []}
+{"id": 203, "target": "github_token", "text": "ghp_ocr7P1jMAjmnW83hVx9neSqLKibkvaRZb27", "expect": []}
+{"id": 204, "target": "github_token", "text": "ghx_OICWTOSm3cmQRBZ2icSRoz8lwc853PaaEc5a", "expect": []}
+{"id": 205, "target": "github_token", "text": "gh_5zDhcmaF20XeIe8BYxdkjw4QEnKiTVMq6ggH", "expect": []}
+{"id": 206, "target": "github_token", "text": "github_pat_egv9oWp9EqYBynJ0u2kdb", "expect": []}
+{"id": 207, "target": "github_token", "text": "export GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}", "expect": []}
+{"id": 208, "target": "github_token", "text": "ghp_XXXXXXXXXXXX", "expect": []}
+{"id": 209, "target": "github_token", "text": "gho_ is the prefix of an OAuth access token.", "expect": []}
+{"id": 210, "target": "github_token", "text": "uses: actions/checkout@v4", "expect": []}
+{"id": 211, "target": "github_token", "text": "https://github.com/acme/infra/pull/4821", "expect": []}
+{"id": 212, "target": "github_token", "text": "github_pat_ tokens can be scoped to one repository.", "expect": []}
+{"id": 213, "target": "github_token", "text": "token: ghp_<your token here>", "expect": []}
+{"id": 214, "target": "github_token", "text": "commit c5eb2a8de0218c1b5e359f6f6b79bb6a3847bc38\nMerge pull request #3874 from acme/fix-ci", "expect": []}
+{"id": 215, "target": "github_token", "text": "commit b256507a963d165e4c3347c2da221599e59cb780\nMerge pull request #4475 from acme/fix-ci", "expect": []}
+{"id": 216, "target": "github_token", "text": "commit 16e63f15f8e9e1e4fe3e1fba32ecf56c12041864\nMerge pull request #740 from acme/fix-ci", "expect": []}
+{"id": 217, "target": "github_token", "text": "commit 402f17ca3d05fbc721b8cdd046e3de14abb8aeeb\nMerge pull request #8510 from acme/fix-ci", "expect": []}
+{"id": 218, "target": "github_token", "text": "commit 70b9274d5a985a901d34af9c77673e0ffd8b613a\nMerge pull request #5519 from acme/fix-ci", "expect": []}
+{"id": 219, "target": "github_token", "text": "commit 6e0b118d2e24e4a738c1af69404b6fcc3c480d22\nMerge pull request #2158 from acme/fix-ci", "expect": []}
+{"id": 220, "target": "github_token", "text": "commit 7f4751b32e20fd9f81468dfc24baac5ddfe049c1\nMerge pull request #4310 from acme/fix-ci", "expect": []}
+{"id": 221, "target": "github_token", "text": "commit b7ee8abeb9d8744832a5104151990ec85b0f63ff\nMerge pull request #3281 from acme/fix-ci", "expect": []}
+{"id": 222, "target": "github_token", "text": "commit eb644d808bc872275191799358e5f540a6a9bf6d\nMerge pull request #9965 from acme/fix-ci", "expect": []}
+{"id": 223, "target": "github_token", "text": "commit abaddec3d6b65e01fa22c4f6b8728477c5590e20\nMerge pull request #7243 from acme/fix-ci", "expect": []}
+{"id": 224, "target": "github_token", "text": "commit d944c293fdbcef8ddcba2849194a5f51d2ba8764\nMerge pull request #5598 from acme/fix-ci", "expect": []}
+{"id": 225, "target": "github_token", "text": "commit b4d32ede2438ffb8635ed00fb14bb12d2f121f04\nMerge pull request #863 from acme/fix-ci", "expect": []}
+{"id": 226, "target": "github_token", "text": "commit 9a28cbeb989a50c7a4114272a1c80127f3ad4b30\nMerge pull request #9429 from acme/fix-ci", "expect": []}
+{"id": 227, "target": "github_token", "text": "commit 5561407d8123c339f1c645208cc936c9aac24bd1\nMerge pull request #8448 from acme/fix-ci", "expect": []}
+{"id": 228, "target": "github_token", "text": "commit be88a3ed4e618bca2c603300bd582c6674fb340c\nMerge pull request #6064 from acme/fix-ci", "expect": []}
+{"id": 229, "target": "github_token", "text": "commit a19995af8c699ab3b3c1db8a558c785649df5788\nMerge pull request #9609 from acme/fix-ci", "expect": []}
+{"id": 230, "target": "github_token", "text": "https://github.com/acme/infra/blob/df3bcecdd5a2ced1ef8d036ccb0c76f68eb5c3f8/deploy/main.tf#L204", "expect": []}
+{"id": 231, "target": "github_token", "text": "https://github.com/acme/infra/blob/342ddbde00998b6b31fafcacdff9d1bb9600354f/deploy/main.tf#L59", "expect": []}
+{"id": 232, "target": "github_token", "text": "https://github.com/acme/infra/blob/cbecc40e1f40342f66f2127387ca9a00edb8f560/deploy/main.tf#L214", "expect": []}
+{"id": 233, "target": "github_token", "text": "https://github.com/acme/infra/blob/b3e8cda8a108b301b156545943af843bbdcbb752/deploy/main.tf#L249", "expect": []}
+{"id": 234, "target": "github_token", "text": "https://github.com/acme/infra/blob/6df389d8799b463f235490d9b4b9c9665d4faf9b/deploy/main.tf#L135", "expect": []}
+{"id": 235, "target": "github_token", "text": "https://github.com/acme/infra/blob/a2037ad8acf890d4e70bc8cfa0ea9d0f13e2940a/deploy/main.tf#L188", "expect": []}
+{"id": 236, "target": "github_token", "text": "https://github.com/acme/infra/blob/a9109a5b695dea3bae87dff6d85c20124cb68651/deploy/main.tf#L99", "expect": []}
+{"id": 237, "target": "github_token", "text": "https://github.com/acme/infra/blob/ada1222616ea68d8520b747bdcf67614e7cb8805/deploy/main.tf#L36", "expect": []}
+{"id": 238, "target": "github_token", "text": "https://github.com/acme/infra/blob/f9d6cb0e72ec94b0ac765d89c36f9051cca10284/deploy/main.tf#L324", "expect": []}
+{"id": 239, "target": "github_token", "text": "https://github.com/acme/infra/blob/c6e1cdbcc5cbc356464b86d4e4e26e123ab89156/deploy/main.tf#L206", "expect": []}
+{"id": 240, "target": "github_token", "text": "https://github.com/acme/infra/blob/78001de946fc88c1299a5ba10e8cc7bc93a72174/deploy/main.tf#L7", "expect": []}
+{"id": 241, "target": "github_token", "text": "https://github.com/acme/infra/blob/a0842fc73ff9c66c53be99961e8b98400590a1f6/deploy/main.tf#L379", "expect": []}
+{"id": 242, "target": "slack_token", "text": "SLACK_BOT_TOKEN=xoxb-618275019854-6999819302580-DBborD9HOZPlfVeFlkMBA6xw", "expect": ["slack_token"]}
+{"id": 243, "target": "slack_token", "text": "client = WebClient(token=\"xoxp-677118865264-5945637355809-m0cDm60ob3NVkHreOeVu0Kce\")", "expect": ["slack_token"]}
+{"id": 244, "target": "slack_token", "text": "{\"slack\": {\"bot_token\": \"xoxa-495837834970-462725629004-ZeopovsYWq0P7iSOBG4wWBJ3\", \"channel\": \"C0123ABCD\"}}", "expect": ["slack_token"]}
+{"id": 245, "target": "slack_token", "text": "User: our bot stopped posting, token is xoxo-535109383780-7553174196544-iI8esRW25rEVTAGkR6ykQBi2", "expect": ["slack_token"]}
+{"id": 246, "target": "slack_token", "text": "2026-03-04T10:22:01Z ERROR slack post failed token=xoxr-825336714136-2434636669561-nCBy1JGdRq0COMHDIUokv8NG err=invalid_auth", "expect": ["slack_token"]}
+{"id": 247, "target": "slack_token", "text": "curl -H 'Authorization: Bearer xoxb-355197079224-4294190184661-4CFdm96FOTnFxsWRpM15atv5' https://slack.com/api/auth.test", "expect": ["slack_token"]}
+{"id": 248, "target": "slack_token", "text": "slack:\n  token: xoxp-42142186178-3392342923894-zID0s8vfB3uoQNeaSr9WaCgM", "expect": ["slack_token"]}
+{"id": 249, "target": "slack_token", "text": "Rotate xoxa-475135068799-3382414809956-WlGIOrXiKdMkObD3IvwmgBkw today, it was in the screenshot.", "expect": ["slack_token"]}
+{"id": 250, "target": "slack_token", "text": "SLACK_BOT_TOKEN=xoxo-598872921134-2450367564171-aX80BpmpdoCIVM1qxLCU9Vhc", "expect": ["slack_token"]}
+{"id": 251, "target": "slack_token", "text": "client = WebClient(token=\"xoxr-663642643964-9980943672529-FsL7BzZvfssyvKFE8IYZcnGq\")", "expect": ["slack_token"]}
+{"id": 252, "target": "slack_token", "text": "{\"slack\": {\"bot_token\": \"xoxb-552509593793-5186217054433-KHIqqz2K1rTypkqK0dsSj6P5\", \"channel\": \"C0123ABCD\"}}", "expect": ["slack_token"]}
+{"id": 253, "target": "slack_token", "text": "User: our bot stopped posting, token is xoxp-159537722525-8082935466112-ulqLylOSpXMu9zoFe5oF3aF3", "expect": ["slack_token"]}
+{"id": 254, "target": "slack_token", "text": "2026-03-04T10:22:01Z ERROR slack post failed token=xoxa-77506929934-5840501338024-m89HukCbS9ORZkLn9BTsSyta err=invalid_auth", "expect": ["slack_token"]}
+{"id": 255, "target": "slack_token", "text": "curl -H 'Authorization: Bearer xoxo-454872299142-2825468511047-RwBSgydPK1tmJhWkpwknlq8e' https://slack.com/api/auth.test", "expect": ["slack_token"]}
+{"id": 256, "target": "slack_token", "text": "slack:\n  token: xoxr-276735003987-9648026484304-ySkBAYdl0YBEhiKYXO5WB8EO", "expect": ["slack_token"]}
+{"id": 257, "target": "slack_token", "text": "Rotate xoxb-860243882325-7197162270935-6nHiTzT1VzIX0mVJxfEbGTID today, it was in the screenshot.", "expect": ["slack_token"]}
+{"id": 258, "target": "slack_token", "text": "SLACK_BOT_TOKEN=xoxp-225158765756-3600644353577-vmailVckPuYttEbAdpCGOjUb", "expect": ["slack_token"]}
+{"id": 259, "target": "slack_token", "text": "client = WebClient(token=\"xoxa-706470460745-830555849908-00MSCWEBgUWi9mEZz4Qiyk4l\")", "expect": ["slack_token"]}
+{"id": 260, "target": "slack_token", "text": "{\"slack\": {\"bot_token\": \"xoxo-78800285125-4451799084941-PuH0ovK6Y5XLcQ1tL4LN1M0M\", \"channel\": \"C0123ABCD\"}}", "expect": ["slack_token"]}
+{"id": 261, "target": "slack_token", "text": "User: our bot stopped posting, token is xoxr-579159038660-4057417252792-cCbLat6DCuIL9IhhlQdZig3V", "expect": ["slack_token"]}
+{"id": 262, "target": "slack_token", "text": "2026-03-04T10:22:01Z ERROR slack post failed token=xoxb-843589199022-4031417769977-u9kgQKfY09hThFgwXSiuWS7m err=invalid_auth", "expect": ["slack_token"]}
+{"id": 263, "target": "slack_token", "text": "curl -H 'Authorization: Bearer xoxp-322209688246-8879267922819-fUz14mWL490ePh4BpT3mu5VA' https://slack.com/api/auth.test", "expect": ["slack_token"]}
+{"id": 264, "target": "slack_token", "text": "slack:\n  token: xoxa-692735695118-4002582448486-XlZFFXU4poKKddSr7PhN5xlF", "expect": ["slack_token"]}
+{"id": 265, "target": "slack_token", "text": "Rotate xoxo-302512897133-7398706439307-A8DKFBIT47Z1DvoL9yffQGgk today, it was in the screenshot.", "expect": ["slack_token"]}
+{"id": 266, "target": "slack_token", "text": "SLACK_BOT_TOKEN=xoxr-616797467418-4932040401739-1S1EvRk77hFYgmUX8AUGd798", "expect": ["slack_token"]}
+{"id": 267, "target": "slack_token", "text": "client = WebClient(token=\"xoxb-102987994040-5080456873291-iTMsSU4OiB3Kp9GUjqqjkJeF\")", "expect": ["slack_token"]}
+{"id": 268, "target": "slack_token", "text": "{\"slack\": {\"bot_token\": \"xoxp-185947627830-8810490492857-VXDG2G8Rt1tQ6RyhyeqMitOS\", \"channel\": \"C0123ABCD\"}}", "expect": ["slack_token"]}
+{"id": 269, "target": "slack_token", "text": "User: our bot stopped posting, token is xoxa-672363078037-3283598781134-9g3hEz1R5qhKBHEKkMzP98IN", "expect": ["slack_token"]}
+{"id": 270, "target": "slack_token", "text": "2026-03-04T10:22:01Z ERROR slack post failed token=xoxo-183335928968-2745799647934-qkXvo8AGeRqm194MtVfdUbOT err=invalid_auth", "expect": ["slack_token"]}
+{"id": 271, "target": "slack_token", "text": "curl -H 'Authorization: Bearer xoxr-992069357308-480401882113-fQysV5GjjFcN7UPp43VYvS0A' https://slack.com/api/auth.test", "expect": ["slack_token"]}
+{"id": 272, "target": "slack_token", "text": "slack:\n  token: xoxb-377072916102-9543779079207-Wtjt7shB8sE3MTSzLrswMPP8", "expect": ["slack_token"]}
+{"id": 273, "target": "slack_token", "text": "Rotate xoxp-324394100452-1596776395523-6X05x7PbCDWjvgUB5z0wqRtb today, it was in the screenshot.", "expect": ["slack_token"]}
+{"id": 274, "target": "slack_token", "text": "SLACK_BOT_TOKEN=xoxa-332704655501-5929884306144-VDyK5U7NgFbhH1pczJSKllA5", "expect": ["slack_token"]}
+{"id": 275, "target": "slack_token", "text": "client = WebClient(token=\"xoxo-56463733959-6455452574661-8R2RtWqutT05aKcd4GAo5SoU\")", "expect": ["slack_token"]}
+{"id": 276, "target": "slack_token", "text": "{\"slack\": {\"bot_token\": \"xoxr-40864731664-7581483806960-sFs4c7PbePRCBURwTDeaoq5n\", \"channel\": \"C0123ABCD\"}}", "expect": ["slack_token"]}
+{"id": 277, "target": "slack_token", "text": "User: our bot stopped posting, token is xoxb-205445116993-3694079432642-Ga3XBEH3yZZmNybNnJTTknS0", "expect": ["slack_token"]}
+{"id": 278, "target": "slack_token", "text": "2026-03-04T10:22:01Z ERROR slack post failed token=xoxe-1-mjmgLmd6BM5790FA1UAqzcdYRQ1fURtBxFjkpMxUVpKh95C8A0usQB7zadJQssOfpOz3Gq9aqx3FlocgXWwoG7eZXX7oRw8M3ZaA0C11SqEoIe78uNh3iSIpjE4Bt4omHsjHzz6s6UYJ err=invalid_auth", "expect": ["slack_token"]}
+{"id": 279, "target": "slack_token", "text": "curl -H 'Authorization: Bearer xoxe-1-0zTkjdOej7nKNrZn4rz3Lg8xNADazqti676kQfsy9QkjW2ND9QSDNI6NShghRiT1t6qN4tzKsl0H7Id04pLj18PNjcTxYCIt8bEmh7Swa8XlGLkFDLbhINIMRBRIxa9lGnOODP17e9Sy' https://slack.com/api/auth.test", "expect": ["slack_token"]}
+{"id": 280, "target": "slack_token", "text": "slack:\n  token: xoxe.xoxp-1-bBJc6M30uElSM03FUv1Yeg2QqxYk4FY9iuvmW9fN3AvvgI7XjadWPnlblQrxAIowNCCZknAB0eQ57jlmG2FmeYfXNTXKxJN30KW5yAGb06jlAGGbMqdFwJsfSGKROuvNRcD62BWh0evS", "expect": ["slack_token"]}
+{"id": 281, "target": "slack_token", "text": "Rotate xoxe.xoxp-1-IacIA593H4cEScGttp9YeufcryPtWUCHrn1geeFZZLtrfitYqJOyGbuohaymAo3aoKf4g9uaAQhkGNLR80Rh4b9DSESv2dir9Uwe5X2OpOT43LEDjykHgK6KKaJXjIVTLV0YznQ1bFSR today, it was in the screenshot.", "expect": ["slack_token"]}
+{"id": 282, "target": "slack_token", "text": "xoxo, see you tomorrow", "expect": []}
+{"id": 283, "target": "slack_token", "text": "Bot tokens start with xoxb- and user tokens with xoxp-.", "expect": []}
+{"id": 284, "target": "slack_token", "text": "SLACK_BOT_TOKEN=xoxb-your-token", "expect": []}
+{"id": 285, "target": "slack_token", "text": "xoxb-1234", "expect": []}
+{"id": 286, "target": "slack_token", "text": "xoxz-530688986301-LqMW9Lr5vywNSolCsxZBVSIj", "expect": []}
+{"id": 287, "target": "slack_token", "text": "token: xoxb-****", "expect": []}
+{"id": 288, "target": "slack_token", "text": "slack_token: ${SLACK_BOT_TOKEN}", "expect": []}
+{"id": 289, "target": "slack_token", "text": "channel C0123ABCD and team T0123ABCD", "expect": []}
+{"id": 290, "target": "slack_token", "text": "XOXO GOSSIP GIRL", "expect": []}
+{"id": 291, "target": "slack_token", "text": "Message from U024BE7LH in #deploys", "expect": []}
+{"id": 292, "target": "slack_token", "text": "Hugs and kisses xoxoxo", "expect": []}
+{"id": 293, "target": "slack_token", "text": "xox-b is not a token prefix", "expect": []}
+{"id": 294, "target": "slack_token", "text": "https://acme.slack.com/archives/CFVUUF2CO/p8172725598972406", "expect": []}
+{"id": 295, "target": "slack_token", "text": "https://acme.slack.com/archives/CH3RMJEEA/p5510325019426998", "expect": []}
+{"id": 296, "target": "slack_token", "text": "https://acme.slack.com/archives/C72K65UAP/p5706126803792715", "expect": []}
+{"id": 297, "target": "slack_token", "text": "https://acme.slack.com/archives/CEEKPY5FJ/p4014877447757963", "expect": []}
+{"id": 298, "target": "slack_token", "text": "https://acme.slack.com/archives/CUXMAUMH3/p5457494880271082", "expect": []}
+{"id": 299, "target": "slack_token", "text": "https://acme.slack.com/archives/CF4US60O5/p6072874695985413", "expect": []}
+{"id": 300, "target": "slack_token", "text": "https://acme.slack.com/archives/C5G407NN2/p7474276943747863", "expect": []}
+{"id": 301, "target": "slack_token", "text": "https://acme.slack.com/archives/CPJC7KQ2O/p4553690869030782", "expect": []}
+{"id": 302, "target": "slack_token", "text": "https://acme.slack.com/archives/CWQ2PHF6L/p2643089143241717", "expect": []}
+{"id": 303, "target": "slack_token", "text": "https://acme.slack.com/archives/CY2IRT1FV/p8306683381868542", "expect": []}
+{"id": 304, "target": "slack_token", "text": "https://acme.slack.com/archives/C7SWGYFNY/p3753807329298219", "expect": []}
+{"id": 305, "target": "slack_token", "text": "https://acme.slack.com/archives/C28VSNO8O/p5225094413443062", "expect": []}
+{"id": 306, "target": "slack_token", "text": "https://acme.slack.com/archives/CH8IVEUIM/p7864872140292361", "expect": []}
+{"id": 307, "target": "slack_token", "text": "https://acme.slack.com/archives/CP7IXMNEG/p6693356572796782", "expect": []}
+{"id": 308, "target": "slack_token", "text": "https://acme.slack.com/archives/CW3XSDXJR/p5967629575667903", "expect": []}
+{"id": 309, "target": "slack_token", "text": "https://acme.slack.com/archives/CZZ3PB3RU/p9426856946413577", "expect": []}
+{"id": 310, "target": "slack_token", "text": "https://acme.slack.com/archives/C6MG2M09F/p7732346271530223", "expect": []}
+{"id": 311, "target": "slack_token", "text": "https://acme.slack.com/archives/CKVQZQOVV/p5054721278698941", "expect": []}
+{"id": 312, "target": "slack_token", "text": "https://acme.slack.com/archives/CFOEH2EYX/p2749878099596545", "expect": []}
+{"id": 313, "target": "slack_token", "text": "https://acme.slack.com/archives/CO8QLKBP1/p7590971681591925", "expect": []}
+{"id": 314, "target": "slack_token", "text": "https://acme.slack.com/archives/CU1H3ZZ5T/p6355065845843328", "expect": []}
+{"id": 315, "target": "slack_token", "text": "https://acme.slack.com/archives/CJWHOT4T7/p8695923110674806", "expect": []}
+{"id": 316, "target": "slack_token", "text": "https://acme.slack.com/archives/CBVKHWDY3/p2171259305506182", "expect": []}
+{"id": 317, "target": "slack_token", "text": "https://acme.slack.com/archives/C1PHDVE9C/p5093214240088870", "expect": []}
+{"id": 318, "target": "slack_token", "text": "https://acme.slack.com/archives/CEYFY75O5/p7163558734077262", "expect": []}
+{"id": 319, "target": "slack_token", "text": "https://acme.slack.com/archives/CSKEHCYHX/p3783431139317398", "expect": []}
+{"id": 320, "target": "slack_token", "text": "https://acme.slack.com/archives/C3DWUZ30B/p2501903178588309", "expect": []}
+{"id": 321, "target": "slack_token", "text": "https://acme.slack.com/archives/CNTHXQ24J/p7881747904644901", "expect": []}
+{"id": 322, "target": "enterplace_key", "text": "export ENTERPLACE_KEY=enterplace_7341e17ac05374f51572f6ce941309944a60143a276a33167fe1b3f912544e65", "expect": ["enterplace_key"]}
+{"id": 323, "target": "enterplace_key", "text": "curl -H 'Authorization: Bearer enterplace_4d810bad84e20bb0ca50b3b6720e3ff7f0f85ff6207ceb85018784bef8a6bf70' http://127.0.0.1:8787/v1/models", "expect": ["enterplace_key"]}
+{"id": 324, "target": "enterplace_key", "text": "{\"api_key\": \"enterplace_d2901b6cb2d839172fb6edcdd219c1d5c30ceb8ce82fe286bea2054969fb5299\", \"base_url\": \"http://127.0.0.1:8787/v1\"}", "expect": ["enterplace_key"]}
+{"id": 325, "target": "enterplace_key", "text": "User: my key enterplace_8bf070e3252ea6dfbee38eaabe669113fe275c9cc337ad87b575ea1f6739de3e gets 401 from the gateway", "expect": ["enterplace_key"]}
+{"id": 326, "target": "enterplace_key", "text": "client = OpenAI(api_key=\"enterplace_c2d374d607f7a1805c9f340a734877d9fe1285b8d00de90ae804171a185b85ae\", base_url=\"http://127.0.0.1:8787/v1\")", "expect": ["enterplace_key"]}
+{"id": 327, "target": "enterplace_key", "text": "ANTHROPIC_AUTH_TOKEN=enterplace_442164502ebc7e70433f7ba12614f9a562657ce7ef51d5b3431bdf56dc62949d", "expect": ["enterplace_key"]}
+{"id": 328, "target": "enterplace_key", "text": "key: enterplace_76b45173c62a8c64502e88090fbfa1252c1571af89429d2cfcbf3c06f26f81a6", "expect": ["enterplace_key"]}
+{"id": 329, "target": "enterplace_key", "text": "Revoke enterplace_ef40634fe304bc44c704a2baf3e822b1cbb71f70ac0adf1b5501136074688183, it was in the wiki.", "expect": ["enterplace_key"]}
+{"id": 330, "target": "enterplace_key", "text": "export ENTERPLACE_KEY=enterplace_49bdf7d857a189b3d0923cf831ea5b24f745a85f6b293d295e23c30dfbe9988f", "expect": ["enterplace_key"]}
+{"id": 331, "target": "enterplace_key", "text": "curl -H 'Authorization: Bearer enterplace_840097e2f3f160e0a00cf0adf4cd2dd51fff15a023631ee80ed3e2d1a3ebcbae' http://127.0.0.1:8787/v1/models", "expect": ["enterplace_key"]}
+{"id": 332, "target": "enterplace_key", "text": "{\"api_key\": \"enterplace_6b17ca111fb4fd46af636ae5f292c98a693fd69b7d50a7cde6978a5f42fbc4d6\", \"base_url\": \"http://127.0.0.1:8787/v1\"}", "expect": ["enterplace_key"]}
+{"id": 333, "target": "enterplace_key", "text": "User: my key enterplace_7edb1dc989e1e19d30b03f9bbd5f68ce327f0f735077b05c5d299bb89be61131 gets 401 from the gateway", "expect": ["enterplace_key"]}
+{"id": 334, "target": "enterplace_key", "text": "client = OpenAI(api_key=\"enterplace_1bcd36b4b9a60c3bad31118c1df31ef41de8ed4a3159b063006237f5233a7a10\", base_url=\"http://127.0.0.1:8787/v1\")", "expect": ["enterplace_key"]}
+{"id": 335, "target": "enterplace_key", "text": "ANTHROPIC_AUTH_TOKEN=enterplace_712fd84785b3b7af3c2e594d582593552f323bd02d6529d5c1729029bb66294d", "expect": ["enterplace_key"]}
+{"id": 336, "target": "enterplace_key", "text": "key: enterplace_d524312f0e4382b0f3f3dcd875392dabf546953da30c58a4a754078c44219cde", "expect": ["enterplace_key"]}
+{"id": 337, "target": "enterplace_key", "text": "Revoke enterplace_ad020ba6cc230adcb1f2f705c0237a726349bd8dfac2c4585f7f90e2ce4c5a60, it was in the wiki.", "expect": ["enterplace_key"]}
+{"id": 338, "target": "enterplace_key", "text": "export ENTERPLACE_KEY=enterplace_e929c2207c4e9d232257ce224f67f194b77bcd461c3850e788da299f6f1c8943", "expect": ["enterplace_key"]}
+{"id": 339, "target": "enterplace_key", "text": "curl -H 'Authorization: Bearer enterplace_6b8de3ae23cd4673e9eb6e428fb53b2817246ce38660388e066b73f18129627f' http://127.0.0.1:8787/v1/models", "expect": ["enterplace_key"]}
+{"id": 340, "target": "enterplace_key", "text": "{\"api_key\": \"enterplace_493bd6f568101184aec63b279de3a534cf420e6c4000faabdbb7be363e09459f\", \"base_url\": \"http://127.0.0.1:8787/v1\"}", "expect": ["enterplace_key"]}
+{"id": 341, "target": "enterplace_key", "text": "User: my key enterplace_a30022a3d5fbd58592bb6061a1361ddf1800e2ba3d5a8a0fefed1a00d4bc9667 gets 401 from the gateway", "expect": ["enterplace_key"]}
+{"id": 342, "target": "enterplace_key", "text": "client = OpenAI(api_key=\"enterplace_15e1bf2fbf656d4bfcf7faa1080cb4ae3aa50d4b7f1ab3002dd35daeda8cbe9c\", base_url=\"http://127.0.0.1:8787/v1\")", "expect": ["enterplace_key"]}
+{"id": 343, "target": "enterplace_key", "text": "ANTHROPIC_AUTH_TOKEN=enterplace_3f00dc1f4961f559823aebfc27cc977ef79110231ed5645ee07c4e4ca121f823", "expect": ["enterplace_key"]}
+{"id": 344, "target": "enterplace_key", "text": "key: enterplace_95ffa8efdf4b8a592a628e794feeff7c8322347fd17f9aa24fa60dfea5ced112", "expect": ["enterplace_key"]}
+{"id": 345, "target": "enterplace_key", "text": "Revoke enterplace_0307bcc96ce1d58c9dbc38cc1c00b1972223b4e3cab3bf3c2f554fc15fb0d5cb, it was in the wiki.", "expect": ["enterplace_key"]}
+{"id": 346, "target": "enterplace_key", "text": "export ENTERPLACE_KEY=enterplace_38a5a389c8dfb4b3a8d9203a1a2c756d3bdf751adf8e1a21e534ab4b5b353689", "expect": ["enterplace_key"]}
+{"id": 347, "target": "enterplace_key", "text": "curl -H 'Authorization: Bearer enterplace_9760bf3551b1aeec5396f52850d3e36d92d1240ada501d68880a67cfde1ca4a1' http://127.0.0.1:8787/v1/models", "expect": ["enterplace_key"]}
+{"id": 348, "target": "enterplace_key", "text": "{\"api_key\": \"enterplace_ad8c59cc4573712a3892fbb942246a77665585d1ea9f5c72ba951665a9e57c33\", \"base_url\": \"http://127.0.0.1:8787/v1\"}", "expect": ["enterplace_key"]}
+{"id": 349, "target": "enterplace_key", "text": "User: my key enterplace_d47610250fd255ad5a2e656001534401ed71ab310fbefde8a3ed5c3bed736632 gets 401 from the gateway", "expect": ["enterplace_key"]}
+{"id": 350, "target": "enterplace_key", "text": "client = OpenAI(api_key=\"enterplace_0d324c9670eaf285ab16f0a43eb877caa0d702b571f03c82a0c21170f93902bd\", base_url=\"http://127.0.0.1:8787/v1\")", "expect": ["enterplace_key"]}
+{"id": 351, "target": "enterplace_key", "text": "ANTHROPIC_AUTH_TOKEN=enterplace_5eaf7a318253b6b714231c047a15afd77d1192adf391834e46d79a913ec60d8d", "expect": ["enterplace_key"]}
+{"id": 352, "target": "enterplace_key", "text": "key: enterplace_b25f49f2106631b908606df5f95e1d40e587960525ca7ba0232b85cbcd857a77", "expect": ["enterplace_key"]}
+{"id": 353, "target": "enterplace_key", "text": "Revoke enterplace_1f3136829ce349914f7d5540507ef2e29f36c2bac9a615d42d886300114a53f0, it was in the wiki.", "expect": ["enterplace_key"]}
+{"id": 354, "target": "enterplace_key", "text": "export ENTERPLACE_KEY=enterplace_105379e20daf90b006e34aba6e7bf1c7f75e7cf343c07af49814abb96c14959a", "expect": ["enterplace_key"]}
+{"id": 355, "target": "enterplace_key", "text": "curl -H 'Authorization: Bearer enterplace_5632bf9baf5d5e9da4425e791370d214f70125ec056b0482276ae0a84c82b863' http://127.0.0.1:8787/v1/models", "expect": ["enterplace_key"]}
+{"id": 356, "target": "enterplace_key", "text": "{\"api_key\": \"enterplace_3e19f02538a8ed3d7e9403ac20f1d10064e2f81e0a289e7fe0528f5f4441a6d7\", \"base_url\": \"http://127.0.0.1:8787/v1\"}", "expect": ["enterplace_key"]}
+{"id": 357, "target": "enterplace_key", "text": "User: my key enterplace_10ea621e7d1d25085ee6c4f3d42cb7cf9d1433ac06a81c2450f6f039b15f0206 gets 401 from the gateway", "expect": ["enterplace_key"]}
+{"id": 358, "target": "enterplace_key", "text": "client = OpenAI(api_key=\"enterplace_f1caf68d1c2f7fe2496a9fc7978a5c2738d485b632357c65841d009a4be27830\", base_url=\"http://127.0.0.1:8787/v1\")", "expect": ["enterplace_key"]}
+{"id": 359, "target": "enterplace_key", "text": "ANTHROPIC_AUTH_TOKEN=enterplace_4800ff2b8e21908894ab1dfc2db444fc1033885c40772d4d29025e4dbe1c00a3", "expect": ["enterplace_key"]}
+{"id": 360, "target": "enterplace_key", "text": "key: enterplace_60ab28fd2be74a7e1e63e8bf7d6fdd67c3f523b613279e38b545eb6cce46920d", "expect": ["enterplace_key"]}
+{"id": 361, "target": "enterplace_key", "text": "Revoke enterplace_5cdb7386feba0e7e31970ae1b0c25d7068fa58b1cb2f275cec6bbfba853dfa14, it was in the wiki.", "expect": ["enterplace_key"]}
+{"id": 362, "target": "enterplace_key", "text": "enterplace_7f7d2307f9b52e1c80deb2550eba4b3a874718a8c2f4c7af503678e3c63ee26", "expect": []}
+{"id": 363, "target": "enterplace_key", "text": "enterplace_bfc0492713ff17c21aa478bc92549a89f13af35647c4899aaed35acadba44af57", "expect": []}
+{"id": 364, "target": "enterplace_key", "text": "enterplace_F3589B53DEAE61DC88CFF2CC4472676598667B0CA8C1FBAACBD0C09963CB8D62", "expect": []}
+{"id": 365, "target": "enterplace_key", "text": "enterplace_core::guard::scan(&parts)", "expect": []}
+{"id": 366, "target": "enterplace_key", "text": "use enterplace_server::serve;", "expect": []}
+{"id": 367, "target": "enterplace_key", "text": "enterplace_check_examples", "expect": []}
+{"id": 368, "target": "enterplace_key", "text": "ENTERPLACE_KEY=enterplace_your_key_here", "expect": []}
+{"id": 369, "target": "enterplace_key", "text": "pip install enterplace_sdk", "expect": []}
+{"id": 370, "target": "enterplace_key", "text": "enterplace-e43ea314f2c32cf88532d8bd3da5c1796a0a87442e033037565e576f8e4c768e", "expect": []}
+{"id": 371, "target": "enterplace_key", "text": "keys look like enterplace_ followed by 64 hex digits", "expect": []}
+{"id": 372, "target": "enterplace_key", "text": "sha256:8031e6edd82db4053bfc21c3ca69d6f78545be393056f64111423403201fb3f5", "expect": []}
+{"id": 373, "target": "enterplace_key", "text": "sha256:695e7ef20086f8a916eba56f0b75c6ccc6c2a28ec3824a92891db19b31438d6c", "expect": []}
+{"id": 374, "target": "enterplace_key", "text": "sha256:d06bd56c74635f18780d491ba19ef32c70be995348ee1c60334af843c0ef1eca", "expect": []}
+{"id": 375, "target": "enterplace_key", "text": "sha256:be3cd9139309fe41ad5e881963dbf3f6720d91e1f2bd75f9dbfc0d7cdf5fcbe1", "expect": []}
+{"id": 376, "target": "enterplace_key", "text": "sha256:872c812be83e95993213b5e7a75f6e0d5c9cf3b499fe4efe97f194f0baee0acb", "expect": []}
+{"id": 377, "target": "enterplace_key", "text": "sha256:5c99de6b0dbedb919dd6e5b255ad399d3161e39b2c8228f9a3693b59b7c78a3d", "expect": []}
+{"id": 378, "target": "enterplace_key", "text": "sha256:e0f96139abe7b22e439e8b46fcc7b60cab3166b5a008cb7b96435579e9f28a3e", "expect": []}
+{"id": 379, "target": "enterplace_key", "text": "sha256:247a3a3d5a42425c1c5199b1859366dca182a13726c8735ebccd903f2da5af34", "expect": []}
+{"id": 380, "target": "enterplace_key", "text": "sha256:edeb6881c463d20dbf5f923bf94d504d8a6659462df5c1174321cab245435fbf", "expect": []}
+{"id": 381, "target": "enterplace_key", "text": "sha256:c254882a38af358d0bc14300840143fe5054168e499be7a70528aee93140bb45", "expect": []}
+{"id": 382, "target": "enterplace_key", "text": "sha256:d663091636831957ee995cf5a1bc197c3270b54c486b7197ca5119bb69557d8e", "expect": []}
+{"id": 383, "target": "enterplace_key", "text": "sha256:d61c546719bb999eaa383e6ea0923fd2484f58d9d8277109d7835d248271e999", "expect": []}
+{"id": 384, "target": "enterplace_key", "text": "sha256:9a6cd2d6886e9112ec9c272774ce31bfecfad039a6efdf59dc04a6dd4f284674", "expect": []}
+{"id": 385, "target": "enterplace_key", "text": "sha256:0630dbfa9d82c0a0941d9829d62d0be83fb44785ef9f0bc5439f56d6e470fd68", "expect": []}
+{"id": 386, "target": "enterplace_key", "text": "sha256:dd932e90236b11a0c7b8b627b158526c19ca29c85791aa4d6d05cc36a79d6ae0", "expect": []}
+{"id": 387, "target": "enterplace_key", "text": "861ea9b266b2b039743ff98446997b1e9f381da312f3fff4e23927578bfe7323  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 388, "target": "enterplace_key", "text": "0fd2dcd7ba2ad1f39e6de8875d04682872dd35cb489333fd5835cb51834cfbd2  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 389, "target": "enterplace_key", "text": "295dc81a2b6c7d558b316bcfa846b5a065f0e0c4033d787888ac7899359dd59c  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 390, "target": "enterplace_key", "text": "7b75ff32a967418dadce56b43276ba74f95fd2be1088df33bf7345fdfd526522  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 391, "target": "enterplace_key", "text": "0c8c2cf7f2b0cb761518be0da9e15001a6685bf8e5b464f90bf802207a236182  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 392, "target": "enterplace_key", "text": "12ee53456f2cd6c137139dc15c97a0c82e74ae26caa03b8cac0920841a4b47ed  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 393, "target": "enterplace_key", "text": "9ad0ce15c9934818fb1f90491cdc927c87300fd2ec106ab1a80e5ed5a3081c40  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 394, "target": "enterplace_key", "text": "f866fe0cbf4e751027e35235fe4ea11913e553e8f4e88f0cec75f7901e426ecd  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 395, "target": "enterplace_key", "text": "df9fec22477f82c12a6764724c8a9981cb9a0b19a8cfda2370fa1b90934e26ab  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 396, "target": "enterplace_key", "text": "8d453b8cab22a9017696d6eaf61458a98703f18372628c8d1b67c40080c6237e  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 397, "target": "enterplace_key", "text": "345cf4f484efcbb119622789944799d949b4cbf44ba744fd265731c5397463a2  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 398, "target": "enterplace_key", "text": "f2a6e6bf13ff8ccb51d09e9bbcce364283bf251a37d9e898a9f72e42ebabf058  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 399, "target": "enterplace_key", "text": "8dbdea6ca5f0db6eea49f27b502a36400487483a4737d54e67ce9284c227b862  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 400, "target": "enterplace_key", "text": "390d40eaaab83a1051242e27f0fcce65454a22bd3df0d0e5ff8fc6c55fbed1cb  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 401, "target": "enterplace_key", "text": "afbc10bf05d9ae15d64ad7faa58dacd28e23400c5b7272a8733e33b6cb2a8cb4  enterplace-x86_64-unknown-linux-gnu.tar.gz", "expect": []}
+{"id": 402, "target": "jwt", "text": "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTE5MjExIiwiaWF0IjoxNzcyOTQwMjU4LCJzY29wZSI6InJlYWQifQ.9iE837-r16s7SYBYipSTYbyQMovEpVlPNyzAp84WsPKZcZl7anvKUvGl1zFez-cBvbOEgijEIAKYL79bJFNVUVGFvYgH0hTStmqab-qDrrIIkcUj_P9ryizAFlNM_T3LO5ylakVCq1URsbFB8UMpFhrvQRyjpvy4TRvbOCknMLT41i3xhyKlUF_78z6NlDf5G5v97PeAF_XXg-W0eJIhx4DlIo5kyJPUrNoZh_rMUoxHxGZBdEVmaJuokOx2xyXTYw_DLUi8w1u6hU_raEhXrRw92PUSEFMF16SS1DtOCa3vbjW3wSFLzQZrcTA1v1YTewUKF8aStdF5Jr9T-UcR4v", "expect": ["jwt"]}
+{"id": 403, "target": "jwt", "text": "Set-Cookie: session=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTY0MjAwIiwiaWF0IjoxNzcyNjQ4MjgyLCJzY29wZSI6InJlYWQifQ.NWpiX5wivt7lr64VaSbgwSVi8gf4KkhdQYb_NzHV6Ep; HttpOnly; Secure", "expect": ["jwt"]}
+{"id": 404, "target": "jwt", "text": "{\"access_token\": \"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQyODMxIiwiaWF0IjoxNzcyOTI3NjU3LCJzY29wZSI6InJlYWQifQ.EBTLE143MjATGz-qaBBzG7ib1i5iUDcjCPnkP4b7Xpo\", \"token_type\": \"Bearer\", \"expires_in\": 3600}", "expect": ["jwt"]}
+{"id": 405, "target": "jwt", "text": "User: decode this for me eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQyNDQzIiwiaWF0IjoxNzczNTIxMTIwLCJzY29wZSI6InJlYWQifQ.-xkZuXVs7mGFWmoQquqykCP_hesX4PQEfdEX6vraXwr-3DaFTnLDSXfYb8yhnlrQ9jQuX8R0pYuejtDjPEw80lLgHg86P-4fGQRM0vbpS39iHIkbZFjQeTEA-VGKiLl8ZXSEDHzl935KSB2-x1lQ2mFKdb_ANYkxHsNwq3-H6fjFN5lluPRhUP_a97CwDhMy2riwyPVbpOSackJnSELBoKl9Q_oqIzdFlm-ianAQfNc0oGLOAPfQsCUMuhnX33DyklKYPFk1u7Ru6hzUohfe7w1rMOPb21S8CQTnG15cX_L248oMqTdi4CEash0gtXL3rTe-OaPsYQdusbN0beoQoz", "expect": ["jwt"]}
+{"id": 406, "target": "jwt", "text": "curl -H \"Authorization: Bearer eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTE3NzcyIiwiaWF0IjoxNzczNTI1NDk2LCJzY29wZSI6InJlYWQifQ.AxLUliGI1qnMHvIMKvYgInzQer6vQvxQOdow8jZLvrU\" https://api.example.com/v1/me", "expect": ["jwt"]}
+{"id": 407, "target": "jwt", "text": "2026-03-04T10:22:01Z DEBUG auth ok jwt=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTE3NDE5IiwiaWF0IjoxNzczMDcyOTQxLCJzY29wZSI6InJlYWQifQ.gQ__1B-QaGgctv2CuzANx3rAUXTgZosKuzk2hxUithZ", "expect": ["jwt"]}
+{"id": 408, "target": "jwt", "text": "const token = \"eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTY4MTQ2IiwiaWF0IjoxNzczNTM1Njc2LCJzY29wZSI6InJlYWQifQ.R2sTDBX-_kIbjzg6RBN7vD2LaiVw4RDvuN5p5RaA5TkfiIsPbUQdWodlvBrrfbiDn7pGeXAHLSEhUjZ73T132r\";", "expect": ["jwt"]}
+{"id": 409, "target": "jwt", "text": "id_token: eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTc3MTcxIiwiaWF0IjoxNzczMzg5OTM1LCJzY29wZSI6InJlYWQifQ.VaSfB8Kaha1FZhNSo5djEDgQfqVkZGsuIEetYAKoeFr", "expect": ["jwt"]}
+{"id": 410, "target": "jwt", "text": "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTExMzQ0IiwiaWF0IjoxNzcyNjE1MjIxLCJzY29wZSI6InJlYWQifQ.qlHdhCPWBdIfS0jcv9UKWSIgJmnpe4DZaqNr4u0dkLs", "expect": ["jwt"]}
+{"id": 411, "target": "jwt", "text": "Set-Cookie: session=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTc1NDc3IiwiaWF0IjoxNzczMTI3MDk3LCJzY29wZSI6InJlYWQifQ.5IAdv62VDiKaN196sLQ7SERdQJc4YklT27i3ks7dnf8; HttpOnly; Secure", "expect": ["jwt"]}
+{"id": 412, "target": "jwt", "text": "{\"access_token\": \"eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTU0OTY1IiwiaWF0IjoxNzcyOTYyMTQ5LCJzY29wZSI6InJlYWQifQ.e9J5PVk1wsvnceATmXf_l8CJif9qAU10l9w0Fj-CI-3h6dKSQ0PtaKby4Muv4P1_LXwPZklEuNpHb-1_qgjnww\", \"token_type\": \"Bearer\", \"expires_in\": 3600}", "expect": ["jwt"]}
+{"id": 413, "target": "jwt", "text": "User: decode this for me eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTgzNjE5IiwiaWF0IjoxNzcyNjc3Mjg1LCJzY29wZSI6InJlYWQifQ.qcfxIC7Ltwb3V__w2cL97omaYwXqNNf1UCgtlU5ftuO", "expect": ["jwt"]}
+{"id": 414, "target": "jwt", "text": "curl -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTUzOTIxIiwiaWF0IjoxNzczNTIwMDcwLCJzY29wZSI6InJlYWQifQ.1ebqIfVkfdNtV0hqL6V1CwDO8R8_GnDZYizBQKenm1IPDfuxJxKUoe1sJ_XftD8xsOFemTdiUaZ3zpn-35hrfaUB8MqbyQS3ViVE6EdX6TIyPg4lPQSemneURW7WhsA1geCUjQpvOF7lqmMfI0lHiD-llBnz4gqsu5nIZ9YW_-Yer4_zyIDTo3H5uszQduQcaZqbYOcL1tvJjeTzx3UHBJ2sDTA8W3hosePjkBrDDHy4c7NyYVBb_O4MatfV3snmsjbYT0uncU4UEgdCHc8G0czlqZ2R5A6OTL54fMNZc9ql95hX-FsSbHG6XY1n1SsQUTbpjqaq7kgqPEPtLjUATd\" https://api.example.com/v1/me", "expect": ["jwt"]}
+{"id": 415, "target": "jwt", "text": "2026-03-04T10:22:01Z DEBUG auth ok jwt=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTY4OTYxIiwiaWF0IjoxNzczNTU5ODU3LCJzY29wZSI6InJlYWQifQ.NHfef7ysx9FoIpieNmW68St9Kx0CytXmsF_RNHwkEUdBc7e_KoOzGL9NbkAEVnFkVpCmHNUfe47F1H_btvFDQX", "expect": ["jwt"]}
+{"id": 416, "target": "jwt", "text": "const token = \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTM0MDMxIiwiaWF0IjoxNzczMzQzNDI2LCJzY29wZSI6InJlYWQifQ.33eZ09WMIMF3IZxgiDe1lZTGpPyPCrHz8TZkOPZbS1-t_tPjOQn8-oI2WJpGgWxAQknwQwKlqPF81Wl4UqhhX_\";", "expect": ["jwt"]}
+{"id": 417, "target": "jwt", "text": "id_token: eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTYwOTcwIiwiaWF0IjoxNzczNDEyMDM1LCJzY29wZSI6InJlYWQifQ.ytLAzTseJrb2LEThLCB7sPVALsgzGcgLl2Qa-TvwaIJ", "expect": ["jwt"]}
+{"id": 418, "target": "jwt", "text": "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTk5OTkwIiwiaWF0IjoxNzcyODY5MzQxLCJzY29wZSI6InJlYWQifQ.h44tdMvD9kVKatDt0aTbtmoRuzzkiRkEWDPXCc1F_F9", "expect": ["jwt"]}
+{"id": 419, "target": "jwt", "text": "Set-Cookie: session=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTc0MzkyIiwiaWF0IjoxNzczNDQ5OTU2LCJzY29wZSI6InJlYWQifQ.WIb7dpT3NM2p-RpbVJ1LJmJ7O7Basr26nQHnOZaVITs; HttpOnly; Secure", "expect": ["jwt"]}
+{"id": 420, "target": "jwt", "text": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTk0Mzc2IiwiaWF0IjoxNzcyODIwNzk0LCJzY29wZSI6InJlYWQifQ.6aPEUhwEJq00KGRM0f-WL1rroJcQjSjnWd9uC01gwDB\", \"token_type\": \"Bearer\", \"expires_in\": 3600}", "expect": ["jwt"]}
+{"id": 421, "target": "jwt", "text": "User: decode this for me eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTY0NDEyIiwiaWF0IjoxNzcyNjAyMDIwLCJzY29wZSI6InJlYWQifQ.-vXfGMp5i7M4C5nqglWk3X4ikCeGsXZvxVqobKzoq3InsNpo_r2siKp3XZW0LM7xlBCe0nuqgemmoZXeMs7hOx", "expect": ["jwt"]}
+{"id": 422, "target": "jwt", "text": "curl -H \"Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTg3Njg2IiwiaWF0IjoxNzcyNzUxMjE3LCJzY29wZSI6InJlYWQifQ.q1Ji7MJRkXf_DTglvchPg0pfRmWFMYkn9TvaI0A1LEU\" https://api.example.com/v1/me", "expect": ["jwt"]}
+{"id": 423, "target": "jwt", "text": "2026-03-04T10:22:01Z DEBUG auth ok jwt=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQ0OTgwIiwiaWF0IjoxNzczNTgyMTI0LCJzY29wZSI6InJlYWQifQ.QN9wT5BAona9fUzpuSOfZYuylxkuRMwlFgGqbeir8UKPfxeUUtn6I8iTqdpcJw4kOO6tZO2YQruyIigjPvLi4y", "expect": ["jwt"]}
+{"id": 424, "target": "jwt", "text": "const token = \"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTk3NDk2IiwiaWF0IjoxNzcyNjk1NDA3LCJzY29wZSI6InJlYWQifQ.eyhd_i00JgomiFSffipTgK9fcZPfmje19kZK-Yuq9wNkdenbybF3ZrZAVZKjQY0yD-5xGiACtvfL3DH7amK1DqkoQT5mmUTUaPDcJkutyhTK4ZALNth888OtaDBcad_hmh0k3acGx8y5Cao8KD8SKFuNCWlD9Ns6LwqesHFt-BQaA13AQS5syMj5po1UGJwMrwKZ4fKkbYziZ0JyJ0rzGodFcIRPazrqxSEs8UyYdPwr1UcwZCB-N1wnRZkdnRt_gu6BAEsL_gD4zedkBJ9rjCQ_Hd1XD0-fEscdr9vytH-WP9enMv3TVqbrJ7SlQ7F-4qBDCKVbuz99oZMargZMKq\";", "expect": ["jwt"]}
+{"id": 425, "target": "jwt", "text": "id_token: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQ5MjY3IiwiaWF0IjoxNzczMTYxOTgzLCJzY29wZSI6InJlYWQifQ.e8vOjtcHkf-AGAHQXjxljO7xQTipZQUc-7lBjyuCRdB", "expect": ["jwt"]}
+{"id": 426, "target": "jwt", "text": "Authorization: Bearer eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEzMzUiLCJpYXQiOjE3NzI5ODU0NzIsInNjb3BlIjoicmVhZCJ9.p2CTjKR4eaBJfOtO1nazzZNhs6xHWdpJJK7Juh_2wRRxXPrYYrpDo3jmXT0LwjnTCqNssH_cGPpatgqcFu0B4i", "expect": ["jwt"]}
+{"id": 427, "target": "jwt", "text": "Set-Cookie: session=eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTk4MzI4IiwiaWF0IjoxNzcyOTYyODkxLCJzY29wZSI6InJlYWQifQ.FIbEJQ_llOiyUaehU4WnoK4fq7lRNtY_PyarnNA_fifKztvtpfe_emo6FOymIn2bLBlNShL0jjxwDovDeHZPLQqfc437jUumGLsKxoclX0MtuTmHx4dQLtz6w5hJPK7WG3qMQ-ttm2X6VK6CStIOCQ_J2lhgT3krTSJv7KzLhsEtVcEP1doNkVcKzeIjJxsF7bq15h7URouDpfhhsCsdp1Wdlg8eVuPGf-yiUbW7hxCS71dm6mQw2Z8SPdtiDwS2thYm4eKpyCZAR-hpYLECcBcWRgrrHWH6yDa3XyM4LoRIEEXXrIEZEBNAdZ2V71zG2fCGu-xF1MoqXXzV4NPG6l; HttpOnly; Secure", "expect": ["jwt"]}
+{"id": 428, "target": "jwt", "text": "{\"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTMyODI5IiwiaWF0IjoxNzczNDE3MDkyLCJzY29wZSI6InJlYWQifQ.WutP2_sWwrTySL4zOnrlVoWOTA5usuryNjq64-9an_N\", \"token_type\": \"Bearer\", \"expires_in\": 3600}", "expect": ["jwt"]}
+{"id": 429, "target": "jwt", "text": "User: decode this for me eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTE4NDc1IiwiaWF0IjoxNzczMzI1NDM5LCJzY29wZSI6InJlYWQifQ.RU1ac7c17CvDZCq8RIzGiV6SJ3ReJMVsmaTNDcc_9l7", "expect": ["jwt"]}
+{"id": 430, "target": "jwt", "text": "curl -H \"Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTE2MTUwIiwiaWF0IjoxNzcyNzE3MDgyLCJzY29wZSI6InJlYWQifQ.UT7gHierYCM3G0hUcClknrCvy5qipX7pQamnDd6_R-n\" https://api.example.com/v1/me", "expect": ["jwt"]}
+{"id": 431, "target": "jwt", "text": "2026-03-04T10:22:01Z DEBUG auth ok jwt=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQzODI4IiwiaWF0IjoxNzczNTU0OTMwLCJzY29wZSI6InJlYWQifQ.L05nDWJvB5AcK175a6p5HmgLdLIjQSTXZDGrhqW4M3x", "expect": ["jwt"]}
+{"id": 432, "target": "jwt", "text": "const token = \"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTY4NTkxIiwiaWF0IjoxNzczMjg1MzEwLCJzY29wZSI6InJlYWQifQ.c-iDloIHAEHCqMBwSGtGfsSby0lhehHlp7Ocj77SJECL8KwVaLwmXY9WxE9wk6iULkwk6pOednqRVzHGoeklwuZd0XNbLMAuWj0KLgCBTp-b874II5cHCdKzSgTzdCNYDC4K7NFBv9-u-x__ibfiB3scu5Klq5bHH5pCNfj2iDtXCz5L3uswpWQ4zAdp7REpWsDqCQnS97ACQQZlo47pNs34Gnwyr2h2ojJWwTKkTAKb9-oNHzOPLqPgmrGGfF5HE7_KHmC_3qY_9KT9O9ipFKJ-CQeI6OSMuDpWdNcNVn9gMnalQjnPo5Xv1FUOprB5jorm60ioyLLEbCInhdvmh_\";", "expect": ["jwt"]}
+{"id": 433, "target": "jwt", "text": "id_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTYyMjQ3IiwiaWF0IjoxNzczMDkxODc2LCJzY29wZSI6InJlYWQifQ.LLUWHcKIa7OkvDDYReq015kB-W4WxkAF__017X87Z5X", "expect": ["jwt"]}
+{"id": 434, "target": "jwt", "text": "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTMzMjU3IiwiaWF0IjoxNzczMTM3MDQwLCJzY29wZSI6InJlYWQifQ.BfrwpiTQ2o17CUCZTDgtc8KmI2J4jV9CPNR9Ql7do4F", "expect": ["jwt"]}
+{"id": 435, "target": "jwt", "text": "Set-Cookie: session=eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTY0Nzg2IiwiaWF0IjoxNzcyNzE4NDY0LCJzY29wZSI6InJlYWQifQ.vtMftVUwj3OuAJ5uFuBTtGlyniR7DorEmLV6MRKDmYXvNSDJc2qkgy4wUxF06iB-gplKeAPUFNuWAsAh63wa9L; HttpOnly; Secure", "expect": ["jwt"]}
+{"id": 436, "target": "jwt", "text": "{\"access_token\": \"eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTgzODY4IiwiaWF0IjoxNzczMTk0ODcwLCJzY29wZSI6InJlYWQifQ.07MuwwmksACpdpb3UexTFs53DVYS4st_ULeHOcoIk37\", \"token_type\": \"Bearer\", \"expires_in\": 3600}", "expect": ["jwt"]}
+{"id": 437, "target": "jwt", "text": "User: decode this for me eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTYwMTE3IiwiaWF0IjoxNzczMDQ1NDYzLCJzY29wZSI6InJlYWQifQ.2a6rmA5BAeaNcOJQzB4yx4R6KF1IXlRtfUicbCK7VmADVz84UQvnYEUpI6CBWLTEGSkYDtVf8ZFOSch_k6cBVY", "expect": ["jwt"]}
+{"id": 438, "target": "jwt", "text": "curl -H \"Authorization: Bearer eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTI2Nzc1IiwiaWF0IjoxNzczNDU5OTQwLCJzY29wZSI6InJlYWQifQ.j_34tzJ9AUOyiMzHCi1WrbtCVV88t0OF9DQZlMiEtOm\" https://api.example.com/v1/me", "expect": ["jwt"]}
+{"id": 439, "target": "jwt", "text": "2026-03-04T10:22:01Z DEBUG auth ok jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTgxNTAwIiwiaWF0IjoxNzcyNzg4MzA0LCJzY29wZSI6InJlYWQifQ.TNw0OAbzju4D6FWkk8SlN9V3WO79KcjUiQK51UAwdSK", "expect": ["jwt"]}
+{"id": 440, "target": "jwt", "text": "const token = \"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTU1OTYxIiwiaWF0IjoxNzczMTI5OTI5LCJzY29wZSI6InJlYWQifQ.8Swtf0P95OCrWz_14YDVxQyOTpSRD3E7DBAMICqtHNNfpBS2cMRJnTlx5MhRnWqXsT_u88YQal0HAKGP8KQraS\";", "expect": ["jwt"]}
+{"id": 441, "target": "jwt", "text": "id_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTYzMDcyIiwiaWF0IjoxNzcyNjE3ODE0LCJzY29wZSI6InJlYWQifQ.", "expect": ["jwt"]}
+{"id": 442, "target": "jwt", "text": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", "expect": []}
+{"id": 443, "target": "jwt", "text": "A JWT has three parts: header.payload.signature, each base64url.", "expect": []}
+{"id": 444, "target": "jwt", "text": "Authorization: Bearer <token>", "expect": []}
+{"id": 445, "target": "jwt", "text": "version 1.22.3.4", "expect": []}
+{"id": 446, "target": "jwt", "text": "eyJ is just {\" in base64", "expect": []}
+{"id": 447, "target": "jwt", "text": "jwt: ${JWT_TOKEN}", "expect": []}
+{"id": 448, "target": "jwt", "text": "eyJ...eyJ...sig", "expect": []}
+{"id": 449, "target": "jwt", "text": "a.b.c", "expect": []}
+{"id": 450, "target": "jwt", "text": "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInNyYy9nbGlyc2UudHMiXSwibWFwcGluZ3MiOiIyeGQreTU5MmxEVmZnbXFJOHVVa2NISDAyK2RoSTRFcjB2bk9Gd2JlIn0", "expect": []}
+{"id": 451, "target": "jwt", "text": "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInNyYy9mc3VuanUudHMiXSwibWFwcGluZ3MiOiJFMmY5VXpINE9ibmNSQTVWSllPd3hUM0tHU3RFNHEzU2F6Qyt6RWlHIn0", "expect": []}
+{"id": 452, "target": "jwt", "text": "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInNyYy9teWV1dmQudHMiXSwibWFwcGluZ3MiOiJUblh3SlBxbXZoNjZPZGloYzVJeUFhd01XNERjblhlWGRmTGZiNk5iIn0", "expect": []}
+{"id": 453, "target": "jwt", "text": "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInNyYy91bGRxZmMudHMiXSwibWFwcGluZ3MiOiJ5eWlkdlRBRVE5VFlobGpQZmZNSFd2MHlaN0l5aUdTdmNINzFPN3o3In0", "expect": []}
+{"id": 454, "target": "jwt", "text": "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInNyYy9lcmlkaWIudHMiXSwibWFwcGluZ3MiOiJpRXhUMGhHb0J4QkhwUXU1eFBkYmxwa1dKUUpFUVR5UmRQTi9rblpOIn0", "expect": []}
+{"id": 455, "target": "jwt", "text": "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInNyYy92anBmZ2sudHMiXSwibWFwcGluZ3MiOiJudStDWGIvbEhKa1huR2VkcHZqalB2ZTVYS29QekVBSUcxOHdJKzZyIn0", "expect": []}
+{"id": 456, "target": "jwt", "text": "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInNyYy9kZmZ4aWwudHMiXSwibWFwcGluZ3MiOiJzY3N2M1pVNmxQRGwwa0RJL3d2cEUwM3FqQ2VvbVBZRlZaS1B2bEhPIn0", "expect": []}
+{"id": 457, "target": "jwt", "text": "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInNyYy9xZ3R2eWcudHMiXSwibWFwcGluZ3MiOiJrbThrZmRpR2dELzZBTm1rTmt6TVJOemxDL2doUHVRR0l4S2pVVGdSIn0", "expect": []}
+{"id": 458, "target": "jwt", "text": "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInNyYy9xZHNjcWcudHMiXSwibWFwcGluZ3MiOiJ1SlFqYS9oWndBSWYwK2wyYk5wRHRjMHhBcFFSK3VaRTRGQjNKZVh0In0", "expect": []}
+{"id": 459, "target": "jwt", "text": "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInNyYy9zYXZuZ3MudHMiXSwibWFwcGluZ3MiOiJhcnJubEhYOVZ2WUJwQ0hkbkFPc1RMai8xQnV4OEFwb1VieE9KK1RXIn0", "expect": []}
+{"id": 460, "target": "jwt", "text": "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInNyYy9meGt5cmcudHMiXSwibWFwcGluZ3MiOiJFelpidFBOeFBrZE9CWndkc2h2akR4cU1wQWxGSW02bFJOZjQwZXM1In0", "expect": []}
+{"id": 461, "target": "jwt", "text": "//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbInNyYy9rc3Z2aGUudHMiXSwibWFwcGluZ3MiOiI0UU56d2M4L0dUV09RaGQ1RnFhbm1hVzZPWEdZRDN5eTJJa0lVYU5iIn0", "expect": []}
+{"id": 462, "target": "jwt", "text": ".dockerconfigjson: eyJhdXRocyI6IHsicmVnaXN0cnkuZXhhbXBsZS5jb20iOiB7ImF1dGgiOiAiRStzNW5ITnN2STBjTGlLdTJOb0xoQXJ5In19fQ==", "expect": []}
+{"id": 463, "target": "jwt", "text": ".dockerconfigjson: eyJhdXRocyI6IHsicmVnaXN0cnkuZXhhbXBsZS5jb20iOiB7ImF1dGgiOiAiSkFUREFEcGhTeW1GbUJQOFBJVUlOUDRrIn19fQ==", "expect": []}
+{"id": 464, "target": "jwt", "text": ".dockerconfigjson: eyJhdXRocyI6IHsicmVnaXN0cnkuZXhhbXBsZS5jb20iOiB7ImF1dGgiOiAiTUVCb2FFbUo3NldzeHJ0ZjN4ckpzZmsyIn19fQ==", "expect": []}
+{"id": 465, "target": "jwt", "text": ".dockerconfigjson: eyJhdXRocyI6IHsicmVnaXN0cnkuZXhhbXBsZS5jb20iOiB7ImF1dGgiOiAiYXhSblJTVTNFSzkyWlVrblJKVDd2WkNMIn19fQ==", "expect": []}
+{"id": 466, "target": "jwt", "text": ".dockerconfigjson: eyJhdXRocyI6IHsicmVnaXN0cnkuZXhhbXBsZS5jb20iOiB7ImF1dGgiOiAiWDAyL1N1ZUtneVR4K2FuaEFvSU1KR2hnIn19fQ==", "expect": []}
+{"id": 467, "target": "jwt", "text": ".dockerconfigjson: eyJhdXRocyI6IHsicmVnaXN0cnkuZXhhbXBsZS5jb20iOiB7ImF1dGgiOiAiMnpYY1ZqRmJjNUNLM3BDWXBVdkNKb2EyIn19fQ==", "expect": []}
+{"id": 468, "target": "jwt", "text": ".dockerconfigjson: eyJhdXRocyI6IHsicmVnaXN0cnkuZXhhbXBsZS5jb20iOiB7ImF1dGgiOiAieGNWVzNhTXRCNkNlMXBPektlNTA1NjBXIn19fQ==", "expect": []}
+{"id": 469, "target": "jwt", "text": ".dockerconfigjson: eyJhdXRocyI6IHsicmVnaXN0cnkuZXhhbXBsZS5jb20iOiB7ImF1dGgiOiAiQnFsZkEwMVdRRGJEMFgrYlZZa3pWWm9EIn19fQ==", "expect": []}
+{"id": 470, "target": "jwt", "text": ".dockerconfigjson: eyJhdXRocyI6IHsicmVnaXN0cnkuZXhhbXBsZS5jb20iOiB7ImF1dGgiOiAiYW0ydldKTW56OGt6aCtRRWk1OW5PeitoIn19fQ==", "expect": []}
+{"id": 471, "target": "jwt", "text": ".dockerconfigjson: eyJhdXRocyI6IHsicmVnaXN0cnkuZXhhbXBsZS5jb20iOiB7ImF1dGgiOiAiQmMwNCtiY0R3STk1VGVUUDBXRVRIV0tTIn19fQ==", "expect": []}
+{"id": 472, "target": "jwt", "text": "eyJraWQiOiIwYjE0MDQ1MSJ9.yZRqgEtixsZk5Rth8ePQA1rddaQvJ3", "expect": []}
+{"id": 473, "target": "jwt", "text": "eyJraWQiOiIzODg3ODhmMyJ9.5JcIpSx9BSX66_ymnoWe730PFLyUW5", "expect": []}
+{"id": 474, "target": "jwt", "text": "eyJraWQiOiIzZmU0OWEyMyJ9.IrzdrLGC4BKjNBkIxtCqh9z6qjpNPJ", "expect": []}
+{"id": 475, "target": "jwt", "text": "eyJraWQiOiIwYmNhZmExOSJ9.dMd1sc1-nbWWbU_ZpaoM0LKnCVj4Qy", "expect": []}
+{"id": 476, "target": "jwt", "text": "eyJraWQiOiJhMTI0YTJlMyJ9.GBHfKg4Lr-LW6vkeBtnEDoWXE9J6oS", "expect": []}
+{"id": 477, "target": "jwt", "text": "eyJraWQiOiJjYjRkMGFmYSJ9.67UAEXC6AjyfoTKi6linjECtn0WCb6", "expect": []}
+{"id": 478, "target": "jwt", "text": "eyJraWQiOiIwYjkyM2Y0ZCJ9.vcorRDD0UWk2og4Piy_ROmIr5UUTPA", "expect": []}
+{"id": 479, "target": "jwt", "text": "eyJraWQiOiIzMmFlMjA3NyJ9.KHI21HW8NIfp7pI0gDv2gSxQFReTCp", "expect": []}
+{"id": 480, "target": "jwt", "text": "eyJraWQiOiI3YmNjNTU4NiJ9.h1mJ8qrG2OSzuQdUIbSDxgmQ9FibsU", "expect": []}
+{"id": 481, "target": "jwt", "text": "eyJraWQiOiIyZjdiZjE2MiJ9.v3aiEeVW5MKgpL6MPJ3kYCKSiwqiww", "expect": []}
+{"id": 482, "target": "api_key", "text": "export OPENAI_API_KEY=sk-fp3UcxNPhX66ayJoBsQ0M786SXy29CmDGDFV0Kc0i9JIqBQJ", "expect": ["api_key"]}
+{"id": 483, "target": "api_key", "text": "client = OpenAI(api_key=\"sk-2Ut2jmBrYPkyA5uJd6MzXBfPIe6l5QuT0jmnmLrlk1tCRWDe\")", "expect": ["api_key"]}
+{"id": 484, "target": "api_key", "text": "curl https://api.anthropic.com/v1/messages -H 'x-api-key: sk-geTEEd8CXd8drAYO9iHNH0l7Q9DRWzxnWr6iYQAwo9TxdWeS'", "expect": ["api_key"]}
+{"id": 485, "target": "api_key", "text": "{\"provider\": \"openai\", \"api_key\": \"sk-xkMixef2SrGxlam265h1hYAYTTv36PSqd3RozQqliBjnfncW\"}", "expect": ["api_key"]}
+{"id": 486, "target": "api_key", "text": "User: is sk-xbQfPKvfLqVRA28vhlBx4m4iPvman2KrH75OpLFTuN1Iooqo still valid? I get 401", "expect": ["api_key"]}
+{"id": 487, "target": "api_key", "text": "2026-03-04T10:22:01Z ERROR upstream 401 key=sk-yA03e9snKgVSeymPtJXnZ2HC1oYTi99aWLymUH09LjM7MX1A", "expect": ["api_key"]}
+{"id": 488, "target": "api_key", "text": "ANTHROPIC_API_KEY=sk-naHxVY17PHapdOGAwDrxNmB3ViiwodlT763ZrUPgL63OO7vp", "expect": ["api_key"]}
+{"id": 489, "target": "api_key", "text": "Here is my key sk-XXnKsv0nVE7O0Exdg3y5UoqXSPGRkjkhwesN1m1ZporhbgG8 please debug", "expect": ["api_key"]}
+{"id": 490, "target": "api_key", "text": "export OPENAI_API_KEY=sk-JdoFuvNcw58iopcBXL4O6ctO1c4LEcaCntxPqD1f3dFXVWQq", "expect": ["api_key"]}
+{"id": 491, "target": "api_key", "text": "client = OpenAI(api_key=\"sk-4M0Xw1t6MYvKahVrnd3qp03RLXJzkIFb54goqMqxovj1WgYr\")", "expect": ["api_key"]}
+{"id": 492, "target": "api_key", "text": "curl https://api.anthropic.com/v1/messages -H 'x-api-key: sk-proj-DhFwHT48PMjjKxIofZwHGc60cAzt7dzfyasayvcBdC_nFFYDq2GyZNlbCMOe1pdH_B46O0I855Ced2IjytqyYCTCv_8QXTFrz0PZD4pjAJ7Ffoy-Xfu7SXEKHeJU7gJvh59RXNrmukliEZ_2NtsOleuKDb23'", "expect": ["api_key"]}
+{"id": 493, "target": "api_key", "text": "{\"provider\": \"openai\", \"api_key\": \"sk-proj-c6U6uGrmo6dfN5HDOhOswCBfDwdIGLSukk9uSywZcX5IpQyTclxiV258bLf_ANtRwQzQjhiBIZKkE3BJ_rPCQ9zqRJ1elhAD-5GWVXXwJ0tMKgYrkK9y-8IP2FGDPBwv2zotMvijilSTBPDAI4RPTQGbTJPP\"}", "expect": ["api_key"]}
+{"id": 494, "target": "api_key", "text": "User: is sk-proj-5sLfgmCxfo7KQlWw7L5lnojUDEpCbp16V_N8Y6p4h4iqDC6pXBxlzS7_knPAIfXzgXO9rikCvbyniWqnTFHDW3sLfIXMKByo3lgKqJiyTB6ocg8Wlh19x-m-7rFeGf8zPAXkQHQgG1Rp10RBipqZsE_-L8sm still valid? I get 401", "expect": ["api_key"]}
+{"id": 495, "target": "api_key", "text": "2026-03-04T10:22:01Z ERROR upstream 401 key=sk-proj-UCZweZ14_pfn5DMfknyAb7uo01e3WdGjdZpBb_AhPK4gw-kC6na5j1e0UwbCzbZ27V2g2kJK3i2llNk3R7Rlkm71b4iRoTFjqmFWqFTGxXwIkl-niNAs7xXAzie-CLRfwK0VOKCQfmDJ-6Vf0HpnMT_dICX3", "expect": ["api_key"]}
+{"id": 496, "target": "api_key", "text": "ANTHROPIC_API_KEY=sk-proj-p1g21fsVSW_5kVvB9Q3YxzUxy6eO8Rp959mSStkwsmG_yfkcXXYZXey5pcAsjsnJCUV5ak25WnrYfyp0I-gFXgz9iq24rODsrLQaPd1Jwqjy5dJ5NMeARmppCKqQ97ApiNEhUzyrW2szg9-MgXGTV0ahyuKk", "expect": ["api_key"]}
+{"id": 497, "target": "api_key", "text": "Here is my key sk-proj-LbJ25wm2hWqEcFuMXpVZQ454e5UTshCwnw9ueHG3yGr-3KbweTZmvLKQN0r-P3AhRNUy7a1iJMCkQGOHPhmDll2buX06aDYGa5JTv8NHeB35BNMo3ZgcKh2SuZL0b1DSTZoVkNXpYW2fXf7r9AP-eCqcQWCf please debug", "expect": ["api_key"]}
+{"id": 498, "target": "api_key", "text": "export OPENAI_API_KEY=sk-proj-1skqkoIT09u3W5g0tJkmeAjZJmSsG3mAqGflfVrVEoKqp_C1CHonRpMmpPmam5QZPrmUK8AyMGAvhLqCneT9xgVAWFXWsssznfYOQsLuv96mO-1wtqgGjnCL-4ZnLGwJI2j_CPBniDtpS-84C6HS7AUuP64l", "expect": ["api_key"]}
+{"id": 499, "target": "api_key", "text": "client = OpenAI(api_key=\"sk-proj-aoG-x-Q1-tb1BrREO0nIKHDtVXu4RyBsr7bdcqwQiaN4Z6EgVAHGpY-OOII8uZKRmcffxPMLFilzvuPU51lg9DHU2MfHsxJQ3h9yt7sgX8GCRQt_vec8k6jgLYoKp3xGQ4Spuq8T5mS32w0jfoigpnfHHBVo\")", "expect": ["api_key"]}
+{"id": 500, "target": "api_key", "text": "curl https://api.anthropic.com/v1/messages -H 'x-api-key: sk-proj-SzOcOVCgMHBHFLDQwvrSwtkPTMVmssRAA5iG98TLVoF3SjQgK0fHQZ4_oan_iNdGGnivJBj1-WTxPpbZtb-gx1bWqnAKIdEai6TeLxwmzjaXzvpCfrGGzIlOVHnwaazn3lKNhFe3ivwvmFC7jWiTQ3CKZs2G'", "expect": ["api_key"]}
+{"id": 501, "target": "api_key", "text": "{\"provider\": \"openai\", \"api_key\": \"sk-proj-xMeOHFpFZ_oXCuufCtV9DbTTuAy1V8bLT1FclkslFlf4bchkwF7eswQ1P97Z_u_pzDdHUQ4Pd7LtecAQ2jQLkKAwJXF9Jerhj3FarRxCEAUnI-6yxLNtGj5iGF9SQst2KBp80-jGNA2Db5Rs1tT6q0TmS_7X\"}", "expect": ["api_key"]}
+{"id": 502, "target": "api_key", "text": "User: is sk-ant-api03-rJNIUb8x4H7dEnJoJAp02wA1iF9sflq5aCKWhpu-mDWDOOXlcDmWDfFE8bS79tgC2_x69_J7AASe82-exVaPXg5IrrtWSAA still valid? I get 401", "expect": ["api_key"]}
+{"id": 503, "target": "api_key", "text": "2026-03-04T10:22:01Z ERROR upstream 401 key=sk-ant-api03-fxvmDWeTaQTXetXGm4m3NETpITQu9Anxw6B8kcYUaJQAS1rQrubn-SON9nQZsA4Zk_c0X9XKj5gjNkCR-rRBaU82BppD8AA", "expect": ["api_key"]}
+{"id": 504, "target": "api_key", "text": "ANTHROPIC_API_KEY=sk-ant-api03-RWwaycJaov8NnFCev1x1rRvlvzfjP-TFC_JVqJjRqQOASae9cWzCXEQuuCL5KzXCtyM7bbSiQoRIVrEAY_1O_JWwNOBOxAA", "expect": ["api_key"]}
+{"id": 505, "target": "api_key", "text": "Here is my key sk-ant-api03-I9Sqw6FlWtWu2f8zT91MHyj0vBxT6h6y-NwkoCYxsbuvBKs4CX30ANY6cF8Ss6540eU32FmUbhhgG-SytYzuM95yNZwcUAA please debug", "expect": ["api_key"]}
+{"id": 506, "target": "api_key", "text": "export OPENAI_API_KEY=sk-ant-api03-CovzeEFYsaZ32rCwwTezmnf18VYSqecHfSjTlv5yw1xv6lsAI27n1HPI_Utpq04fgm70FAxvLEm62I1C8uyeCjtM2FgjFAA", "expect": ["api_key"]}
+{"id": 507, "target": "api_key", "text": "client = OpenAI(api_key=\"sk-ant-api03-I9KPZjXil9N_MtPVMlJU3-zSWrPZOXFowe3i96uRzNF1tBNol02ifYUJud4wwQkOYorWjzya7g5dGsueGA385XQMlBRxuAA\")", "expect": ["api_key"]}
+{"id": 508, "target": "api_key", "text": "curl https://api.anthropic.com/v1/messages -H 'x-api-key: sk-ant-api03-JlyPf7DiFhIb5GpKERacVRPZ8FdQo0fCaAVuK1t-TLfWYd9khNs6rUjrjuK5rlzfuDgbX3c3viNoL0iJnrRRoa-D3H5blAA'", "expect": ["api_key"]}
+{"id": 509, "target": "api_key", "text": "{\"provider\": \"openai\", \"api_key\": \"sk-ant-api03-YsRu_lYlwAcuK16fPyJz_Nk_HyehYm-z314_TE-HeOBeLg6fXrwFJ5AndAnufnJBOAHmErA51Sj49rpO1uPt5_22kl3_CAA\"}", "expect": ["api_key"]}
+{"id": 510, "target": "api_key", "text": "User: is sk-ant-api03-naJNZRguiirsWBLsM0JETJo9YXOlwg8z3Q1K92YFAhQd00NQh_PjYJ_Gc1FZDQCJVuFa5nVmM_9R4WwRXMNULL_ZAssICAA still valid? I get 401", "expect": ["api_key"]}
+{"id": 511, "target": "api_key", "text": "2026-03-04T10:22:01Z ERROR upstream 401 key=sk-ant-api03-9BuJCbUonvGortIwyZULTpDh91gh31wPmw9d2So-SGM0KS8llF99ehdiq4tejp3Ny0jxvYw4mn0nzsVTWkZwPg0kUsGVQAA", "expect": ["api_key"]}
+{"id": 512, "target": "api_key", "text": "ANTHROPIC_API_KEY=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", "expect": ["api_key"]}
+{"id": 513, "target": "api_key", "text": "Here is my key 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 please debug", "expect": ["api_key"]}
+{"id": 514, "target": "api_key", "text": "export OPENAI_API_KEY=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", "expect": ["api_key"]}
+{"id": 515, "target": "api_key", "text": "client = OpenAI(api_key=\"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\")", "expect": ["api_key"]}
+{"id": 516, "target": "api_key", "text": "curl https://api.anthropic.com/v1/messages -H 'x-api-key: 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'", "expect": ["api_key"]}
+{"id": 517, "target": "api_key", "text": "{\"provider\": \"openai\", \"api_key\": \"sk-f148dad33c6ea595ab780313b60f26f7\"}", "expect": ["api_key"]}
+{"id": 518, "target": "api_key", "text": "User: is sk-a678e14f67989976bedd37388f464f72 still valid? I get 401", "expect": ["api_key"]}
+{"id": 519, "target": "api_key", "text": "2026-03-04T10:22:01Z ERROR upstream 401 key=sk-1b01e2ea74fd801b6dd3753e72da95ab", "expect": ["api_key"]}
+{"id": 520, "target": "api_key", "text": "ANTHROPIC_API_KEY=sk-d3aa823fcfc19ca1fc0232b50759be2d", "expect": ["api_key"]}
+{"id": 521, "target": "api_key", "text": "Here is my key sk-ea29516bf6971bf3258e1a3261da7e68 please debug", "expect": ["api_key"]}
+{"id": 522, "target": "api_key", "text": "OPENAI_API_KEY=sk-...", "expect": []}
+{"id": 523, "target": "api_key", "text": "sk-short", "expect": []}
+{"id": 524, "target": "api_key", "text": "sk-Kyh22v0pjzOAH5EOMvf", "expect": []}
+{"id": 525, "target": "api_key", "text": "task-1234567890abcdefghijklmnop", "expect": []}
+{"id": 526, "target": "api_key", "text": "disk-usage-report-2026-03-04-final", "expect": []}
+{"id": 527, "target": "api_key", "text": "risk-assessment-template-for-vendors-v2", "expect": []}
+{"id": 528, "target": "api_key", "text": "import sklearn  # pip install scikit-learn", "expect": []}
+{"id": 529, "target": "api_key", "text": "<div class=\"sk-folding-cube\"></div>", "expect": []}
+{"id": 530, "target": "api_key", "text": "Slovak locale sk-SK is supported.", "expect": []}
+{"id": 531, "target": "api_key", "text": "https://news.example.com/2026/03/sk-hynix-hbm-supply-deal-with-partners", "expect": []}
+{"id": 532, "target": "api_key", "text": "https://news.example.com/2026/02/sk-telecom-quarterly-earnings-beat", "expect": []}
+{"id": 533, "target": "api_key", "text": "Keys start with sk- and are shown once.", "expect": []}
+{"id": 534, "target": "api_key", "text": "api_key: ${OPENAI_API_KEY}", "expect": []}
+{"id": 535, "target": "api_key", "text": "sk-ant-...", "expect": []}
+{"id": 536, "target": "api_key", "text": "asks-for-review-from-platform-team-members", "expect": []}
+{"id": 537, "target": "api_key", "text": "pk_test_TYooMQauvdEDq54NiTphI7jx", "expect": []}
+{"id": 538, "target": "api_key", "text": "the bucket is tasks-archive-eu-west-1-production", "expect": []}
+{"id": 539, "target": "api_key", "text": "request_id=req_c9Jt4v6MSmZwccV43foEQtBG trace=18887dd0633f90c6b46022a32f153f53", "expect": []}
+{"id": 540, "target": "api_key", "text": "request_id=req_r07WNKMaawdAOvprN56eS8ob trace=0683143946481d573b98f808f05cd841", "expect": []}
+{"id": 541, "target": "api_key", "text": "request_id=req_RXJmph85XHjVsKANJwQK5lp8 trace=5d0ea9e50d3dcf977f7dfaa1570cfa0b", "expect": []}
+{"id": 542, "target": "api_key", "text": "request_id=req_mPI0RzYYf1vMGkHksk7EwEmG trace=e97fcb861ff3120c5d0656260ebbe8e5", "expect": []}
+{"id": 543, "target": "api_key", "text": "request_id=req_JXdfUhhjS4Vfd7WAZ285UtZ1 trace=e7025a38e71ed474193adba136fbbcf2", "expect": []}
+{"id": 544, "target": "api_key", "text": "request_id=req_sPsfrxN9XC4VygiCUUYfBQ1t trace=c3c434306dd7296c277f0c62eada88d4", "expect": []}
+{"id": 545, "target": "api_key", "text": "request_id=req_bGOefuGeC5KjUJlaj6Y8JLEP trace=4018aeb9264aba717becaf99c30494a5", "expect": []}
+{"id": 546, "target": "api_key", "text": "request_id=req_8frXOhkSHurbes5sRblQaZSa trace=3669230484b077a6197ff13265be9029", "expect": []}
+{"id": 547, "target": "api_key", "text": "request_id=req_TjmQCHy7T9YuCWI0VJ2sRXm2 trace=ac30dbdd93f2928826486458b0af12f5", "expect": []}
+{"id": 548, "target": "api_key", "text": "request_id=req_FqDQHAju1HgTDRUgZ3UHGWWf trace=4051b06a00346f39bf5d9f6983426064", "expect": []}
+{"id": 549, "target": "api_key", "text": "request_id=req_UQJZjSdguvWlcfNRaYztB4q7 trace=9dc1ad276d05fadabd5683aac6ade4bd", "expect": []}
+{"id": 550, "target": "api_key", "text": "request_id=req_sKvoEoHlFX9AsLewr9Uyfsiw trace=44cf7e9107ad164c6f7abd128a46a9b8", "expect": []}
+{"id": 551, "target": "api_key", "text": "request_id=req_4qXBBOSNbYhfgxwl0rYVUj95 trace=443c2a8ff752c2bf6c146296f17d9b4e", "expect": []}
+{"id": 552, "target": "api_key", "text": "request_id=req_PzpttpabBJy8CwPZXnnPMY5t trace=63c4efdcb7ed53f2870011e72713d50a", "expect": []}
+{"id": 553, "target": "api_key", "text": "request_id=req_ElsarD1rum0uSiXhazv0wgUc trace=d6ac311a10fac051dc07aae547a1203e", "expect": []}
+{"id": 554, "target": "api_key", "text": "request_id=req_qmUQLmRGjX38bFvuqB7N5CVC trace=6e6174c1f7719edc64d136af3e1cbdbf", "expect": []}
+{"id": 555, "target": "api_key", "text": "request_id=req_y38RuVZzTWSaQLxdm2RASbOO trace=99822d5b688c4cc4094817e4d60e6b31", "expect": []}
+{"id": 556, "target": "api_key", "text": "request_id=req_MdLt2FR3XBkwJaDMY9kDBkUZ trace=fdc0df2018271f9149d9076e2b71ff03", "expect": []}
+{"id": 557, "target": "api_key", "text": "request_id=req_I9dRj8iHGkj5EFDLJoJxSUXU trace=5d845ab7161d0735e19a54b4b548c967", "expect": []}
+{"id": 558, "target": "api_key", "text": "request_id=req_b2XZcai2PrRWgOfFOfWqi0s0 trace=c942cfa32b234824e8cc7c753aa13272", "expect": []}
+{"id": 559, "target": "api_key", "text": "request_id=req_5mUfBD3kvymN7ZS6mXePSup9 trace=4fc84009ec85d01109c759099e40be54", "expect": []}
+{"id": 560, "target": "api_key", "text": "request_id=req_hynmAo8aTy8MBlfHxm5dzRuB trace=0b91659f66861ac24f0aa027e608de3d", "expect": []}
+{"id": 561, "target": "api_key", "text": "request_id=req_5TT2o1D8eduoYGO2NQrQIjrh trace=b4a64ae4b80f3596bd62c20558e399f9", "expect": []}
+{"id": 562, "target": "email_address", "text": "Contact jordan-nguyen@eu.example.org for access.", "expect": ["email_address"]}
+{"id": 563, "target": "email_address", "text": "From: Jordan Nguyen <jordan.nguyen@example.com>", "expect": ["email_address"]}
+{"id": 564, "target": "email_address", "text": "{\"email\": \"jamie+invoices@users.test\", \"role\": \"admin\"}", "expect": ["email_address"]}
+{"id": 565, "target": "email_address", "text": "User: please send the report to lior+invoices@mail.example.com by friday", "expect": ["email_address"]}
+{"id": 566, "target": "email_address", "text": "2026-03-04T10:22:01Z INFO login ok user=msmith34@eu.example.org", "expect": ["email_address"]}
+{"id": 567, "target": "email_address", "text": "<a href=\"mailto:jordansmith@corp.example.co.il\">write to us</a>", "expect": ["email_address"]}
+{"id": 568, "target": "email_address", "text": "name,email\nNoam Levi,noam-levi@corp.example.co.il", "expect": ["email_address"]}
+{"id": 569, "target": "email_address", "text": "git config user.email riley+invoices@shop.example", "expect": ["email_address"]}
+{"id": 570, "target": "email_address", "text": "Contact omerroe@mail.example.com for access.", "expect": ["email_address"]}
+{"id": 571, "target": "email_address", "text": "From: Casey Kim <casey+invoices@example.com>", "expect": ["email_address"]}
+{"id": 572, "target": "email_address", "text": "{\"email\": \"omer.smith@eu.example.org\", \"role\": \"admin\"}", "expect": ["email_address"]}
+{"id": 573, "target": "email_address", "text": "User: please send the report to alex.roe@example.net by friday", "expect": ["email_address"]}
+{"id": 574, "target": "email_address", "text": "2026-03-04T10:22:01Z INFO login ok user=lior-smith@example.net", "expect": ["email_address"]}
+{"id": 575, "target": "email_address", "text": "<a href=\"mailto:noam.garcia@example.net\">write to us</a>", "expect": ["email_address"]}
+{"id": 576, "target": "email_address", "text": "name,email\nCasey Roe,croe21@example.org", "expect": ["email_address"]}
+{"id": 577, "target": "email_address", "text": "git config user.email alexsmith@shop.example", "expect": ["email_address"]}
+{"id": 578, "target": "email_address", "text": "Contact samcohen@example.org for access.", "expect": ["email_address"]}
+{"id": 579, "target": "email_address", "text": "From: Tal Doe <tal-doe@eu.example.org>", "expect": ["email_address"]}
+{"id": 580, "target": "email_address", "text": "{\"email\": \"alex+invoices@eu.example.org\", \"role\": \"admin\"}", "expect": ["email_address"]}
+{"id": 581, "target": "email_address", "text": "User: please send the report to oshapiro16@example.com by friday", "expect": ["email_address"]}
+{"id": 582, "target": "email_address", "text": "2026-03-04T10:22:01Z INFO login ok user=jamie+invoices@corp.example.co.il", "expect": ["email_address"]}
+{"id": 583, "target": "email_address", "text": "<a href=\"mailto:sam.cohen@example.com\">write to us</a>", "expect": ["email_address"]}
+{"id": 584, "target": "email_address", "text": "name,email\nCasey Smith,caseysmith@mail.example.com", "expect": ["email_address"]}
+{"id": 585, "target": "email_address", "text": "git config user.email jordan.smith@example.net", "expect": ["email_address"]}
+{"id": 586, "target": "email_address", "text": "Contact omer_kim@corp.example.co.il for access.", "expect": ["email_address"]}
+{"id": 587, "target": "email_address", "text": "From: Omer Mizrahi <omer_mizrahi@users.test>", "expect": ["email_address"]}
+{"id": 588, "target": "email_address", "text": "{\"email\": \"nsmith64@eu.example.org\", \"role\": \"admin\"}", "expect": ["email_address"]}
+{"id": 589, "target": "email_address", "text": "User: please send the report to jamienguyen@example.com by friday", "expect": ["email_address"]}
+{"id": 590, "target": "email_address", "text": "2026-03-04T10:22:01Z INFO login ok user=maya_roe@example.net", "expect": ["email_address"]}
+{"id": 591, "target": "email_address", "text": "<a href=\"mailto:dmizrahi58@mail.example.com\">write to us</a>", "expect": ["email_address"]}
+{"id": 592, "target": "email_address", "text": "name,email\nJordan Levi,jordan+invoices@users.test", "expect": ["email_address"]}
+{"id": 593, "target": "email_address", "text": "git config user.email cmizrahi91@corp.example.co.il", "expect": ["email_address"]}
+{"id": 594, "target": "email_address", "text": "Contact casey-roe@users.test for access.", "expect": ["email_address"]}
+{"id": 595, "target": "email_address", "text": "From: Alex Shapiro <ashapiro84@users.test>", "expect": ["email_address"]}
+{"id": 596, "target": "email_address", "text": "{\"email\": \"alex-levi@example.com\", \"role\": \"admin\"}", "expect": ["email_address"]}
+{"id": 597, "target": "email_address", "text": "User: please send the report to tal-shapiro@eu.example.org by friday", "expect": ["email_address"]}
+{"id": 598, "target": "email_address", "text": "2026-03-04T10:22:01Z INFO login ok user=casey.cohen@mail.example.com", "expect": ["email_address"]}
+{"id": 599, "target": "email_address", "text": "<a href=\"mailto:omer-nguyen@example.com\">write to us</a>", "expect": ["email_address"]}
+{"id": 600, "target": "email_address", "text": "name,email\nTal Mizrahi,tal+invoices@users.test", "expect": ["email_address"]}
+{"id": 601, "target": "email_address", "text": "git config user.email riley+invoices@example.net", "expect": ["email_address"]}
+{"id": 602, "target": "email_address", "text": "git clone git@github.com:acme/infra.git", "expect": []}
+{"id": 603, "target": "email_address", "text": "<img src=\"logo@2x.png\" srcset=\"logo@3x.png 3x\">", "expect": []}
+{"id": 604, "target": "email_address", "text": "npm install @types/node lodash@4.17.21", "expect": []}
+{"id": 605, "target": "email_address", "text": "docker pull nginx@sha256:9039828bff6a7e0ca39b26d263696a01afb6d59432789f5a0eed7051d1082897", "expect": []}
+{"id": 606, "target": "email_address", "text": "ssh deploy@10.0.3.17", "expect": []}
+{"id": 607, "target": "email_address", "text": "Ping @channel about the outage", "expect": []}
+{"id": 608, "target": "email_address", "text": "user@localhost is the default in dev", "expect": []}
+{"id": 609, "target": "email_address", "text": "@app.route('/health')", "expect": []}
+{"id": 610, "target": "email_address", "text": "email: ${SMTP_USER}", "expect": []}
+{"id": 611, "target": "email_address", "text": "write to support at example dot com", "expect": []}
+{"id": 612, "target": "email_address", "text": "foo@bar", "expect": []}
+{"id": 613, "target": "email_address", "text": "the @ sign separates user and host", "expect": []}
+{"id": 614, "target": "email_address", "text": "postgres://app@db:5432/orders", "expect": []}
+{"id": 615, "target": "email_address", "text": "@acme/ui@2.3.1", "expect": []}
+{"id": 616, "target": "email_address", "text": "admin@192.168.1.1", "expect": []}
+{"id": 617, "target": "email_address", "text": "Twitter handle @enterplace_ai", "expect": []}
+{"id": 618, "target": "email_address", "text": "trhwsn@3.16.10", "expect": []}
+{"id": 619, "target": "email_address", "text": "gxfppg@2.19.3", "expect": []}
+{"id": 620, "target": "email_address", "text": "omfrhi@7.13.19", "expect": []}
+{"id": 621, "target": "email_address", "text": "xpdfwe@7.11.0", "expect": []}
+{"id": 622, "target": "email_address", "text": "ycbopi@1.25.15", "expect": []}
+{"id": 623, "target": "email_address", "text": "jrbfns@8.18.6", "expect": []}
+{"id": 624, "target": "email_address", "text": "remuac@4.16.4", "expect": []}
+{"id": 625, "target": "email_address", "text": "lyphxv@6.27.26", "expect": []}
+{"id": 626, "target": "email_address", "text": "qfwchk@2.16.23", "expect": []}
+{"id": 627, "target": "email_address", "text": "sejbbo@5.30.20", "expect": []}
+{"id": 628, "target": "email_address", "text": "zezyvb@2.16.19", "expect": []}
+{"id": 629, "target": "email_address", "text": "hblkxl@3.26.19", "expect": []}
+{"id": 630, "target": "email_address", "text": "@pfiktxe thanks for the review!", "expect": []}
+{"id": 631, "target": "email_address", "text": "@qmmkgfw thanks for the review!", "expect": []}
+{"id": 632, "target": "email_address", "text": "@dejcgnp thanks for the review!", "expect": []}
+{"id": 633, "target": "email_address", "text": "@ojxeyas thanks for the review!", "expect": []}
+{"id": 634, "target": "email_address", "text": "@gzljfxd thanks for the review!", "expect": []}
+{"id": 635, "target": "email_address", "text": "@tczflrb thanks for the review!", "expect": []}
+{"id": 636, "target": "email_address", "text": "@ccqlpmk thanks for the review!", "expect": []}
+{"id": 637, "target": "email_address", "text": "@lbklzoj thanks for the review!", "expect": []}
+{"id": 638, "target": "email_address", "text": "@abwxemv thanks for the review!", "expect": []}
+{"id": 639, "target": "email_address", "text": "@xzlwcez thanks for the review!", "expect": []}
+{"id": 640, "target": "email_address", "text": "@fkbbpbm thanks for the review!", "expect": []}
+{"id": 641, "target": "email_address", "text": "@kqpnenr thanks for the review!", "expect": []}
+{"id": 642, "target": "phone_number", "text": "Call me at +1-312-555-0156 after 5.", "expect": ["phone_number"]}
+{"id": 643, "target": "phone_number", "text": "Phone: 206.555.0177", "expect": ["phone_number"]}
+{"id": 644, "target": "phone_number", "text": "{\"name\": \"front desk\", \"phone\": \"312.555.0164\"}", "expect": ["phone_number"]}
+{"id": 645, "target": "phone_number", "text": "User: the customer left 212-555-0183 as a callback number", "expect": ["phone_number"]}
+{"id": 646, "target": "phone_number", "text": "2026-03-04T10:22:01Z INFO sms queued to=312.555.0164", "expect": ["phone_number"]}
+{"id": 647, "target": "phone_number", "text": "tel. +1-415-555-0142 (mobile)", "expect": ["phone_number"]}
+{"id": 648, "target": "phone_number", "text": "Emergency contact: +1 617 555 0189", "expect": ["phone_number"]}
+{"id": 649, "target": "phone_number", "text": "Reach the on-call engineer on 415-555-0149.", "expect": ["phone_number"]}
+{"id": 650, "target": "phone_number", "text": "Call me at 1-800-555-0108 after 5.", "expect": ["phone_number"]}
+{"id": 651, "target": "phone_number", "text": "Phone: 1-800-555-0176", "expect": ["phone_number"]}
+{"id": 652, "target": "phone_number", "text": "{\"name\": \"front desk\", \"phone\": \"+44 7700 900815\"}", "expect": ["phone_number"]}
+{"id": 653, "target": "phone_number", "text": "User: the customer left +44 7700 900182 as a callback number", "expect": ["phone_number"]}
+{"id": 654, "target": "phone_number", "text": "2026-03-04T10:22:01Z INFO sms queued to=+44 7700 900296", "expect": ["phone_number"]}
+{"id": 655, "target": "phone_number", "text": "tel. +44 7700 900127 (mobile)", "expect": ["phone_number"]}
+{"id": 656, "target": "phone_number", "text": "Emergency contact: +44 7700 900101", "expect": ["phone_number"]}
+{"id": 657, "target": "phone_number", "text": "Reach the on-call engineer on +44 7700 900556.", "expect": ["phone_number"]}
+{"id": 658, "target": "phone_number", "text": "Call me at 07700 900466 after 5.", "expect": ["phone_number"]}
+{"id": 659, "target": "phone_number", "text": "Phone: 07700 900960", "expect": ["phone_number"]}
+{"id": 660, "target": "phone_number", "text": "{\"name\": \"front desk\", \"phone\": \"07700 900548\"}", "expect": ["phone_number"]}
+{"id": 661, "target": "phone_number", "text": "User: the customer left +61 491 570 158 as a callback number", "expect": ["phone_number"]}
+{"id": 662, "target": "phone_number", "text": "2026-03-04T10:22:01Z INFO sms queued to=+61 491 570 113", "expect": ["phone_number"]}
+{"id": 663, "target": "phone_number", "text": "tel. +61 491 570 122 (mobile)", "expect": ["phone_number"]}
+{"id": 664, "target": "phone_number", "text": "Emergency contact: +61 491 570 153", "expect": ["phone_number"]}
+{"id": 665, "target": "phone_number", "text": "Reach the on-call engineer on 0491 570 146.", "expect": ["phone_number"]}
+{"id": 666, "target": "phone_number", "text": "Call me at 0491 570 154 after 5.", "expect": ["phone_number"]}
+{"id": 667, "target": "phone_number", "text": "Phone: +33 1 99 00 32 41", "expect": ["phone_number"]}
+{"id": 668, "target": "phone_number", "text": "{\"name\": \"front desk\", \"phone\": \"+33 1 99 00 83 67\"}", "expect": ["phone_number"]}
+{"id": 669, "target": "phone_number", "text": "User: the customer left +33 1 99 00 26 70 as a callback number", "expect": ["phone_number"]}
+{"id": 670, "target": "phone_number", "text": "2026-03-04T10:22:01Z INFO sms queued to=+972-58-299-8161", "expect": ["phone_number"]}
+{"id": 671, "target": "phone_number", "text": "tel. +972-53-312-7649 (mobile)", "expect": ["phone_number"]}
+{"id": 672, "target": "phone_number", "text": "Emergency contact: +972-53-289-6766", "expect": ["phone_number"]}
+{"id": 673, "target": "phone_number", "text": "Reach the on-call engineer on +972-57-518-1869.", "expect": ["phone_number"]}
+{"id": 674, "target": "phone_number", "text": "Call me at 052-5852246 after 5.", "expect": ["phone_number"]}
+{"id": 675, "target": "phone_number", "text": "Phone: 050-8388393", "expect": ["phone_number"]}
+{"id": 676, "target": "phone_number", "text": "{\"name\": \"front desk\", \"phone\": \"056-8244135\"}", "expect": ["phone_number"]}
+{"id": 677, "target": "phone_number", "text": "User: the customer left 055-6982977 as a callback number", "expect": ["phone_number"]}
+{"id": 678, "target": "phone_number", "text": "2026-03-04T10:22:01Z INFO sms queued to=+972 51 375 2423", "expect": ["phone_number"]}
+{"id": 679, "target": "phone_number", "text": "tel. +972 57 460 4816 (mobile)", "expect": ["phone_number"]}
+{"id": 680, "target": "phone_number", "text": "Emergency contact: +972 57 174 7012", "expect": ["phone_number"]}
+{"id": 681, "target": "phone_number", "text": "Reach the on-call engineer on +972 54 139 8393.", "expect": ["phone_number"]}
+{"id": 682, "target": "phone_number", "text": "Released on 2026-03-04 at 10:22:01.", "expect": []}
+{"id": 683, "target": "phone_number", "text": "Server 10.0.12.34 answered in 120 ms.", "expect": []}
+{"id": 684, "target": "phone_number", "text": "Upgraded from v1.22.3 to v1.23.0", "expect": []}
+{"id": 685, "target": "phone_number", "text": "ISBN 978-3-16-148410-0", "expect": []}
+{"id": 686, "target": "phone_number", "text": "ZIP 94103-1234", "expect": []}
+{"id": 687, "target": "phone_number", "text": "PO 4500012345", "expect": []}
+{"id": 688, "target": "phone_number", "text": "+1 for this proposal", "expect": []}
+{"id": 689, "target": "phone_number", "text": "page 12 of 345", "expect": []}
+{"id": 690, "target": "phone_number", "text": "3 + 4 = 7", "expect": []}
+{"id": 691, "target": "phone_number", "text": "Total: $1,234,567.89", "expect": []}
+{"id": 692, "target": "phone_number", "text": "40.7128, -74.0060", "expect": []}
+{"id": 693, "target": "phone_number", "text": "build 2026.03.04.1542", "expect": []}
+{"id": 694, "target": "phone_number", "text": "Order #123-456-7890 has shipped.", "expect": []}
+{"id": 695, "target": "phone_number", "text": "Invoice 2026-000-4412", "expect": []}
+{"id": 696, "target": "phone_number", "text": "uptime 99.95% over 30 days", "expect": []}
+{"id": 697, "target": "phone_number", "text": "chmod 0755 deploy.sh", "expect": []}
+{"id": 698, "target": "phone_number", "text": "Tue, 04 Mar 2026 10:22:01 +0200", "expect": []}
+{"id": 699, "target": "phone_number", "text": "Score: 3-2 after extra time", "expect": []}
+{"id": 700, "target": "phone_number", "text": "Room 2.04, floor 3", "expect": []}
+{"id": 701, "target": "phone_number", "text": "port 8787, pid 48213", "expect": []}
+{"id": 702, "target": "phone_number", "text": "Order #196-578-6997 is ready for pickup.", "expect": []}
+{"id": 703, "target": "phone_number", "text": "Order #172-730-6850 is ready for pickup.", "expect": []}
+{"id": 704, "target": "phone_number", "text": "Order #834-183-5223 is ready for pickup.", "expect": []}
+{"id": 705, "target": "phone_number", "text": "Order #892-990-5720 is ready for pickup.", "expect": []}
+{"id": 706, "target": "phone_number", "text": "Order #796-509-8336 is ready for pickup.", "expect": []}
+{"id": 707, "target": "phone_number", "text": "Order #168-833-6915 is ready for pickup.", "expect": []}
+{"id": 708, "target": "phone_number", "text": "Order #165-862-2697 is ready for pickup.", "expect": []}
+{"id": 709, "target": "phone_number", "text": "Order #540-103-8154 is ready for pickup.", "expect": []}
+{"id": 710, "target": "phone_number", "text": "Order #692-469-2070 is ready for pickup.", "expect": []}
+{"id": 711, "target": "phone_number", "text": "Order #890-449-6693 is ready for pickup.", "expect": []}
+{"id": 712, "target": "phone_number", "text": "latency p50=49.4ms p99=102.9ms", "expect": []}
+{"id": 713, "target": "phone_number", "text": "latency p50=50.4ms p99=405.4ms", "expect": []}
+{"id": 714, "target": "phone_number", "text": "latency p50=67.7ms p99=794.4ms", "expect": []}
+{"id": 715, "target": "phone_number", "text": "latency p50=75.1ms p99=394.4ms", "expect": []}
+{"id": 716, "target": "phone_number", "text": "latency p50=97.0ms p99=208.5ms", "expect": []}
+{"id": 717, "target": "phone_number", "text": "latency p50=38.2ms p99=497.4ms", "expect": []}
+{"id": 718, "target": "phone_number", "text": "latency p50=61.3ms p99=331.8ms", "expect": []}
+{"id": 719, "target": "phone_number", "text": "latency p50=48.4ms p99=899.3ms", "expect": []}
+{"id": 720, "target": "phone_number", "text": "latency p50=89.2ms p99=190.4ms", "expect": []}
+{"id": 721, "target": "phone_number", "text": "latency p50=55.6ms p99=586.0ms", "expect": []}
+{"id": 722, "target": "credit_card", "text": "Card number: 4111111111111111", "expect": ["credit_card"]}
+{"id": 723, "target": "credit_card", "text": "User: my card 4242424242424242 was declined, exp 12/29", "expect": ["credit_card"]}
+{"id": 724, "target": "credit_card", "text": "{\"pan\": \"4012888888881881\", \"exp_month\": 12, \"exp_year\": 2029}", "expect": ["credit_card"]}
+{"id": 725, "target": "credit_card", "text": "2026-03-04T10:22:01Z WARN charge failed card=4000056655665556 code=do_not_honor", "expect": ["credit_card"]}
+{"id": 726, "target": "credit_card", "text": "Pay with 5555555555554444 for the conference ticket.", "expect": ["credit_card"]}
+{"id": 727, "target": "credit_card", "text": "cc: 5105105105105100", "expect": ["credit_card"]}
+{"id": 728, "target": "credit_card", "text": "Use test card 5200828282828210 in the sandbox.", "expect": ["credit_card"]}
+{"id": 729, "target": "credit_card", "text": "Card on file 2223003122003222, billing ZIP 94103.", "expect": ["credit_card"]}
+{"id": 730, "target": "credit_card", "text": "Card number: 378282246310005", "expect": ["credit_card"]}
+{"id": 731, "target": "credit_card", "text": "User: my card 371449635398431 was declined, exp 12/29", "expect": ["credit_card"]}
+{"id": 732, "target": "credit_card", "text": "{\"pan\": \"6011111111111117\", \"exp_month\": 12, \"exp_year\": 2029}", "expect": ["credit_card"]}
+{"id": 733, "target": "credit_card", "text": "2026-03-04T10:22:01Z WARN charge failed card=6011000990139424 code=do_not_honor", "expect": ["credit_card"]}
+{"id": 734, "target": "credit_card", "text": "Pay with 3530111333300000 for the conference ticket.", "expect": ["credit_card"]}
+{"id": 735, "target": "credit_card", "text": "cc: 3566002020360505", "expect": ["credit_card"]}
+{"id": 736, "target": "credit_card", "text": "Use test card 30569309025904 in the sandbox.", "expect": ["credit_card"]}
+{"id": 737, "target": "credit_card", "text": "Card on file 38520000023237, billing ZIP 94103.", "expect": ["credit_card"]}
+{"id": 738, "target": "credit_card", "text": "Card number: 6200000000000005", "expect": ["credit_card"]}
+{"id": 739, "target": "credit_card", "text": "User: my card 4000000000003220 was declined, exp 12/29", "expect": ["credit_card"]}
+{"id": 740, "target": "credit_card", "text": "{\"pan\": \"4000002500003155\", \"exp_month\": 12, \"exp_year\": 2029}", "expect": ["credit_card"]}
+{"id": 741, "target": "credit_card", "text": "2026-03-04T10:22:01Z WARN charge failed card=5454545454545454 code=do_not_honor", "expect": ["credit_card"]}
+{"id": 742, "target": "credit_card", "text": "Pay with 4111-1111-1111-1111 for the conference ticket.", "expect": ["credit_card"]}
+{"id": 743, "target": "credit_card", "text": "cc: 4242 4242 4242 4242", "expect": ["credit_card"]}
+{"id": 744, "target": "credit_card", "text": "Use test card 4012-8888-8888-1881 in the sandbox.", "expect": ["credit_card"]}
+{"id": 745, "target": "credit_card", "text": "Card on file 4000 0566 5566 5556, billing ZIP 94103.", "expect": ["credit_card"]}
+{"id": 746, "target": "credit_card", "text": "Card number: 5555-5555-5555-4444", "expect": ["credit_card"]}
+{"id": 747, "target": "credit_card", "text": "User: my card 5105 1051 0510 5100 was declined, exp 12/29", "expect": ["credit_card"]}
+{"id": 748, "target": "credit_card", "text": "{\"pan\": \"5200-8282-8282-8210\", \"exp_month\": 12, \"exp_year\": 2029}", "expect": ["credit_card"]}
+{"id": 749, "target": "credit_card", "text": "2026-03-04T10:22:01Z WARN charge failed card=2223 0031 2200 3222 code=do_not_honor", "expect": ["credit_card"]}
+{"id": 750, "target": "credit_card", "text": "Pay with 3782-822463-10005 for the conference ticket.", "expect": ["credit_card"]}
+{"id": 751, "target": "credit_card", "text": "cc: 3714 496353 98431", "expect": ["credit_card"]}
+{"id": 752, "target": "credit_card", "text": "Use test card 6011-1111-1111-1117 in the sandbox.", "expect": ["credit_card"]}
+{"id": 753, "target": "credit_card", "text": "Card on file 6011 0009 9013 9424, billing ZIP 94103.", "expect": ["credit_card"]}
+{"id": 754, "target": "credit_card", "text": "Card number: 3530-1113-3330-0000", "expect": ["credit_card"]}
+{"id": 755, "target": "credit_card", "text": "User: my card 3566 0020 2036 0505 was declined, exp 12/29", "expect": ["credit_card"]}
+{"id": 756, "target": "credit_card", "text": "{\"pan\": \"3056-9309-0259-04\", \"exp_month\": 12, \"exp_year\": 2029}", "expect": ["credit_card"]}
+{"id": 757, "target": "credit_card", "text": "2026-03-04T10:22:01Z WARN charge failed card=3852 0000 0232 37 code=do_not_honor", "expect": ["credit_card"]}
+{"id": 758, "target": "credit_card", "text": "Pay with 6200-0000-0000-0005 for the conference ticket.", "expect": ["credit_card"]}
+{"id": 759, "target": "credit_card", "text": "cc: 4000 0000 0000 3220", "expect": ["credit_card"]}
+{"id": 760, "target": "credit_card", "text": "Use test card 4000-0025-0000-3155 in the sandbox.", "expect": ["credit_card"]}
+{"id": 761, "target": "credit_card", "text": "Card on file 5454 5454 5454 5454, billing ZIP 94103.", "expect": ["credit_card"]}
+{"id": 762, "target": "credit_card", "text": "Card number: 4111 1111 1111 1114", "expect": []}
+{"id": 763, "target": "credit_card", "text": "Card number: 4242 4242 4242 4245", "expect": []}
+{"id": 764, "target": "credit_card", "text": "Card number: 4012 8888 8888 1884", "expect": []}
+{"id": 765, "target": "credit_card", "text": "Card number: 4000 0566 5566 5559", "expect": []}
+{"id": 766, "target": "credit_card", "text": "Card number: 5555 5555 5555 4447", "expect": []}
+{"id": 767, "target": "credit_card", "text": "Card number: 5105 1051 0510 5103", "expect": []}
+{"id": 768, "target": "credit_card", "text": "Card number: 5200 8282 8282 8213", "expect": []}
+{"id": 769, "target": "credit_card", "text": "Card number: 2223 0031 2200 3225", "expect": []}
+{"id": 770, "target": "credit_card", "text": "Card number: 3782 822463 10008", "expect": []}
+{"id": 771, "target": "credit_card", "text": "Card number: 3714 496353 98434", "expect": []}
+{"id": 772, "target": "credit_card", "text": "Card number: 6011 1111 1111 1110", "expect": []}
+{"id": 773, "target": "credit_card", "text": "Card number: 6011 0009 9013 9427", "expect": []}
+{"id": 774, "target": "credit_card", "text": "Order 202603041022 shipped.", "expect": []}
+{"id": 775, "target": "credit_card", "text": "Your confirmation code is 1234 5678 9012.", "expect": []}
+{"id": 776, "target": "credit_card", "text": "Account 0001 2345 6789 0123 4567 8901 2345", "expect": []}
+{"id": 777, "target": "credit_card", "text": "Card ending in 4242 was charged $12.00.", "expect": []}
+{"id": 778, "target": "credit_card", "text": "**** **** **** 1111", "expect": []}
+{"id": 779, "target": "credit_card", "text": "4111 XXXX XXXX 1111", "expect": []}
+{"id": 780, "target": "credit_card", "text": "imei: 49-015420-323751-8", "expect": []}
+{"id": 781, "target": "credit_card", "text": "ts=1798392372133 event=page_view", "expect": []}
+{"id": 782, "target": "credit_card", "text": "ts=1796127784796 event=page_view", "expect": []}
+{"id": 783, "target": "credit_card", "text": "ts=1753373904144 event=page_view", "expect": []}
+{"id": 784, "target": "credit_card", "text": "ts=1711563886005 event=page_view", "expect": []}
+{"id": 785, "target": "credit_card", "text": "ts=1741024535143 event=page_view", "expect": []}
+{"id": 786, "target": "credit_card", "text": "ts=1753693882709 event=page_view", "expect": []}
+{"id": 787, "target": "credit_card", "text": "ts=1701769122930 event=page_view", "expect": []}
+{"id": 788, "target": "credit_card", "text": "order_id=3282270119836082 status=paid", "expect": []}
+{"id": 789, "target": "credit_card", "text": "order_id=5560394521993633 status=paid", "expect": []}
+{"id": 790, "target": "credit_card", "text": "order_id=8403788960406390 status=paid", "expect": []}
+{"id": 791, "target": "credit_card", "text": "order_id=6145861000142060 status=paid", "expect": []}
+{"id": 792, "target": "credit_card", "text": "order_id=9572300074488163 status=paid", "expect": []}
+{"id": 793, "target": "credit_card", "text": "order_id=6595351656393484 status=paid", "expect": []}
+{"id": 794, "target": "credit_card", "text": "order_id=8094340534067008 status=paid", "expect": []}
+{"id": 795, "target": "credit_card", "text": "USPS tracking 9400 4573 2269 1178 9674 33", "expect": []}
+{"id": 796, "target": "credit_card", "text": "USPS tracking 9400 7975 3325 3909 7773 38", "expect": []}
+{"id": 797, "target": "credit_card", "text": "USPS tracking 9400 2528 2433 0115 3032 03", "expect": []}
+{"id": 798, "target": "credit_card", "text": "USPS tracking 9400 1345 2124 9761 1175 35", "expect": []}
+{"id": 799, "target": "credit_card", "text": "USPS tracking 9400 7024 0806 0512 0910 07", "expect": []}
+{"id": 800, "target": "credit_card", "text": "USPS tracking 9400 0952 8371 2034 7888 64", "expect": []}
+{"id": 801, "target": "credit_card", "text": "USPS tracking 9400 0548 3850 7177 9880 71", "expect": []}
+{"id": 802, "target": "iban", "text": "IBAN: GB82WEST12345698765432", "expect": ["iban"]}
+{"id": 803, "target": "iban", "text": "Please wire the deposit to DE89 3704 0044 0532 0130 00.", "expect": ["iban"]}
+{"id": 804, "target": "iban", "text": "{\"iban\": \"FR081023283000JVN1QXF688C45\", \"currency\": \"EUR\"}", "expect": ["iban"]}
+{"id": 805, "target": "iban", "text": "User: can you check NL03 YHIO 6993 0181 97 is right before I pay?", "expect": ["iban"]}
+{"id": 806, "target": "iban", "text": "Bank details: IBAN IL626918748467328537379 BIC COBADEFFXXX", "expect": ["iban"]}
+{"id": 807, "target": "iban", "text": "payee_iban=ES06 1226 3738 7783 3286 6749", "expect": ["iban"]}
+{"id": 808, "target": "iban", "text": "Refund to account IT45G727031878744FN27KHBEVR, reference INV-2026-0412.", "expect": ["iban"]}
+{"id": 809, "target": "iban", "text": "Kontonummer (IBAN) CH78 0914 8MET 2ESK ERML E", "expect": ["iban"]}
+{"id": 810, "target": "iban", "text": "IBAN: BE60442230970188", "expect": ["iban"]}
+{"id": 811, "target": "iban", "text": "Please wire the deposit to AT45 6184 7515 6395 6460.", "expect": ["iban"]}
+{"id": 812, "target": "iban", "text": "{\"iban\": \"SE2861398542299180271361\", \"currency\": \"EUR\"}", "expect": ["iban"]}
+{"id": 813, "target": "iban", "text": "User: can you check PL21 6374 4637 1586 8290 8701 0742 is right before I pay?", "expect": ["iban"]}
+{"id": 814, "target": "iban", "text": "Bank details: IBAN IE19FMLC56912551865671 BIC COBADEFFXXX", "expect": ["iban"]}
+{"id": 815, "target": "iban", "text": "payee_iban=PT71 5541 6274 2069 3163 7219 2", "expect": ["iban"]}
+{"id": 816, "target": "iban", "text": "Refund to account GB91BYTB77212397128421, reference INV-2026-0412.", "expect": ["iban"]}
+{"id": 817, "target": "iban", "text": "Kontonummer (IBAN) DE25 3912 6312 4288 0723 09", "expect": ["iban"]}
+{"id": 818, "target": "iban", "text": "IBAN: FR446981060500HKZLZCISIUY60", "expect": ["iban"]}
+{"id": 819, "target": "iban", "text": "Please wire the deposit to NL88 TEQA 1772 1399 59.", "expect": ["iban"]}
+{"id": 820, "target": "iban", "text": "{\"iban\": \"IL137092873575001510229\", \"currency\": \"EUR\"}", "expect": ["iban"]}
+{"id": 821, "target": "iban", "text": "User: can you check ES78 3612 9967 4916 0254 7540 is right before I pay?", "expect": ["iban"]}
+{"id": 822, "target": "iban", "text": "Bank details: IBAN IT32G48269697217MZ0X4GUM8Y4 BIC COBADEFFXXX", "expect": ["iban"]}
+{"id": 823, "target": "iban", "text": "payee_iban=CH19 2730 6SJA BTLG 177P B", "expect": ["iban"]}
+{"id": 824, "target": "iban", "text": "Refund to account BE41898637328475, reference INV-2026-0412.", "expect": ["iban"]}
+{"id": 825, "target": "iban", "text": "Kontonummer (IBAN) AT70 5547 7432 1637 2239", "expect": ["iban"]}
+{"id": 826, "target": "iban", "text": "IBAN: SE4159822921376969369986", "expect": ["iban"]}
+{"id": 827, "target": "iban", "text": "Please wire the deposit to PL18 4734 2370 1621 4850 8428 6238.", "expect": ["iban"]}
+{"id": 828, "target": "iban", "text": "{\"iban\": \"IE02EUOW40530760850606\", \"currency\": \"EUR\"}", "expect": ["iban"]}
+{"id": 829, "target": "iban", "text": "User: can you check PT09 8741 5982 1758 9872 7968 2 is right before I pay?", "expect": ["iban"]}
+{"id": 830, "target": "iban", "text": "Bank details: IBAN GB96JXUQ68205251487114 BIC COBADEFFXXX", "expect": ["iban"]}
+{"id": 831, "target": "iban", "text": "payee_iban=DE14 2895 0799 3013 0318 15", "expect": ["iban"]}
+{"id": 832, "target": "iban", "text": "Refund to account FR57184772346853LREDX6CH136, reference INV-2026-0412.", "expect": ["iban"]}
+{"id": 833, "target": "iban", "text": "Kontonummer (IBAN) NL87 POQW 5745 7125 77", "expect": ["iban"]}
+{"id": 834, "target": "iban", "text": "IBAN: IL900699268083142447819", "expect": ["iban"]}
+{"id": 835, "target": "iban", "text": "Please wire the deposit to ES72 8656 2945 9990 2431 0717.", "expect": ["iban"]}
+{"id": 836, "target": "iban", "text": "{\"iban\": \"IT28H3895071596HYZONEYGQXE4\", \"currency\": \"EUR\"}", "expect": ["iban"]}
+{"id": 837, "target": "iban", "text": "User: can you check CH53 5645 63ZY SRTZ MQ62 E is right before I pay?", "expect": ["iban"]}
+{"id": 838, "target": "iban", "text": "Bank details: IBAN BE66500091513924 BIC COBADEFFXXX", "expect": ["iban"]}
+{"id": 839, "target": "iban", "text": "payee_iban=AT92 8373 9352 9128 9793", "expect": ["iban"]}
+{"id": 840, "target": "iban", "text": "Refund to account SE4494830276050801778756, reference INV-2026-0412.", "expect": ["iban"]}
+{"id": 841, "target": "iban", "text": "Kontonummer (IBAN) PL53 6470 4319 0524 9959 0949 9186", "expect": ["iban"]}
+{"id": 842, "target": "iban", "text": "iban: gb82west12345698765432", "expect": ["iban"]}
+{"id": 843, "target": "iban", "text": "iban: de89370400440532013000", "expect": ["iban"]}
+{"id": 844, "target": "iban", "text": "IBAN: GB82WEST12345698765431", "expect": []}
+{"id": 845, "target": "iban", "text": "IBAN: DE89370408440532013000", "expect": []}
+{"id": 846, "target": "iban", "text": "IBAN: FR081023283000JVN3QXF688C45", "expect": []}
+{"id": 847, "target": "iban", "text": "IBAN: NL03YHIO6993017197", "expect": []}
+{"id": 848, "target": "iban", "text": "IBAN: IL626918728467328537379", "expect": []}
+{"id": 849, "target": "iban", "text": "IBAN: ES0612263738778332866799", "expect": []}
+{"id": 850, "target": "iban", "text": "IBAN: IT45G727031874744FN27KHBEVR", "expect": []}
+{"id": 851, "target": "iban", "text": "IBAN: CH7829148MET2ESKERMLE", "expect": []}
+{"id": 852, "target": "iban", "text": "IBAN: BE60442230670188", "expect": []}
+{"id": 853, "target": "iban", "text": "IBAN: AT455184751563956460", "expect": []}
+{"id": 854, "target": "iban", "text": "IBAN: SE2861398542199180271361", "expect": []}
+{"id": 855, "target": "iban", "text": "IBAN: PL21637446371585829087010742", "expect": []}
+{"id": 856, "target": "iban", "text": "IBAN: IE19FMLC56912551865871", "expect": []}
+{"id": 857, "target": "iban", "text": "IBAN: PT71554168742069316372192", "expect": []}
+{"id": 858, "target": "iban", "text": "IBAN: GB91BYTB73212397128421", "expect": []}
+{"id": 859, "target": "iban", "text": "IBAN: DE25391263124288072305", "expect": []}
+{"id": 860, "target": "iban", "text": "SWIFT/BIC COBADEFFXXX", "expect": []}
+{"id": 861, "target": "iban", "text": "ISIN US0378331005", "expect": []}
+{"id": 862, "target": "iban", "text": "VIN 1HGCM82633A004352", "expect": []}
+{"id": 863, "target": "iban", "text": "GB00 0000 0000 0000 0000 00", "expect": []}
+{"id": 864, "target": "iban", "text": "IBAN: XX00 XXXX XXXX XXXX XXXX XX", "expect": []}
+{"id": 865, "target": "iban", "text": "Flight LH12 departs at 10:22 from gate B44", "expect": []}
+{"id": 866, "target": "iban", "text": "Ref AB12CDEFGHIJKLMNOPQRST", "expect": []}
+{"id": 867, "target": "iban", "text": "Use the IBAN field for European accounts.", "expect": []}
+{"id": 868, "target": "iban", "text": "tracking WE8593ZGHN3GKW2KDE", "expect": []}
+{"id": 869, "target": "iban", "text": "tracking EN5938XZHRDC3QSADHD9FBJ", "expect": []}
+{"id": 870, "target": "iban", "text": "tracking DF26FU1Q3HE1R1H", "expect": []}
+{"id": 871, "target": "iban", "text": "tracking LH4129GBOFMYYOH", "expect": []}
+{"id": 872, "target": "iban", "text": "tracking QP194Y8AV5S47Z47R45T4", "expect": []}
+{"id": 873, "target": "iban", "text": "tracking BR69BUVVATTNTJC8QZSHD", "expect": []}
+{"id": 874, "target": "iban", "text": "tracking IN98EPPLTDAFKBGPOMCU460N", "expect": []}
+{"id": 875, "target": "iban", "text": "tracking XB22IAQS3UWJ6Y1GLP", "expect": []}
+{"id": 876, "target": "iban", "text": "tracking EZ44DU0QNR876J9KA", "expect": []}
+{"id": 877, "target": "iban", "text": "tracking WN44B0H2MMRTA5VQ5C3T", "expect": []}
+{"id": 878, "target": "iban", "text": "tracking HB15RP67JQVYPXCLX4UD7P25", "expect": []}
+{"id": 879, "target": "iban", "text": "tracking PG39TVHMV7QFBQO5PUU4WEZ8", "expect": []}
+{"id": 880, "target": "iban", "text": "tracking AK34FE2N6ZDO6A5", "expect": []}
+{"id": 881, "target": "iban", "text": "tracking PK46A363MQR6J9EWBCEP3C", "expect": []}
+{"id": 882, "target": "iban", "text": "tracking DT41ZXOF389CEVL", "expect": []}
+{"id": 883, "target": "iban", "text": "tracking KG28IZDE9B1HVN73G", "expect": []}
+{"id": 884, "target": "israeli_id", "text": "מספר תעודת זהות: 709037196", "expect": ["israeli_id"]}
+{"id": 885, "target": "israeli_id", "text": "ID number 593695323", "expect": ["israeli_id"]}
+{"id": 886, "target": "israeli_id", "text": "{\"tz\": \"879680775\", \"city\": \"Haifa\"}", "expect": ["israeli_id"]}
+{"id": 887, "target": "israeli_id", "text": "User: the form rejects my teudat zehut 630802437", "expect": ["israeli_id"]}
+{"id": 888, "target": "israeli_id", "text": "ת.ז. 593188766", "expect": ["israeli_id"]}
+{"id": 889, "target": "israeli_id", "text": "2026-03-04T10:22:01Z INFO kyc check national_id=004170007 result=pass", "expect": ["israeli_id"]}
+{"id": 890, "target": "israeli_id", "text": "name,id\nTal R.,463671511", "expect": ["israeli_id"]}
+{"id": 891, "target": "israeli_id", "text": "Israeli ID: 370926016", "expect": ["israeli_id"]}
+{"id": 892, "target": "israeli_id", "text": "מספר תעודת זהות: 899095467", "expect": ["israeli_id"]}
+{"id": 893, "target": "israeli_id", "text": "ID number 112322102", "expect": ["israeli_id"]}
+{"id": 894, "target": "israeli_id", "text": "{\"tz\": \"653923318\", \"city\": \"Haifa\"}", "expect": ["israeli_id"]}
+{"id": 895, "target": "israeli_id", "text": "User: the form rejects my teudat zehut 979294816", "expect": ["israeli_id"]}
+{"id": 896, "target": "israeli_id", "text": "ת.ז. 285899126", "expect": ["israeli_id"]}
+{"id": 897, "target": "israeli_id", "text": "2026-03-04T10:22:01Z INFO kyc check national_id=469986699 result=pass", "expect": ["israeli_id"]}
+{"id": 898, "target": "israeli_id", "text": "name,id\nTal R.,809635014", "expect": ["israeli_id"]}
+{"id": 899, "target": "israeli_id", "text": "Israeli ID: 699476958", "expect": ["israeli_id"]}
+{"id": 900, "target": "israeli_id", "text": "מספר תעודת זהות: 936298496", "expect": ["israeli_id"]}
+{"id": 901, "target": "israeli_id", "text": "ID number 889737862", "expect": ["israeli_id"]}
+{"id": 902, "target": "israeli_id", "text": "{\"tz\": \"723956793\", \"city\": \"Haifa\"}", "expect": ["israeli_id"]}
+{"id": 903, "target": "israeli_id", "text": "User: the form rejects my teudat zehut 838392223", "expect": ["israeli_id"]}
+{"id": 904, "target": "israeli_id", "text": "ת.ז. 196778807", "expect": ["israeli_id"]}
+{"id": 905, "target": "israeli_id", "text": "2026-03-04T10:22:01Z INFO kyc check national_id=441676236 result=pass", "expect": ["israeli_id"]}
+{"id": 906, "target": "israeli_id", "text": "name,id\nTal R.,713878700", "expect": ["israeli_id"]}
+{"id": 907, "target": "israeli_id", "text": "Israeli ID: 548222165", "expect": ["israeli_id"]}
+{"id": 908, "target": "israeli_id", "text": "מספר תעודת זהות: 059938191", "expect": ["israeli_id"]}
+{"id": 909, "target": "israeli_id", "text": "ID number 064957020", "expect": ["israeli_id"]}
+{"id": 910, "target": "israeli_id", "text": "{\"tz\": \"839308350\", \"city\": \"Haifa\"}", "expect": ["israeli_id"]}
+{"id": 911, "target": "israeli_id", "text": "User: the form rejects my teudat zehut 519119069", "expect": ["israeli_id"]}
+{"id": 912, "target": "israeli_id", "text": "ת.ז. 924292410", "expect": ["israeli_id"]}
+{"id": 913, "target": "israeli_id", "text": "2026-03-04T10:22:01Z INFO kyc check national_id=783409600 result=pass", "expect": ["israeli_id"]}
+{"id": 914, "target": "israeli_id", "text": "name,id\nTal R.,959847526", "expect": ["israeli_id"]}
+{"id": 915, "target": "israeli_id", "text": "Israeli ID: 463307033", "expect": ["israeli_id"]}
+{"id": 916, "target": "israeli_id", "text": "מספר תעודת זהות: 161769955", "expect": ["israeli_id"]}
+{"id": 917, "target": "israeli_id", "text": "ID number 832823231", "expect": ["israeli_id"]}
+{"id": 918, "target": "israeli_id", "text": "{\"tz\": \"201559168\", \"city\": \"Haifa\"}", "expect": ["israeli_id"]}
+{"id": 919, "target": "israeli_id", "text": "User: the form rejects my teudat zehut 292543402", "expect": ["israeli_id"]}
+{"id": 920, "target": "israeli_id", "text": "ת.ז. 160263661", "expect": ["israeli_id"]}
+{"id": 921, "target": "israeli_id", "text": "2026-03-04T10:22:01Z INFO kyc check national_id=990684672 result=pass", "expect": ["israeli_id"]}
+{"id": 922, "target": "israeli_id", "text": "ID 70903719-6", "expect": ["israeli_id"]}
+{"id": 923, "target": "israeli_id", "text": "ID 59369532-3", "expect": ["israeli_id"]}
+{"id": 924, "target": "israeli_id", "text": "ID number 456672797", "expect": []}
+{"id": 925, "target": "israeli_id", "text": "ID number 121745122", "expect": []}
+{"id": 926, "target": "israeli_id", "text": "ID number 215557395", "expect": []}
+{"id": 927, "target": "israeli_id", "text": "ID number 493431561", "expect": []}
+{"id": 928, "target": "israeli_id", "text": "ID number 542377754", "expect": []}
+{"id": 929, "target": "israeli_id", "text": "ID number 712151341", "expect": []}
+{"id": 930, "target": "israeli_id", "text": "ID number 138984934", "expect": []}
+{"id": 931, "target": "israeli_id", "text": "ID number 844538402", "expect": []}
+{"id": 932, "target": "israeli_id", "text": "ID number 648373146", "expect": []}
+{"id": 933, "target": "israeli_id", "text": "ID number 022757971", "expect": []}
+{"id": 934, "target": "israeli_id", "text": "ID number 806191387", "expect": []}
+{"id": 935, "target": "israeli_id", "text": "ID number 323589331", "expect": []}
+{"id": 936, "target": "israeli_id", "text": "ID number 653072463", "expect": []}
+{"id": 937, "target": "israeli_id", "text": "ID number 171939186", "expect": []}
+{"id": 938, "target": "israeli_id", "text": "ID number 741115884", "expect": []}
+{"id": 939, "target": "israeli_id", "text": "ID number 171124684", "expect": []}
+{"id": 940, "target": "israeli_id", "text": "invoice 500369828 paid", "expect": []}
+{"id": 941, "target": "israeli_id", "text": "invoice 984661752 paid", "expect": []}
+{"id": 942, "target": "israeli_id", "text": "invoice 644237277 paid", "expect": []}
+{"id": 943, "target": "israeli_id", "text": "invoice 866827397 paid", "expect": []}
+{"id": 944, "target": "israeli_id", "text": "invoice 522792988 paid", "expect": []}
+{"id": 945, "target": "israeli_id", "text": "invoice 438720135 paid", "expect": []}
+{"id": 946, "target": "israeli_id", "text": "invoice 223762630 paid", "expect": []}
+{"id": 947, "target": "israeli_id", "text": "invoice 754910082 paid", "expect": []}
+{"id": 948, "target": "israeli_id", "text": "invoice 752514126 paid", "expect": []}
+{"id": 949, "target": "israeli_id", "text": "invoice 596741708 paid", "expect": []}
+{"id": 950, "target": "israeli_id", "text": "invoice 757086084 paid", "expect": []}
+{"id": 951, "target": "israeli_id", "text": "invoice 100197214 paid", "expect": []}
+{"id": 952, "target": "israeli_id", "text": "invoice 176628143 paid", "expect": []}
+{"id": 953, "target": "israeli_id", "text": "invoice 874383730 paid", "expect": []}
+{"id": 954, "target": "israeli_id", "text": "000000000", "expect": []}
+{"id": 955, "target": "israeli_id", "text": "ID number 12345678", "expect": []}
+{"id": 956, "target": "israeli_id", "text": "ID number 1234567890", "expect": []}
+{"id": 957, "target": "israeli_id", "text": "zip 6100101", "expect": []}
+{"id": 958, "target": "israeli_id", "text": "build 2026030410", "expect": []}
+{"id": 959, "target": "israeli_id", "text": "Ticket TLV-48213", "expect": []}
+{"id": 960, "target": "israeli_id", "text": "ID: (pending)", "expect": []}
+{"id": 961, "target": "israeli_id", "text": "ID: see the attached scan", "expect": []}
+{"id": 962, "target": "israeli_id", "text": "PID 48213 exited", "expect": []}
+{"id": 963, "target": "israeli_id", "text": "routing 021000021 is a placeholder", "expect": []}
+{"id": 964, "target": "us_ssn", "text": "SSN: 473-23-1347", "expect": ["us_ssn"]}
+{"id": 965, "target": "us_ssn", "text": "User: I typed my social 688-45-8540 on the form, did it save?", "expect": ["us_ssn"]}
+{"id": 966, "target": "us_ssn", "text": "{\"ssn\": \"463-64-6747\", \"dob_year\": 1987}", "expect": ["us_ssn"]}
+{"id": 967, "target": "us_ssn", "text": "Employee SSN 853-84-0684, W-2 attached.", "expect": ["us_ssn"]}
+{"id": 968, "target": "us_ssn", "text": "2026-03-04T10:22:01Z WARN pii in prompt ssn=049-25-8603", "expect": ["us_ssn"]}
+{"id": 969, "target": "us_ssn", "text": "Social Security Number: 493-43-3017", "expect": ["us_ssn"]}
+{"id": 970, "target": "us_ssn", "text": "ssn,state\n763-66-9575,CA", "expect": ["us_ssn"]}
+{"id": 971, "target": "us_ssn", "text": "Applicant's SSN is 790-82-5914.", "expect": ["us_ssn"]}
+{"id": 972, "target": "us_ssn", "text": "SSN: 752-55-9976", "expect": ["us_ssn"]}
+{"id": 973, "target": "us_ssn", "text": "User: I typed my social 709-85-8256 on the form, did it save?", "expect": ["us_ssn"]}
+{"id": 974, "target": "us_ssn", "text": "{\"ssn\": \"732-01-8681\", \"dob_year\": 1987}", "expect": ["us_ssn"]}
+{"id": 975, "target": "us_ssn", "text": "Employee SSN 753-74-0189, W-2 attached.", "expect": ["us_ssn"]}
+{"id": 976, "target": "us_ssn", "text": "2026-03-04T10:22:01Z WARN pii in prompt ssn=425-07-5534", "expect": ["us_ssn"]}
+{"id": 977, "target": "us_ssn", "text": "Social Security Number: 761-15-3671", "expect": ["us_ssn"]}
+{"id": 978, "target": "us_ssn", "text": "ssn,state\n287-99-9572,CA", "expect": ["us_ssn"]}
+{"id": 979, "target": "us_ssn", "text": "Applicant's SSN is 797-86-9119.", "expect": ["us_ssn"]}
+{"id": 980, "target": "us_ssn", "text": "SSN: 877-73-0655", "expect": ["us_ssn"]}
+{"id": 981, "target": "us_ssn", "text": "User: I typed my social 691-53-9466 on the form, did it save?", "expect": ["us_ssn"]}
+{"id": 982, "target": "us_ssn", "text": "{\"ssn\": \"884-14-4684\", \"dob_year\": 1987}", "expect": ["us_ssn"]}
+{"id": 983, "target": "us_ssn", "text": "Employee SSN 832-67-0979, W-2 attached.", "expect": ["us_ssn"]}
+{"id": 984, "target": "us_ssn", "text": "2026-03-04T10:22:01Z WARN pii in prompt ssn=231-78-2822", "expect": ["us_ssn"]}
+{"id": 985, "target": "us_ssn", "text": "Social Security Number: 349-35-1324", "expect": ["us_ssn"]}
+{"id": 986, "target": "us_ssn", "text": "ssn,state\n805-27-3917,CA", "expect": ["us_ssn"]}
+{"id": 987, "target": "us_ssn", "text": "Applicant's SSN is 665-18-9608.", "expect": ["us_ssn"]}
+{"id": 988, "target": "us_ssn", "text": "SSN: 772-50-9053", "expect": ["us_ssn"]}
+{"id": 989, "target": "us_ssn", "text": "User: I typed my social 082-50-5847 on the form, did it save?", "expect": ["us_ssn"]}
+{"id": 990, "target": "us_ssn", "text": "{\"ssn\": \"680-16-3852\", \"dob_year\": 1987}", "expect": ["us_ssn"]}
+{"id": 991, "target": "us_ssn", "text": "Employee SSN 865-41-8149, W-2 attached.", "expect": ["us_ssn"]}
+{"id": 992, "target": "us_ssn", "text": "2026-03-04T10:22:01Z WARN pii in prompt ssn=521-05-2145", "expect": ["us_ssn"]}
+{"id": 993, "target": "us_ssn", "text": "Social Security Number: 827-04-5683", "expect": ["us_ssn"]}
+{"id": 994, "target": "us_ssn", "text": "ssn,state\n156-87-4788,CA", "expect": ["us_ssn"]}
+{"id": 995, "target": "us_ssn", "text": "Applicant's SSN is 068-24-1200.", "expect": ["us_ssn"]}
+{"id": 996, "target": "us_ssn", "text": "SSN: 536-70-2652", "expect": ["us_ssn"]}
+{"id": 997, "target": "us_ssn", "text": "User: I typed my social 780-99-2423 on the form, did it save?", "expect": ["us_ssn"]}
+{"id": 998, "target": "us_ssn", "text": "{\"ssn\": \"775-48-9906\", \"dob_year\": 1987}", "expect": ["us_ssn"]}
+{"id": 999, "target": "us_ssn", "text": "Employee SSN 622-67-0531, W-2 attached.", "expect": ["us_ssn"]}
+{"id": 1000, "target": "us_ssn", "text": "2026-03-04T10:22:01Z WARN pii in prompt ssn=039-57-0719", "expect": ["us_ssn"]}
+{"id": 1001, "target": "us_ssn", "text": "SSN: 883504496", "expect": ["us_ssn"]}
+{"id": 1002, "target": "us_ssn", "text": "SSN: 862079624", "expect": ["us_ssn"]}
+{"id": 1003, "target": "us_ssn", "text": "SSN: 217 20 3557", "expect": ["us_ssn"]}
+{"id": 1004, "target": "us_ssn", "text": "SSN: 000-12-3456", "expect": []}
+{"id": 1005, "target": "us_ssn", "text": "SSN: 666-12-3456", "expect": []}
+{"id": 1006, "target": "us_ssn", "text": "SSN: 912-34-5678", "expect": []}
+{"id": 1007, "target": "us_ssn", "text": "SSN: 123-00-4567", "expect": []}
+{"id": 1008, "target": "us_ssn", "text": "SSN: 123-45-0000", "expect": []}
+{"id": 1009, "target": "us_ssn", "text": "SSN: ***-**-1234", "expect": []}
+{"id": 1010, "target": "us_ssn", "text": "SSN: XXX-XX-XXXX", "expect": []}
+{"id": 1011, "target": "us_ssn", "text": "SSN: on file", "expect": []}
+{"id": 1012, "target": "us_ssn", "text": "Format SSNs as NNN-NN-NNNN.", "expect": []}
+{"id": 1013, "target": "us_ssn", "text": "Released 2026-03-04", "expect": []}
+{"id": 1014, "target": "us_ssn", "text": "ITIN 988-76-5982", "expect": []}
+{"id": 1015, "target": "us_ssn", "text": "ITIN 922-83-3937", "expect": []}
+{"id": 1016, "target": "us_ssn", "text": "ITIN 962-64-9274", "expect": []}
+{"id": 1017, "target": "us_ssn", "text": "ITIN 987-61-7938", "expect": []}
+{"id": 1018, "target": "us_ssn", "text": "ITIN 967-77-5165", "expect": []}
+{"id": 1019, "target": "us_ssn", "text": "ITIN 944-57-9424", "expect": []}
+{"id": 1020, "target": "us_ssn", "text": "ITIN 971-55-7070", "expect": []}
+{"id": 1021, "target": "us_ssn", "text": "ITIN 997-83-3790", "expect": []}
+{"id": 1022, "target": "us_ssn", "text": "ITIN 935-76-9676", "expect": []}
+{"id": 1023, "target": "us_ssn", "text": "ITIN 926-76-3559", "expect": []}
+{"id": 1024, "target": "us_ssn", "text": "Part no. 790-78-0167", "expect": []}
+{"id": 1025, "target": "us_ssn", "text": "Case 617-29-3068", "expect": []}
+{"id": 1026, "target": "us_ssn", "text": "Lot 797-75-6046", "expect": []}
+{"id": 1027, "target": "us_ssn", "text": "Ticket 444-39-7438", "expect": []}
+{"id": 1028, "target": "us_ssn", "text": "Ref 869-77-3088", "expect": []}
+{"id": 1029, "target": "us_ssn", "text": "Model 490-37-6015", "expect": []}
+{"id": 1030, "target": "us_ssn", "text": "Batch 408-38-5665", "expect": []}
+{"id": 1031, "target": "us_ssn", "text": "Claim 024-58-3108", "expect": []}
+{"id": 1032, "target": "us_ssn", "text": "Policy 899-39-9429", "expect": []}
+{"id": 1033, "target": "us_ssn", "text": "Docket 043-18-2912", "expect": []}
+{"id": 1034, "target": "us_ssn", "text": "Build 375-39-69021", "expect": []}
+{"id": 1035, "target": "us_ssn", "text": "Build 901-27-21885", "expect": []}
+{"id": 1036, "target": "us_ssn", "text": "Build 750-46-21625", "expect": []}
+{"id": 1037, "target": "us_ssn", "text": "Build 165-35-98357", "expect": []}
+{"id": 1038, "target": "us_ssn", "text": "Build 762-39-42874", "expect": []}
+{"id": 1039, "target": "us_ssn", "text": "Build 883-73-23317", "expect": []}
+{"id": 1040, "target": "us_ssn", "text": "Build 798-96-97474", "expect": []}
+{"id": 1041, "target": "us_ssn", "text": "Build 910-35-29429", "expect": []}
+{"id": 1042, "target": "us_ssn", "text": "Build 237-55-71677", "expect": []}
+{"id": 1043, "target": "us_ssn", "text": "Build 478-20-65964", "expect": []}
+{"id": 1044, "target": "medical_record_number", "text": "Patient MRN: MR-7544383", "expect": ["medical_record_number"]}
+{"id": 1045, "target": "medical_record_number", "text": "MRN#63812779 admitted to ward 4", "expect": ["medical_record_number"]}
+{"id": 1046, "target": "medical_record_number", "text": "Medical record number: MR-7227773", "expect": ["medical_record_number"]}
+{"id": 1047, "target": "medical_record_number", "text": "{\"note\": \"Discharge summary for MRN MR-8467650\", \"ward\": \"4B\"}", "expect": ["medical_record_number"]}
+{"id": 1048, "target": "medical_record_number", "text": "User: pull the labs for medical record no. MR-9698639 please", "expect": ["medical_record_number"]}
+{"id": 1049, "target": "medical_record_number", "text": "2026-03-04T10:22:01Z INFO chart opened MRN=MR-4276499", "expect": ["medical_record_number"]}
+{"id": 1050, "target": "medical_record_number", "text": "Medical record A1008772, allergies: penicillin", "expect": ["medical_record_number"]}
+{"id": 1051, "target": "medical_record_number", "text": "mrn: 64285714", "expect": ["medical_record_number"]}
+{"id": 1052, "target": "medical_record_number", "text": "Patient MRN: 90937896", "expect": ["medical_record_number"]}
+{"id": 1053, "target": "medical_record_number", "text": "MRN#MR-996605 admitted to ward 4", "expect": ["medical_record_number"]}
+{"id": 1054, "target": "medical_record_number", "text": "Medical record number: 7717-6971", "expect": ["medical_record_number"]}
+{"id": 1055, "target": "medical_record_number", "text": "{\"note\": \"Discharge summary for MRN A8196437\", \"ward\": \"4B\"}", "expect": ["medical_record_number"]}
+{"id": 1056, "target": "medical_record_number", "text": "User: pull the labs for medical record no. MR-5394371 please", "expect": ["medical_record_number"]}
+{"id": 1057, "target": "medical_record_number", "text": "2026-03-04T10:22:01Z INFO chart opened MRN=MR-3743080", "expect": ["medical_record_number"]}
+{"id": 1058, "target": "medical_record_number", "text": "Medical record 8063-4933, allergies: penicillin", "expect": ["medical_record_number"]}
+{"id": 1059, "target": "medical_record_number", "text": "mrn: A8490449", "expect": ["medical_record_number"]}
+{"id": 1060, "target": "medical_record_number", "text": "Patient MRN: 21964777", "expect": ["medical_record_number"]}
+{"id": 1061, "target": "medical_record_number", "text": "MRN#MR-7405293 admitted to ward 4", "expect": ["medical_record_number"]}
+{"id": 1062, "target": "medical_record_number", "text": "Medical record number: MR-8550753", "expect": ["medical_record_number"]}
+{"id": 1063, "target": "medical_record_number", "text": "{\"note\": \"Discharge summary for MRN 7204-6888\", \"ward\": \"4B\"}", "expect": ["medical_record_number"]}
+{"id": 1064, "target": "medical_record_number", "text": "User: pull the labs for medical record no. MR-6455709 please", "expect": ["medical_record_number"]}
+{"id": 1065, "target": "medical_record_number", "text": "2026-03-04T10:22:01Z INFO chart opened MRN=6262-2583", "expect": ["medical_record_number"]}
+{"id": 1066, "target": "medical_record_number", "text": "Medical record 14206442, allergies: penicillin", "expect": ["medical_record_number"]}
+{"id": 1067, "target": "medical_record_number", "text": "mrn: 15890771", "expect": ["medical_record_number"]}
+{"id": 1068, "target": "medical_record_number", "text": "Patient MRN: MR-7198785", "expect": ["medical_record_number"]}
+{"id": 1069, "target": "medical_record_number", "text": "MRN#A1193069 admitted to ward 4", "expect": ["medical_record_number"]}
+{"id": 1070, "target": "medical_record_number", "text": "Medical record number: 2509-3910", "expect": ["medical_record_number"]}
+{"id": 1071, "target": "medical_record_number", "text": "{\"note\": \"Discharge summary for MRN 2527-7070\", \"ward\": \"4B\"}", "expect": ["medical_record_number"]}
+{"id": 1072, "target": "medical_record_number", "text": "User: pull the labs for medical record no. MR-7049304 please", "expect": ["medical_record_number"]}
+{"id": 1073, "target": "medical_record_number", "text": "2026-03-04T10:22:01Z INFO chart opened MRN=7243-3594", "expect": ["medical_record_number"]}
+{"id": 1074, "target": "medical_record_number", "text": "Medical record MR-6337092, allergies: penicillin", "expect": ["medical_record_number"]}
+{"id": 1075, "target": "medical_record_number", "text": "mrn: 87639801", "expect": ["medical_record_number"]}
+{"id": 1076, "target": "medical_record_number", "text": "Patient MRN: 1624-2568", "expect": ["medical_record_number"]}
+{"id": 1077, "target": "medical_record_number", "text": "MRN#22242430 admitted to ward 4", "expect": ["medical_record_number"]}
+{"id": 1078, "target": "medical_record_number", "text": "Medical record number: 1158-5465", "expect": ["medical_record_number"]}
+{"id": 1079, "target": "medical_record_number", "text": "{\"note\": \"Discharge summary for MRN 5094-2119\", \"ward\": \"4B\"}", "expect": ["medical_record_number"]}
+{"id": 1080, "target": "medical_record_number", "text": "User: pull the labs for medical record no. 59534421 please", "expect": ["medical_record_number"]}
+{"id": 1081, "target": "medical_record_number", "text": "2026-03-04T10:22:01Z INFO chart opened MRN=MR-5344440", "expect": ["medical_record_number"]}
+{"id": 1082, "target": "medical_record_number", "text": "PID|1||86065203^^^HOSP^MR||ROE^JANE", "expect": ["medical_record_number"]}
+{"id": 1083, "target": "medical_record_number", "text": "PID|1||48126924^^^HOSP^MR||ROE^JANE", "expect": ["medical_record_number"]}
+{"id": 1084, "target": "medical_record_number", "text": "MRN: N/A", "expect": []}
+{"id": 1085, "target": "medical_record_number", "text": "MRN: pending", "expect": []}
+{"id": 1086, "target": "medical_record_number", "text": "The MRN field is required.", "expect": []}
+{"id": 1087, "target": "medical_record_number", "text": "MRNs are eight digits at this hospital.", "expect": []}
+{"id": 1088, "target": "medical_record_number", "text": "Medical records request form", "expect": []}
+{"id": 1089, "target": "medical_record_number", "text": "medical record review scheduled", "expect": []}
+{"id": 1090, "target": "medical_record_number", "text": "Medical Record Systems vendor demo", "expect": []}
+{"id": 1091, "target": "medical_record_number", "text": "MRN: [redacted]", "expect": []}
+{"id": 1092, "target": "medical_record_number", "text": "Ask for the MRN, not the date of birth.", "expect": []}
+{"id": 1093, "target": "medical_record_number", "text": "MRN lookup failed: timeout", "expect": []}
+{"id": 1094, "target": "medical_record_number", "text": "MRN: UNKNOWN", "expect": []}
+{"id": 1095, "target": "medical_record_number", "text": "the record number is on the wristband", "expect": []}
+{"id": 1096, "target": "medical_record_number", "text": "Room 948, bed 2, ward 4A", "expect": []}
+{"id": 1097, "target": "medical_record_number", "text": "Room 751, bed 4, ward 1A", "expect": []}
+{"id": 1098, "target": "medical_record_number", "text": "Room 864, bed 4, ward 9C", "expect": []}
+{"id": 1099, "target": "medical_record_number", "text": "Room 443, bed 1, ward 1B", "expect": []}
+{"id": 1100, "target": "medical_record_number", "text": "Room 111, bed 1, ward 2C", "expect": []}
+{"id": 1101, "target": "medical_record_number", "text": "Room 773, bed 3, ward 7B", "expect": []}
+{"id": 1102, "target": "medical_record_number", "text": "Room 867, bed 4, ward 4A", "expect": []}
+{"id": 1103, "target": "medical_record_number", "text": "Room 293, bed 3, ward 6B", "expect": []}
+{"id": 1104, "target": "medical_record_number", "text": "Room 256, bed 4, ward 8C", "expect": []}
+{"id": 1105, "target": "medical_record_number", "text": "Room 116, bed 4, ward 8C", "expect": []}
+{"id": 1106, "target": "medical_record_number", "text": "Room 401, bed 3, ward 9B", "expect": []}
+{"id": 1107, "target": "medical_record_number", "text": "Room 193, bed 3, ward 7A", "expect": []}
+{"id": 1108, "target": "medical_record_number", "text": "Room 549, bed 3, ward 7B", "expect": []}
+{"id": 1109, "target": "medical_record_number", "text": "Room 260, bed 4, ward 1B", "expect": []}
+{"id": 1110, "target": "medical_record_number", "text": "Order 98549379 for patient transport", "expect": []}
+{"id": 1111, "target": "medical_record_number", "text": "Order 27177082 for patient transport", "expect": []}
+{"id": 1112, "target": "medical_record_number", "text": "Order 20570633 for patient transport", "expect": []}
+{"id": 1113, "target": "medical_record_number", "text": "Order 25522966 for patient transport", "expect": []}
+{"id": 1114, "target": "medical_record_number", "text": "Order 46013467 for patient transport", "expect": []}
+{"id": 1115, "target": "medical_record_number", "text": "Order 49607742 for patient transport", "expect": []}
+{"id": 1116, "target": "medical_record_number", "text": "Order 39557602 for patient transport", "expect": []}
+{"id": 1117, "target": "medical_record_number", "text": "Order 80783105 for patient transport", "expect": []}
+{"id": 1118, "target": "medical_record_number", "text": "Order 55083100 for patient transport", "expect": []}
+{"id": 1119, "target": "medical_record_number", "text": "Order 77657817 for patient transport", "expect": []}
+{"id": 1120, "target": "medical_record_number", "text": "Order 5959894 for patient transport", "expect": []}
+{"id": 1121, "target": "medical_record_number", "text": "Order 57586807 for patient transport", "expect": []}
+{"id": 1122, "target": "medical_record_number", "text": "Order 55705576 for patient transport", "expect": []}
+{"id": 1123, "target": "medical_record_number", "text": "Order 95769107 for patient transport", "expect": []}
+{"id": 1124, "target": "date_of_birth", "text": "DOB: 10.9.1970", "expect": ["date_of_birth"]}
+{"id": 1125, "target": "date_of_birth", "text": "Patient date of birth: 1967-05-23", "expect": ["date_of_birth"]}
+{"id": 1126, "target": "date_of_birth", "text": "{\"name\": \"J. Roe\", \"dob\": \"DOB 23-01-1972\"}", "expect": ["date_of_birth"]}
+{"id": 1127, "target": "date_of_birth", "text": "User: I was born on 10/07/1945, am I eligible?", "expect": ["date_of_birth"]}
+{"id": 1128, "target": "date_of_birth", "text": "Date of birth 13-08-1989", "expect": ["date_of_birth"]}
+{"id": 1129, "target": "date_of_birth", "text": "2026-03-04T10:22:01Z INFO intake DOB=12/21/1971", "expect": ["date_of_birth"]}
+{"id": 1130, "target": "date_of_birth", "text": "dob: 11/08/1976", "expect": ["date_of_birth"]}
+{"id": 1131, "target": "date_of_birth", "text": "Applicant, born on 11/27/85, lives in Haifa.", "expect": ["date_of_birth"]}
+{"id": 1132, "target": "date_of_birth", "text": "DOB: 1951-06-16", "expect": ["date_of_birth"]}
+{"id": 1133, "target": "date_of_birth", "text": "Patient date of birth: 07-07-2001", "expect": ["date_of_birth"]}
+{"id": 1134, "target": "date_of_birth", "text": "{\"name\": \"J. Roe\", \"dob\": \"DOB 6.12.1959\"}", "expect": ["date_of_birth"]}
+{"id": 1135, "target": "date_of_birth", "text": "User: I was born on 17-05-2005, am I eligible?", "expect": ["date_of_birth"]}
+{"id": 1136, "target": "date_of_birth", "text": "Date of birth 2001-07-23", "expect": ["date_of_birth"]}
+{"id": 1137, "target": "date_of_birth", "text": "2026-03-04T10:22:01Z INFO intake DOB=16-11-2000", "expect": ["date_of_birth"]}
+{"id": 1138, "target": "date_of_birth", "text": "dob: 04/07/1976", "expect": ["date_of_birth"]}
+{"id": 1139, "target": "date_of_birth", "text": "Applicant, born on 12/01/1945, lives in Haifa.", "expect": ["date_of_birth"]}
+{"id": 1140, "target": "date_of_birth", "text": "DOB: 5/21/88", "expect": ["date_of_birth"]}
+{"id": 1141, "target": "date_of_birth", "text": "Patient date of birth: 20.2.1972", "expect": ["date_of_birth"]}
+{"id": 1142, "target": "date_of_birth", "text": "{\"name\": \"J. Roe\", \"dob\": \"DOB 5/16/73\"}", "expect": ["date_of_birth"]}
+{"id": 1143, "target": "date_of_birth", "text": "User: I was born on 08/26/2005, am I eligible?", "expect": ["date_of_birth"]}
+{"id": 1144, "target": "date_of_birth", "text": "Date of birth 01/22/1952", "expect": ["date_of_birth"]}
+{"id": 1145, "target": "date_of_birth", "text": "2026-03-04T10:22:01Z INFO intake DOB=03/22/2002", "expect": ["date_of_birth"]}
+{"id": 1146, "target": "date_of_birth", "text": "dob: 1/11/85", "expect": ["date_of_birth"]}
+{"id": 1147, "target": "date_of_birth", "text": "Applicant, born on 11/18/45, lives in Haifa.", "expect": ["date_of_birth"]}
+{"id": 1148, "target": "date_of_birth", "text": "DOB: 03-03-2007", "expect": ["date_of_birth"]}
+{"id": 1149, "target": "date_of_birth", "text": "Patient date of birth: 1/12/76", "expect": ["date_of_birth"]}
+{"id": 1150, "target": "date_of_birth", "text": "{\"name\": \"J. Roe\", \"dob\": \"DOB 04-06-1977\"}", "expect": ["date_of_birth"]}
+{"id": 1151, "target": "date_of_birth", "text": "User: I was born on 2006-06-22, am I eligible?", "expect": ["date_of_birth"]}
+{"id": 1152, "target": "date_of_birth", "text": "Date of birth 08/08/2009", "expect": ["date_of_birth"]}
+{"id": 1153, "target": "date_of_birth", "text": "2026-03-04T10:22:01Z INFO intake DOB=4.7.1998", "expect": ["date_of_birth"]}
+{"id": 1154, "target": "date_of_birth", "text": "dob: 05/04/1945", "expect": ["date_of_birth"]}
+{"id": 1155, "target": "date_of_birth", "text": "Applicant, born on 20-09-1949, lives in Haifa.", "expect": ["date_of_birth"]}
+{"id": 1156, "target": "date_of_birth", "text": "DOB: 11/03/1962", "expect": ["date_of_birth"]}
+{"id": 1157, "target": "date_of_birth", "text": "Patient date of birth: 19.12.1989", "expect": ["date_of_birth"]}
+{"id": 1158, "target": "date_of_birth", "text": "{\"name\": \"J. Roe\", \"dob\": \"DOB 26.3.1961\"}", "expect": ["date_of_birth"]}
+{"id": 1159, "target": "date_of_birth", "text": "User: I was born on 03/14/1986, am I eligible?", "expect": ["date_of_birth"]}
+{"id": 1160, "target": "date_of_birth", "text": "D.O.B.: 04/12/1987", "expect": ["date_of_birth"]}
+{"id": 1161, "target": "date_of_birth", "text": "DOB: April 12, 1987", "expect": ["date_of_birth"]}
+{"id": 1162, "target": "date_of_birth", "text": "Birth date: 1987-04-12", "expect": ["date_of_birth"]}
+{"id": 1163, "target": "date_of_birth", "text": "birthdate 12/04/1987", "expect": ["date_of_birth"]}
+{"id": 1164, "target": "date_of_birth", "text": "DOB: unknown", "expect": []}
+{"id": 1165, "target": "date_of_birth", "text": "The date of birth field is required.", "expect": []}
+{"id": 1166, "target": "date_of_birth", "text": "born on a Tuesday, as the song goes", "expect": []}
+{"id": 1167, "target": "date_of_birth", "text": "Created: 2026-03-04", "expect": []}
+{"id": 1168, "target": "date_of_birth", "text": "Expiry date 04/27", "expect": []}
+{"id": 1169, "target": "date_of_birth", "text": "Due date: 2026-12-01", "expect": []}
+{"id": 1170, "target": "date_of_birth", "text": "The project was born on 2019-04-01 as a weekend hack.", "expect": []}
+{"id": 1171, "target": "date_of_birth", "text": "DOB: [redacted]", "expect": []}
+{"id": 1172, "target": "date_of_birth", "text": "date of birth (DD/MM/YYYY)", "expect": []}
+{"id": 1173, "target": "date_of_birth", "text": "Last login 03/04/2026 10:22", "expect": []}
+{"id": 1174, "target": "date_of_birth", "text": "Valid from 01.01.2026 to 31.12.2026", "expect": []}
+{"id": 1175, "target": "date_of_birth", "text": "Release 2026-03-04, next one 2026-04-01", "expect": []}
+{"id": 1176, "target": "date_of_birth", "text": "Appointment on 1963-03-02 at 11:00", "expect": []}
+{"id": 1177, "target": "date_of_birth", "text": "Appointment on 04/07/2009 at 15:00", "expect": []}
+{"id": 1178, "target": "date_of_birth", "text": "Appointment on 1969-03-09 at 9:00", "expect": []}
+{"id": 1179, "target": "date_of_birth", "text": "Appointment on 2009-08-09 at 17:00", "expect": []}
+{"id": 1180, "target": "date_of_birth", "text": "Appointment on 22-08-1956 at 12:00", "expect": []}
+{"id": 1181, "target": "date_of_birth", "text": "Appointment on 1944-02-20 at 12:00", "expect": []}
+{"id": 1182, "target": "date_of_birth", "text": "Appointment on 2009-09-09 at 16:00", "expect": []}
+{"id": 1183, "target": "date_of_birth", "text": "Appointment on 04-09-1990 at 9:00", "expect": []}
+{"id": 1184, "target": "date_of_birth", "text": "Appointment on 08-05-2000 at 12:00", "expect": []}
+{"id": 1185, "target": "date_of_birth", "text": "Appointment on 17.8.1985 at 12:00", "expect": []}
+{"id": 1186, "target": "date_of_birth", "text": "Appointment on 21-05-1983 at 17:00", "expect": []}
+{"id": 1187, "target": "date_of_birth", "text": "Appointment on 07/10/1952 at 11:00", "expect": []}
+{"id": 1188, "target": "date_of_birth", "text": "Appointment on 2/4/95 at 15:00", "expect": []}
+{"id": 1189, "target": "date_of_birth", "text": "Appointment on 02-04-1977 at 17:00", "expect": []}
+{"id": 1190, "target": "date_of_birth", "text": "Invoice dated 02-10-1983, due in 30 days", "expect": []}
+{"id": 1191, "target": "date_of_birth", "text": "Invoice dated 1972-04-17, due in 30 days", "expect": []}
+{"id": 1192, "target": "date_of_birth", "text": "Invoice dated 1947-02-17, due in 30 days", "expect": []}
+{"id": 1193, "target": "date_of_birth", "text": "Invoice dated 3/5/45, due in 30 days", "expect": []}
+{"id": 1194, "target": "date_of_birth", "text": "Invoice dated 1952-04-20, due in 30 days", "expect": []}
+{"id": 1195, "target": "date_of_birth", "text": "Invoice dated 5/5/45, due in 30 days", "expect": []}
+{"id": 1196, "target": "date_of_birth", "text": "Invoice dated 22-06-1992, due in 30 days", "expect": []}
+{"id": 1197, "target": "date_of_birth", "text": "Invoice dated 5/21/09, due in 30 days", "expect": []}
+{"id": 1198, "target": "date_of_birth", "text": "Invoice dated 1967-04-26, due in 30 days", "expect": []}
+{"id": 1199, "target": "date_of_birth", "text": "Invoice dated 1989-12-18, due in 30 days", "expect": []}
+{"id": 1200, "target": "date_of_birth", "text": "Invoice dated 8/5/41, due in 30 days", "expect": []}
+{"id": 1201, "target": "date_of_birth", "text": "Invoice dated 1940-08-15, due in 30 days", "expect": []}
+{"id": 1202, "target": "date_of_birth", "text": "Invoice dated 1940-03-13, due in 30 days", "expect": []}
+{"id": 1203, "target": "date_of_birth", "text": "Invoice dated 2005-12-23, due in 30 days", "expect": []}
+{"id": 1204, "target": "mixed", "text": "Ticket from omer.smith@example.com: please call me back on +44 7700 900808, the card 4111 1111 1111 1111 was charged twice.", "expect": ["credit_card", "email_address", "phone_number"]}
+{"id": 1205, "target": "mixed", "text": "Ticket from sam.nguyen@example.com: please call me back on +44 7700 900105, the card 4242 4242 4242 4242 was charged twice.", "expect": ["credit_card", "email_address", "phone_number"]}
+{"id": 1206, "target": "mixed", "text": "Ticket from jordan.roe@example.com: please call me back on +44 7700 900245, the card 4012 8888 8888 1881 was charged twice.", "expect": ["credit_card", "email_address", "phone_number"]}
+{"id": 1207, "target": "mixed", "text": "Ticket from alex.shapiro@example.com: please call me back on +44 7700 900866, the card 4000 0566 5566 5556 was charged twice.", "expect": ["credit_card", "email_address", "phone_number"]}
+{"id": 1208, "target": "mixed", "text": "Ticket from omer.kim@example.com: please call me back on +44 7700 900215, the card 5555 5555 5555 4444 was charged twice.", "expect": ["credit_card", "email_address", "phone_number"]}
+{"id": 1209, "target": "mixed", "text": "Ticket from sam.levi@example.com: please call me back on +44 7700 900240, the card 5105 1051 0510 5100 was charged twice.", "expect": ["credit_card", "email_address", "phone_number"]}
+{"id": 1210, "target": "mixed", "text": "Ticket from tal.shapiro@example.com: please call me back on +44 7700 900503, the card 5200 8282 8282 8210 was charged twice.", "expect": ["credit_card", "email_address", "phone_number"]}
+{"id": 1211, "target": "mixed", "text": "Ticket from casey.cohen@example.com: please call me back on +44 7700 900721, the card 2223 0031 2200 3222 was charged twice.", "expect": ["credit_card", "email_address", "phone_number"]}
+{"id": 1212, "target": "mixed", "text": "Ticket from riley.levi@example.com: please call me back on +44 7700 900628, the card 3782 822463 10005 was charged twice.", "expect": ["credit_card", "email_address", "phone_number"]}
+{"id": 1213, "target": "mixed", "text": "Ticket from jordan.smith@example.com: please call me back on +44 7700 900778, the card 3714 496353 98431 was charged twice.", "expect": ["credit_card", "email_address", "phone_number"]}
+{"id": 1214, "target": "mixed", "text": "CI env dump:\nAWS_ACCESS_KEY_ID=ASIAH71UIAXGQNU84FN5\nGITHUB_TOKEN=ghp_p6mu6RiYaAv0WPvaNoV06mFrNasvd7OVeAy5\nNODE_ENV=production", "expect": ["aws_access_key", "github_token"]}
+{"id": 1215, "target": "mixed", "text": "CI env dump:\nAWS_ACCESS_KEY_ID=ASIAQNEM1FWGDT6CBDLQ\nGITHUB_TOKEN=ghp_GQ6DJO5ITIEdrF5E4otsWCB3kF0sKr9ImDTY\nNODE_ENV=production", "expect": ["aws_access_key", "github_token"]}
+{"id": 1216, "target": "mixed", "text": "CI env dump:\nAWS_ACCESS_KEY_ID=ASIA36O2BSH0SD9ACGR4\nGITHUB_TOKEN=ghp_viZrjyaBoPyT82KY2p0F0bfnK82hXLFQXO0J\nNODE_ENV=production", "expect": ["aws_access_key", "github_token"]}
+{"id": 1217, "target": "mixed", "text": "CI env dump:\nAWS_ACCESS_KEY_ID=ASIAXMINQUKK2VY4GFR3\nGITHUB_TOKEN=ghp_ssn77wg8ZT50o5CzT6LK0pQiMhejB3c16R4v\nNODE_ENV=production", "expect": ["aws_access_key", "github_token"]}
+{"id": 1218, "target": "mixed", "text": "CI env dump:\nAWS_ACCESS_KEY_ID=ASIAISHKUI39HX9YYCP6\nGITHUB_TOKEN=ghp_bNnWqOudObjOnGFRYfiY4ri2hl1F3Dej69bM\nNODE_ENV=production", "expect": ["aws_access_key", "github_token"]}
+{"id": 1219, "target": "mixed", "text": "CI env dump:\nAWS_ACCESS_KEY_ID=AKIAWAROJSCQMVYXMI6Y\nGITHUB_TOKEN=ghp_ImrhLFkal3bYm6ZV089siVl9vfxImzyeMZKZ\nNODE_ENV=production", "expect": ["aws_access_key", "github_token"]}
+{"id": 1220, "target": "mixed", "text": "CI env dump:\nAWS_ACCESS_KEY_ID=AKIAK665PIV3GX6DQ3OL\nGITHUB_TOKEN=ghp_XlA0DEOZsfEGrnSXX6qcpk7vGuy9RPiYM1tX\nNODE_ENV=production", "expect": ["aws_access_key", "github_token"]}
+{"id": 1221, "target": "mixed", "text": "CI env dump:\nAWS_ACCESS_KEY_ID=AKIAEVTKHAU9P90NPL6G\nGITHUB_TOKEN=ghp_Od90fqWHvjvzUTigi3HTT9rV5xdpvqOxBgjO\nNODE_ENV=production", "expect": ["aws_access_key", "github_token"]}
+{"id": 1222, "target": "mixed", "text": "CI env dump:\nAWS_ACCESS_KEY_ID=ASIA1HS8BZKR7CHDV3QP\nGITHUB_TOKEN=ghp_t87BtqDLlpVNROGQ8Xz6jpptJABdymkcg5cL\nNODE_ENV=production", "expect": ["aws_access_key", "github_token"]}
+{"id": 1223, "target": "mixed", "text": "CI env dump:\nAWS_ACCESS_KEY_ID=AKIAQG9UTVHEUEUM14AY\nGITHUB_TOKEN=ghp_QPolIaVouB2C0bGBSIHwXLprpP2hw6RgMOjf\nNODE_ENV=production", "expect": ["aws_access_key", "github_token"]}

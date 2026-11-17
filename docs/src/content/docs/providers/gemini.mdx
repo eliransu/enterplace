@@ -7,11 +7,11 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A provider of `kind: gemini` serves Google's Gemini API. Callers use the chat completions route as for any OpenAI model; Gantry translates each request to Gemini's generateContent body and the answer back. Callers that speak Google's own API, such as Gemini CLI, use `/v1beta/models/<model>:generateContent` and its siblings instead, and their requests go to the provider as sent, untranslated: see [Gemini CLI](/integrations/gemini-cli/). That route also reaches `kind: vertex` providers.
+A provider of `kind: gemini` serves Google's Gemini API. Callers use the chat completions route as for any OpenAI model; Enterplace translates each request to Gemini's generateContent body and the answer back. Callers that speak Google's own API, such as Gemini CLI, use `/v1beta/models/<model>:generateContent` and its siblings instead, and their requests go to the provider as sent, untranslated: see [Gemini CLI](/integrations/gemini-cli/). That route also reaches `kind: vertex` providers.
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: gemini
@@ -59,7 +59,7 @@ A `url` without a path gets `/v1beta`.
 
 A field that cannot be carried across is refused with `untranslatable`, naming it, never dropped. Examples: `logprobs`, `n` above 1, `parallel_tool_calls: false`, a `reasoning_effort` with no Gemini equivalent (`xhigh`, or `none` on Gemini 3), audio, a tool with `strict: true`, or a system message after the conversation has started.
 
-Gemini finish reasons that mean the answer failed, such as `MALFORMED_FUNCTION_CALL`, are reported the same way. The fields dropped on purpose (`user`, thought parts and others) are listed with their reasons in `gantry_core::gemini::SAFE_TO_DROP`.
+Gemini finish reasons that mean the answer failed, such as `MALFORMED_FUNCTION_CALL`, are reported the same way. The fields dropped on purpose (`user`, thought parts and others) are listed with their reasons in `enterplace_core::gemini::SAFE_TO_DROP`.
 
 `reasoning_effort` becomes `generationConfig.thinkingConfig`: a `thinkingBudget` of 1024, 4096 or 16384 tokens for `low`, `medium` and `high` on Gemini 2.5 (0 for `none`), and the same `thinkingLevel` on Gemini 3. See [Reasoning across providers](/providers/overview/#reasoning-across-providers).
 
@@ -75,7 +75,7 @@ Gemini finish reasons that mean the answer failed, such as `MALFORMED_FUNCTION_C
 
 - Prompt tokens are `promptTokenCount` plus `toolUsePromptTokenCount`, less `cachedContentTokenCount`, which is counted as cache reads.
 - Output tokens are `candidatesTokenCount` plus `thoughtsTokenCount`.
-- Gemini prices are built in. Run `gantry prices gemini-2.5-pro` to see one. See [Pricing](/routing/pricing/).
+- Gemini prices are built in. Run `enterplace prices gemini-2.5-pro` to see one. See [Pricing](/routing/pricing/).
 
 ## Behavior
 

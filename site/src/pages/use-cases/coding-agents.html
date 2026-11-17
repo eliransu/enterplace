@@ -1,19 +1,19 @@
 <!--
 title: Track Claude Code, Codex and Cursor usage per developer, with budgets
-description: Roll out Claude Code, Codex, GitHub Copilot, Cursor, Gemini CLI and other coding agents through Gantry. Each developer signs in as themselves, each session has a budget, and every request is recorded. With the table of tools and which were run against Gantry.
+description: Roll out Claude Code, Codex, GitHub Copilot, Cursor, Gemini CLI and other coding agents through Enterplace. Each developer signs in as themselves, each session has a budget, and every request is recorded. With the table of tools and which were run against Enterplace.
 nav: use-cases
 -->
 <section class="wrap head">
   <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>Coding agents</span></nav>
   <h1>Coding agents for every developer, each one under a name and a budget.</h1>
-  <p class="lead">Your developers already run Claude Code, Codex, Copilot or Cursor. Most of them share one provider key, or each team bought its own. This page moves them behind Gantry without taking a tool away from anyone.</p>
-  <figure class="code cmd"><pre>curl -fsSL https://gantry.enterplace.dev/install.sh | sh
-gantry start</pre></figure>
+  <p class="lead">Your developers already run Claude Code, Codex, Copilot or Cursor. Most of them share one provider key, or each team bought its own. This page moves them behind Enterplace without taking a tool away from anyone.</p>
+  <figure class="code cmd"><pre>curl -fsSL https://enterplace.dev/install.sh | sh
+enterplace start</pre></figure>
 </section>
 
 <section class="wrap sec" style="padding-top: 40px">
 {{gate
-label: Four developers send coding agent requests through Gantry. Three are allowed. One is refused because that person is over the daily budget.
+label: Four developers send coding agent requests through Enterplace. Three are allowed. One is refused because that person is over the daily budget.
 foot: Example requests from four developers.
 lane: sarah.miller | Claude Code | Anthropic
 lane: mike.johnson | Codex | OpenAI
@@ -48,39 +48,39 @@ req: 0 | sarah.miller | engineering | allow | claude-sonnet-5-5, rule engineerin
   <ol class="guide">
     <li>
       <div class="guide-text">
-        <h3>Run Gantry in observe mode</h3>
-        <p>Install it and run <code>gantry start</code>. No provider key is needed: it writes a policy with one rule that allows everyone, a free demo model and Claude subscription passthrough, and opens the dashboard, whose Start here checklist shows the exact settings for each coding tool.</p>
+        <h3>Run Enterplace in observe mode</h3>
+        <p>Install it and run <code>enterplace start</code>. No provider key is needed: it writes a policy with one rule that allows everyone, a free demo model and Claude subscription passthrough, and opens the dashboard, whose Start here checklist shows the exact settings for each coding tool.</p>
         <a class="more" href="docs:/start/step-1-see/">Step 1 in the docs {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>On the machine that runs Gantry</figcaption><pre>curl -fsSL https://gantry.enterplace.dev/install.sh | sh
-gantry start
+      <figure class="code"><figcaption>On the machine that runs Enterplace</figcaption><pre>curl -fsSL https://enterplace.dev/install.sh | sh
+enterplace start
 
 <span class="c"># optional: a provider key in the environment is picked up</span>
-<span class="c"># OPENAI_API_KEY=sk-... gantry start</span></pre></figure>
+<span class="c"># OPENAI_API_KEY=sk-... enterplace start</span></pre></figure>
     </li>
     <li>
       <div class="guide-text">
         <h3>Point each tool at the gateway</h3>
-        <p>A coding tool goes through Gantry when it lets you set a base URL. Claude Code on a Claude subscription needs one line and keeps its own login. On API billing it takes a Gantry key in place of the provider's, which never reaches the laptop.</p>
+        <p>A coding tool goes through Enterplace when it lets you set a base URL. Claude Code on a Claude subscription needs one line and keeps its own login. On API billing it takes a Enterplace key in place of the provider's, which never reaches the laptop.</p>
         <a class="more" href="docs:/integrations/coding-tools/">A guide for each tool {{> arrow}}</a>
       </div>
       <figure class="code"><figcaption>On each laptop, for Claude Code</figcaption><pre><span class="c"># on a Claude subscription: no API key</span>
-export ANTHROPIC_BASE_URL=https://gantry.example.com
+export ANTHROPIC_BASE_URL=https://enterplace.example.com
 
-<span class="c"># on API billing: add a Gantry key</span>
-export ANTHROPIC_API_KEY=gantry_...</pre></figure>
+<span class="c"># on API billing: add a Enterplace key</span>
+export ANTHROPIC_API_KEY=enterplace_...</pre></figure>
     </li>
     <li>
       <div class="guide-text">
         <h3>Give each developer their own key</h3>
-        <p>Issue a key per person, or let developers sign in with the company account. <code>gantry login</code> opens the browser, and the key it stores is named by their email and expires on the schedule you set.</p>
+        <p>Issue a key per person, or let developers sign in with the company account. <code>enterplace login</code> opens the browser, and the key it stores is named by their email and expires on the schedule you set.</p>
         <a class="more" href="docs:/governance/single-sign-on/">Single sign-on in the docs {{> arrow}}</a>
       </div>
       <figure class="code"><figcaption>Start with the first; the second needs single sign-on</figcaption><pre><span class="c"># an admin issues a key</span>
-gantry key new sarah.miller --team payments
+enterplace key new sarah.miller --team payments
 
 <span class="c"># or the developer signs in</span>
-gantry login https://gantry.example.com</pre></figure>
+enterplace login https://enterplace.example.com</pre></figure>
     </li>
     <li>
       <div class="guide-text">
@@ -88,7 +88,7 @@ gantry login https://gantry.example.com</pre></figure>
         <p>In observe mode a request over the budget is forwarded and recorded as <code>would_refuse</code>, so you see what the numbers would do. Delete <code>mode: observe</code> to enforce them.</p>
         <a class="more" href="docs:/governance/budgets-and-rate-limits/">Budgets in the docs {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml (added)</figcaption><pre>limits:
+      <figure class="code"><figcaption>enterplace.policy.yaml (added)</figcaption><pre>limits:
   - { team: "*", budget: { usd: 500, per: month } }
   - { person: "*", budget: { usd: 20, per: day } }</pre></figure>
     </li>
@@ -98,7 +98,7 @@ gantry login https://gantry.example.com</pre></figure>
         <p>Until the date, the guardrail records what it finds and blocks nothing. From that date a prompt that holds an API key, a private key or a database password is refused with <code>guardrail_blocked</code>.</p>
         <a class="more" href="docs:/governance/guardrails/">Guardrails in the docs {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml (changed)</figcaption><pre>guardrails:
+      <figure class="code"><figcaption>enterplace.policy.yaml (changed)</figcaption><pre>guardrails:
   - name: no-secrets
     type: secrets
     action: block
@@ -118,7 +118,7 @@ rules:
       <h2>What you see afterwards</h2>
       <ul class="ticks">
         <li>The console's Analytics page ranks requests, tokens and cost <strong>by coding agent, person, team or model</strong>.</li>
-        <li><code>gantry audit coverage</code> lists each person and the tool they used, and names the people who hold a key and have sent nothing.</li>
+        <li><code>enterplace audit coverage</code> lists each person and the tool they used, and names the people who hold a key and have sent nothing.</li>
         <li>A refused developer reads the reason in the terminal they already use, with a decision ID an admin can look up.</li>
         <li>A coding session stays on one deployment while it answers, so the provider's prompt cache keeps working.</li>
       </ul>
@@ -127,7 +127,7 @@ rules:
     <figure class="code"><figcaption>What the developer reads, shortened</figcaption><pre><span class="no">Refused (budget_exceeded)</span>: ... Decision 01M79...
 
 <span class="c"># the admin asks which rule and limits apply</span>
-gantry explain gantry.policy.yaml \
+enterplace explain enterplace.policy.yaml \
   --key emily.davis --model claude-sonnet-5-5</pre></figure>
   </div>
 </section>
@@ -135,10 +135,10 @@ gantry explain gantry.policy.yaml \
 <section class="wrap sec" id="tools">
   <div class="sec-head">
     <h2>Which tools, and what was run</h2>
-    <p>"Run against Gantry" means the tool's real client was run headless against a local Gantry and a mock provider, and the audit records were checked. No run used a real model provider.</p>
+    <p>"Run against Enterplace" means the tool's real client was run headless against a local Enterplace and a mock provider, and the audit records were checked. No run used a real model provider.</p>
   </div>
   <table class="tbl">
-    <thead><tr><th>Tool</th><th>Route on Gantry</th><th>Stays outside Gantry</th><th>Run against Gantry</th></tr></thead>
+    <thead><tr><th>Tool</th><th>Route on Enterplace</th><th>Stays outside Enterplace</th><th>Run against Enterplace</th></tr></thead>
     <tbody>
       <tr><td><a href="docs:/integrations/claude-code/">Claude Code</a></td><td><code>/v1/messages</code></td><td>Telemetry unless turned off</td><td><span class="yes">Yes</span></td></tr>
       <tr><td><a href="docs:/integrations/codex/">Codex</a></td><td><code>/v1/responses</code></td><td></td><td><span class="yes">Yes</span></td></tr>
@@ -160,15 +160,15 @@ gantry explain gantry.policy.yaml \
       <tr><td><a href="docs:/integrations/open-webui/">Open WebUI</a></td><td>Chat completions</td><td>Background steps on direct connections</td><td><span class="no">No</span></td></tr>
     </tbody>
   </table>
-  <p class="tbl-note">"No" means the guide was written from the tool's own documentation and has not been run through Gantry. <a href="docs:/integrations/coding-tools/">The same table in the docs</a>, kept current.</p>
+  <p class="tbl-note">"No" means the guide was written from the tool's own documentation and has not been run through Enterplace. <a href="docs:/integrations/coding-tools/">The same table in the docs</a>, kept current.</p>
 </section>
 
 <section class="wrap sec doc">
   <h2>Limits to know before you start</h2>
   <ul class="ticks out">
-    <li><strong>Gantry sees what is sent through it.</strong> A tool that still calls a provider directly stays invisible until you point it at the gateway. The coverage report shows who holds a key and has sent nothing.</li>
-    <li><strong>On Claude subscriptions, limits are in tokens and requests.</strong> Claude Code on Pro, Max, Team or Enterprise seats goes through Gantry on its own login, with no API key. The seat is billed by Anthropic, so dollar figures there are estimates. Where nothing may be routed, a watch setup reads Claude Code's own usage data and does not block. <a href="docs:/integrations/claude-team/">Claude Team and Enterprise</a></li>
-    <li><strong>Some tools have no setting for a gateway of your own.</strong> Windsurf, Amazon Q Developer and Kiro document no custom model endpoint, so they cannot be sent through Gantry.</li>
+    <li><strong>Enterplace sees what is sent through it.</strong> A tool that still calls a provider directly stays invisible until you point it at the gateway. The coverage report shows who holds a key and has sent nothing.</li>
+    <li><strong>On Claude subscriptions, limits are in tokens and requests.</strong> Claude Code on Pro, Max, Team or Enterprise seats goes through Enterplace on its own login, with no API key. The seat is billed by Anthropic, so dollar figures there are estimates. Where nothing may be routed, a watch setup reads Claude Code's own usage data and does not block. <a href="docs:/integrations/claude-team/">Claude Team and Enterprise</a></li>
+    <li><strong>Some tools have no setting for a gateway of your own.</strong> Windsurf, Amazon Q Developer and Kiro document no custom model endpoint, so they cannot be sent through Enterplace.</li>
     <li><strong>Parts of some tools stay outside.</strong> Cursor's tab completion and Copilot's inline suggestions do not use the endpoint you configure. The table above lists what each tool sends elsewhere.</li>
   </ul>
 </section>
@@ -176,10 +176,10 @@ gantry explain gantry.policy.yaml \
 <section class="wrap sec doc">
   <h2>Questions people ask</h2>
   <div class="qa">
-    <details><summary>Does a developer have to change how they work?</summary><p>They change two settings once, or run <code>gantry login</code>. After that the tool behaves as before. A refusal arrives in the error shape the tool already shows, with the cause and what to do.</p></details>
+    <details><summary>Does a developer have to change how they work?</summary><p>They change two settings once, or run <code>enterplace login</code>. After that the tool behaves as before. A refusal arrives in the error shape the tool already shows, with the cause and what to do.</p></details>
     <details><summary>Can different teams get different models?</summary><p>Yes. A rule names the people or team it applies to and the models they may use. The first rule that names the person decides. <a href="docs:/governance/policy/">The policy file</a></p></details>
     <details><summary>What happens when a key leaks?</summary><p>Revoke that one key in the console or with the admin API, and it stops at once. Nobody else is touched, because the provider's key never left the gateway. A kill switch stops a person, a team or a model with one command.</p></details>
-    <details><summary>Does Gantry store our code?</summary><p>No. The audit log holds who asked, the model, the decision and the cost. It holds no prompt or answer text.</p></details>
+    <details><summary>Does Enterplace store our code?</summary><p>No. The audit log holds who asked, the model, the decision and the cost. It holds no prompt or answer text.</p></details>
   </div>
 </section>
 

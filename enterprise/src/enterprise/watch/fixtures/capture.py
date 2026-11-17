@@ -53,7 +53,7 @@ env.update({
     "CLAUDE_CONFIG_DIR": str(home), "ANTHROPIC_API_KEY": "sk-ant-local-mock", "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "OTEL_METRICS_EXPORTER": "otlp", "OTEL_LOGS_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_PROTOCOL": proto,
-    "OTEL_EXPORTER_OTLP_ENDPOINT": f"http://127.0.0.1:{port}/otlp", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer gantry_watch_capture",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": f"http://127.0.0.1:{port}/otlp", "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer enterplace_watch_capture",
     "OTEL_METRIC_EXPORT_INTERVAL": "1000", "OTEL_LOGS_EXPORT_INTERVAL": "1000", "OTEL_LOG_USER_PROMPTS": "1",
     "OTEL_RESOURCE_ATTRIBUTES": "user.email=maya.cohen@example.com,department=engineering",
 })

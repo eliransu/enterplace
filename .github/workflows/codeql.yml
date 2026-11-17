@@ -1,6 +1,6 @@
 # CodeQL static analysis of the Rust code (and the workflows themselves), on every pull request, every push to main
 # and weekly, so a new query catches old code too. Findings show under Security, Code scanning. `cargo deny check`
-# (ci.yml) covers known advisories in the dependencies; this covers bugs in Gantry's own code.
+# (ci.yml) covers known advisories in the dependencies; this covers bugs in Enterplace's own code.
 name: codeql
 on:
   push:

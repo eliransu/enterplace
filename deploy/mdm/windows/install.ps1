@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-Installs the Gantry device agent on Windows: the binary, the enrolment token, and a scheduled task that starts the
+Installs the Enterplace device agent on Windows: the binary, the enrolment token, and a scheduled task that starts the
 agent when a person signs in.
 
 .DESCRIPTION
 Run as administrator, or as SYSTEM from Intune (a Win32 app, see deploy/mdm/README.md). The agent runs as the
 signed-in person, so it writes that person's own tool settings and nothing outside their profile.
 
-  install.ps1 -ControlPlane https://gantry.example.com -Token gantry_dev_...
-  install.ps1 -ControlPlane https://gantry.example.com -TokenFile .\device-token -Binary .\gantry.exe
+  install.ps1 -ControlPlane https://enterplace.example.com -Token enterplace_dev_...
+  install.ps1 -ControlPlane https://enterplace.example.com -TokenFile .\device-token -Binary .\enterplace.exe
   install.ps1 -Uninstall
 
 The script is not signed. Sign it with your own code signing certificate (Set-AuthenticodeSignature) if your
@@ -16,10 +16,10 @@ execution policy asks for signed scripts, or run it with -ExecutionPolicy Bypass
 #>
 [CmdletBinding()]
 param(
-    # The gateway's address, https, as `gantry device --control-plane` takes it.
+    # The gateway's address, https, as `enterplace device --control-plane` takes it.
     [string]$ControlPlane,
-    # The Gantry Enterprise binary for this machine (x86_64 or arm64).
-    [string]$Binary = (Join-Path $PSScriptRoot 'gantry.exe'),
+    # The Enterplace Enterprise binary for this machine (x86_64 or arm64).
+    [string]$Binary = (Join-Path $PSScriptRoot 'enterplace.exe'),
     # The enrolment token, or a file holding it. With neither, a token file already on the machine is kept.
     [string]$Token,
     [string]$TokenFile,
@@ -29,11 +29,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$TaskName = 'Gantry device agent'
-$InstallDir = Join-Path $env:ProgramFiles 'Gantry'
-$DataDir = Join-Path $env:ProgramData 'Gantry'
+$TaskName = 'Enterplace device agent'
+$InstallDir = Join-Path $env:ProgramFiles 'Enterplace'
+$DataDir = Join-Path $env:ProgramData 'Enterplace'
 $TokenPath = Join-Path $DataDir 'device-token'
-$Exe = Join-Path $InstallDir 'gantry.exe'
+$Exe = Join-Path $InstallDir 'enterplace.exe'
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -46,16 +46,16 @@ if ($Uninstall) {
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     }
     Remove-Item -Recurse -Force $InstallDir, $DataDir -ErrorAction SilentlyContinue
-    Write-Output 'Removed the Gantry device agent. Tool settings it wrote in each profile stay as they are.'
+    Write-Output 'Removed the Enterplace device agent. Tool settings it wrote in each profile stay as they are.'
     exit 0
 }
 
 # The address goes into the task's command line, so only an address is taken.
 if ($ControlPlane -notmatch '^https://[A-Za-z0-9.\-]+(:\d+)?(/[A-Za-z0-9._\-/]*)?$') {
-    throw "-ControlPlane must be the gateway's https address, such as https://gantry.example.com. Got '$ControlPlane'."
+    throw "-ControlPlane must be the gateway's https address, such as https://enterplace.example.com. Got '$ControlPlane'."
 }
 if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) {
-    throw "No binary at $Binary. Pass -Binary with the path to gantry.exe."
+    throw "No binary at $Binary. Pass -Binary with the path to enterplace.exe."
 }
 if ($Interval -lt 30) {
     throw '-Interval is in seconds, 30 or more.'
@@ -72,8 +72,8 @@ if ($TokenFile) {
     $Token = (Get-Content -LiteralPath $TokenFile -Raw).Trim()
 }
 if ($Token) {
-    if ($Token -notmatch '^gantry_dev_[0-9a-f]+$') {
-        throw 'The enrolment token starts with gantry_dev_. Create one on the console''s Devices page.'
+    if ($Token -notmatch '^enterplace_dev_[0-9a-f]+$') {
+        throw 'The enrolment token starts with enterplace_dev_. Create one on the console''s Devices page.'
     }
     Set-Content -LiteralPath $TokenPath -Value $Token -NoNewline -Encoding ascii
 } elseif (-not (Test-Path -LiteralPath $TokenPath)) {

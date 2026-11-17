@@ -4,18 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cloud and production agents: a key, a budget and a record per workload</title>
-<meta name="description" content="Agents and apps in your cloud call models and MCP tools through Gantry. Each workload has its own key and budget, a looping agent can be stopped with one command, and every call is recorded. Steps with the exact policy lines.">
+<meta name="description" content="Agents and apps in your cloud call models and MCP tools through Enterplace. Each workload has its own key and budget, a looping agent can be stopped with one command, and every call is recorded. Steps with the exact policy lines.">
 <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<link rel="canonical" href="https://gantry.enterplace.dev/use-cases/cloud-agents/">
+<link rel="canonical" href="https://enterplace.dev/use-cases/cloud-agents/">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Gantry">
-<meta property="og:url" content="https://gantry.enterplace.dev/use-cases/cloud-agents/">
+<meta property="og:site_name" content="Enterplace">
+<meta property="og:url" content="https://enterplace.dev/use-cases/cloud-agents/">
 <meta property="og:title" content="Cloud and production agents: a key, a budget and a record per workload">
-<meta property="og:description" content="Agents and apps in your cloud call models and MCP tools through Gantry. Each workload has its own key and budget, a looping agent can be stopped with one command, and every call is recorded. Steps with the exact policy lines.">
-<meta property="og:image" content="https://gantry.enterplace.dev/og.png">
+<meta property="og:description" content="Agents and apps in your cloud call models and MCP tools through Enterplace. Each workload has its own key and budget, a looping agent can be stopped with one command, and every call is recorded. Steps with the exact policy lines.">
+<meta property="og:image" content="https://enterplace.dev/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
@@ -30,10 +30,10 @@
 
 <header class="hdr" id="hdr">
   <div class="wrap hdr-in">
-    <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
-gantry</a>
+    <a class="brand" href="/" aria-label="Enterplace, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+enterplace</a>
 
-    <a class="theme gh-phone" href="https://github.com/eliransu/gantry" aria-label="Gantry on GitHub, open source"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
+    <a class="theme gh-phone" href="https://github.com/eliransu/enterplace" aria-label="Enterplace on GitHub, open source"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
 
     <button class="burger" type="button" aria-expanded="false" aria-controls="nav" aria-label="Menu"><span></span></button>
 
@@ -44,8 +44,8 @@ gantry</a>
         <div class="menu" id="menu-product">
           <a href="/product/"><strong>How it works</strong><span>The request path, the controls, the audit log and the console</span></a>
           <a href="/deploy/"><strong>Deploy</strong><span>Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare</span></a>
-          <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops</span></a>
-          <a href="/compare/"><strong>Compare</strong><span>Gantry next to LiteLLM and Bifrost, with sources</span></a>
+          <a href="/security/"><strong>Security</strong><span>What Enterplace protects, and where it stops</span></a>
+          <a href="/compare/"><strong>Compare</strong><span>Enterplace next to LiteLLM and Bifrost, with sources</span></a>
         </div>
       </div>
 
@@ -86,11 +86,11 @@ gantry</a>
       </div>
 
       <a class="nav-link" data-group="enterprise" href="/enterprise/">Enterprise</a>
-      <a class="nav-link" href="https://gantry-docs.enterplace.dev/">Docs</a>
+      <a class="nav-link" href="https://docs.enterplace.dev/">Docs</a>
 
       <div class="nav-actions">
-        <a class="btn btn-main btn-sm" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Get started</a>
-        <a class="theme gh-wide" href="https://github.com/eliransu/gantry" aria-label="Gantry on GitHub, open source">
+        <a class="btn btn-main btn-sm" href="https://docs.enterplace.dev/getting-started/quickstart/">Get started</a>
+        <a class="theme gh-wide" href="https://github.com/eliransu/enterplace" aria-label="Enterplace on GitHub, open source">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
         </a>
         <button class="theme" type="button" aria-label="Switch between light and dark">
@@ -109,7 +109,7 @@ gantry</a>
 </section>
 
 <section class="wrap sec" style="padding-top: 40px">
-<figure class="gate" data-gate aria-label="Four workloads send requests through Gantry. Three are allowed. The triage agent is refused because its key reached its budget.">
+<figure class="gate" data-gate aria-label="Four workloads send requests through Enterplace. Three are allowed. The triage agent is refused because its key reached its budget.">
 <div class="gate-lanes" aria-hidden="true">
 <div class="lane"><span class="lane-from">svc-invoice-bot<i>finance</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">OpenAI</span></div>
 <div class="lane"><span class="lane-from">svc-triage-agent<i>support</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">key_budget_exceeded</span></span><span class="lane-to">Bedrock</span></div>
@@ -147,31 +147,31 @@ gantry</a>
       <div class="guide-text">
         <h3>Issue a key per workload</h3>
         <p>Give each service or job its own name, team and budget. The key is shown once and stored as a hash. Put it in the secret store the service already reads.</p>
-        <a class="more" href="https://gantry-docs.enterplace.dev/governance/keys/">Keys in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <a class="more" href="https://docs.enterplace.dev/governance/keys/">Keys in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
-      <figure class="code"><figcaption>A key with its own budget</figcaption><pre>gantry key new svc-triage-agent \
+      <figure class="code"><figcaption>A key with its own budget</figcaption><pre>enterplace key new svc-triage-agent \
   --team support --budget 20/month</pre></figure>
     </li>
     <li>
       <div class="guide-text">
-        <h3>Point the SDKs at Gantry</h3>
+        <h3>Point the SDKs at Enterplace</h3>
         <p>The OpenAI and Anthropic SDKs read their base URL from the environment, so most services need no code change. The docs have a prompt you can give your coding agent to find and move every call site, then you read the diff.</p>
-        <a class="more" href="https://gantry-docs.enterplace.dev/integrations/connect-a-project/">Connect a project <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <a class="more" href="https://docs.enterplace.dev/integrations/connect-a-project/">Connect a project <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
-      <figure class="code"><figcaption>Where the service runs</figcaption><pre>OPENAI_BASE_URL=https://gantry.example.com/v1
-ANTHROPIC_BASE_URL=https://gantry.example.com
-GANTRY_API_KEY=gantry_...</pre></figure>
+      <figure class="code"><figcaption>Where the service runs</figcaption><pre>OPENAI_BASE_URL=https://enterplace.example.com/v1
+ANTHROPIC_BASE_URL=https://enterplace.example.com
+ENTERPLACE_API_KEY=enterplace_...</pre></figure>
     </li>
     <li>
       <div class="guide-text">
         <h3>Write the rule and the limits</h3>
         <p>A rule names the team and the models it may use. Limits cap dollars, requests per minute and requests in flight. A product that serves your own customers can carry a budget per end customer.</p>
-        <a class="more" href="https://gantry-docs.enterplace.dev/governance/budgets-and-rate-limits/">Budgets and rate limits <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <a class="more" href="https://docs.enterplace.dev/governance/budgets-and-rate-limits/">Budgets and rate limits <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>rules:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>rules:
   - name: support-agents
     principals: { team: support }
     models: [claude-sonnet-5-5, claude-haiku-5-5]
@@ -184,14 +184,14 @@ limits:
       <div class="guide-text">
         <h3>Keep the stop button ready</h3>
         <p>A kill switch needs no policy change. It stops a person, a team, a key or a model, and the callers it stops see the reason and who set it.</p>
-        <a class="more" href="https://gantry-docs.enterplace.dev/governance/kill-switches/">Kill switches <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <a class="more" href="https://docs.enterplace.dev/governance/kill-switches/">Kill switches <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
-      <figure class="code"><figcaption>When an agent loops</figcaption><pre>gantry kill --team support \
+      <figure class="code"><figcaption>When an agent loops</figcaption><pre>enterplace kill --team support \
   --reason "agent retrying one ticket in a loop"
 
 <span class="c"># when it is fixed</span>
-gantry unkill --team support</pre></figure>
+enterplace unkill --team support</pre></figure>
     </li>
   </ol>
 </section>
@@ -202,11 +202,11 @@ gantry unkill --team support</pre></figure>
       <h2>What you see afterwards</h2>
       <ul class="ticks">
         <li>Spend per service, team, end customer and model, with a forecast for each budget.</li>
-        <li>Every response carries <code>X-Gantry-Decision</code>. Log it beside your own request ID and you can find the record for any call.</li>
+        <li>Every response carries <code>X-Enterplace-Decision</code>. Log it beside your own request ID and you can find the record for any call.</li>
         <li>OpenTelemetry traces over OTLP, joined to the caller's trace, and Prometheus metrics on an address of their own.</li>
         <li>On AWS and Google Cloud, Bedrock and Vertex AI need no provider key. The gateway signs in as its own role or service account.</li>
       </ul>
-      <a class="more" href="https://gantry-docs.enterplace.dev/operations/observability/">Observability in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+      <a class="more" href="https://docs.enterplace.dev/operations/observability/">Observability in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
     </div>
     <figure class="code"><figcaption>What the stopped service reads, shortened</figcaption><pre>HTTP 403
@@ -221,8 +221,8 @@ gantry unkill --team support</pre></figure>
 <section class="wrap sec doc">
   <h2>Limits to know before you start</h2>
   <ul class="ticks out">
-    <li><strong>Gantry is in the request path.</strong> Run more than one replica on a Postgres store, and put it where your services can reach it. The deploy guides cover sizing.</li>
-    <li><strong>The decision record says what Gantry decided.</strong> How the provider answered arrives in a second record, with status, tokens and cost, when the answer ends.</li>
+    <li><strong>Enterplace is in the request path.</strong> Run more than one replica on a Postgres store, and put it where your services can reach it. The deploy guides cover sizing.</li>
+    <li><strong>The decision record says what Enterplace decided.</strong> How the provider answered arrives in a second record, with status, tokens and cost, when the answer ends.</li>
     <li><strong>The answer cache is per replica.</strong> Budgets, rate limits and kill switches are shared through the store. Cached answers are not.</li>
     <li><strong>One caller's requests in flight</strong> may hold at most 64 MiB of request bodies.</li>
   </ul>
@@ -231,10 +231,10 @@ gantry unkill --team support</pre></figure>
 <section class="wrap sec doc">
   <h2>Questions people ask</h2>
   <div class="qa">
-    <details><summary>Our services already hold tokens from our identity provider. Do they need a Gantry key too?</summary><p>No. Gantry accepts JWTs from issuers you trust in place of a key, and reads the person and team from claims you name. <a href="https://gantry-docs.enterplace.dev/governance/access-control/">Access control</a></p></details>
-    <details><summary>Does Gantry change the request?</summary><p>The body is forwarded byte for byte, except where your policy changes it: a guardrail that masks, or a translation you opted into. An unknown query parameter is refused by name, never dropped silently.</p></details>
-    <details><summary>What if Gantry cannot write its audit log?</summary><p>Requests are refused with <code>audit_unavailable</code> until it can. That is the design: no request leaves without a record.</p></details>
-    <details><summary>Do the agents' tool calls go through it too?</summary><p>If the tools are MCP servers, yes. Put the servers behind Gantry's MCP endpoint and each call is checked and recorded like a model call. <a href="/use-cases/mcp-tools/">MCP tools</a></p></details>
+    <details><summary>Our services already hold tokens from our identity provider. Do they need a Enterplace key too?</summary><p>No. Enterplace accepts JWTs from issuers you trust in place of a key, and reads the person and team from claims you name. <a href="https://docs.enterplace.dev/governance/access-control/">Access control</a></p></details>
+    <details><summary>Does Enterplace change the request?</summary><p>The body is forwarded byte for byte, except where your policy changes it: a guardrail that masks, or a translation you opted into. An unknown query parameter is refused by name, never dropped silently.</p></details>
+    <details><summary>What if Enterplace cannot write its audit log?</summary><p>Requests are refused with <code>audit_unavailable</code> until it can. That is the design: no request leaves without a record.</p></details>
+    <details><summary>Do the agents' tool calls go through it too?</summary><p>If the tools are MCP servers, yes. Put the servers behind Enterplace's MCP endpoint and each call is checked and recorded like a model call. <a href="/use-cases/mcp-tools/">MCP tools</a></p></details>
   </div>
 </section>
 
@@ -254,7 +254,7 @@ gantry unkill --team support</pre></figure>
   <div class="cta-box">
     <h2>Start with step one. Block nothing, and find out what is in use.</h2>
     <div class="actions">
-      <a class="btn btn-ink" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink" href="https://docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
       <a class="btn btn-ink-line" href="/learn/five-steps/">See the five steps</a>
       <a class="btn btn-ink-line" href="/deploy/">Deploy in your cloud</a>
     </div>
@@ -267,8 +267,8 @@ gantry unkill --team support</pre></figure>
 <footer class="ftr">
   <div class="wrap ftr-top">
     <div class="ftr-about">
-      <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
-gantry</a>
+      <a class="brand" href="/" aria-label="Enterplace, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+enterplace</a>
       <p>A self-hosted AI gateway, governance first. One Docker image plus Postgres, in your cloud.</p>
     </div>
     <nav class="ftr-cols" aria-label="Site map">
@@ -306,15 +306,15 @@ gantry</a>
       </div>
       <div>
         <h2>Project</h2>
-        <a href="https://gantry-docs.enterplace.dev/">Docs</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/status/">Project status</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/changelog/">Changelog</a>
-        <a href="https://github.com/eliransu/gantry">GitHub</a>
+        <a href="https://docs.enterplace.dev/">Docs</a>
+        <a href="https://docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
+        <a href="https://docs.enterplace.dev/getting-started/status/">Project status</a>
+        <a href="https://docs.enterplace.dev/getting-started/changelog/">Changelog</a>
+        <a href="https://github.com/eliransu/enterplace">GitHub</a>
       </div>
     </nav>
   </div>
-  <p class="wrap ftr-legal">Open source core under MIT, <a href="https://github.com/eliransu/gantry">on GitHub</a>. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
+  <p class="wrap ftr-legal">Open source core under MIT, <a href="https://github.com/eliransu/enterplace">on GitHub</a>. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
 </footer>
 </body>
 </html>

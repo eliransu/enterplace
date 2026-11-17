@@ -29,11 +29,11 @@ output "outbound_ips" {
 }
 
 output "master_key_secret" {
-  description = "The Key Vault secret the gateway reads GANTRY_MASTER_KEY from."
+  description = "The Key Vault secret the gateway reads ENTERPLACE_MASTER_KEY from."
   value       = local.vault_secrets["master-key"]
 }
 
 output "export_key_secret" {
-  description = "The Key Vault secret the gateway reads GANTRY_EXPORT_KEY from."
+  description = "The Key Vault secret the gateway reads ENTERPLACE_EXPORT_KEY from."
   value       = local.vault_secrets["export-key"]
 }

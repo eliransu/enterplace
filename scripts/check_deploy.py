@@ -1,9 +1,9 @@
 """Checks the Helm chart in deploy/ without a cluster: YAML parses, the security settings are there, and the policy passes
-`gantry check`.
-Also checks the OpenTelemetry Collector recipe in the observability docs page against audit records a real Gantry writes
-(it starts `gantry serve` on 127.0.0.1:20953 for a moment).
+`enterplace check`.
+Also checks the OpenTelemetry Collector recipe in the observability docs page against audit records a real Enterplace writes
+(it starts `enterplace serve` on 127.0.0.1:20953 for a moment).
 
-Usage: python3 scripts/check_deploy.py [path/to/gantry]
+Usage: python3 scripts/check_deploy.py [path/to/enterplace]
 helm is not required: when it is on PATH, `helm lint` and `helm template` run too, and the rendered StatefulSet's pod is
 checked in full. Without it the chart's templates are only checked for balanced blocks. The Terraform modules, the
 Cloudflare template and the Compose guide are checked by .github/workflows/deploy-targets.yml.
@@ -12,9 +12,9 @@ YAML is parsed with Ruby's bundled Psych, because Python's standard library has 
 import json, pathlib, re, shutil, subprocess, sys, tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-CHART = ROOT / "deploy" / "helm" / "gantry"
+CHART = ROOT / "deploy" / "helm" / "enterplace"
 OBSERVABILITY = ROOT / "docs" / "src" / "content" / "docs" / "operations" / "observability.mdx"
-GANTRY = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "target" / "debug" / "gantry"
+ENTERPLACE = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "target" / "debug" / "enterplace"
 
 
 def load_all(path: pathlib.Path) -> list:
@@ -35,22 +35,22 @@ def check_pod(spec: dict, where: str) -> None:
             continue
         assert c["readinessProbe"]["httpGet"]["path"] == "/readyz" and c["livenessProbe"]["httpGet"]["path"] == "/healthz", where
         mounts = {m["mountPath"] for m in c["volumeMounts"]}
-        assert "/var/lib/gantry" in mounts, f"{where}: the audit log needs its writable volume"
+        assert "/var/lib/enterplace" in mounts, f"{where}: the audit log needs its writable volume"
 
 
-def gantry_check(policy: str, where: str) -> None:
-    if not GANTRY.exists():
-        print(f"skipped gantry check of {where}: {GANTRY} not built")
+def enterplace_check(policy: str, where: str) -> None:
+    if not ENTERPLACE.exists():
+        print(f"skipped enterplace check of {where}: {ENTERPLACE} not built")
         return
     with tempfile.TemporaryDirectory() as tmp:
-        path = pathlib.Path(tmp) / "gantry.policy.yaml"
+        path = pathlib.Path(tmp) / "enterplace.policy.yaml"
         path.write_text(policy)
-        out = subprocess.run([str(GANTRY), "check", str(path)], capture_output=True, text=True)
-        assert out.returncode == 0, f"{where}: gantry check failed:\n{out.stdout}{out.stderr}"
+        out = subprocess.run([str(ENTERPLACE), "check", str(path)], capture_output=True, text=True)
+        assert out.returncode == 0, f"{where}: enterplace check failed:\n{out.stdout}{out.stderr}"
 
 
 def check_otel() -> None:
-    """The Collector recipe in the observability docs page parses, and its timestamp layout fits every record a real Gantry wrote."""
+    """The Collector recipe in the observability docs page parses, and its timestamp layout fits every record a real Enterplace wrote."""
     text = OBSERVABILITY.read_text()
     block = re.search(r"### OpenTelemetry Collector.*?```yaml\n(.*?)```", text, re.S)
     assert block, "no Collector recipe in the observability docs page"
@@ -58,18 +58,18 @@ def check_otel() -> None:
         recipe = pathlib.Path(tmp) / "collector.yaml"
         recipe.write_text(block.group(1))
         config = load_all(recipe)[0]
-    operator = config["receivers"]["filelog/gantry"]["operators"][0]
+    operator = config["receivers"]["filelog/enterplace"]["operators"][0]
     assert operator["timestamp"]["parse_from"] == "attributes.time" and operator["parse_to"] == "attributes"
-    assert config["receivers"]["filelog/gantry"]["include"] == ["/var/lib/gantry/gantry-audit.jsonl"]
-    if not GANTRY.exists():
-        print(f"skipped the audit record check: {GANTRY} not built")
+    assert config["receivers"]["filelog/enterplace"]["include"] == ["/var/lib/enterplace/enterplace-audit.jsonl"]
+    if not ENTERPLACE.exists():
+        print(f"skipped the audit record check: {ENTERPLACE} not built")
         return
-    # A real audit log: start Gantry, send one refused request, stop it.
+    # A real audit log: start Enterplace, send one refused request, stop it.
     with tempfile.TemporaryDirectory() as tmp:
         d = pathlib.Path(tmp)
-        (d / "p.yaml").write_text(load_all(CHART / "values.yaml")[0]["policy"].replace("/var/lib/gantry/", f"{d}/"))
+        (d / "p.yaml").write_text(load_all(CHART / "values.yaml")[0]["policy"].replace("/var/lib/enterplace/", f"{d}/"))
         (d / "k.yaml").write_text("keys: []\n")
-        server = subprocess.Popen([str(GANTRY), "serve", str(d / "p.yaml"), "--keys", str(d / "k.yaml"), "--listen", "127.0.0.1:20953"], env={"OPENAI_PROVIDER_KEY": "not-a-real-key"}, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        server = subprocess.Popen([str(ENTERPLACE), "serve", str(d / "p.yaml"), "--keys", str(d / "k.yaml"), "--listen", "127.0.0.1:20953"], env={"OPENAI_PROVIDER_KEY": "not-a-real-key"}, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         try:
             assert server.stdout and "listening" in server.stdout.readline()
             import urllib.request, urllib.error
@@ -81,12 +81,12 @@ def check_otel() -> None:
         finally:
             server.terminate()
             server.wait(10)
-        lines = (d / "gantry-audit.jsonl").read_text().splitlines()
+        lines = (d / "enterplace-audit.jsonl").read_text().splitlines()
     assert len(lines) >= 2, lines
     for line in lines:
         record = json.loads(line)
         assert isinstance(record, dict)
-        # The Go layout 2006-01-02T15:04:05.000Z07:00 with a UTC "Z", as Gantry always writes it.
+        # The Go layout 2006-01-02T15:04:05.000Z07:00 with a UTC "Z", as Enterplace always writes it.
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", record["time"]), record["time"]
     print(f"Collector recipe parses; {len(lines)} audit records fit its timestamp layout")
 
@@ -95,8 +95,8 @@ def main() -> None:
     values = load_all(CHART / "values.yaml")[0]
     load_all(CHART / "Chart.yaml")
     policy = values["policy"]
-    assert "/var/lib/gantry/" in policy, "the audit log must be on the writable volume"
-    gantry_check(policy, str(CHART / "values.yaml"))
+    assert "/var/lib/enterplace/" in policy, "the audit log must be on the writable volume"
+    enterplace_check(policy, str(CHART / "values.yaml"))
     for template in (CHART / "templates").glob("*.yaml"):
         text = template.read_text()
         opened = len(re.findall(r"\{\{-?\s*(if|with|range|define)\b", text))
@@ -109,25 +109,25 @@ def main() -> None:
             subprocess.run(["helm", "lint", "--strict", str(CHART), *extra], check=True, capture_output=True)
         with tempfile.TemporaryDirectory() as tmp:
             rendered = pathlib.Path(tmp) / "chart.yaml"
-            rendered.write_text(subprocess.run(["helm", "template", "gantry", str(CHART), "--set", "metrics.enabled=true,metrics.serviceMonitor.enabled=true,ingress.enabled=true"], check=True, capture_output=True, text=True).stdout)
+            rendered.write_text(subprocess.run(["helm", "template", "enterplace", str(CHART), "--set", "metrics.enabled=true,metrics.serviceMonitor.enabled=true,ingress.enabled=true"], check=True, capture_output=True, text=True).stdout)
             kinds = {d["kind"]: d for d in load_all(rendered)}
         statefulset = kinds["StatefulSet"]["spec"]
         assert statefulset["replicas"] == 1, "one replica without a store"
         check_pod(statefulset["template"]["spec"], "the rendered StatefulSet")
-        assert kinds["ConfigMap"]["data"]["gantry.policy.yaml"] == policy, "the rendered policy is not values.yaml's"
+        assert kinds["ConfigMap"]["data"]["enterplace.policy.yaml"] == policy, "the rendered policy is not values.yaml's"
         assert "HorizontalPodAutoscaler" not in kinds and "PodDisruptionBudget" not in kinds, "one replica: no HPA, no PDB"
         # Autoscaling: the HPA owns the replica count, scales the StatefulSet on CPU and the custom metric, and a
         # disruption budget keeps all but one pod through a drain.
         with tempfile.TemporaryDirectory() as tmp:
             rendered = pathlib.Path(tmp) / "chart.yaml"
-            rendered.write_text(subprocess.run(["helm", "template", "gantry", str(CHART), "-f", str(CHART / "ci" / "autoscaling.yaml")], check=True, capture_output=True, text=True).stdout)
+            rendered.write_text(subprocess.run(["helm", "template", "enterplace", str(CHART), "-f", str(CHART / "ci" / "autoscaling.yaml")], check=True, capture_output=True, text=True).stdout)
             scaled = {(d["kind"], d["metadata"]["name"]): d for d in load_all(rendered)}
-        hpa = scaled[("HorizontalPodAutoscaler", "gantry")]["spec"]
-        assert hpa["scaleTargetRef"] == {"apiVersion": "apps/v1", "kind": "StatefulSet", "name": "gantry"}, hpa
+        hpa = scaled[("HorizontalPodAutoscaler", "enterplace")]["spec"]
+        assert hpa["scaleTargetRef"] == {"apiVersion": "apps/v1", "kind": "StatefulSet", "name": "enterplace"}, hpa
         assert [m["type"] for m in hpa["metrics"]] == ["Resource", "Pods"], hpa["metrics"]
-        assert "replicas" not in scaled[("StatefulSet", "gantry")]["spec"], "the HPA owns the replica count"
-        assert scaled[("PodDisruptionBudget", "gantry")]["spec"]["maxUnavailable"] == 1
-        refused = subprocess.run(["helm", "template", "gantry", str(CHART), "--set", "autoscaling.enabled=true"], capture_output=True, text=True)
+        assert "replicas" not in scaled[("StatefulSet", "enterplace")]["spec"], "the HPA owns the replica count"
+        assert scaled[("PodDisruptionBudget", "enterplace")]["spec"]["maxUnavailable"] == 1
+        refused = subprocess.run(["helm", "template", "enterplace", str(CHART), "--set", "autoscaling.enabled=true"], capture_output=True, text=True)
         assert refused.returncode and "store:" in refused.stderr, "autoscaling without a store must be refused"
         print("helm lint (with each ci/ values file) and helm template passed; the pod's security settings hold; HPA and PDB render as set")
     else:

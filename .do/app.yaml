@@ -1,15 +1,15 @@
-# Gantry on DigitalOcean App Platform: one service from the published image and a dev Postgres database.
+# Enterplace on DigitalOcean App Platform: one service from the published image and a dev Postgres database.
 # CLI: doctl apps create --spec .do/app.yaml (then set OPENAI_API_KEY in the app's settings).
 # Button: .do/deploy.template.yaml is this spec under `spec:`; keep the two the same.
 # App Platform has no volumes: keys and the policy live in Postgres, the audit log on the container's own disk
-# starts a new chain at each deploy. See https://gantry-docs.enterplace.dev/deploy/one-click/#digitalocean
-name: gantry
+# starts a new chain at each deploy. See https://docs.enterplace.dev/deploy/one-click/#digitalocean
+name: enterplace
 services:
-  - name: gantry
+  - name: enterplace
     image:
       registry_type: GHCR
       registry: eliransu
-      repository: gantry
+      repository: enterplace
       tag: latest
     http_port: 8080
     instance_count: 1

@@ -1,31 +1,31 @@
 ---
 title: License key
-description: Set the commercial license with GANTRY_LICENSE, see what it unlocks, and what happens at expiry and over seats. Checked offline; nothing calls home.
+description: Set the commercial license with ENTERPLACE_LICENSE, see what it unlocks, and what happens at expiry and over seats. Checked offline; nothing calls home.
 sidebar:
   order: 7
 ---
 
-The open source gateway needs no license. The `gantry` binary in the image `ghcr.io/eliransu/gantry` is the enterprise build: without a license key it runs the open source features only, and a valid key unlocks the enterprise features it names.
+The open source gateway needs no license. The `enterplace` binary in the image `ghcr.io/eliransu/enterplace` is the enterprise build: without a license key it runs the open source features only, and a valid key unlocks the enterprise features it names.
 
 ## Two licenses in one repository
 
-Gantry is one repository with two licenses, the way LiteLLM is:
+Enterplace is one repository with two licenses, the way LiteLLM is:
 
-- Everything outside `enterprise/` (the gateway, the console, the command line, the deploy files and the docs) is under the MIT License, and the root `LICENSE` file says so at the top, as LiteLLM's does. You can build it with `cargo install --path crates/gantry-cli` and run it without a key.
-- `enterprise/` holds the enterprise features under the Gantry Commercial License (`enterprise/LICENSE`). Its source is there to read and audit. Running it in production needs a valid Gantry license key, and it may not be redistributed or changed to get around the license check.
+- Everything outside `enterprise/` (the gateway, the console, the command line, the deploy files and the docs) is under the MIT License, and the root `LICENSE` file says so at the top, as LiteLLM's does. You can build it with `cargo install --path crates/enterplace-cli` and run it without a key.
+- `enterprise/` holds the enterprise features under the Enterplace Commercial License (`enterprise/LICENSE`). Its source is there to read and audit. Running it in production needs a valid Enterplace license key, and it may not be redistributed or changed to get around the license check.
 
 The open source crates never import `enterprise/`. The enterprise crate plugs into them through their extension hooks.
 
 ## Set it
 
-The license is one line of text. Give it to `gantry` in one of two ways:
+The license is one line of text. Give it to `enterplace` in one of two ways:
 
 ```sh
-export GANTRY_LICENSE='eyJjdXN0b21lciI6...'          # the token itself
-export GANTRY_LICENSE_FILE=/etc/gantry/license       # or a file that holds it
+export ENTERPLACE_LICENSE='eyJjdXN0b21lciI6...'          # the token itself
+export ENTERPLACE_LICENSE_FILE=/etc/enterplace/license       # or a file that holds it
 ```
 
-Set one, not both. In Kubernetes, put the token in a Secret and pass it as `GANTRY_LICENSE`. Restart the gateway after you change it.
+Set one, not both. In Kubernetes, put the token in a Secret and pass it as `ENTERPLACE_LICENSE`. Restart the gateway after you change it.
 
 At start, the gateway says once what the license unlocks:
 
@@ -36,7 +36,7 @@ License lic_8f2 for Acme: scim, siem, 50 seats, until 2027-11-13.
 To see it at any time, without the token:
 
 ```sh
-gantry license show --keys gantry.keys.yaml
+enterplace license show --keys enterplace.keys.yaml
 ```
 
 It prints the customer, the features, seats used of allowed, the expiry date and whether the license is in its grace period.
@@ -45,7 +45,7 @@ It prints the customer, the features, seats used of allowed, the expiry date and
 
 ## Nothing calls home
 
-The license is signed by Gantry and checked against a public key built into the binary. The check never uses the network, so it works the same in an air-gapped network.
+The license is signed by Enterplace and checked against a public key built into the binary. The check never uses the network, so it works the same in an air-gapped network.
 
 ## At expiry
 
@@ -67,8 +67,8 @@ Seats count people: the distinct names in the keys file. When more people hold k
 
 A license that is set and cannot be checked stops the start, with the cause:
 
-- **not a Gantry license**: the token is cut short or has extra text. Paste it again, on one line.
-- **not signed by Gantry**: the token was changed after it was issued. Paste it exactly as you received it, or ask for a new one.
-- **both GANTRY_LICENSE and GANTRY_LICENSE_FILE are set**: unset one.
+- **not a Enterplace license**: the token is cut short or has extra text. Paste it again, on one line.
+- **not signed by Enterplace**: the token was changed after it was issued. Paste it exactly as you received it, or ask for a new one.
+- **both ENTERPLACE_LICENSE and ENTERPLACE_LICENSE_FILE are set**: unset one.
 
-To run the open source features only, unset `GANTRY_LICENSE` and `GANTRY_LICENSE_FILE`.
+To run the open source features only, unset `ENTERPLACE_LICENSE` and `ENTERPLACE_LICENSE_FILE`.

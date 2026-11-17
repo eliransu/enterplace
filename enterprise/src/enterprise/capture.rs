@@ -2,9 +2,9 @@
 //!
 //! The audit log never holds text, so text cannot come from it. It is taken at request time through the gateway's
 //! `Capture` hook, and only while at least one destination has opted in (for the teams it names, or everyone).
-//! Before it is stored it is redacted by Gantry's own secrets and PII detectors (`gantry_core::guard`, every finding
+//! Before it is stored it is redacted by Enterplace's own secrets and PII detectors (`enterplace_core::guard`, every finding
 //! replaced by `[MASKED kind]`); text the detectors cannot check is dropped, not kept. It is stored encrypted with
-//! GANTRY_EXPORT_KEY in `enterprise_captures`, apart from the audit chain, and deleted after `capture_hours` (24 by
+//! ENTERPLACE_EXPORT_KEY in `enterprise_captures`, apart from the audit chain, and deleted after `capture_hours` (24 by
 //! default, at most 168) whether or not it was sent. Destinations without the opt-in never get it.
 
 use std::collections::HashMap;
@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::{Mutex, RwLock};
 
-use gantry_core::guard::{self, Action, Check, Guardrail, On};
-use gantry_server::{Capture, Captured};
+use enterplace_core::guard::{self, Action, Check, Guardrail, On};
+use enterplace_server::{Capture, Captured};
 use serde_json::{Value, json};
 
 use super::Db;
@@ -81,7 +81,7 @@ impl Capture for Captures {
         if let Err(TrySendError::Full(_)) = self.tx.try_send(captured) {
             if !self.dropped.swap(true, Ordering::Relaxed) {
                 eprintln!(
-                    "gantry: prompt capture is behind and dropped text of some requests; the requests themselves are unaffected. Check that Postgres keeps up."
+                    "enterplace: prompt capture is behind and dropped text of some requests; the requests themselves are unaffected. Check that Postgres keeps up."
                 );
             }
         }
@@ -230,7 +230,7 @@ pub async fn texts(
     Ok(out)
 }
 
-/// The text with every secret and every piece of PII Gantry's detectors find replaced by `[MASKED kind]`. `None`
+/// The text with every secret and every piece of PII Enterplace's detectors find replaced by `[MASKED kind]`. `None`
 /// when the detectors cannot run: text that was not checked is never kept.
 pub fn redact(text: &Text) -> Option<Text> {
     let guards: Vec<Guardrail> = [Check::Secrets, Check::Pii]

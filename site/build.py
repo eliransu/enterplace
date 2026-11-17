@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds the Gantry website: src/ in, public/ out. Standard library only.
+"""Builds the Enterplace website: src/ in, public/ out. Standard library only.
 
     python3 build.py           build public/
     python3 build.py --check   build, then fail if any internal link has no page
@@ -18,8 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 SRC, OUT = ROOT / "src", ROOT / "public"
-SITE = "https://gantry.enterplace.dev"
-DOCS = "https://gantry-docs.enterplace.dev"
+SITE = "https://enterplace.dev"
+DOCS = "https://docs.enterplace.dev"
 VERSION = "0.1.0"
 ROOT_FILES = {"404"}  # written as public/<name>.html, left out of the sitemap
 

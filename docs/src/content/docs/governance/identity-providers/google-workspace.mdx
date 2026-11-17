@@ -1,6 +1,6 @@
 ---
 title: Google Workspace
-description: Connect the Gantry admin console to Google Workspace with OpenID Connect or SAML 2.0, with roles by email address or by Google group.
+description: Connect the Enterplace admin console to Google Workspace with OpenID Connect or SAML 2.0, with roles by email address or by Google group.
 sidebar:
   order: 3
 ---
@@ -9,41 +9,41 @@ import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components'
 
 Google Workspace can sign people in to the admin console with OpenID Connect (`console.sso`) or SAML 2.0 (`console.saml`). Google's ID token carries no groups, so with OpenID Connect you give roles by email address. SAML can send Google group membership, so use SAML when roles should follow groups.
 
-The examples use `https://gantry.example.com` for your Gantry address and `example.com` for your Workspace domain.
+The examples use `https://enterplace.example.com` for your Enterplace address and `example.com` for your Workspace domain.
 
 ## OpenID Connect
 
 <Steps>
 
-1. In the Google Cloud console, select or create a project for Gantry. Fill in the **Branding** page. On the **Audience** page, choose **Internal**, so only accounts in your organization can use the client (Google offers it to Workspace organizations only).
+1. In the Google Cloud console, select or create a project for Enterplace. Fill in the **Branding** page. On the **Audience** page, choose **Internal**, so only accounts in your organization can use the client (Google offers it to Workspace organizations only).
 
 2. On the **Clients** page, click **Create client** and choose a web application.
 
-3. Under authorized redirect URIs, add `https://gantry.example.com/console/sso/callback`. The value must match exactly. `gantry login` comes back on the same URI.
+3. Under authorized redirect URIs, add `https://enterplace.example.com/console/sso/callback`. The value must match exactly. `enterplace login` comes back on the same URI.
 
 4. Copy the client ID, and copy or download the client secret now: Google shows the full secret only once, when it is created.
 
 </Steps>
 
-Google's ID token has `email`, `email_verified` and `hd` (the Workspace domain) but no groups claim. Google documents its `iss` as either `https://accounts.google.com` or `accounts.google.com`; with `issuer: https://accounts.google.com`, Gantry takes both. Use `email` as the role claim and list people by address:
+Google's ID token has `email`, `email_verified` and `hd` (the Workspace domain) but no groups claim. Google documents its `iss` as either `https://accounts.google.com` or `accounts.google.com`; with `issuer: https://accounts.google.com`, Enterplace takes both. Use `email` as the role claim and list people by address:
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 console:
   sso:
     issuer: https://accounts.google.com
     client_id: 123456789012-abc123def456ghi789jkl012mno345pq.apps.googleusercontent.com
-    client_secret_env: GANTRY_SSO_SECRET
-    redirect_url: https://gantry.example.com/console/sso/callback
+    client_secret_env: ENTERPLACE_SSO_SECRET
+    redirect_url: https://enterplace.example.com/console/sso/callback
     allowed_domains: [example.com]
     role_claim: email
     admin_values: [ana@example.com, ben@example.com]
     read_only_values: [chris@example.com, dana@example.com]
 ```
 
-`allowed_domains` keeps out Google accounts from other domains. To give everyone in the domain read-only access instead, set `role_claim: hd` and `read_only_values: [example.com]`; admins then sign in with an admin Gantry key. Set the secret where Gantry runs: `GANTRY_SSO_SECRET=...`.
+`allowed_domains` keeps out Google accounts from other domains. To give everyone in the domain read-only access instead, set `role_claim: hd` and `read_only_values: [example.com]`; admins then sign in with an admin Enterplace key. Set the secret where Enterplace runs: `ENTERPLACE_SSO_SECRET=...`.
 
 <Aside type="note">
-With `role_claim: email`, a team's `sso_values` and a role's `sso_values` are email addresses too. For `gantry login`, list developers in a team's `members` or set `self_issue.team`. When group membership should drive roles and teams, use SAML 2.0 below.
+With `role_claim: email`, a team's `sso_values` and a role's `sso_values` are email addresses too. For `enterplace login`, list developers in a team's `members` or set `self_issue.team`. When group membership should drive roles and teams, use SAML 2.0 below.
 </Aside>
 
 ## SAML 2.0
@@ -55,15 +55,15 @@ With `role_claim: email`, a team's `sso_values` and a role's `sso_values` are em
 2. On **Google Identity Provider details**, copy the **SSO URL** and **Entity ID**, and download the **Certificate**. Then **Continue**.
 
 3. In **Service Provider Details**:
-   - **ACS URL**: `https://gantry.example.com/console/saml/acs`
-   - **Entity ID**: `https://gantry.example.com/console/saml/metadata`
+   - **ACS URL**: `https://enterplace.example.com/console/saml/acs`
+   - **Entity ID**: `https://enterplace.example.com/console/saml/metadata`
    - **Start URL**: leave empty
    - **Signed response**: leave unchecked (Google then signs the assertion) or check it to sign the whole response as well
    - **Name ID format**: EMAIL, with **Name ID** the primary email
 
 4. In **Attribute mapping**, click **Add mapping**, choose **Primary email** and name the app attribute `email`.
 
-5. Under **Group membership**, add the Google groups that give console access (for example `gantry-admins` and `gantry-viewers`) and enter `groups` as the **App attribute**. Google sends only the listed groups the person belongs to, directly or through another group. You can list up to 75 groups.
+5. Under **Group membership**, add the Google groups that give console access (for example `enterplace-admins` and `enterplace-viewers`) and enter `groups` as the **App attribute**. Google sends only the listed groups the person belongs to, directly or through another group. You can list up to 75 groups.
 
 6. Click **Finish**. Then open the app, click **User access**, and turn it **On** for the organizational units or access group that need the console. The change can take up to 24 hours.
 
@@ -73,7 +73,7 @@ Google's documentation does not say whether a group is sent by its name or its e
 
 
 {/* not checked: the certificate is a placeholder */}
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 console:
   saml:
     idp_entity_id: https://accounts.google.com/o/saml2?idpid=C01abcd2e
@@ -82,26 +82,26 @@ console:
       -----BEGIN CERTIFICATE-----
       MIIDdDCCAlygAwIBAgIGAY...
       -----END CERTIFICATE-----
-    sp_entity_id: https://gantry.example.com/console/saml/metadata
-    acs_url: https://gantry.example.com/console/saml/acs
+    sp_entity_id: https://enterplace.example.com/console/saml/metadata
+    acs_url: https://enterplace.example.com/console/saml/acs
     email_attribute: email
     role_attribute: groups
-    admin_values: [gantry-admins]
-    read_only_values: [gantry-viewers]
+    admin_values: [enterplace-admins]
+    read_only_values: [enterplace-viewers]
     allowed_domains: [example.com]
 ```
 
-Copy the **Entity ID** and **SSO URL** exactly as the Admin console shows them. Do not test with **Test SAML login** in the Admin console: it starts an IdP-initiated sign-in, which Gantry refuses. Test from `/console`.
+Copy the **Entity ID** and **SSO URL** exactly as the Admin console shows them. Do not test with **Test SAML login** in the Admin console: it starts an IdP-initiated sign-in, which Enterplace refuses. Test from `/console`.
 
 ## Teams and custom roles
 
-The group names feed a custom role's `sso_values` under `roles:` and a team's `sso_values` under `teams:`. At `gantry login`, a person listed in a team's `members` gets that team, otherwise the first team whose `sso_values` match one of their groups, otherwise `self_issue.team`.
+The group names feed a custom role's `sso_values` under `roles:` and a team's `sso_values` under `teams:`. At `enterplace login`, a person listed in a team's `members` gets that team, otherwise the first team whose `sso_values` match one of their groups, otherwise `self_issue.team`.
 
 ## Check it
 
 <Steps>
 
-1. Open `https://gantry.example.com/console` in a private window and click the sign-in button.
+1. Open `https://enterplace.example.com/console` in a private window and click the sign-in button.
 
 2. Sign in with an account listed in `admin_values` (OpenID Connect) or in the admin group (SAML). The console opens with the admin role.
 
@@ -115,6 +115,6 @@ A refusal with `sso_role` means the email or group values did not match the poli
 
 <CardGrid>
 	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Every console.sso field, check and refusal code." />
-	<LinkCard title="SAML 2.0" href="/governance/saml/" description="Every console.saml field and what Gantry checks." />
+	<LinkCard title="SAML 2.0" href="/governance/saml/" description="Every console.saml field and what Enterplace checks." />
 	<LinkCard title="Console roles" href="/governance/policy/#console-roles" description="Custom roles with sso_values." />
 </CardGrid>

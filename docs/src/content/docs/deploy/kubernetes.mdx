@@ -1,19 +1,19 @@
 ---
 title: Kubernetes
-description: Install Gantry Enterprise with its Helm chart on EKS, GKE, AKS or any cluster, with a managed Postgres, then scale out, upgrade, roll back and back it up.
+description: Install Enterplace Enterprise with its Helm chart on EKS, GKE, AKS or any cluster, with a managed Postgres, then scale out, upgrade, roll back and back it up.
 sidebar:
   order: 4
 ---
 
 import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The Helm chart ships inside the `gantry` image, so it always matches the version you run. It runs the gateway as a StatefulSet. Each pod gets its own claim (`data-gantry-0`, `data-gantry-1`, ...) for its audit log, and every pod shares keys, kill switches and budgets through one Postgres database.
+The Helm chart ships inside the `enterplace` image, so it always matches the version you run. It runs the gateway as a StatefulSet. Each pod gets its own claim (`data-enterplace-0`, `data-enterplace-1`, ...) for its audit log, and every pod shares keys, kill switches and budgets through one Postgres database.
 
 ## Prerequisites
 
 - A cluster on Kubernetes 1.27 or later, with a default StorageClass that offers `ReadWriteOnce` volumes. EKS, GKE and AKS all do.
 - `kubectl` pointed at the cluster, `helm` 3 or later, and Docker, to copy the chart out of the image.
-- Postgres 16 that the cluster can reach, with a database `gantry` and a user that has `CREATE` on it. Gantry creates its tables on first start. Use the cloud's managed Postgres.
+- Postgres 16 that the cluster can reach, with a database `enterplace` and a user that has `CREATE` on it. Enterplace creates its tables on first start. Use the cloud's managed Postgres.
 - Your license key, a provider key (OpenAI in this guide), and the image version you will run.
 
 ## Install
@@ -23,52 +23,52 @@ The Helm chart ships inside the `gantry` image, so it always matches the version
 1. Copy the chart out of the image you will run, and give the install its own namespace.
 
    ```bash
-   export GANTRY_VERSION=<version>
-   docker create --name gantry-files ghcr.io/eliransu/gantry:$GANTRY_VERSION
-   docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
-   kubectl create namespace gantry
-   kubectl config set-context --current --namespace gantry
+   export ENTERPLACE_VERSION=<version>
+   docker create --name enterplace-files ghcr.io/eliransu/enterplace:$ENTERPLACE_VERSION
+   docker cp enterplace-files:/deploy ./enterplace-deploy && docker rm enterplace-files
+   kubectl create namespace enterplace
+   kubectl config set-context --current --namespace enterplace
    ```
 
-   Or install the chart from the registry, where each release publishes it as a signed OCI artifact: `helm install gantry oci://ghcr.io/eliransu/charts/gantry --version $GANTRY_VERSION` in place of the local path below. Check the image and the chart first with `scripts/verify_release.sh $GANTRY_VERSION` ([Verify a release](/operations/verify-release/)).
+   Or install the chart from the registry, where each release publishes it as a signed OCI artifact: `helm install enterplace oci://ghcr.io/eliransu/charts/enterplace --version $ENTERPLACE_VERSION` in place of the local path below. Check the image and the chart first with `scripts/verify_release.sh $ENTERPLACE_VERSION` ([Verify a release](/operations/verify-release/)).
 
 2. Create the secrets. The chart reads secret values only from Secrets you make: none goes in a values file.
 
    The gateway's environment: one entry per provider `key_env`, the license, and the database:
 
    ```bash
-   kubectl create secret generic gantry-secrets \
+   kubectl create secret generic enterplace-secrets \
      --from-literal=OPENAI_PROVIDER_KEY=sk-... \
-     --from-literal=GANTRY_LICENSE='eyJjdXN0b21lciI6...' \
-     --from-literal=DATABASE_URL='postgres://gantry:<password>@<host>:5432/gantry'
+     --from-literal=ENTERPLACE_LICENSE='eyJjdXN0b21lciI6...' \
+     --from-literal=DATABASE_URL='postgres://enterplace:<password>@<host>:5432/enterplace'
    ```
 
-   Gantry checks the database's TLS certificate. What `DATABASE_URL` needs depends on where Postgres runs:
+   Enterplace checks the database's TLS certificate. What `DATABASE_URL` needs depends on where Postgres runs:
 
    | Postgres | `DATABASE_URL` | Also |
    |---|---|---|
-   | Azure Database for PostgreSQL | `postgres://gantry:<password>@<server>.postgres.database.azure.com:5432/gantry` | Nothing: its certificate chains to a root built into Gantry |
-   | Amazon RDS (EKS) | `postgres://gantry:<password>@<instance>.<id>.<region>.rds.amazonaws.com:5432/gantry?sslrootcert=/etc/gantry/rds-global-bundle.pem` | The RDS certificate bundle, as below |
-   | Cloud SQL by private IP (GKE) | `postgres://gantry:<password>@<private IP>:5432/gantry?sslmode=verify-ca&sslrootcert=/etc/gantry/cloudsql-server-ca.pem` | The instance's server CA, as below. `verify-ca`, because the certificate does not name the IP |
-   | Postgres in the cluster, without TLS | `postgres://gantry:<password>@<service>.<namespace>.svc:5432/gantry?sslmode=disable` | Nothing. Key hashes and spend cross the cluster network in plain text, and Gantry warns at start |
+   | Azure Database for PostgreSQL | `postgres://enterplace:<password>@<server>.postgres.database.azure.com:5432/enterplace` | Nothing: its certificate chains to a root built into Enterplace |
+   | Amazon RDS (EKS) | `postgres://enterplace:<password>@<instance>.<id>.<region>.rds.amazonaws.com:5432/enterplace?sslrootcert=/etc/enterplace/rds-global-bundle.pem` | The RDS certificate bundle, as below |
+   | Cloud SQL by private IP (GKE) | `postgres://enterplace:<password>@<private IP>:5432/enterplace?sslmode=verify-ca&sslrootcert=/etc/enterplace/cloudsql-server-ca.pem` | The instance's server CA, as below. `verify-ca`, because the certificate does not name the IP |
+   | Postgres in the cluster, without TLS | `postgres://enterplace:<password>@<service>.<namespace>.svc:5432/enterplace?sslmode=disable` | Nothing. Key hashes and spend cross the cluster network in plain text, and Enterplace warns at start |
 
    Letters and digits in the password keep the string valid without escaping.
 
    Optional: the master key, which seals [provider credentials](/governance/provider-credentials/) kept in the store, and the export key, which encrypts [SIEM export](/operations/siem-export/) destination secrets. Each is 64 hex characters, the same on every replica. Keep a copy of the master key in your secret manager: a lost one cannot be recovered.
 
    ```bash
-   kubectl create secret generic gantry-master-key --from-literal=master-key=$(openssl rand -hex 32)
-   kubectl create secret generic gantry-export-key --from-literal=export-key=$(openssl rand -hex 32)
+   kubectl create secret generic enterplace-master-key --from-literal=master-key=$(openssl rand -hex 32)
+   kubectl create secret generic enterplace-export-key --from-literal=export-key=$(openssl rand -hex 32)
    ```
 
-   Then add `masterKey: { existingSecret: gantry-master-key }` and `exportKey: { existingSecret: gantry-export-key }` to the values below. The chart mounts the master key as a file named by `GANTRY_MASTER_KEY_FILE` and sets `GANTRY_EXPORT_KEY` from its Secret. Without them, provider credentials are off and only SIEM destinations that need no secret can be saved. Do not also put `GANTRY_MASTER_KEY` in `gantry-secrets`: Gantry refuses both.
+   Then add `masterKey: { existingSecret: enterplace-master-key }` and `exportKey: { existingSecret: enterplace-export-key }` to the values below. The chart mounts the master key as a file named by `ENTERPLACE_MASTER_KEY_FILE` and sets `ENTERPLACE_EXPORT_KEY` from its Secret. Without them, provider credentials are off and only SIEM destinations that need no secret can be saved. Do not also put `ENTERPLACE_MASTER_KEY` in `enterplace-secrets`: Enterplace refuses both.
 
-3. Write `gantry-values.yaml`. The policy goes in as text; `store:` is what lets more than one replica run.
+3. Write `enterplace-values.yaml`. The policy goes in as text; `store:` is what lets more than one replica run.
 
-   ```yaml title="gantry-values.yaml"
+   ```yaml title="enterplace-values.yaml"
    replicaCount: 2
    envFromSecrets:
-     - gantry-secrets
+     - enterplace-secrets
    policy: |
      version: 1
      providers:
@@ -81,13 +81,13 @@ The Helm chart ships inside the `gantry` image, so it always matches the version
        - name: everyone
          principals: { any: true }
          models: [gpt-4o-mini]
-     audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+     audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
      store: { postgres_url_env: DATABASE_URL }
    ```
 
    The chart refuses `replicaCount` above 1 when the policy has no `store:` line.
 
-4. For RDS or Cloud SQL, put the CA file beside the policy. The chart mounts its policy ConfigMap as the folder `/etc/gantry`, so a ConfigMap you make with both files puts the CA where `sslrootcert` names it. Skip this step for Azure and for a Postgres without TLS.
+4. For RDS or Cloud SQL, put the CA file beside the policy. The chart mounts its policy ConfigMap as the folder `/etc/enterplace`, so a ConfigMap you make with both files puts the CA where `sslrootcert` names it. Skip this step for Azure and for a Postgres without TLS.
 
    <Tabs>
    <TabItem label="Amazon RDS">
@@ -106,29 +106,29 @@ The Helm chart ships inside the `gantry` image, so it always matches the version
    </TabItem>
    </Tabs>
 
-   Save the policy text from `gantry-values.yaml` as `gantry.policy.yaml`, then:
+   Save the policy text from `enterplace-values.yaml` as `enterplace.policy.yaml`, then:
 
    ```bash
-   kubectl create configmap gantry-policy --from-file=gantry.policy.yaml --from-file=rds-global-bundle.pem
+   kubectl create configmap enterplace-policy --from-file=enterplace.policy.yaml --from-file=rds-global-bundle.pem
    ```
 
-   (or `--from-file=cloudsql-server-ca.pem`), and add this line to `gantry-values.yaml`. The `policy` value is then not used:
+   (or `--from-file=cloudsql-server-ca.pem`), and add this line to `enterplace-values.yaml`. The `policy` value is then not used:
 
-   ```yaml title="gantry-values.yaml"
-   existingPolicyConfigMap: gantry-policy
+   ```yaml title="enterplace-values.yaml"
+   existingPolicyConfigMap: enterplace-policy
    ```
 
 5. Install the chart.
 
    ```bash
-   helm install gantry ./gantry-deploy/helm/gantry -f gantry-values.yaml --set image.tag=$GANTRY_VERSION
-   kubectl rollout status statefulset/gantry
+   helm install enterplace ./enterplace-deploy/helm/enterplace -f enterplace-values.yaml --set image.tag=$ENTERPLACE_VERSION
+   kubectl rollout status statefulset/enterplace
    ```
 
 </Steps>
 
 <Aside type="note">
-`postgres.enabled` starts a one-pod Postgres for trials, but the store cannot use it: its connection string has no `sslmode=disable` and the database has no TLS, so Gantry refuses to start. Use your own Postgres. `keys.existingSecret` seeds a keys file, which Gantry does not read while the policy has `store:`.
+`postgres.enabled` starts a one-pod Postgres for trials, but the store cannot use it: its connection string has no `sslmode=disable` and the database has no TLS, so Enterplace refuses to start. Use your own Postgres. `keys.existingSecret` seeds a keys file, which Enterplace does not read while the policy has `store:`.
 </Aside>
 
 ## Verify
@@ -138,15 +138,15 @@ The Helm chart ships inside the `gantry` image, so it always matches the version
 1. Read what the first pod started with.
 
    ```bash
-   kubectl logs gantry-0 -c gantry
+   kubectl logs enterplace-0 -c enterplace
    ```
 
    ```text
    License lic_8f2 for Acme: scim, siem, 50 seats, until 2027-11-13.
-   gantry enterprise 0.1.0 listening on http://0.0.0.0:8080
+   enterplace enterprise 0.1.0 listening on http://0.0.0.0:8080
    First run: no admin key yet. Open http://127.0.0.1:8080/console/setup/efe8afe6... to make the first one. The link works once.
-   Audit log: /var/lib/gantry/gantry-audit.jsonl is new. The chain starts at record 1.
-   Keys, kill switches and budgets are shared through the store named by DATABASE_URL with every Gantry on that database.
+   Audit log: /var/lib/enterplace/enterplace-audit.jsonl is new. The chain starts at record 1.
+   Keys, kill switches and budgets are shared through the store named by DATABASE_URL with every Enterplace on that database.
    ```
 
    A pod that cannot reach the database or does not trust its certificate stops here with the cause and the fix: `sslrootcert`, `sslmode` or the host.
@@ -154,17 +154,17 @@ The Helm chart ships inside the `gantry` image, so it always matches the version
 2. Make the first admin and sign in to the console. Each pod prints its own one-time link, so forward to the pod whose link you open:
 
    ```bash
-   kubectl port-forward pod/gantry-0 8080:8080
+   kubectl port-forward pod/enterplace-0 8080:8080
    ```
 
-   Open the link from `gantry-0`'s log in a browser on this machine, give your name and team, and keep the admin key it shows once. Sign in at `http://127.0.0.1:8080/console` with it. Once an admin exists, no pod offers a link again.
+   Open the link from `enterplace-0`'s log in a browser on this machine, give your name and team, and keep the admin key it shows once. Sign in at `http://127.0.0.1:8080/console` with it. Once an admin exists, no pod offers a link again.
 
 3. Issue a key with the admin API and make a governed call. In a second terminal, with the port forward running:
 
    ```bash
-   export GANTRY_ADMIN_KEY=gantry_...
+   export ENTERPLACE_ADMIN_KEY=enterplace_...
    KEY=$(curl -s -X POST http://127.0.0.1:8080/admin/keys \
-     -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H 'Content-Type: application/json' \
+     -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -H 'Content-Type: application/json' \
      -d '{"name":"maya.cohen","team":"payments"}' | sed -n 's/.*"key":"\([^"]*\)".*/\1/p')
    curl -s http://127.0.0.1:8080/v1/chat/completions \
      -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
@@ -174,62 +174,62 @@ The Helm chart ships inside the `gantry` image, so it always matches the version
    The key is in Postgres, so every pod accepts it within 2 seconds. The image's own command line does the same from the cluster, with no port forward:
 
    ```bash
-   kubectl exec gantry-0 -c gantry -- /gantry key new maya.cohen --team payments --policy /etc/gantry/gantry.policy.yaml --quiet
+   kubectl exec enterplace-0 -c enterplace -- /enterplace key new maya.cohen --team payments --policy /etc/enterplace/enterplace.policy.yaml --quiet
    ```
 
-4. Verify the audit log. In the console, open **Audit log** and select **Verify chain now**: the pod you are signed in to walks its whole chain, as `gantry audit verify` does, and shows its last hash. Each pod has its own chain, so do it on each (`kubectl port-forward pod/gantry-1 8080:8080`). From the command line, the image runs `audit verify` itself:
+4. Verify the audit log. In the console, open **Audit log** and select **Verify chain now**: the pod you are signed in to walks its whole chain, as `enterplace audit verify` does, and shows its last hash. Each pod has its own chain, so do it on each (`kubectl port-forward pod/enterplace-1 8080:8080`). From the command line, the image runs `audit verify` itself:
 
    ```bash
-   kubectl exec gantry-0 -c gantry -- /gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+   kubectl exec enterplace-0 -c enterplace -- /enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl
    ```
 
 </Steps>
 
 ## Expose it
 
-Turn on the Ingress with TLS at the Ingress, and session affinity, because a console single sign-on callback must reach the pod that started the sign-in. Sessions themselves are in the store and good on every pod. With ingress-nginx, add to `gantry-values.yaml`:
+Turn on the Ingress with TLS at the Ingress, and session affinity, because a console single sign-on callback must reach the pod that started the sign-in. Sessions themselves are in the store and good on every pod. With ingress-nginx, add to `enterplace-values.yaml`:
 
-```yaml title="gantry-values.yaml"
+```yaml title="enterplace-values.yaml"
 ingress:
   enabled: true
   className: nginx
-  host: gantry.example.com
-  tlsSecretName: gantry-tls
+  host: enterplace.example.com
+  tlsSecretName: enterplace-tls
   annotations:
     nginx.ingress.kubernetes.io/affinity: cookie
 ```
 
-`gantry-tls` is a `kubernetes.io/tls` Secret, from cert-manager or `kubectl create secret tls gantry-tls --cert=tls.crt --key=tls.key`. The chart's default annotations stay: buffering off so answers stream, 32m bodies, a 600-second read timeout. For another controller, set the same three things.
+`enterplace-tls` is a `kubernetes.io/tls` Secret, from cert-manager or `kubectl create secret tls enterplace-tls --cert=tls.crt --key=tls.key`. The chart's default annotations stay: buffering off so answers stream, 32m bodies, a 600-second read timeout. For another controller, set the same three things.
 
 ```bash
-helm upgrade gantry ./gantry-deploy/helm/gantry -f gantry-values.yaml --set image.tag=$GANTRY_VERSION
-curl -s https://gantry.example.com/healthz
+helm upgrade enterplace ./enterplace-deploy/helm/enterplace -f enterplace-values.yaml --set image.tag=$ENTERPLACE_VERSION
+curl -s https://enterplace.example.com/healthz
 ```
 
 `networkPolicy.enabled: true` limits who reaches the pods (`networkPolicy.from`) and where they connect (`networkPolicy.egress`, default any host on 443). Add your database's port to `egress` when it is not 443.
 
 ## Change the policy
 
-Change `policy` in `gantry-values.yaml` and run the same `helm upgrade`. The pods do not restart: the kubelet updates the mounted file within about a minute, and each pod checks it and uses it within 2 seconds, or keeps the old one and records `config_rejected`. With `existingPolicyConfigMap`, update the ConfigMap instead:
+Change `policy` in `enterplace-values.yaml` and run the same `helm upgrade`. The pods do not restart: the kubelet updates the mounted file within about a minute, and each pod checks it and uses it within 2 seconds, or keeps the old one and records `config_rejected`. With `existingPolicyConfigMap`, update the ConfigMap instead:
 
 ```bash
-kubectl create configmap gantry-policy --from-file=gantry.policy.yaml --from-file=rds-global-bundle.pem \
+kubectl create configmap enterplace-policy --from-file=enterplace.policy.yaml --from-file=rds-global-bundle.pem \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-Changing the `store:` section needs a restart: `kubectl rollout restart statefulset/gantry`.
+Changing the `store:` section needs a restart: `kubectl rollout restart statefulset/enterplace`.
 
 ## Scale out
 
 ```bash
-helm upgrade gantry ./gantry-deploy/helm/gantry --reuse-values --set replicaCount=3
+helm upgrade enterplace ./enterplace-deploy/helm/enterplace --reuse-values --set replicaCount=3
 ```
 
 The new pod gets its own claim and starts its own chain. Scaling down keeps the claims, and scaling up again reuses them, so a returning pod continues its chain. Budgets are enforced once across every pod. Rate limits and the answer cache are counted per pod.
 
 ### Autoscaling
 
-With `store:` in the policy, the chart can render a HorizontalPodAutoscaler that scales the StatefulSet on CPU, and optionally on a per-pod metric from the custom metrics API (for example the p99 of `gantry_overhead_seconds`, published from the `/metrics` port by prometheus-adapter). It needs metrics-server; `replicaCount` is then ignored.
+With `store:` in the policy, the chart can render a HorizontalPodAutoscaler that scales the StatefulSet on CPU, and optionally on a per-pod metric from the custom metrics API (for example the p99 of `enterplace_overhead_seconds`, published from the `/metrics` port by prometheus-adapter). It needs metrics-server; `replicaCount` is then ignored.
 
 ```yaml
 autoscaling:
@@ -238,7 +238,7 @@ autoscaling:
   maxReplicas: 10
   targetCPUUtilizationPercentage: 70
   podMetric:                       # optional
-    name: gantry_overhead_seconds_p99
+    name: enterplace_overhead_seconds_p99
     targetAverageValue: 2m
 ```
 
@@ -248,25 +248,25 @@ The chart refuses `autoscaling.enabled` without `store:`. With more than one rep
 
 <Steps>
 
-1. Back up Postgres. A newer Gantry may update the database schema. Upgrade one minor version at a time (0.2 to 0.3, not 0.2 to 0.4): during the rollout the old pods keep serving beside the new ones, and an old pod that restarts still starts. A Gantry two minor versions behind the database refuses it, naming both versions. See [Rolling upgrades](/operations/store/#rolling-upgrades).
+1. Back up Postgres. A newer Enterplace may update the database schema. Upgrade one minor version at a time (0.2 to 0.3, not 0.2 to 0.4): during the rollout the old pods keep serving beside the new ones, and an old pod that restarts still starts. A Enterplace two minor versions behind the database refuses it, naming both versions. See [Rolling upgrades](/operations/store/#rolling-upgrades).
 
 2. Upgrade.
 
    ```bash
-   export GANTRY_VERSION=<new version>
-   rm -rf gantry-deploy && docker create --name gantry-files ghcr.io/eliransu/gantry:$GANTRY_VERSION
-   docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
-   helm upgrade gantry ./gantry-deploy/helm/gantry -f gantry-values.yaml --set image.tag=$GANTRY_VERSION
-   kubectl rollout status statefulset/gantry
+   export ENTERPLACE_VERSION=<new version>
+   rm -rf enterplace-deploy && docker create --name enterplace-files ghcr.io/eliransu/enterplace:$ENTERPLACE_VERSION
+   docker cp enterplace-files:/deploy ./enterplace-deploy && docker rm enterplace-files
+   helm upgrade enterplace ./enterplace-deploy/helm/enterplace -f enterplace-values.yaml --set image.tag=$ENTERPLACE_VERSION
+   kubectl rollout status statefulset/enterplace
    ```
 
-   Pods are replaced one at a time, from the highest number down, so with two or more replicas the gateway keeps serving. Each new pod verifies its chain and continues it: `kubectl logs gantry-0 -c gantry | grep 'Audit log'`.
+   Pods are replaced one at a time, from the highest number down, so with two or more replicas the gateway keeps serving. Each new pod verifies its chain and continues it: `kubectl logs enterplace-0 -c enterplace | grep 'Audit log'`.
 
 3. To roll back, return to the previous release.
 
    ```bash
-   helm history gantry
-   helm rollback gantry
+   helm history enterplace
+   helm rollback enterplace
    ```
 
    If the previous version refuses the database because the new one changed its schema, restore the backup from step 1 first.
@@ -281,36 +281,36 @@ The chart refuses `autoscaling.enabled` without `store:`. With more than one rep
 | Audit volumes | A `VolumeSnapshot` of each claim on a schedule, through your CSI driver, or Velero |
 | The audit log, as written | A log shipper as a second container in the pod, the data volume mounted read-only. See [Observability](/operations/observability/#shipping-the-audit-log) |
 | Last hashes | Copy each pod's last hash from **Verify chain now** to a place the cluster cannot write |
-| The policy | `gantry-values.yaml` in version control |
+| The policy | `enterplace-values.yaml` in version control |
 
 ```yaml title="snapshot.yaml"
 apiVersion: snapshot.storage.k8s.io/v1
 kind: VolumeSnapshot
 metadata:
-  name: data-gantry-0-2026-11-13
+  name: data-enterplace-0-2026-11-13
 spec:
   volumeSnapshotClassName: <your snapshot class>
   source:
-    persistentVolumeClaimName: data-gantry-0
+    persistentVolumeClaimName: data-enterplace-0
 ```
 
-`helm uninstall gantry` keeps every claim: the audit log is the record of every request. Delete them by hand when you mean to.
+`helm uninstall enterplace` keeps every claim: the audit log is the record of every request. Delete them by hand when you mean to.
 
 ## Production checklist
 
 - **TLS.** At the Ingress, as above. The metrics port is never on the Ingress.
-- **Secrets.** In Kubernetes Secrets, ideally synced from the cloud's store (AWS Secrets Manager, Google Secret Manager, Azure Key Vault) by the External Secrets Operator or the Secrets Store CSI driver into `gantry-secrets`. A changed secret needs `kubectl rollout restart statefulset/gantry`.
+- **Secrets.** In Kubernetes Secrets, ideally synced from the cloud's store (AWS Secrets Manager, Google Secret Manager, Azure Key Vault) by the External Secrets Operator or the Secrets Store CSI driver into `enterplace-secrets`. A changed secret needs `kubectl rollout restart statefulset/enterplace`.
 - **Backups.** Postgres and every audit claim, as above.
 - **Monitoring.** `metrics.enabled: true` serves `/metrics` on port 9464 in the Service; `metrics.serviceMonitor.enabled: true` adds a Prometheus Operator `ServiceMonitor`. Set `otel` for traces:
 
-  ```yaml title="gantry-values.yaml"
+  ```yaml title="enterplace-values.yaml"
   metrics:
     enabled: true
     serviceMonitor:
       enabled: true
   otel:
     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4318
-    OTEL_SERVICE_NAME: gantry
+    OTEL_SERVICE_NAME: enterplace
   ```
 
 - **Upgrades and rollback.** As above, with a database backup before each.
@@ -320,11 +320,11 @@ spec:
 
 | Signal | Meaning | Do |
 |---|---|---|
-| `gantry_audit_broken` is `1`, or `/healthz` answers 503 | The pod cannot write its audit log. The liveness probe restarts it after a minute | Check the claim's free space |
+| `enterplace_audit_broken` is `1`, or `/healthz` answers 503 | The pod cannot write its audit log. The liveness probe restarts it after a minute | Check the claim's free space |
 | Refusals with `store_unavailable` | Postgres cannot be reached. Requests under a budget are refused; others are served | Check the database and the network policy |
 | Claim usage | About 1.35 GB per million requests per pod | Grow the claim, or start a new chain |
-| Pods not ready after an upgrade | `kubectl logs` names the cause | Fix it, or `helm rollback gantry` |
-| License warning at start | The license is in its 30-day grace period | Update `GANTRY_LICENSE` in the Secret and restart |
+| Pods not ready after an upgrade | `kubectl logs` names the cause | Fix it, or `helm rollback enterplace` |
+| License warning at start | The license is in its 30-day grace period | Update `ENTERPLACE_LICENSE` in the Secret and restart |
 
 ## Next
 

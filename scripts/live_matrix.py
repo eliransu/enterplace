@@ -1,20 +1,20 @@
-"""The live provider matrix: every route Gantry serves, run through a real `gantry serve` against each provider kind.
+"""The live provider matrix: every route Enterplace serves, run through a real `enterplace serve` against each provider kind.
 
 Usage:
-  python3 scripts/live_matrix.py [--gantry target/release/gantry] [--out live-matrix.json]   real providers
+  python3 scripts/live_matrix.py [--enterplace target/release/enterplace] [--out live-matrix.json]   real providers
   python3 scripts/live_matrix.py --mock                                                     a local mock of each API
   python3 scripts/live_matrix.py --selftest                                                 both checks CI runs
 
-Each provider runs only when its GANTRY_LIVE_* variables are set (see PROVIDERS), and every one of its cells says
-"skipped" with the variable that is missing otherwise. Each provider gets its own `gantry serve`, policy, key and audit
-log, and the audit chain is verified with `gantry audit verify` at the end.
+Each provider runs only when its ENTERPLACE_LIVE_* variables are set (see PROVIDERS), and every one of its cells says
+"skipped" with the variable that is missing otherwise. Each provider gets its own `enterplace serve`, policy, key and audit
+log, and the audit chain is verified with `enterplace audit verify` at the end.
 
 Spend: the cheapest models, prompts of a few words, max_tokens 16 (64 for a tool call), and a cap on the tokens of the
-whole run, GANTRY_LIVE_MAX_TOKENS (default 20000), counted from each answer's usage (or a fixed estimate when an
+whole run, ENTERPLACE_LIVE_MAX_TOKENS (default 20000), counted from each answer's usage (or a fixed estimate when an
 answer has none). Past the cap every remaining cell is skipped.
 
---mock points every provider at a mock of its own API on 127.0.0.1 (it checks that the provider key, never the Gantry
-key, arrives) and exits 1 unless every cell passes. --selftest runs --mock, then a run with no GANTRY_LIVE_* variable,
+--mock points every provider at a mock of its own API on 127.0.0.1 (it checks that the provider key, never the Enterplace
+key, arrives) and exits 1 unless every cell passes. --selftest runs --mock, then a run with no ENTERPLACE_LIVE_* variable,
 which must skip every cell and start no gateway. A live run exits 1 when any cell fails.
 
 The matrix is written as JSON (--out) and as a Markdown table on stdout and in $GITHUB_STEP_SUMMARY. Standard library
@@ -32,16 +32,16 @@ MOCK_KEY = "mock-provider-key"
 
 def providers(env):
     """Each provider kind: the variables it needs, its policy entry, the routes it serves and their models."""
-    model = lambda pid, role, default: env.get(f"GANTRY_LIVE_{pid.upper()}_{role.upper()}_MODEL", default)
-    project = env.get("GANTRY_LIVE_VERTEX_PROJECT", "")
-    region = env.get("GANTRY_LIVE_VERTEX_REGION", "us-central1")
-    claude_region = env.get("GANTRY_LIVE_VERTEX_CLAUDE_REGION", "us-east5")
+    model = lambda pid, role, default: env.get(f"ENTERPLACE_LIVE_{pid.upper()}_{role.upper()}_MODEL", default)
+    project = env.get("ENTERPLACE_LIVE_VERTEX_PROJECT", "")
+    region = env.get("ENTERPLACE_LIVE_VERTEX_REGION", "us-central1")
+    claude_region = env.get("ENTERPLACE_LIVE_VERTEX_CLAUDE_REGION", "us-east5")
     vertex = lambda r, publisher: f"https://{r}-aiplatform.googleapis.com/v1/projects/{project}/locations/{r}/publishers/{publisher}"
     azure_model = model("azure", "chat", "gpt-4.1-nano")
-    bedrock_id = env.get("GANTRY_LIVE_BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+    bedrock_id = env.get("ENTERPLACE_LIVE_BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
     return [
-        dict(id="openai", label="OpenAI", need=["GANTRY_LIVE_OPENAI_KEY"], native="chat",
-             fields={"kind": "openai", "key_env": "GANTRY_LIVE_OPENAI_KEY"}, url="https://api.openai.com", mock="",
+        dict(id="openai", label="OpenAI", need=["ENTERPLACE_LIVE_OPENAI_KEY"], native="chat",
+             fields={"kind": "openai", "key_env": "ENTERPLACE_LIVE_OPENAI_KEY"}, url="https://api.openai.com", mock="",
              models={"chat": model("openai", "chat", "gpt-4.1-nano"),
                      "embeddings": model("openai", "embeddings", "text-embedding-3-small"),
                      "images": model("openai", "images", "gpt-image-1-mini"),
@@ -50,42 +50,42 @@ def providers(env):
                      "moderations": model("openai", "moderations", "omni-moderation-latest")},
              routes=COMMON + ["responses", "embeddings", "images", "audio_speech", "audio_transcription", "moderations",
                               "passthrough"], passthrough="/v1/models"),
-        dict(id="anthropic", label="Anthropic", need=["GANTRY_LIVE_ANTHROPIC_KEY"], native="messages",
-             fields={"kind": "anthropic", "key_env": "GANTRY_LIVE_ANTHROPIC_KEY"}, url="https://api.anthropic.com", mock="",
+        dict(id="anthropic", label="Anthropic", need=["ENTERPLACE_LIVE_ANTHROPIC_KEY"], native="messages",
+             fields={"kind": "anthropic", "key_env": "ENTERPLACE_LIVE_ANTHROPIC_KEY"}, url="https://api.anthropic.com", mock="",
              models={"chat": model("anthropic", "chat", "claude-haiku-4-5")},
              routes=COMMON + ["count_tokens", "passthrough"], passthrough="/v1/models"),
-        dict(id="azure", label="Azure OpenAI", need=["GANTRY_LIVE_AZURE_KEY", "GANTRY_LIVE_AZURE_URL", "GANTRY_LIVE_AZURE_DEPLOYMENT"],
-             native="chat", url=env.get("GANTRY_LIVE_AZURE_URL", ""), mock="",
-             fields={"kind": "azure", "key_env": "GANTRY_LIVE_AZURE_KEY",
-                     "api_version": env.get("GANTRY_LIVE_AZURE_API_VERSION", "2024-10-21"),
-                     "deployments": {azure_model: env.get("GANTRY_LIVE_AZURE_DEPLOYMENT", "")}},
+        dict(id="azure", label="Azure OpenAI", need=["ENTERPLACE_LIVE_AZURE_KEY", "ENTERPLACE_LIVE_AZURE_URL", "ENTERPLACE_LIVE_AZURE_DEPLOYMENT"],
+             native="chat", url=env.get("ENTERPLACE_LIVE_AZURE_URL", ""), mock="",
+             fields={"kind": "azure", "key_env": "ENTERPLACE_LIVE_AZURE_KEY",
+                     "api_version": env.get("ENTERPLACE_LIVE_AZURE_API_VERSION", "2024-10-21"),
+                     "deployments": {azure_model: env.get("ENTERPLACE_LIVE_AZURE_DEPLOYMENT", "")}},
              models={"chat": azure_model}, routes=COMMON),
-        dict(id="bedrock", label="Amazon Bedrock", need=["GANTRY_LIVE_AWS_ACCESS_KEY_ID", "GANTRY_LIVE_AWS_SECRET_ACCESS_KEY"],
+        dict(id="bedrock", label="Amazon Bedrock", need=["ENTERPLACE_LIVE_AWS_ACCESS_KEY_ID", "ENTERPLACE_LIVE_AWS_SECRET_ACCESS_KEY"],
              native="messages", url="", mock="",
-             fields={"kind": "bedrock", "region": env.get("GANTRY_LIVE_BEDROCK_REGION", "us-east-1"),
+             fields={"kind": "bedrock", "region": env.get("ENTERPLACE_LIVE_BEDROCK_REGION", "us-east-1"),
                      "model_ids": {"claude-haiku-bedrock": bedrock_id}},
              models={"chat": "claude-haiku-bedrock"}, routes=COMMON),
-        dict(id="gemini", label="Gemini", need=["GANTRY_LIVE_GEMINI_KEY"], native="chat",
-             fields={"kind": "gemini", "key_env": "GANTRY_LIVE_GEMINI_KEY"},
+        dict(id="gemini", label="Gemini", need=["ENTERPLACE_LIVE_GEMINI_KEY"], native="chat",
+             fields={"kind": "gemini", "key_env": "ENTERPLACE_LIVE_GEMINI_KEY"},
              # No path, so the passthrough path is the API's own /v1beta/... as Google documents it.
              url="https://generativelanguage.googleapis.com", mock="",
              models={"chat": model("gemini", "chat", "gemini-2.5-flash-lite")},
              routes=COMMON + ["passthrough"], passthrough="/v1beta/models"),
-        dict(id="vertex", label="Vertex AI (Gemini)", need=["GANTRY_LIVE_VERTEX_TOKEN", "GANTRY_LIVE_VERTEX_PROJECT"],
-             native="chat", fields={"kind": "vertex", "key_env": "GANTRY_LIVE_VERTEX_TOKEN"}, url=vertex(region, "google"),
+        dict(id="vertex", label="Vertex AI (Gemini)", need=["ENTERPLACE_LIVE_VERTEX_TOKEN", "ENTERPLACE_LIVE_VERTEX_PROJECT"],
+             native="chat", fields={"kind": "vertex", "key_env": "ENTERPLACE_LIVE_VERTEX_TOKEN"}, url=vertex(region, "google"),
              mock="/v1/projects/p/locations/us-central1/publishers/google",
              models={"chat": model("vertex", "chat", "gemini-2.5-flash-lite")}, routes=COMMON),
-        dict(id="vertex_anthropic", label="Vertex AI (Claude)", need=["GANTRY_LIVE_VERTEX_TOKEN", "GANTRY_LIVE_VERTEX_PROJECT"],
-             native="messages", fields={"kind": "vertex_anthropic", "key_env": "GANTRY_LIVE_VERTEX_TOKEN"},
+        dict(id="vertex_anthropic", label="Vertex AI (Claude)", need=["ENTERPLACE_LIVE_VERTEX_TOKEN", "ENTERPLACE_LIVE_VERTEX_PROJECT"],
+             native="messages", fields={"kind": "vertex_anthropic", "key_env": "ENTERPLACE_LIVE_VERTEX_TOKEN"},
              url=vertex(claude_region, "anthropic"), mock="/v1/projects/p/locations/us-east5/publishers/anthropic",
              models={"chat": model("vertex_anthropic", "chat", "claude-haiku-4-5@20251001")}, routes=COMMON),
-        dict(id="groq", label="Groq (preset)", need=["GANTRY_LIVE_GROQ_KEY"], native="chat",
-             fields={"preset": "groq", "key_env": "GANTRY_LIVE_GROQ_KEY"}, url="", mock="/openai/v1",
+        dict(id="groq", label="Groq (preset)", need=["ENTERPLACE_LIVE_GROQ_KEY"], native="chat",
+             fields={"preset": "groq", "key_env": "ENTERPLACE_LIVE_GROQ_KEY"}, url="", mock="/openai/v1",
              models={"chat": model("groq", "chat", "llama-3.1-8b-instant"),
                      "audio_transcription": model("groq", "audio_transcription", "whisper-large-v3-turbo")},
              routes=COMMON + ["audio_transcription", "passthrough"], passthrough="/v1/models"),
-        dict(id="mistral", label="Mistral (preset)", need=["GANTRY_LIVE_MISTRAL_KEY"], native="chat",
-             fields={"preset": "mistral", "key_env": "GANTRY_LIVE_MISTRAL_KEY"}, url="", mock="/v1",
+        dict(id="mistral", label="Mistral (preset)", need=["ENTERPLACE_LIVE_MISTRAL_KEY"], native="chat",
+             fields={"preset": "mistral", "key_env": "ENTERPLACE_LIVE_MISTRAL_KEY"}, url="", mock="/v1",
              models={"chat": model("mistral", "chat", "mistral-small-latest"),
                      "embeddings": model("mistral", "embeddings", "mistral-embed")},
              routes=COMMON + ["embeddings", "passthrough"], passthrough="/v1/models"),
@@ -225,7 +225,7 @@ def run_route(route, provider, gateway):
         status, headers, data = call(gateway, "POST", "/v1/audio/speech", {"model": m, "input": "OK", "voice": "alloy", "response_format": "wav"})
         return status == 200 and len(data) > 100, describe(status, headers, data, f"{len(data)} bytes of audio"), 20
     if route == "audio_transcription":
-        boundary = "gantry-live-matrix"
+        boundary = "enterplace-live-matrix"
         form = (f"--{boundary}\r\ncontent-disposition: form-data; name=\"model\"\r\n\r\n{m}\r\n"
                 f"--{boundary}\r\ncontent-disposition: form-data; name=\"file\"; filename=\"tone.wav\"\r\ncontent-type: audio/wav\r\n\r\n").encode()
         form += tone_wav() + f"\r\n--{boundary}--\r\n".encode()
@@ -249,17 +249,17 @@ def run_route(route, provider, gateway):
 
 def describe(status, headers, data, what):
     """A cell's detail: what was checked, or the refusal or provider error that came back, without any key."""
-    if status == 200 and any(h.lower() == "x-gantry-decision" for h in headers):
+    if status == 200 and any(h.lower() == "x-enterplace-decision" for h in headers):
         return f"200, {what}"
     if status == 200:
-        return f"200 but no X-Gantry-Decision header, {what}"
-    text = re.sub(r"(gantry_|sk-)[A-Za-z0-9_-]+", "<key>", data.decode(errors="replace"))
+        return f"200 but no X-Enterplace-Decision header, {what}"
+    text = re.sub(r"(enterplace_|sk-)[A-Za-z0-9_-]+", "<key>", data.decode(errors="replace"))
     return f"{status}: {' '.join(text.split())[:300]}"
 
 
 # ---------------------------------------------------------------------------------------------------------------
 # A mock of each provider API, for --mock. It answers in the provider's own shape and refuses any request that does
-# not carry the provider key, or that carries anything that looks like a Gantry key.
+# not carry the provider key, or that carries anything that looks like a Enterplace key.
 
 def sse(events):
     return "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
@@ -302,20 +302,20 @@ class Mock(http.server.BaseHTTPRequestHandler):
 
     def authorized(self):
         values = [v for _, v in self.headers.items()]
-        if any("gantry_" in v for v in values):
+        if any("enterplace_" in v for v in values):
             return False
         sent = {self.headers.get("authorization", ""), self.headers.get("x-api-key"), self.headers.get("api-key"), self.headers.get("x-goog-api-key")}
         return f"Bearer {MOCK_KEY}" in sent or MOCK_KEY in sent or self.headers.get("authorization", "").startswith("AWS4-HMAC-SHA256 ")
 
     def do_GET(self):
         if not self.authorized():
-            return self.reply({"error": {"message": "mock: no provider key, or a Gantry key reached the provider"}}, status=401)
+            return self.reply({"error": {"message": "mock: no provider key, or a Enterplace key reached the provider"}}, status=401)
         self.reply({"object": "list", "data": [{"id": "mock-model", "object": "model"}]})
 
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("content-length", "0")))
         if not self.authorized():
-            return self.reply({"error": {"message": "mock: no provider key, or a Gantry key reached the provider"}}, status=401)
+            return self.reply({"error": {"message": "mock: no provider key, or a Enterplace key reached the provider"}}, status=401)
         body = parse(raw) if self.headers.get("content-type", "").startswith("application/json") else {}
         body = body if isinstance(body, dict) else {}
         path = urllib.parse.urlsplit(self.path).path
@@ -399,17 +399,17 @@ def vertex_token(sa_json):
         return json.load(answer)["access_token"], sa.get("project_id", "")
 
 
-def start_gateway(gantry, provider, folder, env, mock_url):
+def start_gateway(enterplace, provider, folder, env, mock_url):
     folder.mkdir()
-    (folder / "gantry.policy.yaml").write_text(policy(provider, mock_url))
-    keys = folder / "gantry.keys.yaml"
-    made = subprocess.run([gantry, "key", "new", "live-matrix", "--team", "ci", "--keys", str(keys), "--quiet"], capture_output=True, text=True)
-    key = re.search(r"gantry_[0-9a-f]{64}", made.stdout)
+    (folder / "enterplace.policy.yaml").write_text(policy(provider, mock_url))
+    keys = folder / "enterplace.keys.yaml"
+    made = subprocess.run([enterplace, "key", "new", "live-matrix", "--team", "ci", "--keys", str(keys), "--quiet"], capture_output=True, text=True)
+    key = re.search(r"enterplace_[0-9a-f]{64}", made.stdout)
     if not key:
-        return None, f"gantry key new failed: {made.stdout} {made.stderr}"
+        return None, f"enterplace key new failed: {made.stdout} {made.stderr}"
     port = free_port()
     log = open(folder / "serve.log", "w")
-    process = subprocess.Popen([gantry, "serve", str(folder / "gantry.policy.yaml"), "--keys", str(keys), "--listen", f"127.0.0.1:{port}"],
+    process = subprocess.Popen([enterplace, "serve", str(folder / "enterplace.policy.yaml"), "--keys", str(keys), "--listen", f"127.0.0.1:{port}"],
                                stdout=log, stderr=subprocess.STDOUT, env=env)
     gateway = {"url": f"http://127.0.0.1:{port}", "key": key.group(0), "process": process, "log": log, "folder": folder}
     for _ in range(200):
@@ -422,7 +422,7 @@ def start_gateway(gantry, provider, folder, env, mock_url):
         except OSError:
             time.sleep(0.1)
     stop(gateway)
-    return None, "gantry serve did not start: " + " ".join((folder / "serve.log").read_text().split())[-400:]
+    return None, "enterplace serve did not start: " + " ".join((folder / "serve.log").read_text().split())[-400:]
 
 
 def stop(gateway):
@@ -432,25 +432,25 @@ def stop(gateway):
     gateway["log"].close()
 
 
-def run(gantry, env, mock):
-    """Runs the matrix. env holds the GANTRY_LIVE_* variables; mock is the mock's base URL or None."""
+def run(enterplace, env, mock):
+    """Runs the matrix. env holds the ENTERPLACE_LIVE_* variables; mock is the mock's base URL or None."""
     env = dict(env)
     if mock is not None:
         for p in providers({}):
             for name in p["need"]:
                 env[name] = MOCK_KEY
-        env["GANTRY_LIVE_AZURE_URL"] = "http://placeholder"
-    elif env.get("GANTRY_LIVE_VERTEX_SA_JSON") and not env.get("GANTRY_LIVE_VERTEX_TOKEN"):
-        env["GANTRY_LIVE_VERTEX_TOKEN"], project = vertex_token(env["GANTRY_LIVE_VERTEX_SA_JSON"])
-        env.setdefault("GANTRY_LIVE_VERTEX_PROJECT", project)
-    cap = int(env.get("GANTRY_LIVE_MAX_TOKENS", "20000"))
-    version = subprocess.run([gantry, "version"], capture_output=True, text=True).stdout.strip()
-    matrix = {"schema": 1, "mode": "mock" if mock is not None else "live", "gantry": version,
+        env["ENTERPLACE_LIVE_AZURE_URL"] = "http://placeholder"
+    elif env.get("ENTERPLACE_LIVE_VERTEX_SA_JSON") and not env.get("ENTERPLACE_LIVE_VERTEX_TOKEN"):
+        env["ENTERPLACE_LIVE_VERTEX_TOKEN"], project = vertex_token(env["ENTERPLACE_LIVE_VERTEX_SA_JSON"])
+        env.setdefault("ENTERPLACE_LIVE_VERTEX_PROJECT", project)
+    cap = int(env.get("ENTERPLACE_LIVE_MAX_TOKENS", "20000"))
+    version = subprocess.run([enterplace, "version"], capture_output=True, text=True).stdout.strip()
+    matrix = {"schema": 1, "mode": "mock" if mock is not None else "live", "enterplace": version,
               "commit": env.get("GITHUB_SHA") or subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
               "run": f"{env['GITHUB_SERVER_URL']}/{env['GITHUB_REPOSITORY']}/actions/runs/{env['GITHUB_RUN_ID']}" if env.get("GITHUB_RUN_ID") else None,
               "started": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "token_cap": cap, "tokens": 0, "routes": ROUTES, "providers": [], "results": {r: {} for r in ROUTES}}
-    work = pathlib.Path(tempfile.mkdtemp(prefix="gantry-live-matrix-"))
+    work = pathlib.Path(tempfile.mkdtemp(prefix="enterplace-live-matrix-"))
     try:
         for provider in providers(env):
             missing = [name for name in provider["need"] if not env.get(name)]
@@ -460,17 +460,17 @@ def run(gantry, env, mock):
                 "status": status, "detail": detail, "translated": translated(provider, route) and route != "tool_calls",
                 "model": provider["models"].get(route, provider["models"]["chat"])})
             if missing:
-                entry["skipped"] = f"not set: {', '.join(missing)}" + (" (GANTRY_LIVE_VERTEX_SA_JSON sets both)" if "VERTEX" in missing[0] else "")
+                entry["skipped"] = f"not set: {', '.join(missing)}" + (" (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)" if "VERTEX" in missing[0] else "")
                 for route in provider["routes"]:
                     cell(route, "skipped", entry["skipped"])
                 print(f"skipped {provider['label']}: {entry['skipped']}", file=sys.stderr)
                 continue
             gateway_env = {**os.environ, **env}
             if provider["id"] == "bedrock":
-                gateway_env["AWS_ACCESS_KEY_ID"] = env["GANTRY_LIVE_AWS_ACCESS_KEY_ID"]
-                gateway_env["AWS_SECRET_ACCESS_KEY"] = env["GANTRY_LIVE_AWS_SECRET_ACCESS_KEY"]
+                gateway_env["AWS_ACCESS_KEY_ID"] = env["ENTERPLACE_LIVE_AWS_ACCESS_KEY_ID"]
+                gateway_env["AWS_SECRET_ACCESS_KEY"] = env["ENTERPLACE_LIVE_AWS_SECRET_ACCESS_KEY"]
                 gateway_env.pop("AWS_SESSION_TOKEN", None)
-            gateway, error = start_gateway(gantry, provider, work / provider["id"], gateway_env, mock)
+            gateway, error = start_gateway(enterplace, provider, work / provider["id"], gateway_env, mock)
             if not gateway:
                 for route in provider["routes"]:
                     cell(route, "fail", error)
@@ -490,7 +490,7 @@ def run(gantry, env, mock):
                     print(f"{'pass' if passed else 'FAIL'}  {provider['id']:<17} {route:<20} {detail[:120]}", file=sys.stderr)
             finally:
                 stop(gateway)
-            verify = subprocess.run([gantry, "audit", "verify", str(gateway["folder"] / "gantry-audit.jsonl")], capture_output=True, text=True)
+            verify = subprocess.run([enterplace, "audit", "verify", str(gateway["folder"] / "enterplace-audit.jsonl")], capture_output=True, text=True)
             # The temporary path means nothing after the run: keep what was verified.
             entry["audit"] = {"verified": verify.returncode == 0, "detail": " ".join((verify.stdout + verify.stderr).split()).split(".jsonl: ")[-1][:300]}
     finally:
@@ -502,7 +502,7 @@ def markdown(matrix):
     ids = [p["id"] for p in matrix["providers"]]
     mark = {"pass": "pass", "fail": "**fail**", "skipped": "skipped"}
     lines = [f"### Live provider matrix ({matrix['mode']})", "",
-             f"{matrix['gantry']}, commit `{matrix['commit'][:12]}`, {matrix['started']}, {matrix['tokens']} of {matrix['token_cap']} tokens.", "",
+             f"{matrix['enterplace']}, commit `{matrix['commit'][:12]}`, {matrix['started']}, {matrix['tokens']} of {matrix['token_cap']} tokens.", "",
              "| Route | " + " | ".join(p["label"] for p in matrix["providers"]) + " |", "|---|" + "---|" * len(ids)]
     for route in matrix["routes"]:
         cells = [matrix["results"][route].get(i) for i in ids]
@@ -520,13 +520,13 @@ def cells(matrix):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--gantry", default="target/release/gantry")
+    parser.add_argument("--enterplace", default="target/release/enterplace")
     parser.add_argument("--out", default="live-matrix.json")
     parser.add_argument("--mock", action="store_true", help="point every provider at a local mock of its API")
     parser.add_argument("--selftest", action="store_true", help="--mock must pass every cell; no keys must skip every cell")
     args = parser.parse_args()
-    gantry = str(pathlib.Path(args.gantry).resolve())
-    live_env = {k: v for k, v in os.environ.items() if k.startswith(("GANTRY_LIVE_", "GITHUB_"))}
+    enterplace = str(pathlib.Path(args.enterplace).resolve())
+    live_env = {k: v for k, v in os.environ.items() if k.startswith(("ENTERPLACE_LIVE_", "GITHUB_"))}
 
     mock_url = None
     if args.mock or args.selftest:
@@ -535,11 +535,11 @@ def main():
         mock_url = f"http://127.0.0.1:{server.server_address[1]}"
 
     if args.selftest:
-        mocked = run(gantry, live_env, mock_url)
+        mocked = run(enterplace, live_env, mock_url)
         bad = [f"{r} {i}: {c['detail']}" for r, row in mocked["results"].items() for i, c in row.items() if c["status"] != "pass"]
         bad += [f"audit {p['id']}: {p['audit']['detail']}" for p in mocked["providers"] if not p["audit"]["verified"]]
         print(markdown(mocked))
-        keyless = run(gantry, {k: v for k, v in live_env.items() if k.startswith("GITHUB_")}, None)
+        keyless = run(enterplace, {k: v for k, v in live_env.items() if k.startswith("GITHUB_")}, None)
         bad += [f"{r} {i} ran without keys" for r, row in keyless["results"].items() for i, c in row.items() if c["status"] != "skipped"]
         bad += [f"{p['id']} started a gateway without keys" for p in keyless["providers"] if p["ran"]]
         print(markdown(keyless))
@@ -548,7 +548,7 @@ def main():
         print(f"PASS  {len(cells(mocked))} cells passed against the mocks, {len(cells(keyless))} skipped without keys")
         return
 
-    matrix = run(gantry, live_env, mock_url)
+    matrix = run(enterplace, live_env, mock_url)
     pathlib.Path(args.out).write_text(json.dumps(matrix, indent=2) + "\n")
     table = markdown(matrix)
     print(table)

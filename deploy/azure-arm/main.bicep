@@ -1,10 +1,10 @@
-// Gantry on Azure Container Apps with Azure Database for PostgreSQL flexible server as its store.
+// Enterplace on Azure Container Apps with Azure Database for PostgreSQL flexible server as its store.
 // A first try or a small team: one replica, a Burstable database. The admin key is printed once in the container's
 // logs. The Deploy to Azure button uses azuredeploy.json, built from this file: az bicep build --file main.bicep --outfile azuredeploy.json
-// Production: https://gantry-docs.enterplace.dev/deploy/azure/
+// Production: https://docs.enterplace.dev/deploy/azure/
 
 @description('Name prefix for every resource.')
-param name string = 'gantry'
+param name string = 'enterplace'
 
 @description('Where everything runs.')
 param location string = resourceGroup().location
@@ -17,8 +17,8 @@ param providerKeyName string = 'OPENAI_API_KEY'
 @secure()
 param providerKey string
 
-@description('The Gantry image. Pin a version for anything that lasts.')
-param image string = 'ghcr.io/eliransu/gantry:latest'
+@description('The Enterplace image. Pin a version for anything that lasts.')
+param image string = 'ghcr.io/eliransu/enterplace:latest'
 
 @description('The database password. Leave the default: a new random value, used only inside DATABASE_URL.')
 @secure()
@@ -44,7 +44,7 @@ resource database 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   }
   properties: {
     version: '16'
-    administratorLogin: 'gantry'
+    administratorLogin: 'enterplace'
     administratorLoginPassword: databasePassword
     storage: { storageSizeGB: 32 }
     backup: { backupRetentionDays: 7, geoRedundantBackup: 'Disabled' }
@@ -53,9 +53,9 @@ resource database 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   }
 }
 
-resource gantryDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
+resource enterplaceDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
   parent: database
-  name: 'gantry'
+  name: 'enterplace'
 }
 
 // 0.0.0.0 to 0.0.0.0 admits Azure services only, Container Apps among them. The password and TLS guard the rest.
@@ -85,7 +85,7 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
   location: location
-  dependsOn: [gantryDatabase, allowAzure]
+  dependsOn: [enterplaceDatabase, allowAzure]
   properties: {
     managedEnvironmentId: environment.id
     configuration: {
@@ -96,10 +96,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       }
       secrets: [
         {
-          // The server's certificate chains to DigiCert Global Root G2, among the roots built into Gantry, so the
+          // The server's certificate chains to DigiCert Global Root G2, among the roots built into Enterplace, so the
           // default sslmode (verify-full) holds.
           name: 'database-url'
-          value: 'postgres://gantry:${databasePassword}@${database.properties.fullyQualifiedDomainName}:5432/gantry'
+          value: 'postgres://enterplace:${databasePassword}@${database.properties.fullyQualifiedDomainName}:5432/enterplace'
         }
         {
           name: 'provider-key'
@@ -110,7 +110,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
     template: {
       containers: [
         {
-          name: 'gantry'
+          name: 'enterplace'
           image: image
           resources: {
             cpu: json('0.5')
@@ -140,4 +140,4 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
 
 output consoleUrl string = 'https://${app.properties.configuration.ingress.fqdn}/console'
 output gatewayUrl string = 'https://${app.properties.configuration.ingress.fqdn}'
-output adminKeyLogs string = 'az containerapp logs show --name ${name} --resource-group ${resourceGroup().name} --type console --tail 300 | grep GANTRY_KEY'
+output adminKeyLogs string = 'az containerapp logs show --name ${name} --resource-group ${resourceGroup().name} --type console --tail 300 | grep ENTERPLACE_KEY'

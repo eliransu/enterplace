@@ -1,6 +1,6 @@
 ---
 title: "Step 2: Know"
-description: Give each person their own Gantry key so every request carries a name and a team, and usage and cost show up per person.
+description: Give each person their own Enterplace key so every request carries a name and a team, and usage and cost show up per person.
 sidebar:
   order: 3
 ---
@@ -16,7 +16,7 @@ Every request has a name and a team on it. Usage and cost show up per person and
 Give each person a key of their own, in place of the shared one from step 1.
 
 ```bash
-gantry key new maya.cohen --team payments
+enterplace key new maya.cohen --team payments
 ```
 
 The command prints the key once, with the lines Claude Code and the OpenAI SDKs read. Send them to the person through your secret manager. They replace the shared key in their tool, and nothing else changes for them.
@@ -30,9 +30,9 @@ Nothing is blocked in this step either. Observe mode is still on.
 - **Start here** (`/console/start`): with **Coding agents**, the step **Add a second person** turns done when a second person sends a request. After the checklist, the five-step strip marks Know done.
 - **Analytics** (`/console/analytics`): rank by person or team. Each name has its requests, tokens and cost.
 - **People and workloads** (`/console/people`): every key by name and team, with what it spent this month and today.
-- From the terminal, `gantry audit coverage gantry-audit.jsonl --keys gantry.keys.yaml` lists each person and tool. A person with tool `-` and last seen `never` holds a key and has sent nothing.
+- From the terminal, `enterplace audit coverage enterplace-audit.jsonl --keys enterplace.keys.yaml` lists each person and tool. A person with tool `-` and last seen `never` holds a key and has sent nothing.
 
-People on Claude subscriptions keep their Claude login and get a person token in place of a key: `gantry key new <name> --team <team> --identity-only` prints one, and Claude Code sends it in `ANTHROPIC_CUSTOM_HEADERS`. See [Claude Code](/integrations/claude-code/#claude-subscriptions). With [watch mode](/integrations/claude-team/) they need nothing: they appear under the email address they signed in to Claude with.
+People on Claude subscriptions keep their Claude login and get a person token in place of a key: `enterplace key new <name> --team <team> --identity-only` prints one, and Claude Code sends it in `ANTHROPIC_CUSTOM_HEADERS`. See [Claude Code](/integrations/claude-code/#claude-subscriptions). With [watch mode](/integrations/claude-team/) they need nothing: they appear under the email address they signed in to Claude with.
 
 <Aside type="caution">
 A key is shown once. Never send it in chat or email. If one is lost, issue a new one.
@@ -48,16 +48,16 @@ You know who uses what. To cap what each team spends, go to [Step 3: Limit](/sta
 
 With more than a handful of people, let them issue their own key through your identity provider. Add `console.sso` with `self_issue` to the policy:
 
-```yaml title="gantry.policy.yaml (added)"
+```yaml title="enterplace.policy.yaml (added)"
 console:
   sso:
     issuer: https://login.example.com
-    client_id: gantry-console
-    client_secret_env: GANTRY_SSO_SECRET
-    redirect_url: https://gantry.example.com/console/sso/callback
+    client_id: enterplace-console
+    client_secret_env: ENTERPLACE_SSO_SECRET
+    redirect_url: https://enterplace.example.com/console/sso/callback
     allowed_domains: [example.com]
     role_claim: groups
-    admin_values: [gantry-admins]
+    admin_values: [enterplace-admins]
     self_issue:
       allowed_domains: [example.com]
       team: developers
@@ -67,7 +67,7 @@ console:
 Each developer then runs one command and signs in with their company account:
 
 ```bash
-gantry login https://gantry.example.com
+enterplace login https://enterplace.example.com
 ```
 
 The key is named by their email and expires after 30 days. See [Single sign-on](/governance/single-sign-on/).
@@ -77,5 +77,5 @@ The key is named by their email and expires after 30 days. See [Single sign-on](
 | Way | Use it when | Page |
 |---|---|---|
 | A key per workload | A CI job or an agent calls models. Give it a name such as `ci.release`, an expiry and a budget | [Keys](/governance/keys/) |
-| JWT from your identity provider | Services already hold access tokens. Gantry accepts them in place of a key | [JWT sign-in](/governance/access-control/#jwts-from-your-identity-provider) |
+| JWT from your identity provider | Services already hold access tokens. Enterplace accepts them in place of a key | [JWT sign-in](/governance/access-control/#jwts-from-your-identity-provider) |
 | SCIM (Enterprise) | Okta or Microsoft Entra ID should add and remove people and push groups as teams | [SCIM provisioning](/operations/scim/) |

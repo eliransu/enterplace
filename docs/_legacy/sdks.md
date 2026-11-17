@@ -1,6 +1,6 @@
 # SDKs
 
-OpenAI's and Anthropic's SDKs reach Gantry by their base URL. Give the client Gantry's address and a Gantry key in place of a provider key. Each request is then identified, decided, recorded and only then forwarded.
+OpenAI's and Anthropic's SDKs reach Enterplace by their base URL. Give the client Enterplace's address and a Enterplace key in place of a provider key. Each request is then identified, decided, recorded and only then forwarded.
 
 ## At a glance
 
@@ -13,30 +13,30 @@ OpenAI's and Anthropic's SDKs reach Gantry by their base URL. Give the client Ga
 
 The OpenAI SDKs take the address with `/v1`; the Anthropic SDKs take it without, because they add `/v1/messages` themselves.
 
-The OpenAI SDKs send the key as `Authorization: Bearer`; the Anthropic SDKs send `api_key` (`ANTHROPIC_API_KEY`) as `x-api-key`, and `auth_token` (`ANTHROPIC_AUTH_TOKEN`) as `Authorization: Bearer`. Gantry reads either header; both at once must hold the same value, or the request is refused with `ambiguous_key`. Set only one of `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, to the Gantry key.
+The OpenAI SDKs send the key as `Authorization: Bearer`; the Anthropic SDKs send `api_key` (`ANTHROPIC_API_KEY`) as `x-api-key`, and `auth_token` (`ANTHROPIC_AUTH_TOKEN`) as `Authorization: Bearer`. Enterplace reads either header; both at once must hold the same value, or the request is refused with `ambiguous_key`. Set only one of `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, to the Enterplace key.
 
 The model must be on a provider the route fits: chat, Responses and embeddings requests for models on an `openai` provider (chat also for `azure`, `gemini`, `vertex`), messages requests for models on an `anthropic` or `bedrock` provider. A request on the wrong route is refused with `wrong_route`, which names the right one. See [Providers](providers.html).
 
 ## Refusals
 
-A refusal is an HTTP error, so each SDK raises its status error. The status picks the class: 400 `BadRequestError`, 401 `AuthenticationError`, 403 `PermissionDeniedError`, 404 `NotFoundError`, 429 `RateLimitError`, 500 and above `InternalServerError`, all subclasses of `APIStatusError` (Python) or `APIError` (TypeScript). The message ends with `Decision <id>.`, and every refusal also carries the decision ID in the `X-Gantry-Decision` header. Where the Gantry code sits depends on the SDK:
+A refusal is an HTTP error, so each SDK raises its status error. The status picks the class: 400 `BadRequestError`, 401 `AuthenticationError`, 403 `PermissionDeniedError`, 404 `NotFoundError`, 429 `RateLimitError`, 500 and above `InternalServerError`, all subclasses of `APIStatusError` (Python) or `APIError` (TypeScript). The message ends with `Decision <id>.`, and every refusal also carries the decision ID in the `X-Enterplace-Decision` header. Where the Enterplace code sits depends on the SDK:
 
-| SDK | Gantry code | Decision ID |
+| SDK | Enterplace code | Decision ID |
 |---|---|---|
 | OpenAI, Python | `e.code` | `e.body["decision"]` |
 | OpenAI, TypeScript | `err.code` | `err.error.decision` |
-| Anthropic, Python | `e.body["gantry_code"]` | `e.body["decision"]` |
-| Anthropic, TypeScript | `err.error.gantry_code` | `err.error.decision` |
+| Anthropic, Python | `e.body["enterplace_code"]` | `e.body["decision"]` |
+| Anthropic, TypeScript | `err.error.enterplace_code` | `err.error.decision` |
 
-The OpenAI SDKs keep the inner `error` object of OpenAI's shape; the Anthropic SDKs keep the whole body of Anthropic's shape, where Gantry puts `gantry_code` and `decision` at the top level. The header works the same in all four: `e.response.headers["x-gantry-decision"]` in Python, `err.headers.get("x-gantry-decision")` in TypeScript. Every code is in [Refusal codes](refusals.html).
+The OpenAI SDKs keep the inner `error` object of OpenAI's shape; the Anthropic SDKs keep the whole body of Anthropic's shape, where Enterplace puts `enterplace_code` and `decision` at the top level. The header works the same in all four: `e.response.headers["x-enterplace-decision"]` in Python, `err.headers.get("x-enterplace-decision")` in TypeScript. Every code is in [Refusal codes](refusals.html).
 
-All four SDKs retry 408, 409, 429 and 5xx answers twice by default, but obey the `x-should-retry` header when it is there. Gantry sets it on every refusal: `false` on most, so a refusal is raised at once and recorded once; `true` on `busy`, `rate_limited` and the `upstream_*` codes, which the SDK sends again on its own. `max_retries` (Python) or `maxRetries` (TypeScript) changes the count.
+All four SDKs retry 408, 409, 429 and 5xx answers twice by default, but obey the `x-should-retry` header when it is there. Enterplace sets it on every refusal: `false` on most, so a refusal is raised at once and recorded once; `true` on `busy`, `rate_limited` and the `upstream_*` codes, which the SDK sends again on its own. `max_retries` (Python) or `maxRetries` (TypeScript) changes the count.
 
 ## OpenAI SDK, Python
 
 ```bash
 export OPENAI_BASE_URL=http://127.0.0.1:8080/v1
-export OPENAI_API_KEY=gantry_...
+export OPENAI_API_KEY=enterplace_...
 ```
 
 ```python
@@ -79,7 +79,7 @@ try {
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-export ANTHROPIC_API_KEY=gantry_...
+export ANTHROPIC_API_KEY=enterplace_...
 ```
 
 ```python
@@ -94,7 +94,7 @@ try:
     )
     print(message.content[0].text)
 except anthropic.APIStatusError as e:
-    print(e.status_code, e.body["gantry_code"], e.body["decision"])
+    print(e.status_code, e.body["enterplace_code"], e.body["decision"])
 ```
 
 `anthropic.Anthropic(base_url=..., api_key=...)` sets both in code instead. `e.type` holds Anthropic's error type for the code (for example `permission_error`), as listed in [Refusal codes](refusals.html).
@@ -114,7 +114,7 @@ try {
   console.log(message.content[0].text);
 } catch (err) {
   if (!(err instanceof Anthropic.APIError)) throw err;
-  console.log(err.status, err.error?.gantry_code, err.error?.decision);
+  console.log(err.status, err.error?.enterplace_code, err.error?.decision);
 }
 ```
 
@@ -127,7 +127,7 @@ try {
 - Anthropic SDK, Python: from docs only.
 - Anthropic SDK, TypeScript: from docs only.
 
-None of the four SDKs is installed on the machine these pages were written on. The parameter, variable, exception and attribute names come from each SDK's documentation and published source. The refusal bodies they parse were checked against a running Gantry with `curl` on 2026-11-13, on both routes.
+None of the four SDKs is installed on the machine these pages were written on. The parameter, variable, exception and attribute names come from each SDK's documentation and published source. The refusal bodies they parse were checked against a running Enterplace with `curl` on 2026-11-13, on both routes.
 
 ## Sources
 

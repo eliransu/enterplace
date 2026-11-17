@@ -1,4 +1,4 @@
-# Builds the image for amd64 and arm64 and pushes it to ghcr.io/eliransu/gantry, a public package, tagged latest (main),
+# Builds the image for amd64 and arm64 and pushes it to ghcr.io/eliransu/enterplace, a public package, tagged latest (main),
 # with the commit sha (and the version, on a v* tag). On a pull request or a branch, it builds both and pushes nothing.
 # On a v* tag it also checks that the repository names that version, and puts the image digest at the top of the
 # GitHub Release of this repository (release.yml adds the signed tarballs). How to release: RELEASING.md.
@@ -19,7 +19,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/gantry
+  IMAGE: ghcr.io/${{ github.repository_owner }}/enterplace
   COSIGN_VERSION: v3.1.4
   SYFT_VERSION: v1.46.0
   GRYPE_VERSION: v0.115.0
@@ -77,21 +77,21 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           # By digest: the merge job below puts both architectures under one tag.
-          outputs: ${{ env.PUBLISH == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || 'type=docker,name=gantry:check' }}
+          outputs: ${{ env.PUBLISH == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || 'type=docker,name=enterplace:check' }}
       - name: Check the size and user
         if: env.PUBLISH != 'true'
         run: |
-          size=$(docker image inspect gantry:check --format '{{.Size}}')
+          size=$(docker image inspect enterplace:check --format '{{.Size}}')
           echo "${{ matrix.platform }}: $size bytes"
           [ "$size" -lt $((50 * 1024 * 1024)) ]
-          [ "$(docker image inspect gantry:check --format '{{.Config.User}}')" = 65532:65532 ]
+          [ "$(docker image inspect enterplace:check --format '{{.Config.User}}')" = 65532:65532 ]
       # One architecture is enough: both are built from one Cargo.lock, so they ship the same crates.
       - name: Scan the image
         if: env.PUBLISH != 'true' && matrix.platform == 'linux/amd64'
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin "$SYFT_VERSION"
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin "$GRYPE_VERSION"
-          scripts/scan_image.sh gantry:check
+          scripts/scan_image.sh enterplace:check
       - name: Keep the digest
         if: env.PUBLISH == 'true'
         run: |
@@ -208,6 +208,6 @@ jobs:
           else
             cat image.md release-notes.md > notes.md
             gh release create "$GITHUB_REF_NAME" --repo "${{ github.repository }}" --verify-tag \
-              --title "Gantry $VERSION" --notes-file notes.md
+              --title "Enterplace $VERSION" --notes-file notes.md
           fi
           gh release upload "$GITHUB_REF_NAME" sbom.cdx.json --repo "${{ github.repository }}" --clobber

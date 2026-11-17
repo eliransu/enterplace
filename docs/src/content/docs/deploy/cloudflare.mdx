@@ -1,6 +1,6 @@
 ---
 title: Cloudflare
-description: Deploy Gantry Enterprise on Cloudflare with the wrangler template, gateway containers behind a Worker with the audit chain in R2 and the store in Postgres, then verify and run it in production.
+description: Deploy Enterplace Enterprise on Cloudflare with the wrangler template, gateway containers behind a Worker with the audit chain in R2 and the store in Postgres, then verify and run it in production.
 sidebar:
   label: Cloudflare
   order: 8
@@ -8,20 +8,20 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The wrangler template `cloudflare`, which ships inside the `gantry` image, runs gateways in Cloudflare Containers behind a Worker, keeps each gateway's audit chain in R2, and keeps keys, kill switches and budgets in Postgres.
+The wrangler template `cloudflare`, which ships inside the `enterplace` image, runs gateways in Cloudflare Containers behind a Worker, keeps each gateway's audit chain in R2, and keeps keys, kill switches and budgets in Postgres.
 
 ## What it creates
 
 | Resource | Why |
 |---|---|
-| A Worker on your hostname | Sends each request to one of `GATEWAYS` gateway instances, named `gateway-0`, `gateway-1` and on. Serves `GET /_gantry/audit/<instance>`, the whole audit chain of one instance |
-| Durable Object class `GantryGateway` and its container application | One gateway per instance, from an image built of the Gantry image and your policy. Instances start on the first request and stop after 30 minutes without one |
+| A Worker on your hostname | Sends each request to one of `GATEWAYS` gateway instances, named `gateway-0`, `gateway-1` and on. Serves `GET /_enterplace/audit/<instance>`, the whole audit chain of one instance |
+| Durable Object class `EnterplaceGateway` and its container application | One gateway per instance, from an image built of the Enterplace image and your policy. Instances start on the first request and stop after 30 minutes without one |
 | R2 bucket, bound as `AUDIT` | Each instance's sealed audit segments, under `audit/<instance id>/` |
-| Workers secrets | `DATABASE_URL`, `GANTRY_LICENSE`, provider keys and the rest. The Worker passes them to the container as environment variables when it starts |
+| Workers secrets | `DATABASE_URL`, `ENTERPLACE_LICENSE`, provider keys and the rest. The Worker passes them to the container as environment variables when it starts |
 
-**The audit chain in R2.** A container's disk is new at every start, and the audit log is one hash-chained file. So the gateway seals its log every `GANTRY_AUDIT_SEAL_SECONDS` (60 by default), or as soon as it reaches `GANTRY_AUDIT_SEAL_BYTES` (1 MiB), and writes each sealed segment to R2. Only once R2 has a segment does the gateway remove it from disk, with an `audit_retired` record in the chain that names it and its SHA-256. A graceful stop (a deploy, or an idle instance going to sleep) seals and writes the rest first. On a start with an empty disk, the gateway fetches its newest segments back from R2 and continues the chain from the last hash. The segments in R2, in name order, followed by the records not yet sealed, are one chain from record 1 that `gantry audit verify` proves.
+**The audit chain in R2.** A container's disk is new at every start, and the audit log is one hash-chained file. So the gateway seals its log every `ENTERPLACE_AUDIT_SEAL_SECONDS` (60 by default), or as soon as it reaches `ENTERPLACE_AUDIT_SEAL_BYTES` (1 MiB), and writes each sealed segment to R2. Only once R2 has a segment does the gateway remove it from disk, with an `audit_retired` record in the chain that names it and its SHA-256. A graceful stop (a deploy, or an idle instance going to sleep) seals and writes the rest first. On a start with an empty disk, the gateway fetches its newest segments back from R2 and continues the chain from the last hash. The segments in R2, in name order, followed by the records not yet sealed, are one chain from record 1 that `enterplace audit verify` proves.
 
-**No R2 access key.** The gateway sends its S3 requests to `http://audit.gantry.internal`, a name that exists only inside the container: the Worker answers it from the bucket binding. It keeps each instance in its own folder, so one gateway cannot write another's chain, has no delete, and refuses to overwrite a segment with different bytes.
+**No R2 access key.** The gateway sends its S3 requests to `http://audit.enterplace.internal`, a name that exists only inside the container: the Worker answers it from the bucket binding. It keeps each instance in its own folder, so one gateway cannot write another's chain, has no delete, and refuses to overwrite a segment with different bytes.
 
 **Postgres over TLS, not Hyperdrive.** Hyperdrive is a binding for Worker code. A container reaches its Worker over HTTP only, so the gateway connects to Postgres itself, with TLS checked against the Mozilla roots built into it. Use a Postgres that is reachable from the internet and whose certificate chains to a public authority, such as Neon.
 
@@ -41,34 +41,34 @@ The wrangler template `cloudflare`, which ships inside the `gantry` image, runs 
 1. Copy the template out of the image you will run, and install wrangler beside it.
 
    ```bash
-   docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
-   docker cp gantry-files:/deploy/cloudflare ./gantry-cloudflare && docker rm gantry-files
-   cd gantry-cloudflare
+   docker create --name enterplace-files ghcr.io/eliransu/enterplace:<version>
+   docker cp enterplace-files:/deploy/cloudflare ./enterplace-cloudflare && docker rm enterplace-files
+   cd enterplace-cloudflare
    npm ci
    npx wrangler login
    ```
 
-2. Edit the four lines marked `EDIT` in `wrangler.jsonc`: the Worker's name, the image version in `image_vars`, the bucket name, and your hostname. Edit `gantry.policy.yaml` for your providers and rules, and keep its last two lines:
+2. Edit the four lines marked `EDIT` in `wrangler.jsonc`: the Worker's name, the image version in `image_vars`, the bucket name, and your hostname. Edit `enterplace.policy.yaml` for your providers and rules, and keep its last two lines:
 
-   ```yaml title="gantry.policy.yaml"
-   audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+   ```yaml title="enterplace.policy.yaml"
+   audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
    store: { postgres_url_env: DATABASE_URL }
    ```
 
 3. Create the bucket, deploy, and set the secrets. The first deploy builds and pushes the image, which takes a few minutes.
 
    ```bash
-   npx wrangler r2 bucket create gantry-audit
+   npx wrangler r2 bucket create enterplace-audit
    npx wrangler deploy
    npx wrangler secret put DATABASE_URL
-   npx wrangler secret put GANTRY_LICENSE
+   npx wrangler secret put ENTERPLACE_LICENSE
    npx wrangler secret put OPENAI_PROVIDER_KEY
-   openssl rand -hex 32 | npx wrangler secret put GANTRY_MASTER_KEY
-   openssl rand -hex 32 | npx wrangler secret put GANTRY_EXPORT_KEY
-   openssl rand -hex 32 | tee audit-read-token.txt | npx wrangler secret put GANTRY_AUDIT_READ_TOKEN
+   openssl rand -hex 32 | npx wrangler secret put ENTERPLACE_MASTER_KEY
+   openssl rand -hex 32 | npx wrangler secret put ENTERPLACE_EXPORT_KEY
+   openssl rand -hex 32 | tee audit-read-token.txt | npx wrangler secret put ENTERPLACE_AUDIT_READ_TOKEN
    ```
 
-   Every secret or variable named `GANTRY_*`, `DATABASE_URL`, `AWS_*` or `*_PROVIDER_KEY` reaches the gateway. Keep a copy of the master key outside Cloudflare: a lost master key cannot be recovered. A running gateway reads its environment when it starts, so a secret set later reaches it at its next start: run `npx wrangler deploy` again to roll the instances.
+   Every secret or variable named `ENTERPLACE_*`, `DATABASE_URL`, `AWS_*` or `*_PROVIDER_KEY` reaches the gateway. Keep a copy of the master key outside Cloudflare: a lost master key cannot be recovered. A running gateway reads its environment when it starts, so a secret set later reaches it at its next start: run `npx wrangler deploy` again to roll the instances.
 
 </Steps>
 
@@ -79,8 +79,8 @@ The wrangler template `cloudflare`, which ships inside the `gantry` image, runs 
 | `GATEWAYS` | `vars` | `2` | Gateway instances requests are spread over |
 | `max_instances` | `containers` | `4` | At least `GATEWAYS`, plus one for each instance still stopping during a rollout |
 | `instance_type` | `containers` | `basic` | The container's size. See the instance types in the Containers documentation |
-| `GANTRY_AUDIT_SEAL_SECONDS` | `vars` | `60` | How often the audit log is sealed and written to R2, when it holds new records |
-| `GANTRY_AUDIT_SEAL_BYTES` | `vars` | `1048576` | Seal sooner when the open file reaches this size |
+| `ENTERPLACE_AUDIT_SEAL_SECONDS` | `vars` | `60` | How often the audit log is sealed and written to R2, when it holds new records |
+| `ENTERPLACE_AUDIT_SEAL_BYTES` | `vars` | `1048576` | Seal sooner when the open file reaches this size |
 | `sleepAfter` | `src/index.ts` | `30m` | How long an idle instance runs before it stops. Each start fetches its newest segments from R2 |
 
 ## Verify
@@ -90,7 +90,7 @@ The wrangler template `cloudflare`, which ships inside the `gantry` image, runs 
 1. Check the gateway answers. The first request starts an instance, which takes a few seconds.
 
    ```bash
-   export GATEWAY=https://gantry.example.com
+   export GATEWAY=https://enterplace.example.com
    curl -s $GATEWAY/healthz
    ```
 
@@ -105,9 +105,9 @@ The wrangler template `cloudflare`, which ships inside the `gantry` image, runs 
 3. Issue a key with the admin API and make a governed call.
 
    ```bash
-   export GANTRY_ADMIN_KEY=gantry_...
+   export ENTERPLACE_ADMIN_KEY=enterplace_...
    KEY=$(curl -s -X POST $GATEWAY/admin/keys \
-     -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H 'Content-Type: application/json' \
+     -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -H 'Content-Type: application/json' \
      -d '{"name":"maya.cohen","team":"payments"}' | sed -n 's/.*"key":"\([^"]*\)".*/\1/p')
    curl -s $GATEWAY/v1/chat/completions \
      -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
@@ -117,8 +117,8 @@ The wrangler template `cloudflare`, which ships inside the `gantry` image, runs 
 4. Verify the audit chain of an instance: its segments from R2, then the records it has not sealed yet, as one file.
 
    ```bash
-   curl -s -H "Authorization: Bearer $(cat audit-read-token.txt)" $GATEWAY/_gantry/audit/gateway-0 > chain.jsonl
-   docker run --rm -v "$PWD":/w:ro ghcr.io/eliransu/gantry:<version> audit verify /w/chain.jsonl
+   curl -s -H "Authorization: Bearer $(cat audit-read-token.txt)" $GATEWAY/_enterplace/audit/gateway-0 > chain.jsonl
+   docker run --rm -v "$PWD":/w:ro ghcr.io/eliransu/enterplace:<version> audit verify /w/chain.jsonl
    ```
 
    ```text
@@ -135,7 +135,7 @@ The wrangler template `cloudflare`, which ships inside the `gantry` image, runs 
 
 ## Known limits
 
-- **A killed container loses its unsealed records.** A graceful stop loses nothing. A container that is killed (out of memory, a host failure) loses the records written since the last seal, at most `GANTRY_AUDIT_SEAL_SECONDS` of them; the chain then continues from the last segment in R2 and still verifies. Lower the interval to narrow the window; each seal adds one `audit_retired` record and one R2 write.
+- **A killed container loses its unsealed records.** A graceful stop loses nothing. A container that is killed (out of memory, a host failure) loses the records written since the last seal, at most `ENTERPLACE_AUDIT_SEAL_SECONDS` of them; the chain then continues from the last segment in R2 and still verifies. Lower the interval to narrow the window; each seal adds one `audit_retired` record and one R2 write.
 - **A chain per organization ships under its own folder.** With `audit: { per_org: true }`, each organization's chain is sealed and written to R2 as the instance's is, under `<instance folder>/orgs/<org>`, and fetched back on a start with an empty disk for each organization listed under `orgs:`. See [a chain per organization](/governance/audit-log/#a-chain-per-organization).
 - **Hyperdrive is not used.** See above: the gateway connects to Postgres directly over TLS. A database whose certificate comes from a private authority, such as Cloud SQL, is refused.
 - **Requests are spread at random.** Keys, kill switches and budgets are shared through the store, so any instance answers any request. The answer cache is per instance, and a single sign-on callback must reach the instance that started the sign-in: with single sign-on, run one instance.
@@ -149,9 +149,9 @@ The wrangler template `cloudflare`, which ships inside the `gantry` image, runs 
 
 - **TLS.** The custom domain has a Cloudflare certificate. The Worker reaches the container inside Cloudflare.
 - **Secrets.** Every secret is a Workers secret, set with `wrangler secret put` and never in `wrangler.jsonc`. Never change the master key in place: the credentials sealed with it would no longer open.
-- **Backups.** Turn on your Postgres provider's backups with point-in-time recovery. The audit chain is in R2: copy the bucket, or each instance's folder, to storage where the account that runs Gantry cannot delete, and keep each instance's last hash from step 4 outside Cloudflare.
+- **Backups.** Turn on your Postgres provider's backups with point-in-time recovery. The audit chain is in R2: copy the bucket, or each instance's folder, to storage where the account that runs Enterplace cannot delete, and keep each instance's last hash from step 4 outside Cloudflare.
 - **Monitoring.** A health check on `$GATEWAY/healthz` (Cloudflare Health Checks, or your own), Workers observability for errors, and an alert on the log line `warning: audit segments`, which means a segment could not be written to R2 and stays on the container's disk until it can.
-- **Upgrades.** Take a database backup first, since a newer Gantry may update the schema and an older one refuses a database a newer one has written. Change `GANTRY_IMAGE` in `image_vars` and run `npx wrangler deploy`. Instances roll one by one; each seals and writes its chain before it stops.
+- **Upgrades.** Take a database backup first, since a newer Enterplace may update the schema and an older one refuses a database a newer one has written. Change `ENTERPLACE_IMAGE` in `image_vars` and run `npx wrangler deploy`. Instances roll one by one; each seals and writes its chain before it stops.
 - **Rollback.** Put the previous version back in `image_vars` and deploy again. Each instance continues its chain from R2. If the older version refuses the database because the new one changed the schema, restore the backup first. `npx wrangler rollback` rolls back the Worker code only, not the containers.
 
 ### What to watch
@@ -161,7 +161,7 @@ The wrangler template `cloudflare`, which ships inside the `gantry` image, runs 
 | `gateway_not_ready` answers | The container did not start: a policy it cannot use, a missing secret, or a chain in R2 that does not verify | `npx wrangler tail`: the error names the fix |
 | `warning: audit segments` in the log | R2 did not take a segment. It stays on disk, and is written when R2 answers again | Check the bucket binding and R2's status |
 | Refusals with `store_unavailable` | Postgres cannot be reached. Budgeted requests are refused; others are served | Check the database and `DATABASE_URL` |
-| License warning in the log | The license is in its 30-day grace period | Set the renewed license with `wrangler secret put GANTRY_LICENSE` and deploy |
+| License warning in the log | The license is in its 30-day grace period | Set the renewed license with `wrangler secret put ENTERPLACE_LICENSE` and deploy |
 
 ## Next
 

@@ -1,13 +1,13 @@
 ---
 title: Kill switches
-description: Stop a person, a team, a key, a model or all traffic at once with gantry kill, and show the people stopped who did it and why.
+description: Stop a person, a team, a key, a model or all traffic at once with enterplace kill, and show the people stopped who did it and why.
 sidebar:
   order: 7
 ---
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A kill switch stops matching traffic within a second, with a reason the people stopped see in their tool. Use it for a runaway agent, a leaked key or a provider incident, then turn it off with `gantry unkill`.
+A kill switch stops matching traffic within a second, with a reason the people stopped see in their tool. Use it for a runaway agent, a leaked key or a provider incident, then turn it off with `enterplace unkill`.
 
 ## Set a switch
 
@@ -15,24 +15,24 @@ A kill switch stops matching traffic within a second, with a reason the people s
 <TabItem label="CLI">
 
 ```bash
-export GANTRY_URL=https://gantry.example.com
-export GANTRY_ADMIN_KEY=gantry_...
+export ENTERPLACE_URL=https://enterplace.example.com
+export ENTERPLACE_ADMIN_KEY=enterplace_...
 
-gantry kill --person maya.cohen@example.com --reason "retrying the same ticket in a loop"
-gantry kill --team support --reason "support budget review"
-gantry kill --key-prefix 3f9a1c2e --reason "key pasted in a public issue"
-gantry kill --model gpt-4o --reason "provider incident"
-gantry kill --all --reason "suspected key leak, investigating"
+enterplace kill --person maya.cohen@example.com --reason "retrying the same ticket in a loop"
+enterplace kill --team support --reason "support budget review"
+enterplace kill --key-prefix 3f9a1c2e --reason "key pasted in a public issue"
+enterplace kill --model gpt-4o --reason "provider incident"
+enterplace kill --all --reason "suspected key leak, investigating"
 ```
 
-The CLI takes the admin key from `GANTRY_ADMIN_KEY`, or the key saved by `gantry login` if it is an admin's. The gateway is `--url`, `GANTRY_URL` or the saved login's address.
+The CLI takes the admin key from `ENTERPLACE_ADMIN_KEY`, or the key saved by `enterplace login` if it is an admin's. The gateway is `--url`, `ENTERPLACE_URL` or the saved login's address.
 
 </TabItem>
 <TabItem label="Admin API">
 
 ```bash
-curl -X POST https://gantry.example.com/admin/kills \
-  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+curl -X POST https://enterplace.example.com/admin/kills \
+  -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{"scope":"person","value":"maya.cohen@example.com","reason":"retrying the same ticket in a loop"}'
 ```
@@ -48,16 +48,16 @@ Answers `201` with the switch and `"in_effect": true`. `GET /admin/kills` lists 
 <TabItem label="CLI">
 
 ```bash
-gantry unkill --person maya.cohen@example.com
-gantry unkill --all
+enterplace unkill --person maya.cohen@example.com
+enterplace unkill --all
 ```
 
 </TabItem>
 <TabItem label="Admin API">
 
 ```bash
-curl -X DELETE https://gantry.example.com/admin/kills \
-  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+curl -X DELETE https://enterplace.example.com/admin/kills \
+  -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{"scope":"person","value":"maya.cohen@example.com"}'
 ```
@@ -71,9 +71,9 @@ curl -X DELETE https://gantry.example.com/admin/kills \
 
 | CLI flag | API `scope` | Matches |
 |---|---|---|
-| `--person <name>` | `person` | The name on the key. Keys from `gantry login` are named by email. |
+| `--person <name>` | `person` | The name on the key. Keys from `enterplace login` are named by email. |
 | `--team <team>` | `team` | The team on the key. |
-| `--key-prefix <hash>` | `key_prefix` | Keys whose SHA-256 starts with these 8 to 64 hex characters, as `gantry key list` shows them. |
+| `--key-prefix <hash>` | `key_prefix` | Keys whose SHA-256 starts with these 8 to 64 hex characters, as `enterplace key list` shows them. |
 | `--model <model>` | `model` | The model the caller sent. Also stops every alias with a deployment of that model. |
 | `--all` | `all` | Everyone. Takes no value. |
 
@@ -92,7 +92,7 @@ A switch on a model stops the whole alias, not only that deployment. An alias's 
 A stopped request is refused with `killed` (403), in the error shape their client understands:
 
 ```text
-Refused: a kill switch stops traffic for person maya.cohen@example.com: "retrying the same ticket in a loop" (set by noa.bar at 2026-11-13T09:12:44.120Z). It stays stopped until an admin runs gantry unkill. Ask noa.bar.
+Refused: a kill switch stops traffic for person maya.cohen@example.com: "retrying the same ticket in a loop" (set by noa.bar at 2026-11-13T09:12:44.120Z). It stays stopped until an admin runs enterplace unkill. Ask noa.bar.
 ```
 
 While a switch is on, the console's Audit log shows a banner, and the record of each request it stopped names it.
@@ -101,9 +101,9 @@ Admin API calls are never stopped, so an admin can always turn a switch off, inc
 
 ## Persistence
 
-Switches are kept in memory and in `gantry.kills.json` beside the keys file, so a restart keeps them.
+Switches are kept in memory and in `enterplace.kills.json` beside the keys file, so a restart keeps them.
 
-```json title="gantry.kills.json"
+```json title="enterplace.kills.json"
 {
   "kills": [
     {
@@ -119,7 +119,7 @@ Switches are kept in memory and in `gantry.kills.json` beside the keys file, so 
 
 - The node that takes the change applies it before it answers. Every other node serving the same files reads it within 1 second.
 - Every set and clear is an `admin` audit record: `set_kill` with the reason, `clear_kill`.
-- A `gantry.kills.json` that cannot be read, at start or when it changes, refuses every request with `kills_unreadable` (503) until it is fixed or deleted. Gantry cannot tell who is not stopped, so it fails closed.
+- A `enterplace.kills.json` that cannot be read, at start or when it changes, refuses every request with `kills_unreadable` (503) until it is fixed or deleted. Enterplace cannot tell who is not stopped, so it fails closed.
 
 <Aside type="note">
 Two nodes changing switches at the same instant can lose one change. Check `GET /admin/kills` after a change made during an incident.
@@ -130,7 +130,7 @@ Two nodes changing switches at the same instant can lose one change. Check `GET 
 | Code | Status | Cause |
 |---|---|---|
 | `killed` | 403 | A switch stops this person, team, key or model. |
-| `kills_unreadable` | 503 | `gantry.kills.json` cannot be read. |
+| `kills_unreadable` | 503 | `enterplace.kills.json` cannot be read. |
 | `kill_matches_nothing` | 400 | Setting a switch that matches no key, team or served model, without `--force`. |
 | `no_such_switch` | 404 | Clearing a switch that is not on. |
 

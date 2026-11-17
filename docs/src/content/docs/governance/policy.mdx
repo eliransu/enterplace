@@ -1,19 +1,19 @@
 ---
 title: Policy file
-description: Write gantry.policy.yaml, the file that names your providers and decides who may use which model, and read what gantry check reports.
+description: Write enterplace.policy.yaml, the file that names your providers and decides who may use which model, and read what enterplace check reports.
 sidebar:
   order: 1
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The policy file names the providers Gantry forwards to and the rules that decide who may use which model. `gantry check` and `gantry serve` read it the same way, so a file that passes one is accepted by the other.
+The policy file names the providers Enterplace forwards to and the rules that decide who may use which model. `enterplace check` and `enterplace serve` read it the same way, so a file that passes one is accepted by the other.
 
-Any key Gantry does not know is an error. Nothing in the file is ignored.
+Any key Enterplace does not know is an error. Nothing in the file is ignored.
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -54,15 +54,15 @@ rules:
     models: []
 prices:
   gpt-oss:20b: { input: 0, output: 0 }
-audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
 ```
 
 ```bash
-gantry check gantry.policy.yaml
+enterplace check enterplace.policy.yaml
 ```
 
 ```text
-gantry.policy.yaml is valid: 3 rules, 0 keys, 3 providers: openai (openai) at https://api.openai.com, anthropic (anthropic) at https://api.anthropic.com, local (openai) at http://127.0.0.1:11434.
+enterplace.policy.yaml is valid: 3 rules, 0 keys, 3 providers: openai (openai) at https://api.openai.com, anthropic (anthropic) at https://api.anthropic.com, local (openai) at http://127.0.0.1:11434.
 ```
 
 ## Rules and first match
@@ -77,11 +77,11 @@ In the example, `maya.cohen` of team `payments` may use every model, because `ma
 
 ### Principals
 
-Each rule names exactly one principal. The name and team come from the caller's [Gantry key](/governance/keys/).
+Each rule names exactly one principal. The name and team come from the caller's [Enterplace key](/governance/keys/).
 
 | Principal | Matches |
 |---|---|
-| `{ name: maya.cohen }` | The one key, or keys, issued to that name. Keys from `gantry login` are named by email. |
+| `{ name: maya.cohen }` | The one key, or keys, issued to that name. Keys from `enterplace login` are named by email. |
 | `{ team: payments }` | Every key issued to that team. |
 | `{ tag: ci }` | Every key whose entry carries that tag. A tag sent in a header never picks a rule. |
 | `{ any: true }` | Every identified caller. Put it last as the catch-all. |
@@ -111,8 +111,8 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `guardrails` | list | `[]` | Guardrails that rules may name. See [Guardrails](/governance/guardrails/). |
 | `prices` | map | `{}` | Prices by exact model name, over the built-in table. See [Pricing](/routing/pricing/). |
 | `aliases` | list | `[]` | One model name served by several deployments, with weights, cooldown and named fallbacks. See [Providers](/providers/overview/). |
-| `audit` | map | see below | `{ path: <file> }`. Where the audit log is written. Default `gantry-audit.jsonl` beside the policy file. |
-| `console` | map | none | `{ sso: ... }`. Console sign-in and `gantry login`. See [Single sign-on](/governance/single-sign-on/). |
+| `audit` | map | see below | `{ path: <file> }`. Where the audit log is written. Default `enterplace-audit.jsonl` beside the policy file. |
+| `console` | map | none | `{ sso: ... }`. Console sign-in and `enterplace login`. See [Single sign-on](/governance/single-sign-on/). |
 | `orgs` | list | `[]` | The [organizations](#organizations) of a multi-tenant install. |
 | `profiles` | list | `[]` | [Access profiles](#access-profiles) rules include. |
 | `default_guardrails` | list | `[]` | Guardrails every rule runs, before its own. See [Guardrails](/governance/guardrails/#default-guardrails-and-guardrails-per-key). |
@@ -120,9 +120,9 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `key_bounds` | map | none | What a key may be issued with: `max_days`, `max_budget`, `models`. See [Keys](/governance/keys/#bounds-on-issued-keys). |
 | `limits` | list | `[]` | Budgets, rates and `parallel` per scope: global, organization, team, person, key, customer, tag, model. See [Budgets and rate limits](/governance/budgets-and-rate-limits/#scopes-and-the-limits-list). |
 | `roles` | list | `[]` | [Console roles](#console-roles) beside the built-in `admin` and `read_only`. |
-| `jwt` | list | `[]` | Identity providers whose JWTs are accepted in place of a Gantry key. See [JWT sign-in](/governance/access-control/#jwts-from-your-identity-provider). |
+| `jwt` | list | `[]` | Identity providers whose JWTs are accepted in place of a Enterplace key. See [JWT sign-in](/governance/access-control/#jwts-from-your-identity-provider). |
 | `trusted_proxies` | list | `[]` | Address ranges of load balancers whose `X-Forwarded-For` names the client. See [Behind a load balancer](/governance/access-control/#behind-a-load-balancer). |
-| `cors` | map | off | `allowed_origins`: the browser origins that may call Gantry's routes, or `"*"`. See [Browser pages (CORS)](/governance/access-control/#browser-pages-cors). |
+| `cors` | map | off | `allowed_origins`: the browser origins that may call Enterplace's routes, or `"*"`. See [Browser pages (CORS)](/governance/access-control/#browser-pages-cors). |
 | `store` | map | none | `{ postgres_url_env: DATABASE_URL, policy_from: file, approval: false }`. The shared Postgres store. `policy_from: store` keeps this policy in the store as versions edited in the console and the admin API; see [Policy versions](#policy-versions-in-the-store). See [Store](/operations/store/). |
 
 ### Providers
@@ -133,11 +133,11 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `kind` | string | required | `openai`, `anthropic`, `azure`, `bedrock`, `gemini`, `vertex` or `vertex_anthropic`. |
 | `url` | string | required | Base URL, `http://` or `https://`, no query, fragment or login. May carry the vendor's path, such as `https://api.groq.com/openai/v1`. Not used by `bedrock`. |
 | `key_env` | string | required | Name of the environment variable holding the provider key. Optional for an `openai` provider with `allow_private: true`. Not used by `bedrock`, which signs with the AWS credentials it finds. Optional for `vertex` and `vertex_anthropic`, which otherwise sign in to Google Cloud themselves. |
-| `key_file` | string | none | Instead of `key_env`: the path of a file holding the provider key. Read at start and again within 2 seconds of a change, without a restart. A relative path is read from where Gantry runs. Not used by `bedrock`. |
-| `credential` | string | none | Instead of `key_env` or `key_file`: the name of a [provider credential](/governance/provider-credentials/) kept in the store, sealed under `GANTRY_MASTER_KEY`. A rotation reaches every gateway within 2 seconds, without a restart. Needs `store:`. Not used by `bedrock`. |
+| `key_file` | string | none | Instead of `key_env`: the path of a file holding the provider key. Read at start and again within 2 seconds of a change, without a restart. A relative path is read from where Enterplace runs. Not used by `bedrock`. |
+| `credential` | string | none | Instead of `key_env` or `key_file`: the name of a [provider credential](/governance/provider-credentials/) kept in the store, sealed under `ENTERPLACE_MASTER_KEY`. A rotation reaches every gateway within 2 seconds, without a restart. Needs `store:`. Not used by `bedrock`. |
 | `models` | list | required | Exact model names this provider serves. Not empty, no `"*"`. A model may be listed by one provider only, except that a passthrough provider and a keyed one may share it. |
 | `auth` | string | `key` | `passthrough`: each caller's own login (Claude Code's Claude subscription) is sent on unchanged and the provider takes no key. Kind `anthropic`. See [Subscriptions](/governance/subscriptions/). |
-| `identity` | string | `required` | With `auth: passthrough`: `optional` records a request without `x-gantry-user` as the person `unknown`. See [Subscriptions](/governance/subscriptions/). |
+| `identity` | string | `required` | With `auth: passthrough`: `optional` records a request without `x-enterplace-user` as the person `unknown`. See [Subscriptions](/governance/subscriptions/). |
 | `retries` | integer | `0` | 0 to 5. Retries after a connection failure, timeout, 429 or 5xx, before any byte reaches the caller. |
 | `fallback` | string | none | Another provider of the same API to try after the retries fail. |
 | `accept_chat` | boolean | `false` | `anthropic`, `bedrock` and `vertex_anthropic`: also take chat completions requests, translated to messages. |
@@ -146,9 +146,9 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `deployments` | map | `azure` only | Model name to Azure deployment name. |
 | `api_version` | string | `azure` only | The Azure OpenAI `api-version`. |
 | `region` | string | `bedrock` only | The AWS region. |
-| `role_arn` | string | `bedrock` only | An IAM role to assume with the AWS credentials Gantry finds. |
+| `role_arn` | string | `bedrock` only | An IAM role to assume with the AWS credentials Enterplace finds. |
 | `model_ids` | map | `bedrock` only | Model name to Bedrock model ID. |
-| `batch` | map | `bedrock`, `vertex`, `vertex_anthropic` only | `{ bucket: s3://<bucket>/<prefix>/ or gs://<bucket>/<prefix>/, role_arn: <IAM role>, url: <batch API>, storage_url: <S3 or Cloud Storage endpoint> }`. Runs `/v1/batches` as Bedrock batch inference or Vertex AI batch prediction on files Gantry keeps in the bucket. `role_arn` (the service role Bedrock assumes) is required for `bedrock` and refused otherwise; `url` and `storage_url` are for private endpoints. See [Files, batches and realtime](/providers/batches-and-realtime/#bedrock-and-vertex-ai-batches). |
+| `batch` | map | `bedrock`, `vertex`, `vertex_anthropic` only | `{ bucket: s3://<bucket>/<prefix>/ or gs://<bucket>/<prefix>/, role_arn: <IAM role>, url: <batch API>, storage_url: <S3 or Cloud Storage endpoint> }`. Runs `/v1/batches` as Bedrock batch inference or Vertex AI batch prediction on files Enterplace keeps in the bucket. `role_arn` (the service role Bedrock assumes) is required for `bedrock` and refused otherwise; `url` and `storage_url` are for private endpoints. See [Files, batches and realtime](/providers/batches-and-realtime/#bedrock-and-vertex-ai-batches). |
 
 Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 
@@ -161,8 +161,8 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | `models` | list | required | Exact names, `["*"]`, or `[]`. Optional for a rule that includes profiles: theirs are added to the rule's. |
 | `org` | string | none | Name only callers of this organization, one `orgs:` lists. |
 | `profiles` | list | `[]` | [Access profiles](#access-profiles) the rule includes, in order. |
-| `customers` | list | `[]` | End customers a caller may name in `x-gantry-customer`, or `["*"]` for any. See [End customers and tags](/governance/budgets-and-rate-limits/#end-customers-and-tags). |
-| `tags` | list | `[]` | Tags a caller may send in `x-gantry-tags`, or `["*"]` for any. |
+| `customers` | list | `[]` | End customers a caller may name in `x-enterplace-customer`, or `["*"]` for any. See [End customers and tags](/governance/budgets-and-rate-limits/#end-customers-and-tags). |
+| `tags` | list | `[]` | Tags a caller may send in `x-enterplace-tags`, or `["*"]` for any. |
 | `parallel` | integer | none | Most requests in flight at once, 1 to 100000, counted where the budget is. |
 | `guardrails` | list | `[]` | Names from the top-level `guardrails:`, run in this order. An undefined name is an error. |
 | `require` | map | none | `{ headers: [...], body: [...] }`: what every request under the rule must carry. See [Required headers and fields](#required-headers-and-fields). |
@@ -173,22 +173,22 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | `cache` | map | none | `{ ttl_seconds: 1 to 86400, scope: person or team, semantic: { model, threshold } }`. See [Caching](/routing/caching/). |
 | `prompt_cache` | string | `off` | `auto` marks cache breakpoints on Anthropic messages requests. See [Caching](/routing/caching/#prompt-caching). |
 | `buffer_stream` | boolean | `false` | Hold a streamed answer whole so `on: [answer]` guardrails check it first. Needs a guardrail with `on: [answer]`. |
-| `budget_headers` | boolean | `false` | Add `x-gantry-budget-remaining-usd` and `x-gantry-budget-reset` to each answer: what the tightest budget the request counts against has left. See [Budget headers](/governance/budgets-and-rate-limits/#budget-headers). |
+| `budget_headers` | boolean | `false` | Add `x-enterplace-budget-remaining-usd` and `x-enterplace-budget-reset` to each answer: what the tightest budget the request counts against has left. See [Budget headers](/governance/budgets-and-rate-limits/#budget-headers). |
 | `check_stream_every` | integer | none | Check a streamed answer every this many characters, sending only what was checked. See [guardrails](/governance/guardrails/#checking-a-stream-as-it-comes-check_stream_every). |
 | `passthrough` | list | `[]` | Native provider paths the rule may reach as sent. See [Passthrough](#passthrough). |
 | `containers` | map | none | `{ sizes: [1g, 4g] }`: the memory sizes of code interpreter containers the rule's callers may create, each of `1g`, `4g`, `16g`, `64g`. Without it none. See [Videos and containers](/providers/videos-and-containers/#containers). |
 | `from` | list | `[]` | Address ranges the rule's callers may send from. See [Source address ranges](/governance/access-control/#source-address-ranges). |
 | `regions` | list | none | Residency: the regions an alias deployment must be labelled with. Anything else is refused, never sent elsewhere. See [Residency](/routing/strategies/#residency-regions). |
-| `tags` | list | `[]` | Tags callers may send in `x-gantry-tags`. Any other is refused with `tag_not_allowed`. |
+| `tags` | list | `[]` | Tags callers may send in `x-enterplace-tags`. Any other is refused with `tag_not_allowed`. |
 | `shadow_until` | string | none | A UTC date or time, such as `2026-12-31` or `2026-12-31T18:00:00Z`. Until then what the rule would refuse (its models, `rate`, `parallel`, `regions` and budgets) is forwarded and recorded as `would_refuse`. See [Observe mode](#observe-mode). |
 | `budget_basis` | string | `billed` | `api_equivalent`: dollar budgets count [subscription passthrough](/governance/subscriptions/) traffic at its estimated API price. By default they do not count it. |
-| `caller_provider_key` | string | `refused` | Whether a caller may send their own provider key in `x-gantry-provider-key`: `refused`, `allowed` (sent in place of Gantry's, spend recorded as caller-paid and not counted against budgets) or `allowed_budgeted` (counted). See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key). |
+| `caller_provider_key` | string | `refused` | Whether a caller may send their own provider key in `x-enterplace-provider-key`: `refused`, `allowed` (sent in place of Enterplace's, spend recorded as caller-paid and not counted against budgets) or `allowed_budgeted` (counted). See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key). |
 
-Every model a budgeted rule reaches must have a price, built in or under `prices:`. For `models: ["*"]` that is every model every provider serves. `gantry check` refuses a file that breaks this.
+Every model a budgeted rule reaches must have a price, built in or under `prices:`. For `models: ["*"]` that is every model every provider serves. `enterplace check` refuses a file that breaks this.
 
 ## Observe mode
 
-`mode: observe` turns the policy into a dry run. Every request a valid key sends for a model Gantry serves is forwarded, and each decision that would have refused it goes on its record as [`would_refuse`](/reference/audit-records/#would_refuse), in the same audit chain. Use it for a first rollout, or before you enforce a new rule, budget or guardrail.
+`mode: observe` turns the policy into a dry run. Every request a valid key sends for a model Enterplace serves is forwarded, and each decision that would have refused it goes on its record as [`would_refuse`](/reference/audit-records/#would_refuse), in the same audit chain. Use it for a first rollout, or before you enforce a new rule, budget or guardrail.
 
 ```yaml
 version: 1
@@ -220,7 +220,7 @@ What it still refuses, because forwarding would open the gateway:
 - a model no provider serves (`unknown_model`)
 - a [kill switch](/governance/kill-switches/): a stop button always works
 
-Spend and limits still count. A request a budget would refuse is charged to that budget's counter, and a request over `rpm`, `tpm` or `parallel` holds its tokens and its place as an enforced one does, so the numbers are real when you switch to enforce. `gantry check` warns while observe mode is on, and the console's audit log shows "Observe mode: nothing is blocked". Remove the line, or write `mode: enforce`, and the next request after the [reload](#reloading) is enforced.
+Spend and limits still count. A request a budget would refuse is charged to that budget's counter, and a request over `rpm`, `tpm` or `parallel` holds its tokens and its place as an enforced one does, so the numbers are real when you switch to enforce. `enterplace check` warns while observe mode is on, and the console's audit log shows "Observe mode: nothing is blocked". Remove the line, or write `mode: enforce`, and the next request after the [reload](#reloading) is enforced.
 
 To try one feature while the rest is enforced, give it a `shadow_until` date instead: a rule, each budget, and each `limits:` entry take one, as guardrails do. Until that date it records what it would refuse; after it, it enforces. See [Budgets and rate limits](/governance/budgets-and-rate-limits/#trying-a-limit-first).
 
@@ -230,7 +230,7 @@ Observe mode covers every governed route: the model routes (chat, messages, resp
 
 One install may hold several organizations, each with its own rules, budgets, keys and console view:
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -253,9 +253,9 @@ limits:
   - { org: globex, budget: { usd: 5000, per: month }, parallel: 50 }
 ```
 
-- A key belongs to the organization its entry names (`org: acme`, or `gantry key new --org acme`). A key without one belongs to none, and counts as before organizations.
+- A key belongs to the organization its entry names (`org: acme`, or `enterplace key new --org acme`). A key without one belongs to none, and counts as before organizations.
 - A rule with `org:` names only that organization's callers. Teams, people, customers, tags and models are counted per organization, so `team:acme/payments` and `team:globex/payments` are two counters.
-- A key, rule, limit or role naming an organization `orgs:` does not list is refused by `gantry check`, so a misspelling never becomes a tenant of its own.
+- A key, rule, limit or role naming an organization `orgs:` does not list is refused by `enterplace check`, so a misspelling never becomes a tenant of its own.
 - A console role kept to an organization (a key with `org:` and a role, or a role with `org:`) sees only that organization's keys, records and spend, issues keys only in it, and cannot set kill switches or change provider credentials, which act on the whole install.
 - Records carry `org`. Every organization's records are in the install's one audit chain.
 
@@ -263,7 +263,7 @@ limits:
 
 A profile is a named set of models, guardrails, tools and limits that rules include:
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -323,7 +323,7 @@ A request that lacks one is refused with `required_missing` (400) before it is r
 
 Every install has two roles: `admin` (every permission) and `read_only` (`see_keys`, `see_spend`, `see_records`). The policy may define more:
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -369,15 +369,15 @@ roles:
 | `see_records` | See the audit log. |
 | `see_bodies` | See captured request and answer bodies, where capture is on. |
 
-A key gets a role with `role:` in its entry (`gantry key new --role finance`); `admin: true` is the role `admin`. A person signing in through [single sign-on](/governance/single-sign-on/) gets `admin` for an `admin_values` claim value, else the first role whose `sso_values` the claim holds, else `read_only` for a `read_only_values` value. The console and the admin API check the permission each page and action needs on every request, and a refusal names the role and the missing permission (`not_permitted`). Roles live in the policy file, so a change to them is reviewed in git like any rule.
+A key gets a role with `role:` in its entry (`enterplace key new --role finance`); `admin: true` is the role `admin`. A person signing in through [single sign-on](/governance/single-sign-on/) gets `admin` for an `admin_values` claim value, else the first role whose `sso_values` the claim holds, else `read_only` for a `read_only_values` value. The console and the admin API check the permission each page and action needs on every request, and a refusal names the role and the missing permission (`not_permitted`). Roles live in the policy file, so a change to them is reviewed in git like any rule.
 
 ## Passthrough
 
-Gantry serves the common routes itself: chat completions, messages, responses, embeddings, images, audio, moderations, rerank, legacy completions, files, batches, fine-tuning jobs and realtime sessions. For any other endpoint of a provider's own API (Bedrock or Vertex batch jobs, Gemini's native methods), send the request to `/passthrough/<provider>/<path>`. Gantry swaps your Gantry key for the provider key and sends the request to that path unchanged.
+Enterplace serves the common routes itself: chat completions, messages, responses, embeddings, images, audio, moderations, rerank, legacy completions, files, batches, fine-tuning jobs and realtime sessions. For any other endpoint of a provider's own API (Bedrock or Vertex batch jobs, Gemini's native methods), send the request to `/passthrough/<provider>/<path>`. Enterplace swaps your Enterplace key for the provider key and sends the request to that path unchanged.
 
 A rule reaches nothing this way unless it lists the provider and the path prefixes:
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 rules:
   - name: data-team
     principals: { team: data }
@@ -387,17 +387,17 @@ rules:
 ```
 
 ```bash
-curl https://gantry.example.com/passthrough/openai/v1/batches/batch_123 \
-  -H "Authorization: Bearer $GANTRY_KEY"
+curl https://enterplace.example.com/passthrough/openai/v1/batches/batch_123 \
+  -H "Authorization: Bearer $ENTERPLACE_KEY"
 ```
 
 - A prefix matches whole path segments: `/v1/batches` reaches `/v1/batches/batch_123/cancel`, not `/v1/batchesX`. A path with a `.`, `..` or escaped segment is refused, so a listed prefix cannot be climbed out of.
 - A body with a `model` field is checked against the rule's models, as on every other route. A body without one is allowed by the path alone.
 - Each call is recorded, counts against the rule's budget and rate, and is charged from the `usage` the provider returns, priced by the body's model. A call with no model is recorded with no cost.
 - Guardrails read every string in the body, whatever its shape. A call with no body (a `GET`) is recorded with `guardrails: not_run: the request has no body`.
-- Every kind. Bedrock requests are signed with the provider's AWS credentials (SigV4) and Vertex AI requests carry its Google token. `/bedrock/<path>` and `/vertex/<path>` reach the one provider of that cloud without naming it (with several, name one in `x-gantry-provider`); a Vertex AI path starts at the host (`/v1/projects/...`). For these two the model in the path (`/model/<id>/...`, `.../models/<model>:<method>`) is the one decided on, by the name the policy knows it by. A streamed Bedrock answer goes back as Bedrock's event stream, unread, and is charged its reservation.
+- Every kind. Bedrock requests are signed with the provider's AWS credentials (SigV4) and Vertex AI requests carry its Google token. `/bedrock/<path>` and `/vertex/<path>` reach the one provider of that cloud without naming it (with several, name one in `x-enterplace-provider`); a Vertex AI path starts at the host (`/v1/projects/...`). For these two the model in the path (`/model/<id>/...`, `.../models/<model>:<method>`) is the one decided on, by the name the policy knows it by. A streamed Bedrock answer goes back as Bedrock's event stream, unread, and is charged its reservation.
 - The provider key can reach any path you list. List the endpoints people need, never an account's admin API.
-- A WebSocket (`Upgrade: websocket`) to `/passthrough/<provider>/<path>` reaches a provider's realtime API that Gantry has no route of its own for, on the same listed paths, with the provider's key and headers. It is decided at connect (key, rule, path, kill switches, a spent budget), then relayed frame for frame. The rule's guardrails read every string of each JSON text frame (a text frame that is not JSON is one text): a blocked frame from the caller ends the session with close code 1008, a masked one goes on masked, and a block in what the provider sends ends it too. A kill switch ends a session within a second. The session is recorded when it ends as a `realtime_session` record with `api: websocket_passthrough`, the path (never the query), how long it ran and why it ended. It is not metered: no provider protocol reports usage in a shape Gantry knows here. Bedrock and Vertex AI providers are refused, since their WebSockets need signed requests.
+- A WebSocket (`Upgrade: websocket`) to `/passthrough/<provider>/<path>` reaches a provider's realtime API that Enterplace has no route of its own for, on the same listed paths, with the provider's key and headers. It is decided at connect (key, rule, path, kill switches, a spent budget), then relayed frame for frame. The rule's guardrails read every string of each JSON text frame (a text frame that is not JSON is one text): a blocked frame from the caller ends the session with close code 1008, a masked one goes on masked, and a block in what the provider sends ends it too. A kill switch ends a session within a second. The session is recorded when it ends as a `realtime_session` record with `api: websocket_passthrough`, the path (never the query), how long it ran and why it ended. It is not metered: no provider protocol reports usage in a shape Enterplace knows here. Bedrock and Vertex AI providers are refused, since their WebSockets need signed requests.
 
 ## Order of checks
 
@@ -429,15 +429,15 @@ For the full path, from body limits to provider errors, see [How it works](/gett
 
 ## Reloading
 
-Save the policy file or the keys file and Gantry uses the new version within 2 seconds, without a restart. `kill -HUP <pid>` makes it check at once. Gantry compares the SHA-256 of both files once a second, so editors that save by renaming and symlinks switched to another file are both noticed.
+Save the policy file or the keys file and Enterplace uses the new version within 2 seconds, without a restart. `kill -HUP <pid>` makes it check at once. Enterplace compares the SHA-256 of both files once a second, so editors that save by renaming and symlinks switched to another file are both noticed.
 
-- **A change that passes** the same checks as `gantry check` is written to the audit log as a `config_loaded` record, then decides every request after it. The policy and keys switch together.
-- **A change that fails** is not used. Gantry keeps the version it has, prints every problem to stderr, writes one `config_rejected` record per distinct pair of files, and uses the next save that passes.
+- **A change that passes** the same checks as `enterplace check` is written to the audit log as a `config_loaded` record, then decides every request after it. The policy and keys switch together.
+- **A change that fails** is not used. Enterplace keeps the version it has, prints every problem to stderr, writes one `config_rejected` record per distinct pair of files, and uses the next save that passes.
 - **A request decided before the switch** finishes under the decision it got, its stream included.
 
 ```text
-/etc/gantry/gantry.policy.yaml:12: "modles" is not a key Gantry knows. Did you mean "models"?
-gantry: the change to /etc/gantry/gantry.policy.yaml or /etc/gantry/gantry.keys.yaml is not used: 1 problem above. Gantry keeps deciding with the version it has (policy 5d41402a, keys 7c211433) and uses the next save that passes `gantry check`.
+/etc/enterplace/enterplace.policy.yaml:12: "modles" is not a key Enterplace knows. Did you mean "models"?
+enterplace: the change to /etc/enterplace/enterplace.policy.yaml or /etc/enterplace/enterplace.keys.yaml is not used: 1 problem above. Enterplace keeps deciding with the version it has (policy 5d41402a, keys 7c211433) and uses the next save that passes `enterplace check`.
 ```
 
 Rules, guardrails, budgets, rate limits, caches, prices, keys and providers all change without a restart. A provider may be added, removed, or given a new `url`, `kind`, `key_env`, `key_file`, `credential`, `region` or `api_version`: the reload builds a new route for it, reading its key at that moment, and requests already sent finish on the old one. A provider whose key cannot be read then (an unset `key_env`, a missing `key_file`) makes the reload fail, and the version in use is kept. Spend already counted and the cache are kept across a reload.
@@ -457,9 +457,9 @@ These need a restart, and a change to one of them is rejected with that reason:
 
 ## Policy versions in the store
 
-With a store, the policy can live in Postgres instead of the file, as versions an admin edits in the [console](/operations/console-editing/) or the admin API. Each save is a new version, checked exactly as `gantry check` checks a file, recorded in the audit chain, and used by every gateway on the database within 2 seconds, without a restart.
+With a store, the policy can live in Postgres instead of the file, as versions an admin edits in the [console](/operations/console-editing/) or the admin API. Each save is a new version, checked exactly as `enterplace check` checks a file, recorded in the audit chain, and used by every gateway on the database within 2 seconds, without a restart.
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 store: { postgres_url_env: DATABASE_URL, policy_from: store, approval: true }
 ```
 
@@ -470,10 +470,10 @@ store: { postgres_url_env: DATABASE_URL, policy_from: store, approval: true }
 
 ### Which one wins
 
-One source decides, and Gantry says so out loud when the other disagrees.
+One source decides, and Enterplace says so out loud when the other disagrees.
 
 - **`policy_from: file`** (the default): the file decides, as it always has. The console and the admin API show the policy and export it, and refuse every change with `policy_in_file`. A GitOps team keeps this setting: the file in git is the only way to change the policy, and the console cannot drift from it.
-- **`policy_from: store`**: the store's live version decides. The first gateway on an empty store imports the file as version 1. From then on the file is read only for its `store:` section, which says where the store is. When the file differs from the live version, Gantry says so at every start and the console's Policy page shows a banner. To bring them together, export the live version (`GET /admin/policy`) into the file, or import the file as a new version (`PUT /admin/policy`).
+- **`policy_from: store`**: the store's live version decides. The first gateway on an empty store imports the file as version 1. From then on the file is read only for its `store:` section, which says where the store is. When the file differs from the live version, Enterplace says so at every start and the console's Policy page shows a banner. To bring them together, export the live version (`GET /admin/policy`) into the file, or import the file as a new version (`PUT /admin/policy`).
 
 Switching from `store` back to `file` is a restart with the file as the source; switching to `store` again makes the store's live version decide, so import the file first if it changed meanwhile.
 
@@ -483,8 +483,8 @@ Every call takes an admin key and is recorded before anything is done.
 
 | Call | What it does |
 |---|---|
-| `GET /admin/policy` | The live policy as YAML. `ETag` is its version number, `X-Gantry-Policy-Source` is `store` or `file`. This is the export. |
-| `PUT /admin/policy` | A new version from the YAML body (the import). `If-Match` names the version it started from (`none` for the first); a version saved meanwhile makes it `409 version_conflict`. `X-Gantry-Note` says why. |
+| `GET /admin/policy` | The live policy as YAML. `ETag` is its version number, `X-Enterplace-Policy-Source` is `store` or `file`. This is the export. |
+| `PUT /admin/policy` | A new version from the YAML body (the import). `If-Match` names the version it started from (`none` for the first); a version saved meanwhile makes it `409 version_conflict`. `X-Enterplace-Note` says why. |
 | `GET /admin/policy/versions` | The history, newest first, with state, who saved it and who approved it. |
 | `GET /admin/policy/versions/<n>` | One version, its text and its diff from the version it was drafted on. |
 | `POST /admin/policy/versions/<n>/approve` | Puts a pending version live. Refused with `own_version` for the admin who saved it, and with `version_conflict` when another version went live after it was drafted. |
@@ -493,36 +493,36 @@ Every call takes an admin key and is recorded before anything is done.
 | `POST /admin/policy/dry-run?hours=24` | Replays the last 1 to 720 hours of request records (every gateway's with a store, this gateway's audit log without one, named by `dry_run.source`) against the YAML body and lists the requests it would now refuse, now allow, or allow by another rule. Nothing is saved. |
 
 ```bash
-curl -s -D - -H "Authorization: Bearer $GANTRY_ADMIN_KEY" http://127.0.0.1:8080/admin/policy -o gantry.policy.yaml
-curl -s -X PUT -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H 'If-Match: "3"' \
-  -H "X-Gantry-Note: give interns gpt-4o-mini" --data-binary @gantry.policy.yaml http://127.0.0.1:8080/admin/policy
+curl -s -D - -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" http://127.0.0.1:8080/admin/policy -o enterplace.policy.yaml
+curl -s -X PUT -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -H 'If-Match: "3"' \
+  -H "X-Enterplace-Note: give interns gpt-4o-mini" --data-binary @enterplace.policy.yaml http://127.0.0.1:8080/admin/policy
 ```
 
-A draft that `gantry check` refuses comes back as `400 invalid_policy` with every problem on its line. A draft that would need a restart (a new audit path, new MCP servers, another store) is refused the same way, so no version goes live that a gateway would then reject.
+A draft that `enterplace check` refuses comes back as `400 invalid_policy` with every problem on its line. A draft that would need a restart (a new audit path, new MCP servers, another store) is refused the same way, so no version goes live that a gateway would then reject.
 
 ### In the audit chain
 
 Each call is an `admin` record (`propose_policy`, `approve_policy`, `reject_policy`, `rollback_policy`, `dry_run_policy`) that carries a saved draft's whole text, so a pending or refused draft is on file too. Each gateway then writes a `config_loaded` record with `trigger: store` and `policy_version` when it starts using a new version. The policy holds no secrets: provider keys stay in the environment, in key files or in [sealed credentials](/governance/provider-credentials/).
 
-## gantry check
+## enterplace check
 
 ```bash
-gantry check <policy> [--keys <file>]
+enterplace check <policy> [--keys <file>]
 ```
 
-`gantry check` prints every problem, one per line, with file and line, then `<file> cannot be used: N problems above.` It exits 0 when the files can be used and 1 when they cannot. The keys file is `gantry.keys.yaml` beside the policy unless `--keys` names another. A missing keys file is fine.
+`enterplace check` prints every problem, one per line, with file and line, then `<file> cannot be used: N problems above.` It exits 0 when the files can be used and 1 when they cannot. The keys file is `enterplace.keys.yaml` beside the policy unless `--keys` names another. A missing keys file is fine.
 
 An unknown key stops the check of that file at that point, because the rest cannot be read reliably. Fix the names it lists and run it again.
 
 | Problem | Message |
 |---|---|
-| Misspelled key | `gantry.policy.yaml:18: "modles" is not a key Gantry knows. Did you mean "models"?` |
-| Unknown key | `"colour" is not a key Gantry knows. Remove it, or check the spelling.` |
+| Misspelled key | `enterplace.policy.yaml:18: "modles" is not a key Enterplace knows. Did you mean "models"?` |
+| Unknown key | `"colour" is not a key Enterplace knows. Remove it, or check the spelling.` |
 | MCP tool on no server | `tool "gitlab.create_issue" is on MCP server "gitlab", which is not defined under mcp. The MCP servers are: github, docs.` |
 | Key in the wrong place | `"retries" does not belong here. The keys here are name, principals, models, ... Move it to where it belongs, or remove it.` |
 | Missing key | `"url" is missing here. Add it.` |
 | Wrong type | `budget is integer 5. Write it as budget: { usd: 20, per: month }.` |
-| Wrong version | `version is 2. This version of Gantry reads version 1.` |
+| Wrong version | `version is 2. This version of Enterplace reads version 1.` |
 | No provider | `the file lists no provider, so no request could be forwarded. Add one under providers.` |
 | Model on two providers | `model "claude-sonnet-5-5" is listed by provider "anthropic" and by provider "local" at line 8. A model is served by one provider. Remove it from one of them.` |
 | Private URL | `the provider url points at this machine or a private network. If that is intended, for example a local model server, add allow_private: true to the provider.` |
@@ -532,7 +532,7 @@ An unknown key stops the check of that file at that point, because the rest cann
 | `retries` too high | `retries is at most 5. Each retry can wait as long as the provider's whole timeout, so more would leave a caller waiting for many minutes.` |
 | Unknown `fallback` | `fallback names provider "bedrok", and there is none. The providers are: groq, azure, anthropic, bedrock.` |
 | Budget period | `per is "fortnight". A budget starts again each minute, hour, day, week, month or year, or every so many of them: write per: day, per: month, or a count such as per: 6h, 15min, 7d, 2w or 3mo.` |
-| Time zone | `tz is "Mars/Olympus", which is not a time zone Gantry knows. Write an IANA name such as America/New_York, Europe/Berlin or Asia/Jerusalem, or leave tz out for UTC.` |
+| Time zone | `tz is "Mars/Olympus", which is not a time zone Enterplace knows. Write an IANA name such as America/New_York, Europe/Berlin or Asia/Jerusalem, or leave tz out for UTC.` |
 | Organization not listed | `organization "acme-corp" is not listed under orgs. Add it to orgs: at the top of the policy, or check the spelling.` |
 | Profile not defined | `rule "payments" includes profile "standrd", which is not defined under profiles. Define it there, or check the spelling.` |
 | Limits entry | `a limits entry names one scope: global: true, org: <org> (or "*" for each), or one of team, person, key, customer, tag or model ...` |
@@ -543,12 +543,12 @@ An unknown key stops the check of that file at that point, because the rest cann
 | Guardrail not defined | `rule "payments-team" names guardrail "no-secret", which is not defined under guardrails. Define it there, or check the spelling.` |
 | Guardrail without an action | `guardrail "mask-pii" has no action. Add action: block, mask or warn.` |
 | Webhook without `on_failure` | `guardrail "vendor" does not say what to do when the service fails. Add on_failure: fail_closed ... or fail_open ...` |
-| Bad key hash | `gantry.keys.yaml:4: sha256 must be 64 hex characters. Run gantry key new to add a key instead of writing one by hand.` |
-| Impossible expiry | `gantry.keys.yaml:4: expires 2026-11-31 is not a date: November 2026 has 30 days. Write a day that exists.` |
+| Bad key hash | `enterplace.keys.yaml:4: sha256 must be 64 hex characters. Run enterplace key new to add a key instead of writing one by hand.` |
+| Impossible expiry | `enterplace.keys.yaml:4: expires 2026-11-31 is not a date: November 2026 has 30 days. Write a day that exists.` |
 
 Each message starts with `<file>:<line>: `, shortened in the table.
 
-**Warnings** do not stop the file from loading: a model a rule names that no provider serves, a provider model name with spaces at its ends or holding `*`, two provider model names that differ only in case or spaces, and a key whose expiry has passed. `gantry serve` and a reload accept expired keys, because keys expire while Gantry runs.
+**Warnings** do not stop the file from loading: a model a rule names that no provider serves, a provider model name with spaces at its ends or holding `*`, two provider model names that differ only in case or spaces, and a key whose expiry has passed. `enterplace serve` and a reload accept expired keys, because keys expire while Enterplace runs.
 
 <Aside type="note">
 A rule's `tools:` list and the `mcp:` servers it names are described in [MCP gateway](/governance/mcp-gateway/).

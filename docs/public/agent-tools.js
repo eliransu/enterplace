@@ -2,12 +2,12 @@
 // the page's Markdown twin, so a coding agent or a chat reads the page as text.
 (function () {
 	var title = document.querySelector('main h1');
-	if (!title || document.querySelector('.gantry-agent')) return;
+	if (!title || document.querySelector('.enterplace-agent')) return;
 	var path = location.pathname.replace(/\/$/, '');
 	var md = location.origin + (path === '' ? '/index' : path) + '.md';
-	var ask = 'Read ' + md + ' and help me with it. More Gantry docs as Markdown: ' + location.origin + '/llms.txt';
+	var ask = 'Read ' + md + ' and help me with it. More Enterplace docs as Markdown: ' + location.origin + '/llms.txt';
 	var bar = document.createElement('div');
-	bar.className = 'gantry-agent';
+	bar.className = 'enterplace-agent';
 	var copy = document.createElement('button');
 	copy.type = 'button';
 	copy.textContent = 'Copy page';

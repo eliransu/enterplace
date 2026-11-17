@@ -7,13 +7,13 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-With a license that includes `alerts` (see [License key](/operations/license/)), Gantry adds an **Alerts** page to the console. You define rules there; Gantry evaluates them against the audit records of every replica and sends each alert to the channels you pick. Every alert names the audit records behind it and is written to the audit chain itself.
+With a license that includes `alerts` (see [License key](/operations/license/)), Enterplace adds an **Alerts** page to the console. You define rules there; Enterplace evaluates them against the audit records of every replica and sends each alert to the channels you pick. Every alert names the audit records behind it and is written to the audit chain itself.
 
 ## Before you start
 
 - The policy needs a `store:` section: rules, channels and alert history live in the same Postgres as the [store](/operations/store/).
-- Set `GANTRY_EXPORT_KEY` on every replica to the same 64 hex characters (`openssl rand -hex 32`). Channel credentials (webhook URLs, routing keys, SMTP passwords, signing secrets) are kept encrypted with it.
-- Optional: set `GANTRY_CONSOLE_URL` to the console's address as people reach it, such as `https://gantry.example.com`. Links in alerts then open the alert and its audit records directly. Without it, links are relative to the console.
+- Set `ENTERPLACE_EXPORT_KEY` on every replica to the same 64 hex characters (`openssl rand -hex 32`). Channel credentials (webhook URLs, routing keys, SMTP passwords, signing secrets) are kept encrypted with it.
+- Optional: set `ENTERPLACE_CONSOLE_URL` to the console's address as people reach it, such as `https://enterplace.example.com`. Links in alerts then open the alert and its audit records directly. Without it, links are relative to the console.
 
 <Steps>
 
@@ -28,17 +28,17 @@ With a license that includes `alerts` (see [License key](/operations/license/)),
 | Kind | URL | Secret | Sent as |
 |---|---|---|---|
 | Slack | The incoming webhook URL | None: the URL is the credential, kept encrypted | A message with the summary, links to each record and to the alert |
-| Microsoft Teams | The workflow's "when a webhook request is received" URL, or an incoming webhook URL | None: the URL is kept encrypted | An Adaptive Card 1.4 in a `message`, with facts, record links and an **Open in Gantry** button |
-| PagerDuty | Empty (`https://events.pagerduty.com/v2/enqueue`) | The integration's routing key | Events API v2 `trigger`, `dedup_key` `gantry-<rule>-<subject>` so repeats group into one incident, the alert as `custom_details` |
+| Microsoft Teams | The workflow's "when a webhook request is received" URL, or an incoming webhook URL | None: the URL is kept encrypted | An Adaptive Card 1.4 in a `message`, with facts, record links and an **Open in Enterplace** button |
+| PagerDuty | Empty (`https://events.pagerduty.com/v2/enqueue`) | The integration's routing key | Events API v2 `trigger`, `dedup_key` `enterplace-<rule>-<subject>` so repeats group into one incident, the alert as `custom_details` |
 | Email | `smtps://host:465` (TLS from the start) or `smtp://host:587` (STARTTLS) | The SMTP password, with a username | A plain text message to every To address, with the records and links |
-| Webhook | Your HTTPS endpoint | Made by Gantry (`whsec_...`), shown once | A JSON POST signed the [Standard Webhooks](https://www.standardwebhooks.com/) way |
+| Webhook | Your HTTPS endpoint | Made by Enterplace (`whsec_...`), shown once | A JSON POST signed the [Standard Webhooks](https://www.standardwebhooks.com/) way |
 
 STARTTLS is required unless the SMTP server is this machine. Webhook URLs must be `https://`, or `http://` to this machine only.
 
 ### Webhook body and signature
 
 ```json
-{"type":"gantry.alert","alert":42,"rule":"Payments budget","kind":"budget","severity":"warning","subject":"team:payments:2026-11","summary":"team:payments has spent $81.20 in 2026-11, reaching $80.00.","time":"2026-11-14T10:02:11.120Z","link":"https://gantry.example.com/console/alerts#alert-42","records":[{"replica":"pod-0-84347ac2b1f0","n":1204,"hash":"9c1f...","id":"01M7969SBMMKV7S7HFP6Q99SPJ"}]}
+{"type":"enterplace.alert","alert":42,"rule":"Payments budget","kind":"budget","severity":"warning","subject":"team:payments:2026-11","summary":"team:payments has spent $81.20 in 2026-11, reaching $80.00.","time":"2026-11-14T10:02:11.120Z","link":"https://enterplace.example.com/console/alerts#alert-42","records":[{"replica":"pod-0-84347ac2b1f0","n":1204,"hash":"9c1f...","id":"01M7969SBMMKV7S7HFP6Q99SPJ"}]}
 ```
 
 Each POST carries `webhook-id` (`alert_<id>`), `webhook-timestamp` (seconds) and `webhook-signature: v1,<base64>`, the HMAC-SHA256 of `<webhook-id>.<webhook-timestamp>.<raw body>` under the base64-decoded part of the secret after `whsec_`. Any Standard Webhooks library verifies it. Reject a timestamp more than five minutes old.
@@ -61,7 +61,7 @@ Each POST carries `webhook-id` (`alert_<id>`), `webhook-timestamp` (seconds) and
 | `unusual_errors` | A scope's error rate today (answers with status 5xx or 429, and requests no provider answered) is `factor` times its rate over the last 14 days, with at least `count` errors | by, factor (3), count (10) | scope and day: once a day |
 | `unusual_latency` | A scope's average latency today is `factor` times its average over the last 14 days, over at least `count` requests | by, factor (2), count (20) | scope and day: once a day |
 | `deployment_down` | `count` failures of a provider within `minutes` and not one answer from it in that time | count, minutes | the provider |
-| `credential_failing` | `count` answers with status 401 or 403 from a provider within `minutes`: it refuses Gantry's credential | count, minutes | the provider |
+| `credential_failing` | `count` answers with status 401 or 403 from a provider within `minutes`: it refuses Enterplace's credential | count, minutes | the provider |
 | `guardrail_vendor_failing` | `count` requests or answers whose guardrail service could not be reached within `minutes`, whether it failed open or closed | count, minutes | the guardrail |
 | `key_expiring` | A key expires within `days`. Checked once a minute against the keys | days (7) | key and expiry: once each |
 | `export_lagging` | An audit export destination has records older than `minutes` that it has not sent. Checked once a minute | minutes (15) | replica and destination |
@@ -74,11 +74,11 @@ Each POST carries `webhook-id` (`alert_<id>`), `webhook-timestamp` (seconds) and
 
 Group by is `all` (default), `person`, `team` or `key`. The unusual kinds compare by `team` (default), `key` or `provider`: their requests, errors and latency are kept per scope and day in Postgres from the first record read, so the baseline is there when a rule is added. A replica new to alerting reads the records of the last 14 days before the month began, so the baseline is whole from the start.
 
-Each failure counts once: a try that was retried is in the attempts record, and the last try is in the usage record when the provider answered (a 5xx or 429 passed on) or in the upstream error record when none did. A failure Gantry made itself, such as a model with no deployment (`unknown_model`), is not a provider's and does not count.
+Each failure counts once: a try that was retried is in the attempts record, and the last try is in the usage record when the provider answered (a 5xx or 429 passed on) or in the upstream error record when none did. A failure Enterplace made itself, such as a model with no deployment (`unknown_model`), is not a provider's and does not count.
 
 ### Watched spend
 
-With [watch mode](/integrations/claude-team/), the cost Claude Code estimates for each request on a Claude Team or Enterprise seat counts for `budget` rules by amount and for `unusual_spend`, under the person and team of the watch token. A rule with a percent counts only requests that went through Gantry, as the policy's budgets do.
+With [watch mode](/integrations/claude-team/), the cost Claude Code estimates for each request on a Claude Team or Enterprise seat counts for `budget` rules by amount and for `unusual_spend`, under the person and team of the watch token. A rule with a percent counts only requests that went through Enterplace, as the policy's budgets do.
 
 ### A percent of a policy budget
 
@@ -114,7 +114,7 @@ It fires once per budget and period (subject `team:payments|month|2026-11`). A s
 Alert rules are in the [admin API](/reference/admin-api/#alert-rules) too, with the same checks as this page: `GET /admin/alerts/rules`, `POST /admin/alerts/rules`, `PUT` and `DELETE /admin/alerts/rules/<id>`, `GET /admin/alerts/channels` (never their secrets) and `GET /admin/alerts` (what fired lately). Reading needs `see_records`, changing `edit_policy`.
 
 ```bash
-curl -X POST http://127.0.0.1:8080/admin/alerts/rules -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+curl -X POST http://127.0.0.1:8080/admin/alerts/rules -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" \
   -d '{"name": "Payments volume", "kind": "unusual_requests", "params": {"by": "team", "factor": "3", "count": "200"}, "channels": [1]}'
 ```
 

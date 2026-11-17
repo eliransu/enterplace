@@ -1,10 +1,10 @@
 #!/bin/sh
-# Website and docs traffic from the gantry-web D1 database (written by site/worker.js).
+# Website and docs traffic from the enterplace-web D1 database (written by site/worker.js).
 # Usage: scripts/web_stats.sh [days]        the standard report for the last N days (default 7)
 #        scripts/web_stats.sh --sql "..."   any query on the hits table (schema: site/web-schema.sql)
 set -eu
 cd "$(dirname "$0")/.."
-q() { npx --prefix docs wrangler d1 execute gantry-web --remote --command "$1" 2>/dev/null | sed -n '/^\[/,$p' \
+q() { npx --prefix docs wrangler d1 execute enterplace-web --remote --command "$1" 2>/dev/null | sed -n '/^\[/,$p' \
   | python3 -c 'import json,sys
 for r in json.load(sys.stdin)[0]["results"]: print("  " + " | ".join(str(v) for v in r.values()))'; }
 

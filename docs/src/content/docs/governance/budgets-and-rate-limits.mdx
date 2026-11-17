@@ -17,7 +17,7 @@ Limits sit in three places, and a request must fit all of them at once:
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -60,7 +60,7 @@ prices:
 A key can carry its own budget, `tpm` and `parallel` on top of its rule's:
 
 ```bash
-gantry key new ci.release --team platform --budget 20/month --tpm 50000 --parallel 4
+enterplace key new ci.release --team platform --budget 20/month --tpm 50000 --parallel 4
 ```
 
 ## Budgets
@@ -137,7 +137,7 @@ limits:
     shadow_until: 2026-12-31
 ```
 
-On a `limits:` entry, `shadow_until` goes on the entry and covers all of its limits. A request a shadowed budget would refuse is still charged to it. `gantry check` refuses a `shadow_until` that is not a date, naming where it is, such as `rules[0].budget.shadow_until`. To try every rule and limit at once, use [observe mode](/governance/policy/#observe-mode).
+On a `limits:` entry, `shadow_until` goes on the entry and covers all of its limits. A request a shadowed budget would refuse is still charged to it. `enterplace check` refuses a `shadow_until` that is not a date, naming where it is, such as `rules[0].budget.shadow_until`. To try every rule and limit at once, use [observe mode](/governance/policy/#observe-mode).
 
 ### Inheritance and overrides
 
@@ -166,10 +166,10 @@ A budget counts all of that scope's spend in the period, under any rule. A budge
 
 **End customers** are the customers of your own product. A request is for a customer when:
 
-- its key names one (`customer:` in the keys file, or `gantry key new --customer`): every request with the key is for it, and a header cannot change it, or
-- the caller sends `x-gantry-customer: <name>` and its rule lists the name, or `"*"`, under `customers:`. A name the rule does not list is refused with `customer_not_allowed`, so a caller cannot charge another customer.
+- its key names one (`customer:` in the keys file, or `enterplace key new --customer`): every request with the key is for it, and a header cannot change it, or
+- the caller sends `x-enterplace-customer: <name>` and its rule lists the name, or `"*"`, under `customers:`. A name the rule does not list is refused with `customer_not_allowed`, so a caller cannot charge another customer.
 
-**Tags** attribute spend to a project, feature or tool. A request carries the tags of its key (`tags:` in the keys file) and those it sends in `x-gantry-tags: search,checkout` that its rule lists under `tags:` (or `"*"`). An unlisted tag is refused with `tag_not_allowed`, so tags cannot be forged. At most 16 tags per request.
+**Tags** attribute spend to a project, feature or tool. A request carries the tags of its key (`tags:` in the keys file) and those it sends in `x-enterplace-tags: search,checkout` that its rule lists under `tags:` (or `"*"`). An unlisted tag is refused with `tag_not_allowed`, so tags cannot be forged. At most 16 tags per request.
 
 Both headers are taken out before the request is forwarded. Decision and usage records carry `org`, `customer` and `tags` when set, so reports can group spend by them, and a rule may name keys by tag with `principals: { tag: ci }` (key tags only, never a header's).
 
@@ -182,12 +182,12 @@ With a store, places are counted in Postgres and shared by every replica. A gate
 ## Why was this allowed or refused
 
 ```bash
-gantry explain gantry.policy.yaml --key maya.cohen --model o3 --customer globex-shop --tags search
+enterplace explain enterplace.policy.yaml --key maya.cohen --model o3 --customer globex-shop --tags search
 ```
 
 ```bash
-curl "https://gantry.example.com/admin/explain?key=1a2b3c4d&model=o3&customer=globex-shop&tags=search" \
-  -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+curl "https://enterplace.example.com/admin/explain?key=1a2b3c4d&model=o3&customer=globex-shop&tags=search" \
+  -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY"
 ```
 
 Both answer with the rules passed over and why, the rule that decides (with the profiles it includes and what the rule set over them), the verdict, and every limit that applies:
@@ -228,16 +228,16 @@ rules:
 ```
 
 ```text
-x-gantry-budget-remaining-usd: 412.37
-x-gantry-budget-reset: 2026-12-01 00:00 UTC
+x-enterplace-budget-remaining-usd: 412.37
+x-enterplace-budget-reset: 2026-12-01 00:00 UTC
 ```
 
 The figure is the budget with the least left of every budget the request counts against (its rule's, its key's, and each `limits:` entry that applies), after this request's own reservation: its limit less what was spent and what requests in flight hold. A budget in its shadow period refuses nothing and is left out. A sliding window has no reset, so that header is absent. With a store each budget is one read of it, which is why the headers are a choice.
 
-`GET /v1/gantry/me` answers any key about itself: its name, team, rule, and every budget it counts against with what was spent, what is held, what is left and when it resets. `?model=<model>` adds the budgets of that model. It reaches no provider, costs nothing and writes no audit record.
+`GET /v1/enterplace/me` answers any key about itself: its name, team, rule, and every budget it counts against with what was spent, what is held, what is left and when it resets. `?model=<model>` adds the budgets of that model. It reaches no provider, costs nothing and writes no audit record.
 
 ```bash
-curl http://127.0.0.1:8080/v1/gantry/me -H "Authorization: Bearer $GANTRY_KEY"
+curl http://127.0.0.1:8080/v1/enterplace/me -H "Authorization: Bearer $ENTERPLACE_KEY"
 ```
 
 ```json title="200"
@@ -245,7 +245,7 @@ curl http://127.0.0.1:8080/v1/gantry/me -H "Authorization: Bearer $GANTRY_KEY"
  "budgets":[{"of":"rule","whose":"team \"payments\"","usd":500,"per":"month","spent_usd":86.2,"reserved_usd":1.43,"remaining_usd":412.37,"resets":"2026-12-01 00:00 UTC","shadow":false}]}
 ```
 
-`gantry budget status` prints the same, and `--short` prints one line for a status line. See [the CLI](/reference/cli/#budget-status) and the [Claude Code status line](/integrations/claude-code/#budget-in-the-status-line).
+`enterplace budget status` prints the same, and `--short` prints one line for a status line. See [the CLI](/reference/cli/#budget-status) and the [Claude Code status line](/integrations/claude-code/#budget-in-the-status-line).
 
 ## How a budget is counted
 ## How a budget is counted
@@ -264,7 +264,7 @@ A budget is passed only when a provider bills more than the reservation: a model
 
 **Output tokens reserved** are the largest of `max_tokens`, `max_completion_tokens` and `max_output_tokens`, because a provider may read any of them. A request that states none reserves the model's `max_output` from its [price](/routing/pricing/), and is refused with `max_tokens_needed` when the price has none. A chat request with `n` reserves its output `n` times. Embeddings have no output tokens. `count_tokens` requests are free.
 
-**Spend survives a restart.** At start, Gantry sums the `charged_usd` of the usage records of this year and last from the audit log into every counter the policy's budgets keep for them. A reload that changes a budget applies to the next request.
+**Spend survives a restart.** At start, Enterplace sums the `charged_usd` of the usage records of this year and last from the audit log into every counter the policy's budgets keep for them. A reload that changes a budget applies to the next request.
 
 ### Answers without usage
 
@@ -275,19 +275,19 @@ A budget is passed only when a provider bills more than the reservation: a model
 | Cut off before its final usage event, by the caller or mid-answer | the larger of what it reported and its reservation | `partial` |
 | Never answered (`upstream_*` failure) | nothing, the reservation is given back | no usage record |
 
-Send `stream_options: {"include_usage": true}` on OpenAI streams to be charged exactly what the provider reports. Gantry never adds it, because it never rewrites a request.
+Send `stream_options: {"include_usage": true}` on OpenAI streams to be charged exactly what the provider reports. Enterplace never adds it, because it never rewrites a request.
 
 Without a budget, a finished stream without usage is charged an estimate from what it streamed (`usage: estimated`), so spend counted before a budget is added is not understated.
 
 ### Requests a budget refuses by shape
 
-Under a budget, Gantry refuses a request whose cost it cannot bound:
+Under a budget, Enterplace refuses a request whose cost it cannot bound:
 
 - **`bad_limits` (400):** a body that names `model`, `messages`, `system`, `input`, `stream`, `n`, `previous_response_id`, `conversation`, `prompt` or a token limit twice; a token limit that is not a whole number; or `n` outside 1 to 16. Parsers differ on which copy wins, so the reservation could be of another request. The same applies under a cache.
 - **`stored_context` (400):** a Responses request naming `previous_response_id`, `conversation` or `prompt`, because the provider adds context the body does not hold. It is admitted when the model's price sets `max_context`, reserving that many input tokens. Otherwise send the whole conversation in `input` with `store: false`, as Codex does.
 - **`max_tokens_needed` (400):** no output limit in the request and no `max_output` in the price.
 
-Every model a budgeted rule reaches must have a price. `gantry check` refuses a file that breaks this.
+Every model a budgeted rule reaches must have a price. `enterplace check` refuses a file that breaks this.
 
 ## Requests per hour and per day
 
@@ -353,7 +353,7 @@ rules:
     rate: { session_requests: 200 }
 ```
 
-The session is the one on the request's record: `x-gantry-session`, `x-session-id`, Claude Code's or Codex's own marker, `prompt_cache_key`, or the first message (see [audit records](/reference/audit-records/)). Over the budget a request is refused with `session_budget_exceeded` (429), over the count with `session_requests_exceeded` (429); both name the session. A new session starts from zero.
+The session is the one on the request's record: `x-enterplace-session`, `x-session-id`, Claude Code's or Codex's own marker, `prompt_cache_key`, or the first message (see [audit records](/reference/audit-records/)). Over the budget a request is refused with `session_budget_exceeded` (429), over the count with `session_requests_exceeded` (429); both name the session. A new session starts from zero.
 
 ## Budget raises
 
@@ -364,7 +364,7 @@ A person asks for more room until a date, an admin approves it for an amount and
 1. The person asks, with their own key:
 
    ```bash
-   gantry budget raise request --usd 500 --until 2026-12-31 --reason "quarter-end backfill"
+   enterplace budget raise request --usd 500 --until 2026-12-31 --reason "quarter-end backfill"
    ```
 
    Or `POST /v1/budget/raises` with `{"usd": 500, "until": "2026-12-31", "reason": "..."}`. The raise is for the team's budget when the caller's rule counts by team, else for the person's; `"scope": "team" | "person" | "key"` picks another.
@@ -372,17 +372,17 @@ A person asks for more room until a date, an admin approves it for an amount and
 2. An admin with `issue_keys` lists and decides:
 
    ```bash
-   gantry budget raise list
-   gantry budget raise approve raise_1a2b3c4d5e6f --usd 300 --until 2026-12-15
+   enterplace budget raise list
+   enterplace budget raise approve raise_1a2b3c4d5e6f --usd 300 --until 2026-12-15
    ```
 
-   `reject` turns it down. `gantry budget raise add --scope team:payments --usd 500 --until 2026-12-31 --reason "..."` raises a scope at once.
+   `reject` turns it down. `enterplace budget raise add --scope team:payments --usd 500 --until 2026-12-31 --reason "..."` raises a scope at once.
 
 3. Until `until` (a UTC date or time), every budget of that scope is larger by the amount. Then it is the policy's again.
 
 </Steps>
 
-`GET /admin/explain` shows a raised budget with its raised amount and the raise in `source`. The request is on the audit log as a decision record with `budget_raise`, and each decision as an admin record (`add_budget_raise`, `approve_budget_raise`, `reject_budget_raise`), so an [alert rule](/operations/alerting/) or a SIEM export can act on them. A role kept to teams decides raises of those teams only. With a store every replica applies a raise within a second; without one it is kept in `gantry-raises.json` beside the keys file.
+`GET /admin/explain` shows a raised budget with its raised amount and the raise in `source`. The request is on the audit log as a decision record with `budget_raise`, and each decision as an admin record (`add_budget_raise`, `approve_budget_raise`, `reject_budget_raise`), so an [alert rule](/operations/alerting/) or a SIEM export can act on them. A role kept to teams decides raises of those teams only. With a store every replica applies a raise within a second; without one it is kept in `enterplace-raises.json` beside the keys file.
 
 ## How rate limits are counted
 
@@ -412,9 +412,9 @@ The record of a refusal by a limit names it in `limit`, for example `{"kind": "t
 | `parallel_limited` | 429 | yes, after `Retry-After` | A `parallel` limit. |
 | `session_budget_exceeded` | 429 | no | The session's budget (`per: session`) would be passed. |
 | `session_requests_exceeded` | 429 | no | The session has sent `session_requests` requests. |
-| `customer_not_allowed` | 403 | no | `x-gantry-customer` names a customer the rule does not list, or another than the key's. |
-| `tag_not_allowed` | 403 | no | `x-gantry-tags` holds a tag the rule does not list. |
-| `bad_header` | 400 | no | `x-gantry-customer` or `x-gantry-tags` is sent twice, holds a name Gantry does not accept, or carries more than 16 tags. |
+| `customer_not_allowed` | 403 | no | `x-enterplace-customer` names a customer the rule does not list, or another than the key's. |
+| `tag_not_allowed` | 403 | no | `x-enterplace-tags` holds a tag the rule does not list. |
+| `bad_header` | 400 | no | `x-enterplace-customer` or `x-enterplace-tags` is sent twice, holds a name Enterplace does not accept, or carries more than 16 tags. |
 | `max_tokens_needed` | 400 | no | No output limit and no `max_output` price. |
 | `bad_limits` | 400 | no | Duplicate keys, a non-integer token limit or `n` out of range. |
 | `stored_context` | 400 | no | Stored Responses context under a budget without `max_context`. |
@@ -422,7 +422,7 @@ The record of a refusal by a limit names it in `limit`, for example `{"kind": "t
 Claude Code reads `x-should-retry` and does not retry a budget refusal. See [Refusal codes](/reference/refusal-codes/).
 
 <Aside type="note">
-Without a store, spend, reservations, places in flight and rate-limit windows live in the memory of one Gantry process. Rate-limit windows start empty after a restart; spend is read back from the audit log. With a [store](/operations/store/), budgets of every scope are reserved and settled in Postgres, places in flight are counted there, and rate limits are leased from it, so every replica enforces one budget and one limit; if the store cannot be reached, requests under a budget, `rpm`, `tpm` or `parallel` are refused with `store_unavailable`.
+Without a store, spend, reservations, places in flight and rate-limit windows live in the memory of one Enterplace process. Rate-limit windows start empty after a restart; spend is read back from the audit log. With a [store](/operations/store/), budgets of every scope are reserved and settled in Postgres, places in flight are counted there, and rate limits are leased from it, so every replica enforces one budget and one limit; if the store cannot be reached, requests under a budget, `rpm`, `tpm` or `parallel` are refused with `store_unavailable`.
 </Aside>
 
 ## Related

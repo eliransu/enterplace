@@ -1,6 +1,6 @@
 # aws-ecs
 
-Gantry on AWS: ECS Fargate gateways behind an HTTPS Application Load Balancer, RDS Postgres 16 for keys, kill
+Enterplace on AWS: ECS Fargate gateways behind an HTTPS Application Load Balancer, RDS Postgres 16 for keys, kill
 switches and budgets, and EFS for each gateway's audit log.
 
 ## What it creates
@@ -9,16 +9,16 @@ switches and budgets, and EFS for each gateway's audit log.
 |---|---|
 | ALB, HTTPS listener (your ACM certificate), HTTP listener that redirects | TLS ends at the load balancer; health check `GET /healthz`; cookie stickiness so a console sign-in stays on one gateway |
 | ECS cluster, one service per replica (one task each) | Each gateway writes its own audit hash chain, so each needs its own volume, which ECS gives per task definition |
-| EFS file system, one access point per replica (`/gantry-<n>`, owned by 65532) | `/var/lib/gantry`, the audit log. Encrypted, backed up by AWS Backup |
+| EFS file system, one access point per replica (`/enterplace-<n>`, owned by 65532) | `/var/lib/enterplace`, the audit log. Encrypted, backed up by AWS Backup |
 | RDS Postgres 16 (Multi-AZ, encrypted, 7-day backups) and an RDS Proxy | The store. Skipped when `database_url_secret_arn` names an existing database |
-| Secrets Manager secret `DATABASE_URL` | Gantry reads the whole connection string from one variable |
-| SSM parameter with the policy, a busybox init container per task | ECS cannot mount a parameter as a file and the image has no shell, so the init container writes `/etc/gantry/gantry.policy.yaml` |
+| Secrets Manager secret `DATABASE_URL` | Enterplace reads the whole connection string from one variable |
+| SSM parameter with the policy, a busybox init container per task | ECS cannot mount a parameter as a file and the image has no shell, so the init container writes `/etc/enterplace/enterplace.policy.yaml` |
 | Security groups | Only the ALB reaches the tasks (8080); only the tasks reach the proxy and EFS; only the proxy reaches RDS |
-| Secrets Manager secrets `<name>/master-key` and `<name>/export-key`, random 64 hex characters each | `GANTRY_MASTER_KEY` (seals provider credentials in the store) and `GANTRY_EXPORT_KEY` (encrypts SIEM destination secrets). Made once and kept across applies; skipped for a key you pass as `master_key_secret_arn` or `export_key_secret_arn` |
+| Secrets Manager secrets `<name>/master-key` and `<name>/export-key`, random 64 hex characters each | `ENTERPLACE_MASTER_KEY` (seals provider credentials in the store) and `ENTERPLACE_EXPORT_KEY` (encrypts SIEM destination secrets). Made once and kept across applies; skipped for a key you pass as `master_key_secret_arn` or `export_key_secret_arn` |
 | CloudWatch log group, execution role | Logs; the role reads the secrets and the policy at start |
 | Task role allowed `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on `bedrock_resource_arns` | Bedrock providers sign with it through the AWS default credential chain, so no AWS keys are stored. Not made when `bedrock_resource_arns` is empty: the tasks then have no AWS permissions |
 
-Why RDS Proxy: Gantry checks the database's TLS certificate against the Mozilla roots built into it. RDS instances
+Why RDS Proxy: Enterplace checks the database's TLS certificate against the Mozilla roots built into it. RDS instances
 present certificates from the RDS certificate authorities, which are not among them, so a direct connection is
 refused. RDS Proxy presents an ACM certificate that chains to Amazon's public roots.
 
@@ -28,22 +28,22 @@ Put the provider keys and the license in Secrets Manager first (the module only 
 never enter Terraform state), then:
 
 ```hcl
-module "gantry" {
-  # Copied out of the image: docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
-  #   && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
-  source = "./gantry-deploy/terraform/aws-ecs"
+module "enterplace" {
+  # Copied out of the image: docker create --name enterplace-files ghcr.io/eliransu/enterplace:<version>
+  #   && docker cp enterplace-files:/deploy ./enterplace-deploy && docker rm enterplace-files
+  source = "./enterplace-deploy/terraform/aws-ecs"
 
-  image              = "ghcr.io/eliransu/gantry:0.1.0"
-  policy             = file("gantry.policy.yaml")
+  image              = "ghcr.io/eliransu/enterplace:0.1.0"
+  policy             = file("enterplace.policy.yaml")
   vpc_id             = "vpc-..."
   private_subnet_ids = ["subnet-...", "subnet-..."]
   public_subnet_ids  = ["subnet-...", "subnet-..."]
   allowed_cidrs      = ["0.0.0.0/0"]
   certificate_arn    = "arn:aws:acm:..."
-  domain_name        = "gantry.example.com"
+  domain_name        = "enterplace.example.com"
 
   image_pull_secret_arn    = "arn:aws:secretsmanager:...:secret:ghcr-pull"
-  license_secret_arn       = "arn:aws:secretsmanager:...:secret:gantry-license"
+  license_secret_arn       = "arn:aws:secretsmanager:...:secret:enterplace-license"
   provider_key_secret_arns = { OPENAI_PROVIDER_KEY = "arn:aws:secretsmanager:...:secret:openai" }
 
   # For Bedrock providers: the models and inference profiles the task role may invoke. No AWS keys.
@@ -51,8 +51,8 @@ module "gantry" {
 }
 ```
 
-The policy must have `audit: { path: /var/lib/gantry/gantry-audit.jsonl }` and
-`store: { postgres_url_env: DATABASE_URL }`. `gantry.policy.yaml` beside the modules (`/deploy/terraform` in the image) is a starting point. Then point
+The policy must have `audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }` and
+`store: { postgres_url_env: DATABASE_URL }`. `enterplace.policy.yaml` beside the modules (`/deploy/terraform` in the image) is a starting point. Then point
 `domain_name` at the output `alb_dns_name`, issue a key and call `gateway_url`.
 
 `examples/basic` is the configuration CI plans, with no AWS account.

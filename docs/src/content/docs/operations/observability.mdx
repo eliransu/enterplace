@@ -1,87 +1,87 @@
 ---
 title: Observability
-description: Scrape Prometheus metrics from Gantry with --metrics, and ship the audit log with Vector, Fluent Bit or the OpenTelemetry Collector.
+description: Scrape Prometheus metrics from Enterplace with --metrics, and ship the audit log with Vector, Fluent Bit or the OpenTelemetry Collector.
 sidebar:
   order: 4
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gantry gives you two signals: Prometheus metrics for dashboards and alerts, and the audit log for what happened to each request. The audit log is the record; metrics are counts.
+Enterplace gives you two signals: Prometheus metrics for dashboards and alerts, and the audit log for what happened to each request. The audit log is the record; metrics are counts.
 
 ## Metrics
 
 ```bash
-gantry serve gantry.policy.yaml --metrics 127.0.0.1:9464
+enterplace serve enterplace.policy.yaml --metrics 127.0.0.1:9464
 ```
 
 ```text
 Metrics: http://127.0.0.1:9464/metrics
 ```
 
-`GET /metrics` is served in the Prometheus text format on that address only. It is off unless `--metrics` names an address, and that address must differ from `--listen`. The gateway's own address never serves `/metrics`, so a caller with a Gantry key cannot read it. Scrapes are not written to the audit log.
+`GET /metrics` is served in the Prometheus text format on that address only. It is off unless `--metrics` names an address, and that address must differ from `--listen`. The gateway's own address never serves `/metrics`, so a caller with a Enterplace key cannot read it. Scrapes are not written to the audit log.
 
 <Aside type="caution">
-`/metrics` takes no key and shows team, model and provider names and what each team spent. Keep it on loopback or a network only your scraper reaches. Gantry warns at start when the metrics address is not loopback.
+`/metrics` takes no key and shows team, model and provider names and what each team spent. Keep it on loopback or a network only your scraper reaches. Enterplace warns at start when the metrics address is not loopback.
 </Aside>
 
 ### Metric reference
 
 | Metric | Type | Labels | Counts |
 |---|---|---|---|
-| `gantry_requests_total` | counter | `route`, `verdict`, `code`, `provider` | Every decision, as the audit log records it |
-| `gantry_upstream_responses_total` | counter | `provider`, `outcome` | Every attempt at a provider, retries and fallbacks included |
-| `gantry_provider_key_switches_total` | counter | `provider`, `status` | A [key pool](/routing/key-pools/) key set aside after a 401, 403 or 429 |
-| `gantry_upstream_seconds` | histogram | `provider` | Time from sending to a provider to its answer's headers |
-| `gantry_overhead_seconds` | histogram | none | Gantry's own time on a forwarded request: identify, decide, guardrails, record, and handing the answer back. The same figure as the `Server-Timing: gantry;dur=` header |
-| `gantry_audit_write_seconds` | histogram | none | Time of each write to the audit log. Under load one write carries many records |
-| `gantry_audit_queue_depth` | gauge | none | Records waiting for the audit writer |
-| `gantry_audit_broken` | gauge | none | `1` when the audit log cannot be written and every request is refused until a restart |
-| `gantry_spend_usd_total` | counter | `team`, `model` | US dollars charged since Gantry started, as usage records write them |
-| `gantry_secret_rotations_total` | counter | `source` | Gantry Enterprise: secrets a refresh found changed in their [secret manager](/operations/secret-managers/), by manager (`vault`, `aws-sm`, `gcp-sm`, `azure-kv`) |
-| `gantry_secret_refresh_failures_total` | counter | `source` | Gantry Enterprise: secrets a refresh could not read from their manager, by manager. The value read before stays in use |
-| `gantry_cache_saved_usd` | gauge | `team`, `kind` | US dollars caching saved since start: `answer` (Gantry's answer cache) or `prompt` (a provider's prompt cache, net of cache writes) |
-| `gantry_refusals_total` | counter | `code` | Requests refused, by refusal code: the refused part of `gantry_requests_total`, summed over route and provider |
-| `gantry_tokens_total` | counter | `team`, `model`, `kind` | Tokens providers reported: `input`, `output`, `cached` (read from a prompt cache) or `cache_write`. Answers from Gantry's cache add none |
-| `gantry_request_seconds` | histogram | `model` | Time from a request reaching Gantry to the end of its answer, streamed or not |
-| `gantry_first_byte_seconds` | histogram | `provider` | Time from a request reaching Gantry to its answer's headers leaving for the caller |
-| `gantry_events_delivered_total` | counter | `guardrail`, `outcome` | Envelopes of [events guardrails](/governance/plugin-events/) delivered to their plugin: `sent` or `failed` |
-| `gantry_events_dropped_total` | counter | `guardrail` | Envelopes an observing events guardrail dropped because its queue was full |
-| `gantry_guardrail_findings_total` | counter | `kind` | What guardrails found on requests, by detector kind, such as `email_address`; `unavailable` when a guardrail service could not be reached |
-| `gantry_cache_lookups_total` | counter | `outcome` | Answer cache lookups of rules with `cache:`: `hit` or `miss` |
-| `gantry_deployment_up` | gauge | `deployment` | `1` while a deployment of an alias (`provider/model`) takes requests and its last [health probe](/routing/health-probes/), if it has one, got an answer; `0` while it cools down after failures or its probe fails |
-| `gantry_deployment_cooldowns_total` | counter | `deployment` | Times a deployment was put to cool down after a failure (no answer, a 429 or a 5xx) |
-| `gantry_budget_limit_usd` | gauge | `scope`, `name`, `per` | A budget of `limits:` in the policy |
-| `gantry_budget_remaining_usd` | gauge | `scope`, `name`, `per` | What that budget has left this period: its limit less what was spent and what requests in flight hold. Counted by the store when the policy has one |
-| `gantry_store_up` | gauge | none | With a store: `1` when it answers, `0` when requests under a budget or rate limit would be refused |
-| `gantry_budget_reserved_usd` | gauge | `scope`, `name`, `per` | What requests in flight hold of that budget now |
-| `gantry_stage_seconds` | histogram | `stage` | Time a request spent in each stage inside Gantry ([below](#time-by-stage)) |
-| `gantry_guardrail_seconds` | histogram | `guardrail` | Time of each guardrail call on a request, by guardrail name: `builtin` for the built-in detectors (they share one scan), `events` for [events plugins](/governance/plugin-events/) |
-| `gantry_unpriced_requests_total` | counter | `model` | Answers from a provider for a model with no price: their spend is counted nowhere. Add the model under `prices:` |
-| `gantry_deployment_rate_headroom_ratio` | gauge | `deployment` | The smallest share left (0 to 1) of the rate limits a deployment's provider named in its last answer's headers, for a minute after that answer |
-| `gantry_mcp_calls_total` | counter | `server`, `outcome` | [MCP gateway](/governance/mcp-gateway/) calls to a tool, prompt or resource: `ok`, `tool_error`, `rpc_error`, a refusal code, or why the server gave no answer |
-| `gantry_requests_by_dimension_total` | counter | `dimension`, `value`, `verdict` | Requests by the `x-gantry-dim-<dimension>` headers you choose ([below](#labels-from-request-headers)). Absent until `GANTRY_METRICS_DIMENSIONS` is set |
+| `enterplace_requests_total` | counter | `route`, `verdict`, `code`, `provider` | Every decision, as the audit log records it |
+| `enterplace_upstream_responses_total` | counter | `provider`, `outcome` | Every attempt at a provider, retries and fallbacks included |
+| `enterplace_provider_key_switches_total` | counter | `provider`, `status` | A [key pool](/routing/key-pools/) key set aside after a 401, 403 or 429 |
+| `enterplace_upstream_seconds` | histogram | `provider` | Time from sending to a provider to its answer's headers |
+| `enterplace_overhead_seconds` | histogram | none | Enterplace's own time on a forwarded request: identify, decide, guardrails, record, and handing the answer back. The same figure as the `Server-Timing: enterplace;dur=` header |
+| `enterplace_audit_write_seconds` | histogram | none | Time of each write to the audit log. Under load one write carries many records |
+| `enterplace_audit_queue_depth` | gauge | none | Records waiting for the audit writer |
+| `enterplace_audit_broken` | gauge | none | `1` when the audit log cannot be written and every request is refused until a restart |
+| `enterplace_spend_usd_total` | counter | `team`, `model` | US dollars charged since Enterplace started, as usage records write them |
+| `enterplace_secret_rotations_total` | counter | `source` | Enterplace Enterprise: secrets a refresh found changed in their [secret manager](/operations/secret-managers/), by manager (`vault`, `aws-sm`, `gcp-sm`, `azure-kv`) |
+| `enterplace_secret_refresh_failures_total` | counter | `source` | Enterplace Enterprise: secrets a refresh could not read from their manager, by manager. The value read before stays in use |
+| `enterplace_cache_saved_usd` | gauge | `team`, `kind` | US dollars caching saved since start: `answer` (Enterplace's answer cache) or `prompt` (a provider's prompt cache, net of cache writes) |
+| `enterplace_refusals_total` | counter | `code` | Requests refused, by refusal code: the refused part of `enterplace_requests_total`, summed over route and provider |
+| `enterplace_tokens_total` | counter | `team`, `model`, `kind` | Tokens providers reported: `input`, `output`, `cached` (read from a prompt cache) or `cache_write`. Answers from Enterplace's cache add none |
+| `enterplace_request_seconds` | histogram | `model` | Time from a request reaching Enterplace to the end of its answer, streamed or not |
+| `enterplace_first_byte_seconds` | histogram | `provider` | Time from a request reaching Enterplace to its answer's headers leaving for the caller |
+| `enterplace_events_delivered_total` | counter | `guardrail`, `outcome` | Envelopes of [events guardrails](/governance/plugin-events/) delivered to their plugin: `sent` or `failed` |
+| `enterplace_events_dropped_total` | counter | `guardrail` | Envelopes an observing events guardrail dropped because its queue was full |
+| `enterplace_guardrail_findings_total` | counter | `kind` | What guardrails found on requests, by detector kind, such as `email_address`; `unavailable` when a guardrail service could not be reached |
+| `enterplace_cache_lookups_total` | counter | `outcome` | Answer cache lookups of rules with `cache:`: `hit` or `miss` |
+| `enterplace_deployment_up` | gauge | `deployment` | `1` while a deployment of an alias (`provider/model`) takes requests and its last [health probe](/routing/health-probes/), if it has one, got an answer; `0` while it cools down after failures or its probe fails |
+| `enterplace_deployment_cooldowns_total` | counter | `deployment` | Times a deployment was put to cool down after a failure (no answer, a 429 or a 5xx) |
+| `enterplace_budget_limit_usd` | gauge | `scope`, `name`, `per` | A budget of `limits:` in the policy |
+| `enterplace_budget_remaining_usd` | gauge | `scope`, `name`, `per` | What that budget has left this period: its limit less what was spent and what requests in flight hold. Counted by the store when the policy has one |
+| `enterplace_store_up` | gauge | none | With a store: `1` when it answers, `0` when requests under a budget or rate limit would be refused |
+| `enterplace_budget_reserved_usd` | gauge | `scope`, `name`, `per` | What requests in flight hold of that budget now |
+| `enterplace_stage_seconds` | histogram | `stage` | Time a request spent in each stage inside Enterplace ([below](#time-by-stage)) |
+| `enterplace_guardrail_seconds` | histogram | `guardrail` | Time of each guardrail call on a request, by guardrail name: `builtin` for the built-in detectors (they share one scan), `events` for [events plugins](/governance/plugin-events/) |
+| `enterplace_unpriced_requests_total` | counter | `model` | Answers from a provider for a model with no price: their spend is counted nowhere. Add the model under `prices:` |
+| `enterplace_deployment_rate_headroom_ratio` | gauge | `deployment` | The smallest share left (0 to 1) of the rate limits a deployment's provider named in its last answer's headers, for a minute after that answer |
+| `enterplace_mcp_calls_total` | counter | `server`, `outcome` | [MCP gateway](/governance/mcp-gateway/) calls to a tool, prompt or resource: `ok`, `tool_error`, `rpc_error`, a refusal code, or why the server gave no answer |
+| `enterplace_requests_by_dimension_total` | counter | `dimension`, `value`, `verdict` | Requests by the `x-enterplace-dim-<dimension>` headers you choose ([below](#labels-from-request-headers)). Absent until `ENTERPLACE_METRICS_DIMENSIONS` is set |
 
 | Label | Values |
 |---|---|
 | `route` | `chat_completions`, `messages`, `count_tokens`, `responses`, `embeddings`, `models`, or `other` for every other path |
 | `verdict` | `allow` or `refused` |
 | `code` | The [refusal code](/reference/refusal-codes/), empty when allowed |
-| `outcome` | The provider's HTTP status, or the Gantry code when it gave none, such as `upstream_timeout`. On `gantry_cache_lookups_total`, `hit` or `miss` |
+| `outcome` | The provider's HTTP status, or the Enterplace code when it gave none, such as `upstream_timeout`. On `enterplace_cache_lookups_total`, `hit` or `miss` |
 | `scope` | The scope kind of a `limits:` entry: `global`, `org`, `team`, `person`, `key`, `customer`, `tag` or `model` |
 | `name` | The entry's name, `org/name` when it is kept to an organization; empty for `global` |
 | `per` | The budget's period, as the policy writes it: `day`, `month`, `6h`, `month@America/New_York` |
 
 ### Time by stage
 
-`gantry_stage_seconds` splits a request's time inside Gantry. The same split is on each answer's `Server-Timing` header and on the usage record (`stages_ms`), which the console's [request log](/operations/request-log/) shows in a request's detail.
+`enterplace_stage_seconds` splits a request's time inside Enterplace. The same split is on each answer's `Server-Timing` header and on the usage record (`stages_ms`), which the console's [request log](/operations/request-log/) shows in a request's detail.
 
 | `stage` | Covers |
 |---|---|
 | `auth` | Identifying the caller: the key or JWT, kill switches, expiry |
 | `read` | Reading the request body off the socket. A slow client shows here |
 | `policy` | Deciding by the policy: the rule, the model, the route, where it goes |
-| `guardrails` | Transforms, the tool check and every guardrail on the request. `gantry_guardrail_seconds` splits it by guardrail |
+| `guardrails` | Transforms, the tool check and every guardrail on the request. `enterplace_guardrail_seconds` splits it by guardrail |
 | `cache` | The answer cache lookup, with the rate limits and budget reservations made beside it |
 | `audit` | Waiting for the decision record to be written |
 | `connect` | Getting a connection to the provider that answered: its connect and TLS handshake, near zero for a reused connection |
@@ -89,41 +89,41 @@ Metrics: http://127.0.0.1:9464/metrics
 | `stream` | From the answer's headers to its last byte |
 
 ```text
-Server-Timing: gantry;dur=0.412, gantry-auth;dur=0.018, gantry-read;dur=0.031, gantry-policy;dur=0.060, gantry-guardrails;dur=0.110, gantry-cache;dur=0.022, gantry-audit;dur=0.150, gantry-connect;dur=0.004, gantry-first-byte;dur=312.500
+Server-Timing: enterplace;dur=0.412, enterplace-auth;dur=0.018, enterplace-read;dur=0.031, enterplace-policy;dur=0.060, enterplace-guardrails;dur=0.110, enterplace-cache;dur=0.022, enterplace-audit;dur=0.150, enterplace-connect;dur=0.004, enterplace-first-byte;dur=312.500
 ```
 
-The header leaves with the answer's head, so it has no `stream`. `gantry;dur=` is Gantry's own time as before. Browser devtools and `curl -i` read the header.
+The header leaves with the answer's head, so it has no `stream`. `enterplace;dur=` is Enterplace's own time as before. Browser devtools and `curl -i` read the header.
 
 ### Labels from request headers
 
-To count requests by a dimension of your own, name it in `GANTRY_METRICS_DIMENSIONS` where `gantry serve` runs, comma-separated, up to 8:
+To count requests by a dimension of your own, name it in `ENTERPLACE_METRICS_DIMENSIONS` where `enterplace serve` runs, comma-separated, up to 8:
 
 ```bash
-GANTRY_METRICS_DIMENSIONS=env,app
+ENTERPLACE_METRICS_DIMENSIONS=env,app
 ```
 
-A request that carries `x-gantry-dim-env: prod` is then counted in `gantry_requests_by_dimension_total{dimension="env",value="prod",verdict="allow"}`. The headers are Gantry's: they are taken out before the request goes to the provider. A caller chooses the value, so Gantry bounds it: 64 characters of letters, digits, `.`, `-` and `_`, and 100 values a dimension. Any other value, and any value past the hundredth, is counted as `other`.
+A request that carries `x-enterplace-dim-env: prod` is then counted in `enterplace_requests_by_dimension_total{dimension="env",value="prod",verdict="allow"}`. The headers are Enterplace's: they are taken out before the request goes to the provider. A caller chooses the value, so Enterplace bounds it: 64 characters of letters, digits, `.`, `-` and `_`, and 100 values a dimension. Any other value, and any value past the hundredth, is counted as `other`.
 
 ### Push to a Pushgateway
 
-For a gateway nothing can scrape (behind NAT, a short job), Gantry pushes the same text to a [Prometheus Pushgateway](https://prometheus.io/docs/instrumenting/pushing/):
+For a gateway nothing can scrape (behind NAT, a short job), Enterplace pushes the same text to a [Prometheus Pushgateway](https://prometheus.io/docs/instrumenting/pushing/):
 
 ```bash
-GANTRY_METRICS_PUSH_URL=http://pushgateway:9091/metrics/job/gantry/instance/gw-1
-GANTRY_METRICS_PUSH_SECONDS=15   # the default
+ENTERPLACE_METRICS_PUSH_URL=http://pushgateway:9091/metrics/job/enterplace/instance/gw-1
+ENTERPLACE_METRICS_PUSH_SECONDS=15   # the default
 ```
 
 The URL is the whole address, job and instance included. Each push is a `PUT`, which replaces the group's metrics. A push that fails is reported on standard error at most once a minute, and the next one is tried on time. `--metrics` is not needed for it.
 
 ### Label cardinality
 
-Every label value comes from the policy (routes, codes, providers, models, teams, deployments, guardrail names, MCP servers, detector kinds), never from what a caller sends, so the number of series is bounded by the policy. The one exception is `gantry_requests_by_dimension_total`, which is off unless you name its dimensions and caps their values. Budget gauges are the one family that could grow with people: by default they cover the `global`, `org`, `team` and `model` entries of `limits:`, and leave out entries for `*` (each member counted apart). Choose the scope kinds with `GANTRY_METRICS_BUDGET_SCOPES`, a comma-separated list such as `team,person`, or `none` for no budget gauges.
+Every label value comes from the policy (routes, codes, providers, models, teams, deployments, guardrail names, MCP servers, detector kinds), never from what a caller sends, so the number of series is bounded by the policy. The one exception is `enterplace_requests_by_dimension_total`, which is off unless you name its dimensions and caps their values. Budget gauges are the one family that could grow with people: by default they cover the `global`, `org`, `team` and `model` entries of `limits:`, and leave out entries for `*` (each member counted apart). Choose the scope kinds with `ENTERPLACE_METRICS_BUDGET_SCOPES`, a comma-separated list such as `team,person`, or `none` for no budget gauges.
 
-LiteLLM's Prometheus metrics, for orientation: requests (`gantry_requests_total`), tokens (`gantry_tokens_total`), spend (`gantry_spend_usd_total`), total latency (`gantry_request_seconds`), provider latency (`gantry_upstream_seconds`), time to first byte (`gantry_first_byte_seconds`), deployment state and cooldowns (`gantry_deployment_up`, `gantry_deployment_cooldowns_total`), remaining budgets (`gantry_budget_remaining_usd`), cache hits (`gantry_cache_lookups_total`), guardrail findings and errors (`gantry_guardrail_findings_total`). Key switches in a provider's key pool: `gantry_provider_key_switches_total`.
+LiteLLM's Prometheus metrics, for orientation: requests (`enterplace_requests_total`), tokens (`enterplace_tokens_total`), spend (`enterplace_spend_usd_total`), total latency (`enterplace_request_seconds`), provider latency (`enterplace_upstream_seconds`), time to first byte (`enterplace_first_byte_seconds`), deployment state and cooldowns (`enterplace_deployment_up`, `enterplace_deployment_cooldowns_total`), remaining budgets (`enterplace_budget_remaining_usd`), cache hits (`enterplace_cache_lookups_total`), guardrail findings and errors (`enterplace_guardrail_findings_total`). Key switches in a provider's key pool: `enterplace_provider_key_switches_total`.
 
 Histogram buckets run from 100 microseconds to 60 seconds: `0.0001`, `0.00025`, `0.0005`, `0.001`, `0.0025`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1`, `2.5`, `5`, `10`, `30`, `60` and `+Inf`.
 
-Counters start at zero when Gantry starts. Spend that counts against budgets is read back from the audit log at start, so budgets survive a restart even though `gantry_spend_usd_total` does not.
+Counters start at zero when Enterplace starts. Spend that counts against budgets is read back from the audit log at start, so budgets survive a restart even though `enterplace_spend_usd_total` does not.
 
 The metrics never hold a prompt, a key, a person's name or a decision ID.
 
@@ -131,37 +131,37 @@ The metrics never hold a prompt, a key, a person's name or a decision ID.
 
 ```yaml title="prometheus.yml"
 scrape_configs:
-  - job_name: gantry
+  - job_name: enterplace
     static_configs:
       - targets: ["127.0.0.1:9464"]
 ```
 
-```yaml title="gantry-alerts.yml"
+```yaml title="enterplace-alerts.yml"
 groups:
-  - name: gantry
+  - name: enterplace
     rules:
-      - alert: GantryAuditLogBroken
-        expr: gantry_audit_broken == 1
+      - alert: EnterplaceAuditLogBroken
+        expr: enterplace_audit_broken == 1
         annotations:
-          summary: Gantry cannot write its audit log and refuses every request. Look at the disk and restart it.
-      - alert: GantryRefusalRateHigh
-        expr: sum(rate(gantry_requests_total{verdict="refused"}[10m])) / sum(rate(gantry_requests_total[10m])) > 0.2
+          summary: Enterplace cannot write its audit log and refuses every request. Look at the disk and restart it.
+      - alert: EnterplaceRefusalRateHigh
+        expr: sum(rate(enterplace_requests_total{verdict="refused"}[10m])) / sum(rate(enterplace_requests_total[10m])) > 0.2
         for: 10m
         annotations:
           summary: More than a fifth of requests are refused. Group by code to see why.
-      - alert: GantryTeamSpendHigh
-        expr: sum by (team) (increase(gantry_spend_usd_total[1d])) > 500
+      - alert: EnterplaceTeamSpendHigh
+        expr: sum by (team) (increase(enterplace_spend_usd_total[1d])) > 500
         annotations:
           summary: A team spent more than $500 in a day.
 ```
 
 ## Traces
 
-Gantry exports one OpenTelemetry span per request, with a child span for each attempt at a provider and each guardrail call, over OTLP. Set the standard variables where `gantry serve` runs:
+Enterplace exports one OpenTelemetry span per request, with a child span for each attempt at a provider and each guardrail call, over OTLP. Set the standard variables where `enterplace serve` runs:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318   # spans go to /v1/traces
-OTEL_SERVICE_NAME=gantry                                  # the default
+OTEL_SERVICE_NAME=enterplace                                  # the default
 OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer%20abc     # optional, percent-encoded
 ```
 
@@ -173,7 +173,7 @@ OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer%20abc     # optional, percent-en
 | `http/protobuf` | OTLP/HTTP, protobuf body | The same |
 | `grpc` | OTLP/gRPC over HTTP/2: in the clear for `http://`, TLS for `https://` | `http://otel-collector:4317`, the collector's address alone |
 
-`OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` sets it for traces alone. Any other value stops Gantry at startup with a message saying so.
+`OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` sets it for traces alone. Any other value stops Enterplace at startup with a message saying so.
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
@@ -182,9 +182,9 @@ OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 
 ### Trace context
 
-When a request carries a W3C `traceparent`, its span joins that trace. The provider is sent a `traceparent` naming the span of the attempt that reached it, so a trace reads caller, Gantry, attempt, provider. `GANTRY_TRACE_PROPAGATION` chooses the sides:
+When a request carries a W3C `traceparent`, its span joins that trace. The provider is sent a `traceparent` naming the span of the attempt that reached it, so a trace reads caller, Enterplace, attempt, provider. `ENTERPLACE_TRACE_PROPAGATION` chooses the sides:
 
-| `GANTRY_TRACE_PROPAGATION` | Joins the caller's trace | Sends `traceparent` to the provider |
+| `ENTERPLACE_TRACE_PROPAGATION` | Joins the caller's trace | Sends `traceparent` to the provider |
 |---|---|---|
 | `caller,provider` (the default) | Yes | Yes |
 | `caller` | Yes | No: the provider gets no `traceparent` or `tracestate`, the caller's included |
@@ -198,29 +198,29 @@ The request's span:
 | Span field | Value |
 |---|---|
 | Name | The method and path, such as `POST /v1/chat/completions` |
-| `gantry.decision` | The decision ID, the same as the `x-gantry-decision` header and the audit record's `id` |
-| `gantry.verdict`, `gantry.code`, `gantry.rule` | The decision and, for a refusal, its code |
-| `gantry.team`, `gantry.provider`, `gen_ai.request.model` | Who, where and which model |
-| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gantry.charged_usd` | From the usage record |
-| `http.response.status_code`, `gantry.ended` | How the answer ended |
+| `enterplace.decision` | The decision ID, the same as the `x-enterplace-decision` header and the audit record's `id` |
+| `enterplace.verdict`, `enterplace.code`, `enterplace.rule` | The decision and, for a refusal, its code |
+| `enterplace.team`, `enterplace.provider`, `gen_ai.request.model` | Who, where and which model |
+| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `enterplace.charged_usd` | From the usage record |
+| `http.response.status_code`, `enterplace.ended` | How the answer ended |
 | `gen_ai.operation.name`, `gen_ai.response.model`, `gen_ai.conversation.id` | The [GenAI conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)' names: the operation (`chat`, `embeddings`, `text_completion`, `generate_content`), the model that answered, and the session when an events guardrail gave one |
 
 Its children:
 
 | Child span | Name | Attributes |
 |---|---|---|
-| One per attempt at a provider, retries and fallbacks included (a client span) | The operation and model, such as `chat gpt-4o` | `gen_ai.operation.name`, `gen_ai.provider.name` (the provider's kind), `gen_ai.request.model`, `server.address`, `http.response.status_code` or `error.type`, `gantry.provider`, `gantry.deployment`, `gantry.attempt`. An attempt that is retried or fallen back from has an error status |
-| One per guardrail call on the request | `guardrail <name>`: `builtin` for the built-in detectors, the guardrail's name for a webhook, `events` for events plugins | `gantry.guardrail` |
+| One per attempt at a provider, retries and fallbacks included (a client span) | The operation and model, such as `chat gpt-4o` | `gen_ai.operation.name`, `gen_ai.provider.name` (the provider's kind), `gen_ai.request.model`, `server.address`, `http.response.status_code` or `error.type`, `enterplace.provider`, `enterplace.deployment`, `enterplace.attempt`. An attempt that is retried or fallen back from has an error status |
+| One per guardrail call on the request | `guardrail <name>`: `builtin` for the built-in detectors, the guardrail's name for a webhook, `events` for events plugins | `enterplace.guardrail` |
 
 The request's span lasts until the request's usage record, so a stream's span covers the whole stream. A span with no usage record (an upstream error, a route with no usage) ends when its answer was sent, five minutes later. Its status is an error only for a 5xx: a refusal is the policy working.
 
-Spans carry what the audit log says and less: no prompt, no answer, no key and no person's name. They are built from the audit records, so traces need the audit log on, as it is under `gantry serve`.
+Spans carry what the audit log says and less: no prompt, no answer, no key and no person's name. They are built from the audit records, so traces need the audit log on, as it is under `enterplace serve`.
 
-Export never slows a request. Spans wait in memory and go out once a second. When the collector is down or slow, spans are dropped, and Gantry says so on standard error at most once a minute.
+Export never slows a request. Spans wait in memory and go out once a second. When the collector is down or slow, spans are dropped, and Enterplace says so on standard error at most once a minute.
 
 ## Shipping the audit log
 
-The audit log is a file of JSON lines, `gantry-audit.jsonl` or the `audit: { path: ... }` in the policy. Gantry only appends to it, so any shipper that tails a file can send it to Loki, Elasticsearch, Splunk or Datadog. Ship each line as it is: the `hash` and `prev` fields chain every record to the one before, and that chain is what `gantry audit verify` checks.
+The audit log is a file of JSON lines, `enterplace-audit.jsonl` or the `audit: { path: ... }` in the policy. Enterplace only appends to it, so any shipper that tails a file can send it to Loki, Elasticsearch, Splunk or Datadog. Ship each line as it is: the `hash` and `prev` fields chain every record to the one before, and that chain is what `enterplace audit verify` checks.
 
 Fields worth indexing: `event` (absent on request records), `id`, `person`, `team`, `key`, `verdict`, `code`, `model`, `provider`, `charged_usd`. Every field is in [Audit records](/reference/audit-records/).
 
@@ -230,14 +230,14 @@ The recipes below read the file from its start and keep their place across resta
 
 ```yaml title="vector.yaml"
 sources:
-  gantry_audit:
+  enterplace_audit:
     type: file
-    include: [/var/lib/gantry/gantry-audit.jsonl]
+    include: [/var/lib/enterplace/enterplace-audit.jsonl]
     read_from: beginning
 transforms:
-  gantry_parsed:
+  enterplace_parsed:
     type: remap
-    inputs: [gantry_audit]
+    inputs: [enterplace_audit]
     # Keeps the original line in .line, so the chain can be checked from what was shipped.
     source: |
       .line = .message
@@ -245,7 +245,7 @@ transforms:
 sinks:
   out:
     type: console
-    inputs: [gantry_parsed]
+    inputs: [enterplace_parsed]
     encoding:
       codec: json
 ```
@@ -256,14 +256,14 @@ sinks:
 pipeline:
   inputs:
     - name: tail
-      path: /var/lib/gantry/gantry-audit.jsonl
+      path: /var/lib/enterplace/enterplace-audit.jsonl
       read_from_head: true
-      db: /var/lib/fluent-bit/gantry-audit.db
+      db: /var/lib/fluent-bit/enterplace-audit.db
       parser: json
-      tag: gantry.audit
+      tag: enterplace.audit
   outputs:
     - name: stdout
-      match: gantry.audit
+      match: enterplace.audit
       format: json_lines
 ```
 
@@ -271,12 +271,12 @@ pipeline:
 
 ### OpenTelemetry Collector
 
-Gantry has no OTLP exporter of its own. The Collector's `filelog` receiver, in the contrib distribution `otelcol-contrib`, turns each audit line into an OpenTelemetry log record and sends it on over OTLP.
+Enterplace has no OTLP exporter of its own. The Collector's `filelog` receiver, in the contrib distribution `otelcol-contrib`, turns each audit line into an OpenTelemetry log record and sends it on over OTLP.
 
 ```yaml
 receivers:
-  filelog/gantry:
-    include: [/var/lib/gantry/gantry-audit.jsonl]
+  filelog/enterplace:
+    include: [/var/lib/enterplace/enterplace-audit.jsonl]
     start_at: beginning
     storage: file_storage
     operators:
@@ -300,7 +300,7 @@ service:
   extensions: [file_storage]
   pipelines:
     logs:
-      receivers: [filelog/gantry]
+      receivers: [filelog/enterplace]
       processors: [batch]
       exporters: [otlphttp, debug]
 ```
@@ -310,7 +310,7 @@ service:
 - `file_storage` keeps the receiver's place across Collector restarts, so records are neither skipped nor sent twice. Its folder must exist and be writable by the Collector.
 - `otlphttp` sends to `<endpoint>/v1/logs`. Replace the endpoint with your backend's and drop `debug` once it works. Recent Collector releases name this exporter `otlp_http` and accept `otlphttp` as a deprecated alias.
 
-On Kubernetes, run the shipper as a second container in the Gantry pod. See [Kubernetes](/deploy/kubernetes/).
+On Kubernetes, run the shipper as a second container in the Enterplace pod. See [Kubernetes](/deploy/kubernetes/).
 
 ## Verify what was shipped
 
@@ -318,10 +318,10 @@ A copy in a log system can be edited or lose records like any other copy. Check 
 
 <Steps>
 
-1. On Gantry's host, verify the log and keep the last hash where the host cannot change it, such as the log system or a ticket.
+1. On Enterplace's host, verify the log and keep the last hash where the host cannot change it, such as the log system or a ticket.
 
    ```bash
-   gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+   enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl
    ```
 
 2. Export the original lines from the log system (the `line` field from Vector, or the log record body from the Collector), sorted by `n`, into a file.
@@ -329,7 +329,7 @@ A copy in a log system can be edited or lose records like any other copy. Check 
 3. Verify the export against the kept hash.
 
    ```bash
-   gantry audit verify exported.jsonl --expect-last <hash kept in step 1>
+   enterplace audit verify exported.jsonl --expect-last <hash kept in step 1>
    ```
 
    It passes only if every record up to that hash is there, unchanged and in order.

@@ -3,19 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>A LiteLLM and Bifrost alternative: Gantry compared, with sources</title>
-<meta name="description" content="An honest comparison of Gantry with the LiteLLM and Bifrost open source AI gateways: what Gantry is built around, what each of the older projects does better, and the public sources for every claim.">
+<title>A LiteLLM and Bifrost alternative: Enterplace compared, with sources</title>
+<meta name="description" content="An honest comparison of Enterplace with the LiteLLM and Bifrost open source AI gateways: what Enterplace is built around, what each of the older projects does better, and the public sources for every claim.">
 <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<link rel="canonical" href="https://gantry.enterplace.dev/compare/">
+<link rel="canonical" href="https://enterplace.dev/compare/">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Gantry">
-<meta property="og:url" content="https://gantry.enterplace.dev/compare/">
-<meta property="og:title" content="A LiteLLM and Bifrost alternative: Gantry compared, with sources">
-<meta property="og:description" content="An honest comparison of Gantry with the LiteLLM and Bifrost open source AI gateways: what Gantry is built around, what each of the older projects does better, and the public sources for every claim.">
-<meta property="og:image" content="https://gantry.enterplace.dev/og.png">
+<meta property="og:site_name" content="Enterplace">
+<meta property="og:url" content="https://enterplace.dev/compare/">
+<meta property="og:title" content="A LiteLLM and Bifrost alternative: Enterplace compared, with sources">
+<meta property="og:description" content="An honest comparison of Enterplace with the LiteLLM and Bifrost open source AI gateways: what Enterplace is built around, what each of the older projects does better, and the public sources for every claim.">
+<meta property="og:image" content="https://enterplace.dev/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
@@ -30,10 +30,10 @@
 
 <header class="hdr" id="hdr">
   <div class="wrap hdr-in">
-    <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
-gantry</a>
+    <a class="brand" href="/" aria-label="Enterplace, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+enterplace</a>
 
-    <a class="theme gh-phone" href="https://github.com/eliransu/gantry" aria-label="Gantry on GitHub, open source"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
+    <a class="theme gh-phone" href="https://github.com/eliransu/enterplace" aria-label="Enterplace on GitHub, open source"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
 
     <button class="burger" type="button" aria-expanded="false" aria-controls="nav" aria-label="Menu"><span></span></button>
 
@@ -44,8 +44,8 @@ gantry</a>
         <div class="menu" id="menu-product">
           <a href="/product/"><strong>How it works</strong><span>The request path, the controls, the audit log and the console</span></a>
           <a href="/deploy/"><strong>Deploy</strong><span>Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare</span></a>
-          <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops</span></a>
-          <a href="/compare/" aria-current="page"><strong>Compare</strong><span>Gantry next to LiteLLM and Bifrost, with sources</span></a>
+          <a href="/security/"><strong>Security</strong><span>What Enterplace protects, and where it stops</span></a>
+          <a href="/compare/" aria-current="page"><strong>Compare</strong><span>Enterplace next to LiteLLM and Bifrost, with sources</span></a>
         </div>
       </div>
 
@@ -86,11 +86,11 @@ gantry</a>
       </div>
 
       <a class="nav-link" data-group="enterprise" href="/enterprise/">Enterprise</a>
-      <a class="nav-link" href="https://gantry-docs.enterplace.dev/">Docs</a>
+      <a class="nav-link" href="https://docs.enterplace.dev/">Docs</a>
 
       <div class="nav-actions">
-        <a class="btn btn-main btn-sm" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Get started</a>
-        <a class="theme gh-wide" href="https://github.com/eliransu/gantry" aria-label="Gantry on GitHub, open source">
+        <a class="btn btn-main btn-sm" href="https://docs.enterplace.dev/getting-started/quickstart/">Get started</a>
+        <a class="theme gh-wide" href="https://github.com/eliransu/enterplace" aria-label="Enterplace on GitHub, open source">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
         </a>
         <button class="theme" type="button" aria-label="Switch between light and dark">
@@ -103,8 +103,8 @@ gantry</a>
 
 <main id="main">
 <section class="wrap head">
-  <h1>Gantry next to LiteLLM and Bifrost.</h1>
-  <p class="lead">Gantry covers the gateway work you expect: one endpoint, several providers, routing, retries, caching, budgets. It is younger than both projects and each of them does some jobs better. The difference is what Gantry does before a request leaves.</p>
+  <h1>Enterplace next to LiteLLM and Bifrost.</h1>
+  <p class="lead">Enterplace covers the gateway work you expect: one endpoint, several providers, routing, retries, caching, budgets. It is younger than both projects and each of them does some jobs better. The difference is what Enterplace does before a request leaves.</p>
 </section>
 
 <section class="wrap sec" style="padding-top: 48px">
@@ -113,7 +113,7 @@ gantry</a>
     <p>What each project's open source edition gives you for the record and for sign-on, from each project's public documentation.</p>
   </div>
   <table class="tbl">
-    <thead><tr><th>In the open source edition</th><th>Gantry</th><th>LiteLLM</th><th>Bifrost</th></tr></thead>
+    <thead><tr><th>In the open source edition</th><th>Enterplace</th><th>LiteLLM</th><th>Bifrost</th></tr></thead>
     <tbody>
       <tr><td>A record of every request</td><td><span class="yes">Yes.</span> Hash-chained, written before the request is forwarded</td><td>Audit logs are an Enterprise feature and record admin changes</td><td>Audit logs are an Enterprise feature</td></tr>
       <tr><td>Single sign-on for the admin console</td><td><span class="yes">Yes.</span> OpenID Connect and SAML</td><td>Free for up to 5 users, then Enterprise</td><td>Enterprise</td></tr>
@@ -124,14 +124,14 @@ gantry</a>
 
 <section class="wrap sec">
   <div class="sec-head">
-    <h2>What Gantry is built around</h2>
+    <h2>What Enterplace is built around</h2>
     <p>Five design decisions. Each can be checked in the docs or by running the binary.</p>
   </div>
   <dl class="facts">
     <div><dt>The record comes first</dt><dd>Every request, allowed or refused, gets a hash-chained audit record before it is forwarded. If the record cannot be written, the request is refused. The chain is checked with one command, in the open source edition.</dd></div>
-    <div><dt>A wrong policy is an error</dt><dd><code>gantry check</code> names the file, the line and the nearest known word for every mistake. A misspelled field does not start quietly.</dd></div>
+    <div><dt>A wrong policy is an error</dt><dd><code>enterplace check</code> names the file, the line and the nearest known word for every mistake. A misspelled field does not start quietly.</dd></div>
     <div><dt>Nothing is dropped silently</dt><dd>The request body is forwarded byte for byte, except where your policy changes it. An unknown query parameter is refused by name.</dd></div>
-    <div><dt>Keys shown once, no prompts in the log</dt><dd>Gantry keys are stored as a SHA-256 hash. The audit log holds no prompt text, answer text or keys.</dd></div>
+    <div><dt>Keys shown once, no prompts in the log</dt><dd>Enterplace keys are stored as a SHA-256 hash. The audit log holds no prompt text, answer text or keys.</dd></div>
     <div><dt>One image, one database</dt><dd>A single static binary in an image built from scratch, running as a non-root user, with Postgres as the only other part. No Redis.</dd></div>
   </dl>
 </section>
@@ -146,31 +146,31 @@ gantry</a>
       <h3>LiteLLM</h3>
       <ul class="ticks out">
         <li><strong>Providers.</strong> It supports far more providers, with translation between their APIs.</li>
-        <li><strong>A shared cache.</strong> Its cache is shared by every instance through Redis. Gantry's answer cache is per replica.</li>
-        <li><strong>Admin UI.</strong> A fuller admin interface. Gantry's console is smaller.</li>
+        <li><strong>A shared cache.</strong> Its cache is shared by every instance through Redis. Enterplace's answer cache is per replica.</li>
+        <li><strong>Admin UI.</strong> A fuller admin interface. Enterplace's console is smaller.</li>
         <li><strong>History.</strong> More years in production at more companies.</li>
       </ul>
     </div>
     <div>
       <h3>Bifrost</h3>
       <ul class="ticks out">
-        <li><strong>Forwarding speed.</strong> It is built for low overhead with features on, and publishes benchmarks. Gantry publishes no latency figures on this site.</li>
+        <li><strong>Forwarding speed.</strong> It is built for low overhead with features on, and publishes benchmarks. Enterplace publishes no latency figures on this site.</li>
         <li><strong>Governance objects in open source.</strong> Customers, teams and virtual keys with budgets and rate limits.</li>
         <li><strong>Response headers</strong> that name the provider and the resolved model.</li>
       </ul>
     </div>
   </div>
-  <p class="note" style="margin-top: 40px"><strong>How this was written.</strong> No source code of LiteLLM or Bifrost was read. The docs hold the full comparison, capability by capability, from a hands-on review and from the projects' public pages, with the versions compared. <a href="https://gantry-docs.enterplace.dev/migrate/comparison/">Gantry, LiteLLM and Bifrost in the docs</a></p>
+  <p class="note" style="margin-top: 40px"><strong>How this was written.</strong> No source code of LiteLLM or Bifrost was read. The docs hold the full comparison, capability by capability, from a hands-on review and from the projects' public pages, with the versions compared. <a href="https://docs.enterplace.dev/migrate/comparison/">Enterplace, LiteLLM and Bifrost in the docs</a></p>
 </section>
 
 <section class="wrap sec">
   <div class="sec-head solo"><h2>Moving over</h2></div>
   <nav class="rows tight" aria-label="Migration guides">
-    <a href="https://gantry-docs.enterplace.dev/migrate/from-litellm/"><strong>Migrate from LiteLLM</strong><span><code>gantry import litellm</code> turns a LiteLLM proxy config into a Gantry policy.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+    <a href="https://docs.enterplace.dev/migrate/from-litellm/"><strong>Migrate from LiteLLM</strong><span><code>enterplace import litellm</code> turns a LiteLLM proxy config into a Enterplace policy.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
-    <a href="https://gantry-docs.enterplace.dev/migrate/from-bifrost/"><strong>Migrate from Bifrost</strong><span>How Bifrost's objects map to Gantry's policy file.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+    <a href="https://docs.enterplace.dev/migrate/from-bifrost/"><strong>Migrate from Bifrost</strong><span>How Bifrost's objects map to Enterplace's policy file.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
-    <a href="https://gantry-docs.enterplace.dev/getting-started/status/"><strong>Project status</strong><span>What is built, what is planned, and what was tested against what.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+    <a href="https://docs.enterplace.dev/getting-started/status/"><strong>Project status</strong><span>What is built, what is planned, and what was tested against what.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
   </nav>
 </section>
@@ -179,7 +179,7 @@ gantry</a>
   <div class="cta-box">
     <h2>Start with step one. Block nothing, and find out what is in use.</h2>
     <div class="actions">
-      <a class="btn btn-ink" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink" href="https://docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
       <a class="btn btn-ink-line" href="/learn/five-steps/">See the five steps</a>
       <a class="btn btn-ink-line" href="/deploy/">Deploy in your cloud</a>
     </div>
@@ -192,8 +192,8 @@ gantry</a>
 <footer class="ftr">
   <div class="wrap ftr-top">
     <div class="ftr-about">
-      <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
-gantry</a>
+      <a class="brand" href="/" aria-label="Enterplace, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+enterplace</a>
       <p>A self-hosted AI gateway, governance first. One Docker image plus Postgres, in your cloud.</p>
     </div>
     <nav class="ftr-cols" aria-label="Site map">
@@ -231,15 +231,15 @@ gantry</a>
       </div>
       <div>
         <h2>Project</h2>
-        <a href="https://gantry-docs.enterplace.dev/">Docs</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/status/">Project status</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/changelog/">Changelog</a>
-        <a href="https://github.com/eliransu/gantry">GitHub</a>
+        <a href="https://docs.enterplace.dev/">Docs</a>
+        <a href="https://docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
+        <a href="https://docs.enterplace.dev/getting-started/status/">Project status</a>
+        <a href="https://docs.enterplace.dev/getting-started/changelog/">Changelog</a>
+        <a href="https://github.com/eliransu/enterplace">GitHub</a>
       </div>
     </nav>
   </div>
-  <p class="wrap ftr-legal">Open source core under MIT, <a href="https://github.com/eliransu/gantry">on GitHub</a>. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
+  <p class="wrap ftr-legal">Open source core under MIT, <a href="https://github.com/eliransu/enterplace">on GitHub</a>. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
 </footer>
 </body>
 </html>

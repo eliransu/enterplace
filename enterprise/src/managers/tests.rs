@@ -8,7 +8,7 @@ use axum::{
     http::{HeaderMap, StatusCode, Uri},
     routing::{get, post},
 };
-use gantry_core::secrets::Source;
+use enterplace_core::secrets::Source;
 use serde_json::{Value, json};
 
 use super::*;
@@ -22,7 +22,7 @@ fn bearer(headers: &HeaderMap, want: &str) -> bool {
 async fn mock() -> Result<String, Box<dyn std::error::Error>> {
     let app = Router::new()
         .route(
-            "/v1/secret/data/gantry",
+            "/v1/secret/data/enterplace",
             get(|headers: HeaderMap| async move {
                 if headers.get("x-vault-token").and_then(|v| v.to_str().ok()) != Some("vault-token") {
                     return (StatusCode::FORBIDDEN, json!({"errors": ["permission denied"]}).to_string());
@@ -31,14 +31,14 @@ async fn mock() -> Result<String, Box<dyn std::error::Error>> {
             }),
         )
         .route(
-            "/v1/kv/gantry",
+            "/v1/kv/enterplace",
             get(|| async { json!({"data": {"openai": "sk-vault-v1"}}).to_string() }),
         )
         .route(
             "/v1/auth/kubernetes/login",
             post(|body: String| async move {
                 let body: Value = serde_json::from_str(&body).unwrap_or_default();
-                if body["role"] == "gantry" && body["jwt"] == "pod-jwt" {
+                if body["role"] == "enterplace" && body["jwt"] == "pod-jwt" {
                     (StatusCode::OK, json!({"auth": {"client_token": "vault-token", "lease_duration": 3600}}).to_string())
                 } else {
                     (StatusCode::BAD_REQUEST, json!({"errors": ["invalid role"]}).to_string())
@@ -59,12 +59,12 @@ async fn mock() -> Result<String, Box<dyn std::error::Error>> {
                         .get("authorization")
                         .and_then(|v| v.to_str().ok())
                         .is_some_and(|v| v.contains("/eu-west-1/kms/aws4_request"));
-                    if !scoped || id["CiphertextBlob"] != "d3JhcHBlZA==" || id["KeyId"] != "alias/gantry" {
+                    if !scoped || id["CiphertextBlob"] != "d3JhcHBlZA==" || id["KeyId"] != "alias/enterplace" {
                         return (StatusCode::BAD_REQUEST, json!({"__type": "InvalidCiphertextException"}).to_string());
                     }
                     // A raw 32-byte data key, as `aws kms generate-data-key` makes.
                     let key: Vec<u8> = (0u8..32).collect();
-                    return (StatusCode::OK, json!({"Plaintext": gantry_core::x509::base64_encode(&key)}).to_string());
+                    return (StatusCode::OK, json!({"Plaintext": enterplace_core::x509::base64_encode(&key)}).to_string());
                 }
                 if !signed || target != Some("secretsmanager.GetSecretValue") {
                     return (StatusCode::FORBIDDEN, json!({"message": "bad signature"}).to_string());
@@ -87,7 +87,7 @@ async fn mock() -> Result<String, Box<dyn std::error::Error>> {
                 if !bearer(&headers, "Bearer google-token") || name != "projects/p/secrets/openai/versions/latest:access" {
                     return (StatusCode::FORBIDDEN, json!({"error": name}).to_string());
                 }
-                (StatusCode::OK, json!({"payload": {"data": gantry_core::x509::base64_encode(b"sk-gcp")}}).to_string())
+                (StatusCode::OK, json!({"payload": {"data": enterplace_core::x509::base64_encode(b"sk-gcp")}}).to_string())
             }),
         )
         .route(
@@ -107,7 +107,7 @@ async fn mock() -> Result<String, Box<dyn std::error::Error>> {
                 if !bearer(&headers, "Bearer google-token") || name != "projects/p/locations/global/keyRings/r/cryptoKeys/master:decrypt" || body["ciphertext"] != "d3JhcHBlZA==" {
                     return (StatusCode::FORBIDDEN, json!({"error": name}).to_string());
                 }
-                (StatusCode::OK, json!({"plaintext": gantry_core::x509::base64_encode(b"sk-from-gcp-kms")}).to_string())
+                (StatusCode::OK, json!({"plaintext": enterplace_core::x509::base64_encode(b"sk-from-gcp-kms")}).to_string())
             }),
         )
         .route(
@@ -124,7 +124,7 @@ async fn mock() -> Result<String, Box<dyn std::error::Error>> {
         .route(
             "/authn/{account}/{login}/authenticate",
             post(|Path((account, login)): Path<(String, String)>, body: String| async move {
-                if account == "acme" && login == "host/gantry" && body == "conjur-api-key" {
+                if account == "acme" && login == "host/enterplace" && body == "conjur-api-key" {
                     (StatusCode::OK, r#"{"protected":"p","payload":"x","signature":"s"}"#.to_string())
                 } else {
                     (StatusCode::UNAUTHORIZED, String::new())
@@ -144,7 +144,7 @@ async fn mock() -> Result<String, Box<dyn std::error::Error>> {
         .route(
             "/secrets/{account}/variable/{id}",
             get(|Path((account, id)): Path<(String, String)>, headers: HeaderMap| async move {
-                let token = gantry_core::x509::base64_encode(br#"{"protected":"p","payload":"x","signature":"s"}"#);
+                let token = enterplace_core::x509::base64_encode(br#"{"protected":"p","payload":"x","signature":"s"}"#);
                 let want = format!("Token token=\"{token}\"");
                 if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some(want.as_str()) || account != "acme" {
                     return (StatusCode::UNAUTHORIZED, String::new());
@@ -196,16 +196,19 @@ async fn vault_is_read_with_a_token_or_the_pods_kubernetes_identity() -> TestRes
         ("VAULT_TOKEN", "vault-token".into()),
     ]));
     assert_eq!(
-        fetch(m.clone(), "vault://secret/data/gantry#openai").await?,
+        fetch(m.clone(), "vault://secret/data/enterplace#openai").await?,
         "sk-vault"
     );
-    assert_eq!(fetch(m.clone(), "vault://kv/gantry").await?, "sk-vault-v1");
-    let err = fetch(m.clone(), "vault://secret/data/gantry")
+    assert_eq!(
+        fetch(m.clone(), "vault://kv/enterplace").await?,
+        "sk-vault-v1"
+    );
+    let err = fetch(m.clone(), "vault://secret/data/enterplace")
         .await
         .err()
         .ok_or("no field")?;
     assert!(err.contains("#field"), "{err}");
-    let err = fetch(m, "vault://secret/data/gantry#missing")
+    let err = fetch(m, "vault://secret/data/enterplace#missing")
         .await
         .err()
         .ok_or("missing")?;
@@ -214,19 +217,19 @@ async fn vault_is_read_with_a_token_or_the_pods_kubernetes_identity() -> TestRes
         "{err}"
     );
 
-    let dir = std::env::temp_dir().join(format!("gantry-managers-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("enterplace-managers-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("token"), "pod-jwt\n")?;
     let k8s = Arc::new(managers(&[
         ("VAULT_ADDR", format!("http://{addr}")),
-        ("VAULT_K8S_ROLE", "gantry".into()),
+        ("VAULT_K8S_ROLE", "enterplace".into()),
         (
             "VAULT_K8S_TOKEN_PATH",
             dir.join("token").display().to_string(),
         ),
     ]));
     assert_eq!(
-        fetch(k8s, "vault://secret/data/gantry#openai").await?,
+        fetch(k8s, "vault://secret/data/enterplace#openai").await?,
         "sk-vault"
     );
 
@@ -234,13 +237,13 @@ async fn vault_is_read_with_a_token_or_the_pods_kubernetes_identity() -> TestRes
         ("VAULT_ADDR", format!("http://{addr}")),
         ("VAULT_TOKEN", "nope".into()),
     ]));
-    let err = fetch(wrong, "vault://secret/data/gantry#openai")
+    let err = fetch(wrong, "vault://secret/data/enterplace#openai")
         .await
         .err()
         .ok_or("403")?;
     assert!(err.contains("403"), "{err}");
     let none = Arc::new(managers(&[]));
-    let err = fetch(none, "vault://secret/data/gantry#openai")
+    let err = fetch(none, "vault://secret/data/enterplace#openai")
         .await
         .err()
         .ok_or("addr")?;
@@ -249,7 +252,7 @@ async fn vault_is_read_with_a_token_or_the_pods_kubernetes_identity() -> TestRes
         ("VAULT_ADDR", "http://vault.example.com".into()),
         ("VAULT_TOKEN", "t".into()),
     ]));
-    let err = fetch(plain, "vault://secret/data/gantry#openai")
+    let err = fetch(plain, "vault://secret/data/enterplace#openai")
         .await
         .err()
         .ok_or("http")?;
@@ -292,7 +295,7 @@ async fn aws_secrets_manager_is_read_signed_with_the_default_chain() -> TestResu
 #[tokio::test(flavor = "multi_thread")]
 async fn google_secret_manager_is_read_with_application_default_credentials() -> TestResult {
     let addr = mock().await?;
-    let dir = std::env::temp_dir().join(format!("gantry-managers-g-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("enterplace-managers-g-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let file = dir.join("adc.json");
     std::fs::write(
@@ -358,7 +361,7 @@ async fn conjur_is_read_with_an_api_key_or_the_workloads_jwt() -> TestResult {
     let m = Arc::new(managers(&[
         ("CONJUR_APPLIANCE_URL", format!("http://{addr}")),
         ("CONJUR_ACCOUNT", "acme".into()),
-        ("CONJUR_AUTHN_LOGIN", "host/gantry".into()),
+        ("CONJUR_AUTHN_LOGIN", "host/enterplace".into()),
         ("CONJUR_AUTHN_API_KEY", "conjur-api-key".into()),
     ]));
     assert_eq!(fetch(m.clone(), "conjur://prod/openai").await?, "sk-conjur");
@@ -369,7 +372,7 @@ async fn conjur_is_read_with_an_api_key_or_the_workloads_jwt() -> TestResult {
     let err = fetch(m, "conjur://prod/missing").await.err().ok_or("404")?;
     assert!(err.contains("Conjur answered 404"), "{err}");
 
-    let dir = std::env::temp_dir().join(format!("gantry-managers-c-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("enterplace-managers-c-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("jwt"), "pod-jwt\n")?;
     let jwt = Arc::new(managers(&[
@@ -406,27 +409,27 @@ async fn a_value_wrapped_by_a_cloud_key_is_decrypted_by_aws_kms_google_kms_and_a
         ("AWS_EC2_METADATA_DISABLED", "true".into()),
         ("AWS_ENDPOINT_URL_KMS", format!("http://{addr}")),
     ]));
-    let master = fetch(aws.clone(), "aws-kms://alias/gantry#d3JhcHBlZA==").await?;
+    let master = fetch(aws.clone(), "aws-kms://alias/enterplace#d3JhcHBlZA==").await?;
     assert_eq!(
         master,
         (0u8..32).map(|b| format!("{b:02x}")).collect::<String>()
     );
-    let key = gantry_server::MasterKey::from_env(&|v| {
-        (v == "GANTRY_MASTER_KEY").then(|| master.clone())
+    let key = enterplace_server::MasterKey::from_env(&|v| {
+        (v == "ENTERPLACE_MASTER_KEY").then(|| master.clone())
     })?;
     assert!(key.is_some(), "the decrypted key is a master key");
-    let err = fetch(aws, "aws-kms://alias/gantry#b3RoZXI=")
+    let err = fetch(aws, "aws-kms://alias/enterplace#b3RoZXI=")
         .await
         .err()
         .ok_or("bad blob")?;
     assert!(err.contains("AWS KMS answered 400"), "{err}");
-    let err = fetch(Arc::new(managers(&[])), "aws-kms://alias/gantry")
+    let err = fetch(Arc::new(managers(&[])), "aws-kms://alias/enterplace")
         .await
         .err()
         .ok_or("shape")?;
     assert!(err.contains("#<base64 ciphertext>"), "{err}");
 
-    let dir = std::env::temp_dir().join(format!("gantry-managers-k-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("enterplace-managers-k-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let file = dir.join("adc.json");
     std::fs::write(

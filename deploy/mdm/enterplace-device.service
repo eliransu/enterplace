@@ -1,0 +1,15 @@
+# The Enterplace device agent on Linux, as a root systemd unit. Install with:
+#   install -m 0644 enterplace-device.service /etc/systemd/system/ && systemctl enable --now enterplace-device
+# Put the enrolment token in /etc/enterplace/device-token (mode 0600) and the control plane URL below.
+[Unit]
+Description=Enterplace device agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/enterplace device --control-plane CONTROL_PLANE_URL
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

@@ -1,40 +1,40 @@
 ---
 title: Aider
-description: Run Aider against Gantry with two environment variables and an openai/ model name.
+description: Run Aider against Enterplace with two environment variables and an openai/ model name.
 sidebar:
   order: 6
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Aider reaches an OpenAI-compatible server through two environment variables. Point them at Gantry and its requests go to `POST /v1/chat/completions`.
+Aider reaches an OpenAI-compatible server through two environment variables. Point them at Enterplace and its requests go to `POST /v1/chat/completions`.
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
 
 ```bash
 export OPENAI_API_BASE=http://127.0.0.1:8080/v1
-export OPENAI_API_KEY=gantry_...
+export OPENAI_API_KEY=enterplace_...
 aider --model openai/gpt-4o-mini
 ```
 
 | Variable | Value |
 |---|---|
-| `OPENAI_API_BASE` | Gantry's address with `/v1` |
-| `OPENAI_API_KEY` | The Gantry key |
+| `OPENAI_API_BASE` | Enterplace's address with `/v1` |
+| `OPENAI_API_KEY` | The Enterplace key |
 
-The `openai/` prefix tells Aider which API to use. Gantry receives the name after it, `gpt-4o-mini`, which the person's rule must allow.
+The `openai/` prefix tells Aider which API to use. Enterplace receives the name after it, `gpt-4o-mini`, which the person's rule must allow.
 
 ## Behavior
 
 - Aider warns about models it has no information on. The warning is Aider's own.
-- Aider documents only `ANTHROPIC_API_KEY` for Anthropic, with no base URL, so use the OpenAI route. For Claude models, set `accept_chat: true` on the Gantry provider. See [Translation](/routing/translation/).
+- Aider documents only `ANTHROPIC_API_KEY` for Anthropic, with no base URL, so use the OpenAI route. For Claude models, set `accept_chat: true` on the Enterplace provider. See [Translation](/routing/translation/).
 
 <Aside type="note">
-This setup follows Aider's documentation. How Aider displays a Gantry refusal is not documented.
+This setup follows Aider's documentation. How Aider displays a Enterplace refusal is not documented.
 </Aside>
 
 ## Related

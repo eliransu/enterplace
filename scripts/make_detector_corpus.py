@@ -1,5 +1,5 @@
-"""Writes crates/gantry-core/tests/corpus/gantry-detectors-v1.jsonl, the labelled corpus the built-in detectors are
-measured on (crates/gantry-core/tests/detector_corpus.rs, docs/src/content/docs/governance/guardrails.mdx).
+"""Writes crates/enterplace-core/tests/corpus/enterplace-detectors-v1.jsonl, the labelled corpus the built-in detectors are
+measured on (crates/enterplace-core/tests/detector_corpus.rs, docs/src/content/docs/governance/guardrails.mdx).
 
 Usage: python3 scripts/make_detector_corpus.py
 The output is fixed by the seed below, so running this again writes the same file. A new corpus version is a new
@@ -12,7 +12,7 @@ Standard library only.
 import base64, json, pathlib, random, string
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-OUT = ROOT / "crates" / "gantry-core" / "tests" / "corpus" / "gantry-detectors-v1.jsonl"
+OUT = ROOT / "crates" / "enterplace-core" / "tests" / "corpus" / "enterplace-detectors-v1.jsonl"
 R = random.Random(20261113)
 
 UP = string.ascii_uppercase
@@ -96,7 +96,7 @@ pk_neg = [
     f"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI{rnd(B64, 43)} ci@runner",
     "-----END RSA PRIVATE KEY-----",
     "Never paste a private key into a chat, rotate it if you did.",
-    "private_key_path: /etc/gantry/tls/server.key",
+    "private_key_path: /etc/enterplace/tls/server.key",
     "ansible-playbook site.yml --private-key ./deploy.pem",
     "The file should start with BEGIN RSA PRIVATE KEY between five dashes.",
     'openssl genpkey -algorithm ed25519 -out key.pem && openssl pkey -in key.pem -pubout',
@@ -239,12 +239,12 @@ for _ in range(28):
     neg("slack_token", f"https://acme.slack.com/archives/C{rnd(UPNUM, 8)}/p{R.randint(10**15, 10**16)}")
 
 # --------------------------------------------------------------------------------------------------------------
-# gantry_key
+# enterplace_key
 # --------------------------------------------------------------------------------------------------------------
 for i in range(40):
-    key = f"gantry_{rnd(HEX, 64)}"
+    key = f"enterplace_{rnd(HEX, 64)}"
     shapes = [
-        f"export GANTRY_KEY={key}",
+        f"export ENTERPLACE_KEY={key}",
         f"curl -H 'Authorization: Bearer {key}' http://127.0.0.1:8787/v1/models",
         json.dumps({"api_key": key, "base_url": "http://127.0.0.1:8787/v1"}),
         f"User: my key {key} gets 401 from the gateway",
@@ -253,25 +253,25 @@ for i in range(40):
         f"key: {key}",
         f"Revoke {key}, it was in the wiki.",
     ]
-    pos("gantry_key", shapes[i % len(shapes)])
+    pos("enterplace_key", shapes[i % len(shapes)])
 gk_neg = [
-    f"gantry_{rnd(HEX, 63)}",
-    f"gantry_{rnd(HEX, 65)}",
-    f"gantry_{rnd(HEX, 64).upper()}",
-    "gantry_core::guard::scan(&parts)",
-    "use gantry_server::serve;",
-    "gantry_check_examples",
-    "GANTRY_KEY=gantry_your_key_here",
-    "pip install gantry_sdk",
-    f"gantry-{rnd(HEX, 64)}",
-    "keys look like gantry_ followed by 64 hex digits",
+    f"enterplace_{rnd(HEX, 63)}",
+    f"enterplace_{rnd(HEX, 65)}",
+    f"enterplace_{rnd(HEX, 64).upper()}",
+    "enterplace_core::guard::scan(&parts)",
+    "use enterplace_server::serve;",
+    "enterplace_check_examples",
+    "ENTERPLACE_KEY=enterplace_your_key_here",
+    "pip install enterplace_sdk",
+    f"enterplace-{rnd(HEX, 64)}",
+    "keys look like enterplace_ followed by 64 hex digits",
 ]
 for text in gk_neg:
-    neg("gantry_key", text)
+    neg("enterplace_key", text)
 for _ in range(15):
-    neg("gantry_key", f"sha256:{rnd(HEX, 64)}")
+    neg("enterplace_key", f"sha256:{rnd(HEX, 64)}")
 for _ in range(15):
-    neg("gantry_key", f"{rnd(HEX, 64)}  gantry-x86_64-unknown-linux-gnu.tar.gz")
+    neg("enterplace_key", f"{rnd(HEX, 64)}  enterplace-x86_64-unknown-linux-gnu.tar.gz")
 
 # --------------------------------------------------------------------------------------------------------------
 # jwt
@@ -400,7 +400,7 @@ email_neg = [
     "postgres://app@db:5432/orders",
     "@acme/ui@2.3.1",
     "admin@192.168.1.1",
-    "Twitter handle @gantry_ai",
+    "Twitter handle @enterplace_ai",
 ]
 for text in email_neg:
     neg("email_address", text)
@@ -819,14 +819,14 @@ for i in range(10):
         ["aws_access_key", "github_token"])
 
 HEADER = [
-    "# gantry-detectors-v1: a labelled corpus for Gantry's built-in secrets and pii detectors.",
+    "# enterplace-detectors-v1: a labelled corpus for Enterplace's built-in secrets and pii detectors.",
     "# Made by scripts/make_detector_corpus.py (seeded, so it is reproducible). Each line is one JSON object:",
     "# target is the kind the line was written to test (or mixed), text is the text scanned, expect lists every",
     "# kind a careful reader would report in it, once per value. An empty expect is a hard negative.",
     "# Every value is synthetic or a published example value: AWS's documented example key, card networks' test",
     "# numbers, RFC 2606 mail domains, fictional phone ranges, random numbers with valid or broken checksums.",
     "# No real secret and no real person's data. License: Apache-2.0, as the rest of the repository.",
-    "# Measured by crates/gantry-core/tests/detector_corpus.rs; published in docs/src/content/docs/governance/guardrails.mdx.",
+    "# Measured by crates/enterplace-core/tests/detector_corpus.rs; published in docs/src/content/docs/governance/guardrails.mdx.",
 ]
 OUT.parent.mkdir(parents=True, exist_ok=True)
 with OUT.open("w", encoding="utf-8") as fh:
@@ -836,12 +836,12 @@ with OUT.open("w", encoding="utf-8") as fh:
 print(f"wrote {len(rows)} lines to {OUT}")
 
 # ==============================================================================================================
-# gantry-detectors-v2: v1, with OpenAI project and Anthropic keys given their own kinds, and the cloud and service
+# enterplace-detectors-v2: v1, with OpenAI project and Anthropic keys given their own kinds, and the cloud and service
 # keys v2 added. v1 above is written unchanged (same seed, same order); v2 draws from a seed of its own.
 # ==============================================================================================================
 import copy
 
-OUT2 = OUT.with_name("gantry-detectors-v2.jsonl")
+OUT2 = OUT.with_name("enterplace-detectors-v2.jsonl")
 R2 = random.Random(20261114)
 
 
@@ -1059,7 +1059,7 @@ neg2("database_url", [
 for _ in range(28):
     neg2("database_url", [f"{R2.choice(schemes)}://{R2.choice(['db.internal', 'cache', 'mq'])}:{R2.randint(1000, 9999)}/{rnd2(LOWER, 5)}"])
 
-HEADER2 = [h.replace("gantry-detectors-v1", "gantry-detectors-v2") for h in HEADER]
+HEADER2 = [h.replace("enterplace-detectors-v1", "enterplace-detectors-v2") for h in HEADER]
 HEADER2.insert(1, "# v2 is v1 with sk-proj- and sk-ant- keys labelled openai_project_key and anthropic_key, plus the cloud and")
 HEADER2.insert(2, "# service key kinds v2 added (GCP, Azure, Stripe, Twilio, SendGrid, database URLs). Every key is random.")
 with OUT2.open("w", encoding="utf-8") as fh:

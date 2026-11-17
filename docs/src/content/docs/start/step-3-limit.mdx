@@ -13,14 +13,14 @@ A cap on what each team spends in a month, and a stop button for a person, a tea
 
 ## The one change
 
-Add a budget for every team to `gantry.policy.yaml`:
+Add a budget for every team to `enterplace.policy.yaml`:
 
-```yaml title="gantry.policy.yaml (added)"
+```yaml title="enterplace.policy.yaml (added)"
 limits:
   - { team: "*", budget: { usd: 500, per: month } }
 ```
 
-Each team may spend 500 US dollars a month. Pick the amount from what step 2 showed you. Gantry uses the saved file within 2 seconds, without a restart.
+Each team may spend 500 US dollars a month. Pick the amount from what step 2 showed you. Enterplace uses the saved file within 2 seconds, without a restart.
 
 Observe mode is still on, so a request over the budget is forwarded and recorded as `would_refuse` with the code `budget_exceeded`. Its cost still counts against the budget, so the numbers are real on the day you enforce.
 
@@ -31,7 +31,7 @@ Observe mode is still on, so a request over the budget is forwarded and recorded
 - **Analytics** (`/console/analytics`): the budget forecasts say whether each budget lasts the month at the current pace, or the date it runs out.
 
 <Aside type="note">
-Claude Code on Claude subscriptions goes through Gantry too. A subscription is paid by the seat, so limit it in tokens and requests (`tpd`, `rpd`), or in dollars at the estimate: see [Subscriptions](/governance/subscriptions/#limit-tokens-and-requests). Usage seen only through [watch mode](/integrations/claude-team/) is never refused and counts against no budget; an [alert](/operations/alerting/) on watched spend still works.
+Claude Code on Claude subscriptions goes through Enterplace too. A subscription is paid by the seat, so limit it in tokens and requests (`tpd`, `rpd`), or in dollars at the estimate: see [Subscriptions](/governance/subscriptions/#limit-tokens-and-requests). Usage seen only through [watch mode](/integrations/claude-team/) is never refused and counts against no budget; an [alert](/operations/alerting/) on watched spend still works.
 </Aside>
 
 ## Enforce it
@@ -40,13 +40,13 @@ When the amounts look right, delete the `mode: observe` line from the policy. Fr
 
 ## The stop button
 
-A kill switch needs no policy change and works in observe mode too. It needs the gateway's address and an admin key, the one `gantry start` printed:
+A kill switch needs no policy change and works in observe mode too. It needs the gateway's address and an admin key, the one `enterplace start` printed:
 
 ```bash
-export GANTRY_URL=http://127.0.0.1:8080
-export GANTRY_KEY=gantry_...   # the admin key; GANTRY_ADMIN_KEY works too
-gantry kill --team support --reason "agent retrying one ticket in a loop"
-gantry unkill --team support
+export ENTERPLACE_URL=http://127.0.0.1:8080
+export ENTERPLACE_KEY=enterplace_...   # the admin key; ENTERPLACE_ADMIN_KEY works too
+enterplace kill --team support --reason "agent retrying one ticket in a loop"
+enterplace unkill --team support
 ```
 
 The people stopped see the reason and who set it. See [Kill switches](/governance/kill-switches/).
@@ -61,7 +61,7 @@ Spend is capped. To keep secrets and personal data out of prompts, go to [Step 4
 
 After you delete `mode: observe`, a new limit can still run on trial by itself. Add `shadow_until` with a UTC date:
 
-```yaml title="gantry.policy.yaml (added)"
+```yaml title="enterplace.policy.yaml (added)"
 limits:
   - { team: "*", budget: { usd: 500, per: month } }
   - { person: "*", budget: { usd: 20, per: day }, shadow_until: 2026-12-15 }
@@ -76,10 +76,10 @@ Until 15 December the daily budget per person refuses nothing and records what i
 | A budget for one team | `{ team: payments, budget: { usd: 2000, per: month } }` | `budget_exceeded` |
 | A budget for one costly model | `{ model: o3, budget: { usd: 1000, per: month } }` | `budget_exceeded` |
 | Requests per minute for each person | `{ person: "*", rate: { rpm: 60 } }` | `rate_limited`, with `Retry-After` |
-| A budget on one key | `gantry key new ci.release --team platform --budget 20/month` | `key_budget_exceeded` |
+| A budget on one key | `enterplace key new ci.release --team platform --budget 20/month` | `key_budget_exceeded` |
 
 Every entry goes in the `limits:` list. See [Budgets and rate limits](/governance/budgets-and-rate-limits/).
 
 <Aside type="note">
-Alerts on spend, sent to Slack, Teams, PagerDuty or email before a budget runs out, are part of Gantry Enterprise. See [Alerting](/operations/alerting/).
+Alerts on spend, sent to Slack, Teams, PagerDuty or email before a budget runs out, are part of Enterplace Enterprise. See [Alerting](/operations/alerting/).
 </Aside>

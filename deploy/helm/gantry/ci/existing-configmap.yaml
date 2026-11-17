@@ -1,3 +1,0 @@
-# A policy ConfigMap managed outside the chart; the chart trusts it to hold `store:`.
-replicaCount: 2
-existingPolicyConfigMap: my-gantry-policy

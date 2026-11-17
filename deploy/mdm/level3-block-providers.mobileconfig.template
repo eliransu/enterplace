@@ -3,7 +3,7 @@
 <!--
   UNTESTED. DO NOT DEPLOY. Level 3 (enforced: the device cannot reach provider hosts directly) is the subject of
   the device spike, plan item 0.5. Nobody has run this profile on a real Mac. Until the spike passes its criteria
-  (two coding agents work fully through Gantry with direct access blocked, allowed desktop apps keep working, a
+  (two coding agents work fully through Enterplace with direct access blocked, allowed desktop apps keep working, a
   developer with local admin cannot bypass it without leaving a trace), treat this as a starting sketch only.
 
   Approach sketched: a DNS settings payload sends resolution of the provider hosts to a resolver the customer
@@ -20,7 +20,7 @@
       <key>PayloadType</key>
       <string>com.apple.dnsSettings.managed</string>
       <key>PayloadIdentifier</key>
-      <string>me.gantry.level3.dns</string>
+      <string>me.enterplace.level3.dns</string>
       <key>PayloadUUID</key>
       <string>9A8B7C6D-5E4F-4A3B-8C2D-1E0F9A8B7C6D</string>
       <key>PayloadVersion</key>
@@ -59,9 +59,9 @@
     </dict>
   </array>
   <key>PayloadDisplayName</key>
-  <string>Gantry level 3: block direct provider access (UNTESTED)</string>
+  <string>Enterplace level 3: block direct provider access (UNTESTED)</string>
   <key>PayloadIdentifier</key>
-  <string>me.gantry.level3</string>
+  <string>me.enterplace.level3</string>
   <key>PayloadScope</key>
   <string>System</string>
   <key>PayloadType</key>

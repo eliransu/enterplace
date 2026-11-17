@@ -58,10 +58,10 @@ Claude Code can now run with `ANTHROPIC_MODEL=gpt-5` and `ANTHROPIC_SMALL_FAST_M
 A field that cannot be carried across is refused with `untranslatable`, naming it:
 
 ```text
-Refused (untranslatable): The parameter "n" set to 2 has no equivalent in Anthropic's messages API, so Gantry cannot translate it. Remove it, or use a model whose provider speaks the client's format. Decision 01M7....
+Refused (untranslatable): The parameter "n" set to 2 has no equivalent in Anthropic's messages API, so Enterplace cannot translate it. Remove it, or use a model whose provider speaks the client's format. Decision 01M7....
 ```
 
-The translation is decided before the record is written, so an untranslatable request is a recorded refusal. The record of a translated request says `"translated": true`. The few fields dropped on purpose are listed with their reasons in `gantry_core::translate::SAFE_TO_DROP`.
+The translation is decided before the record is written, so an untranslatable request is a recorded refusal. The record of a translated request says `"translated": true`. The few fields dropped on purpose are listed with their reasons in `enterplace_core::translate::SAFE_TO_DROP`.
 
 ## Chat to messages (accept_chat)
 
@@ -85,20 +85,20 @@ The translation is decided before the record is written, so an untranslatable re
 | `tool_calls` | `tool_use` |
 | `content_filter`, or a refusal | `refusal` |
 
-**Streams** become Anthropic's events in the order Claude Code reads them: `message_start`; for each text or tool call `content_block_start`, `content_block_delta` (`text_delta`, or `input_json_delta` for tool arguments) and `content_block_stop`; then `message_delta` with `stop_reason` and usage; then `message_stop`. Gantry asks the provider for `stream_options.include_usage`, so usage carries the provider's counts. A provider error in the stream becomes an `error` event. A stream cut before `data: [DONE]` is broken off, not ended as if complete.
+**Streams** become Anthropic's events in the order Claude Code reads them: `message_start`; for each text or tool call `content_block_start`, `content_block_delta` (`text_delta`, or `input_json_delta` for tool arguments) and `content_block_stop`; then `message_delta` with `stop_reason` and usage; then `message_stop`. Enterplace asks the provider for `stream_options.include_usage`, so usage carries the provider's counts. A provider error in the stream becomes an `error` event. A stream cut before `data: [DONE]` is broken off, not ended as if complete.
 
 **Errors** come back in Anthropic's error shape, typed by status (429 is `rate_limit_error`), with the message `Provider "<name>" answered <status>: <the provider's message> Decision <id>.`, the decision ID in `decision`, the provider's own `Retry-After`, and `x-should-retry: true` for 408, 409, 429 and 5xx (`false` otherwise).
 
 **Mapped:** thinking of type `enabled` becomes the `reasoning_effort` its budget stands for (up to 1024 `low`, up to 4096 `medium`, above that `high`); adaptive thinking is let through.
 
-**Refused with `untranslatable`:** thinking of another type, server tools (web search, code execution), `context_management` edits other than clearing thinking, document and other non-text tool result blocks, and any field Gantry does not know.
+**Refused with `untranslatable`:** thinking of another type, server tools (web search, code execution), `context_management` edits other than clearing thinking, document and other non-text tool result blocks, and any field Enterplace does not know.
 
 **Dropped on purpose:** `cache_control`, thinking blocks, `defer_loading` on tools, `context_management` that only clears thinking, `safeguards` (Claude Code then runs its auto mode classifier itself), and the `anthropic-*` headers.
 
 `POST /v1/messages/count_tokens` for these models is refused with `wrong_route`. It is served for `anthropic`, `bedrock` (Bedrock's CountTokens) and `vertex_anthropic` (Vertex AI's count-tokens endpoint).
 
 <Aside type="caution">
-Claude Code sends `output_config.effort` on every request, which Gantry sends as `reasoning_effort`. A model that is not a reasoning model may refuse that field, and its 400 reaches Claude Code as the provider gave it.
+Claude Code sends `output_config.effort` on every request, which Enterplace sends as `reasoning_effort`. A model that is not a reasoning model may refuse that field, and its 400 reaches Claude Code as the provider gave it.
 </Aside>
 
 ## Responses to chat (Codex on any provider)
@@ -111,9 +111,9 @@ A `POST /v1/responses` request for a model on a provider that does not speak Res
 
 **Streams** become Responses events: `response.created`, `response.in_progress`, then per item `response.output_item.added`, `response.content_part.added`, `response.output_text.delta` (or `response.function_call_arguments.delta`, `response.reasoning_summary_text.delta`), their `.done` events and `response.output_item.done`, and last `response.completed` with the usage. Each event carries its `sequence_number`.
 
-**Refused by name:** `previous_response_id`, `conversation` and `prompt` (state the provider does not keep: send the whole conversation in `input`), `background: true`, tools other than functions (web search, file search, code interpreter, computer use, custom tools), `include` values other than `reasoning.encrypted_content`, file inputs by OpenAI file ID, and any field Gantry does not know.
+**Refused by name:** `previous_response_id`, `conversation` and `prompt` (state the provider does not keep: send the whole conversation in `input`), `background: true`, tools other than functions (web search, file search, code interpreter, computer use, custom tools), `include` values other than `reasoning.encrypted_content`, file inputs by OpenAI file ID, and any field Enterplace does not know.
 
-**Dropped on purpose:** `store`, `include: reasoning.encrypted_content`, reasoning items handed back in `input`, and the defaults `truncation: disabled` and `service_tier: auto`, listed in `gantry_core::responses::SAFE_TO_DROP`.
+**Dropped on purpose:** `store`, `include: reasoning.encrypted_content`, reasoning items handed back in `input`, and the defaults `truncation: disabled` and `service_tier: auto`, listed in `enterplace_core::responses::SAFE_TO_DROP`.
 
 ## Chat to Responses (chat_as_responses)
 

@@ -1,6 +1,6 @@
-# Gantry website
+# Enterplace website
 
-The site at https://gantry.enterplace.dev. Static, hand-written HTML, CSS and one small script. No framework and no dependencies.
+The site at https://enterplace.dev. Static, hand-written HTML, CSS and one small script. No framework and no dependencies.
 
 ## Layout
 
@@ -10,7 +10,7 @@ The site at https://gantry.enterplace.dev. Static, hand-written HTML, CSS and on
 | `src/partials/` | Shared pieces: `layout.html` (head, header, footer), `cta.html`, the mark and icons. |
 | `src/static/` | Copied as they are: `styles.css`, `site.js`, fonts, logos, images, `robots.txt`, `_redirects`. |
 | `build.py` | Builds `public/` from `src/`. Python standard library only. |
-| `public/` | The built site. Committed, and served by the Cloudflare Worker `gantry-site`. Do not edit it by hand. |
+| `public/` | The built site. Committed, and served by the Cloudflare Worker `enterplace-site`. Do not edit it by hand. |
 
 ## Build
 
@@ -59,7 +59,7 @@ Add a new page to the header and footer in `src/partials/layout.html`.
 
 ```sh
 python3 -m http.server 4410 --bind 127.0.0.1 --directory public
-npx --prefix /Users/lasso/Documents/private/gantry/gantry/docs wrangler deploy
+npx --prefix /Users/lasso/Documents/private/enterplace/enterplace/docs wrangler deploy
 ```
 
 Run the deploy from this folder. `wrangler.jsonc` serves `public/` with clean URLs and `404.html` for unknown paths.

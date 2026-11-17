@@ -1,11 +1,11 @@
 <!--
-title: Deploy Gantry: Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare
-description: Gantry runs in your own network or cloud account as one image plus Postgres. Deployment guides for Docker Compose, Kubernetes with Helm, Terraform on AWS, Google Cloud and Azure, and Cloudflare. What you deploy and what stays in your network.
+title: Deploy Enterplace: Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare
+description: Enterplace runs in your own network or cloud account as one image plus Postgres. Deployment guides for Docker Compose, Kubernetes with Helm, Terraform on AWS, Google Cloud and Azure, and Cloudflare. What you deploy and what stays in your network.
 nav: product
 -->
 <section class="wrap head">
   <h1>One image plus Postgres, in your own cloud.</h1>
-  <p class="lead">Gantry runs in your network or cloud account. Prompts go from your callers, through the gateway, to the providers your policy names. Gantry never stores them, and the license is checked without a network call.</p>
+  <p class="lead">Enterplace runs in your network or cloud account. Prompts go from your callers, through the gateway, to the providers your policy names. Enterplace never stores them, and the license is checked without a network call.</p>
   <div class="actions">
     <a class="btn btn-main" href="docs:/deploy/overview/">Open the deploy guides</a>
     <a class="btn btn-line" href="docs:/getting-started/quickstart/">Try it on one machine first</a>
@@ -25,7 +25,7 @@ nav: product
     <a href="docs:/deploy/azure/"><strong>Azure</strong><span>Terraform for Container Apps, Azure Database for PostgreSQL and Azure Files.</span>{{> arrow}}</a>
     <a href="docs:/deploy/cloudflare/"><strong>Cloudflare</strong><span>Containers, with the audit chain sealed into R2.</span>{{> arrow}}</a>
   </nav>
-  <p class="tbl-note">The guides use the Gantry Enterprise image with its Compose stack, Helm chart and Terraform modules. <span class="ent">Enterprise</span> Without a license the same image runs the open source edition.</p>
+  <p class="tbl-note">The guides use the Enterplace Enterprise image with its Compose stack, Helm chart and Terraform modules. <span class="ent">Enterprise</span> Without a license the same image runs the open source edition.</p>
 </section>
 
 <section class="wrap sec">
@@ -36,7 +36,7 @@ nav: product
   <table class="tbl">
     <thead><tr><th>Part</th><th>What it is</th><th>Where it lives</th></tr></thead>
     <tbody>
-      <tr><td>The image</td><td><code>ghcr.io/eliransu/gantry</code>: one static binary, built from scratch, running as user 65532. It serves the gateway, the console and the admin API.</td><td>Your registry, or ghcr.io</td></tr>
+      <tr><td>The image</td><td><code>ghcr.io/eliransu/enterplace</code>: one static binary, built from scratch, running as user 65532. It serves the gateway, the console and the admin API.</td><td>Your registry, or ghcr.io</td></tr>
       <tr><td>Postgres</td><td>The store: keys, kill switches and spend, shared by every replica.</td><td>A managed database, or the Compose container</td></tr>
       <tr><td>A volume per replica</td><td>That replica's hash-chained audit log. Two replicas never share one, because each writes its own chain.</td><td>A Docker volume, a PersistentVolumeClaim, EFS, Filestore or Azure Files</td></tr>
       <tr><td>The policy</td><td>One YAML file: providers, rules, guardrails. It holds no secrets.</td><td>Version control, then a ConfigMap, a parameter or a mount</td></tr>
@@ -54,7 +54,7 @@ nav: product
       <dl class="facts">
         <div><dt>Prompts and answers</dt><dd>Go to the provider your policy names and back to the caller. Never stored: not in the audit log, not in Postgres.</dd></div>
         <div><dt>Provider keys</dt><dd>Read from environment variables and sent only to their provider.</dd></div>
-        <div><dt>Gantry keys</dt><dd>Shown once when issued. Only the SHA-256 is stored.</dd></div>
+        <div><dt>Enterplace keys</dt><dd>Shown once when issued. Only the SHA-256 is stored.</dd></div>
         <div><dt>The audit log</dt><dd>On your volume. You ship it where you choose.</dd></div>
         <div><dt>The license</dt><dd>Checked against a public key in the binary. No network call.</dd></div>
       </dl>
@@ -71,10 +71,10 @@ rules:
   - name: everyone
     principals: { any: true }
     models: [gpt-4o-mini]
-audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
 store: { postgres_url_env: DATABASE_URL }</pre></figure>
-      <figure class="code"><figcaption>Any gantry command, from the image you deploy</figcaption><pre>docker compose run --rm gantry \
-  audit verify /var/lib/gantry/gantry-audit.jsonl</pre></figure>
+      <figure class="code"><figcaption>Any enterplace command, from the image you deploy</figcaption><pre>docker compose run --rm enterplace \
+  audit verify /var/lib/enterplace/enterplace-audit.jsonl</pre></figure>
     </div>
   </div>
 </section>
@@ -82,7 +82,7 @@ store: { postgres_url_env: DATABASE_URL }</pre></figure>
 <section class="wrap sec doc">
   <h2>Limits to know before you start</h2>
   <ul class="ticks out">
-    <li><strong>Gantry serves plain HTTP unless you give it a certificate.</strong> Start it with <code>--tls-cert</code> and <code>--tls-key</code>, or put TLS in front of it, before traffic leaves one machine.</li>
+    <li><strong>Enterplace serves plain HTTP unless you give it a certificate.</strong> Start it with <code>--tls-cert</code> and <code>--tls-key</code>, or put TLS in front of it, before traffic leaves one machine.</li>
     <li><strong>On Cloud Run and Container Apps, one replica.</strong> More than one replica on those two is planned. Kubernetes and ECS run several.</li>
     <li><strong>Pin the version.</strong> <code>latest</code> is for a first try. A moving tag makes a rollback guesswork.</li>
     <li><strong>Releases are signed.</strong> Images ship with an SBOM and provenance. <a href="docs:/operations/verify-release/">Verify a release</a></li>
@@ -92,7 +92,7 @@ store: { postgres_url_env: DATABASE_URL }</pre></figure>
 <section class="wrap sec">
   <div class="sec-head solo"><h2>Read next</h2></div>
   <nav class="rows tight" aria-label="Read next">
-    <a href="/security/"><strong>Security</strong><span>What Gantry protects, what it does not, and where your data goes.</span>{{> arrow}}</a>
+    <a href="/security/"><strong>Security</strong><span>What Enterplace protects, what it does not, and where your data goes.</span>{{> arrow}}</a>
     <a href="/enterprise/"><strong>Open source and Enterprise</strong><span>What the license adds, and how it is checked.</span>{{> arrow}}</a>
     <a href="/use-cases/local-models/"><strong>Local and air-gapped</strong><span>Running with no connection out.</span>{{> arrow}}</a>
   </nav>

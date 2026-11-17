@@ -14,5 +14,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup show
-      - run: cargo build --locked -p gantry-cli
+      - run: cargo build --locked -p enterplace-cli
       - run: python3 scripts/browser_check.py --chrome "$(command -v google-chrome)"

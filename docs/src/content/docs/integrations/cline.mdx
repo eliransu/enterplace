@@ -1,16 +1,16 @@
 ---
 title: Cline
-description: Configure Cline in VS Code to send its requests through Gantry over OpenAI's or Anthropic's API.
+description: Configure Cline in VS Code to send its requests through Enterplace over OpenAI's or Anthropic's API.
 sidebar:
   order: 5
 ---
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Cline is configured in its settings panel in VS Code. It can reach Gantry over OpenAI's chat completions API or Anthropic's messages API, with a Gantry key in place of a provider key.
+Cline is configured in its settings panel in VS Code. It can reach Enterplace over OpenAI's chat completions API or Anthropic's messages API, with a Enterplace key in place of a provider key.
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -21,11 +21,11 @@ You need a running Gantry and a Gantry key. `gantry start` gives both in one com
 | Setting | Value |
 |---|---|
 | API Provider | OpenAI Compatible |
-| Base URL | Gantry's address with `/v1`, for example `http://127.0.0.1:8080/v1` |
-| API Key | The Gantry key |
+| Base URL | Enterplace's address with `/v1`, for example `http://127.0.0.1:8080/v1` |
+| API Key | The Enterplace key |
 | Model | The model as the policy names it |
 
-Requests go to `POST /v1/chat/completions`. Cline's documentation gives no example base URL, so the `/v1` ending follows the OpenAI convention. A 404 `unknown_route` from Gantry means the path is wrong.
+Requests go to `POST /v1/chat/completions`. Cline's documentation gives no example base URL, so the `/v1` ending follows the OpenAI convention. A 404 `unknown_route` from Enterplace means the path is wrong.
 
 </TabItem>
 <TabItem label="Anthropic">
@@ -33,8 +33,8 @@ Requests go to `POST /v1/chat/completions`. Cline's documentation gives no examp
 | Setting | Value |
 |---|---|
 | API Provider | Anthropic |
-| API Key | The Gantry key |
-| Use custom base URL | Checked, with Gantry's address and no `/v1`, for example `http://127.0.0.1:8080` |
+| API Key | The Enterplace key |
+| Use custom base URL | Checked, with Enterplace's address and no `/v1`, for example `http://127.0.0.1:8080` |
 
 Requests go to `POST /v1/messages`, where refusals use Anthropic's error shape.
 
@@ -42,12 +42,12 @@ Requests go to `POST /v1/messages`, where refusals use Anthropic's error shape.
 </Tabs>
 
 <Aside type="note">
-This setup follows Cline's documentation. Cline lists "Invalid API Key" and "Model Not Found" errors; whether it shows Gantry's message text is not documented.
+This setup follows Cline's documentation. Cline lists "Invalid API Key" and "Model Not Found" errors; whether it shows Enterplace's message text is not documented.
 </Aside>
 
 ## Related
 
 <CardGrid>
 	<LinkCard title="Continue" href="/integrations/continue/" description="A model in Continue's config.yaml." />
-	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="Every code Gantry returns and what to do about it." />
+	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="Every code Enterplace returns and what to do about it." />
 </CardGrid>

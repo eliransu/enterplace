@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turns LiteLLM's model price map into the price table built into Gantry.
+"""Turns LiteLLM's model price map into the price table built into Enterplace.
 
 Usage: scripts/prices.py <model_prices_and_context_window.json> <commit sha> <date YYYY-MM-DD>
 
@@ -7,8 +7,8 @@ Download the JSON data file alone, never LiteLLM's code (AGENTS.md rule 3):
   curl -sSfLo /some/empty/dir/prices.json \
     https://raw.githubusercontent.com/BerriAI/litellm/<commit>/model_prices_and_context_window.json
 
-Writes crates/gantry-core/data/litellm-prices.tsv. The map is MIT licensed; the license and attribution are in
-crates/gantry-core/data/LICENSE-litellm-prices.
+Writes crates/enterplace-core/data/litellm-prices.tsv. The map is MIT licensed; the license and attribution are in
+crates/enterplace-core/data/LICENSE-litellm-prices.
 """
 
 import json
@@ -16,10 +16,10 @@ import re
 import sys
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent.parent / "crates/gantry-core/data/litellm-prices.tsv"
+OUT = Path(__file__).resolve().parent.parent / "crates/enterplace-core/data/litellm-prices.tsv"
 URL = "https://raw.githubusercontent.com/BerriAI/litellm/{}/model_prices_and_context_window.json"
 # A name with a provider prefix ("vertex_ai/gemini-2.5-pro") is also listed under its bare name, which is what a
-# caller sends to Gantry, unless the bare name has an entry of its own. When several prefixes share a bare name,
+# caller sends to Enterplace, unless the bare name has an entry of its own. When several prefixes share a bare name,
 # the first provider here wins: the vendor's own price over a reseller's.
 FIRST = ["openai", "anthropic", "gemini", "vertex_ai", "mistral", "groq", "deepseek", "xai", "bedrock"]
 LONG = re.compile(r"^input_cost_per_token_above_(\d+)k_tokens$")

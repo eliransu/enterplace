@@ -1,16 +1,16 @@
 ---
 title: LangChain
-description: Point LangChain's ChatOpenAI and ChatAnthropic, in Python and JavaScript, at Gantry, and read its refusals as the SDK errors they are.
+description: Point LangChain's ChatOpenAI and ChatAnthropic, in Python and JavaScript, at Enterplace, and read its refusals as the SDK errors they are.
 sidebar:
   order: 9
 ---
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-LangChain's chat models for OpenAI and Anthropic are built on the official SDKs, so they reach Gantry by base URL, with a Gantry key in place of a provider key. Plain calls, streaming and tool calling work as they do against the provider.
+LangChain's chat models for OpenAI and Anthropic are built on the official SDKs, so they reach Enterplace by base URL, with a Enterplace key in place of a provider key. Plain calls, streaming and tool calling work as they do against the provider.
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Send a request
@@ -26,10 +26,10 @@ pip install langchain-openai langchain-anthropic
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
 
-gpt = ChatOpenAI(model="gpt-4o-mini", base_url="http://127.0.0.1:8080/v1", api_key="gantry_...")
+gpt = ChatOpenAI(model="gpt-4o-mini", base_url="http://127.0.0.1:8080/v1", api_key="enterplace_...")
 print(gpt.invoke("Say hello.").content)
 
-claude = ChatAnthropic(model="claude-sonnet-4-6", base_url="http://127.0.0.1:8080", api_key="gantry_...", max_tokens=256)
+claude = ChatAnthropic(model="claude-sonnet-4-6", base_url="http://127.0.0.1:8080", api_key="enterplace_...", max_tokens=256)
 for chunk in claude.stream("Say hello."):
     print(chunk.content, end="")
 ```
@@ -45,10 +45,10 @@ npm install @langchain/openai @langchain/anthropic
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
 
-const gpt = new ChatOpenAI({ model: "gpt-4o-mini", apiKey: "gantry_...", configuration: { baseURL: "http://127.0.0.1:8080/v1" } });
+const gpt = new ChatOpenAI({ model: "gpt-4o-mini", apiKey: "enterplace_...", configuration: { baseURL: "http://127.0.0.1:8080/v1" } });
 console.log((await gpt.invoke("Say hello.")).content);
 
-const claude = new ChatAnthropic({ model: "claude-sonnet-4-6", apiKey: "gantry_...", anthropicApiUrl: "http://127.0.0.1:8080", maxTokens: 256 });
+const claude = new ChatAnthropic({ model: "claude-sonnet-4-6", apiKey: "enterplace_...", anthropicApiUrl: "http://127.0.0.1:8080", maxTokens: 256 });
 for await (const chunk of await claude.stream("Say hello.")) process.stdout.write(chunk.content);
 ```
 
@@ -59,7 +59,7 @@ for await (const chunk of await claude.stream("Say hello.")) process.stdout.writ
 
 ## Tools and refusals
 
-`bind_tools` (`bindTools` in JavaScript) declares function tools as the SDK does, so a rule's [tool permissions](/governance/tool-permissions/) apply. A refusal comes back as the SDK's own error, with Gantry's code:
+`bind_tools` (`bindTools` in JavaScript) declares function tools as the SDK does, so a rule's [tool permissions](/governance/tool-permissions/) apply. A refusal comes back as the SDK's own error, with Enterplace's code:
 
 ```python
 import openai
@@ -72,11 +72,11 @@ except openai.PermissionDeniedError as e:
 
 ## Tested
 
-`scripts/langchain_check.py` starts a mock provider and `gantry serve`, then drives LangChain through it: a plain call, a streamed call and a tool call with `ChatOpenAI` and `ChatAnthropic`, a model the rule does not allow (`model_not_allowed`) and a function tool it does not allow (`tool_not_allowed`). With `--js` it runs the same checks with LangChain.js.
+`scripts/langchain_check.py` starts a mock provider and `enterplace serve`, then drives LangChain through it: a plain call, a streamed call and a tool call with `ChatOpenAI` and `ChatAnthropic`, a model the rule does not allow (`model_not_allowed`) and a function tool it does not allow (`tool_not_allowed`). With `--js` it runs the same checks with LangChain.js.
 
 ```bash
-cargo build -p gantry-cli
-uv run --with langchain-openai --with langchain-anthropic python3 scripts/langchain_check.py target/debug/gantry --js
+cargo build -p enterplace-cli
+uv run --with langchain-openai --with langchain-anthropic python3 scripts/langchain_check.py target/debug/enterplace --js
 ```
 
 Last run on 2026-11-14 with langchain-openai 1.8.0, langchain-anthropic 1.7.10 and langchain-core 1.8.0 (Python), and @langchain/openai 1.8.4, @langchain/anthropic 1.6.5 and @langchain/core 1.4.1 (Node 25). It needs network access to install them, so it is not part of `scripts/ci.sh`.

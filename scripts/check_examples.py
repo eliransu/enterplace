@@ -1,6 +1,6 @@
-"""Runs every policy example a reader can copy through `gantry check`, so no example can drift from the code.
+"""Runs every policy example a reader can copy through `enterplace check`, so no example can drift from the code.
 
-Usage: python3 scripts/check_examples.py [path/to/gantry]
+Usage: python3 scripts/check_examples.py [path/to/enterplace]
 Checked: every fenced block in README.md and the docs site pages (docs/src/content/docs) with a top-level `version:` line (a whole policy file).
 A fragment (a block whose top-level keys are all policy sections, such as `guardrails:` or `providers:` alone) is
 pasted into a minimal policy, replacing that section, and checked the same way. A block written to show a mistake on
@@ -10,7 +10,7 @@ Standard library only.
 import pathlib, re, subprocess, sys, tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-GANTRY = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "target" / "release" / "gantry"
+ENTERPLACE = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "target" / "release" / "enterplace"
 
 
 # The minimal policy a fragment is pasted into. A section the fragment has replaces the one here.
@@ -64,17 +64,17 @@ def blocks(path: pathlib.Path):
 
 def check(text: str, where: str, failures: list) -> str:
     with tempfile.TemporaryDirectory() as folder:
-        policy = pathlib.Path(folder) / "gantry.policy.yaml"
+        policy = pathlib.Path(folder) / "enterplace.policy.yaml"
         policy.write_text(text)
-        run = subprocess.run([str(GANTRY), "check", str(policy)], capture_output=True, text=True)
+        run = subprocess.run([str(ENTERPLACE), "check", str(policy)], capture_output=True, text=True)
     if run.returncode != 0:
-        failures.append(f"{where}: gantry check exits {run.returncode}:\n{run.stderr.replace(str(policy), 'gantry.policy.yaml')}")
-    return run.stdout.replace(str(policy), "gantry.policy.yaml").strip()
+        failures.append(f"{where}: enterplace check exits {run.returncode}:\n{run.stderr.replace(str(policy), 'enterplace.policy.yaml')}")
+    return run.stdout.replace(str(policy), "enterplace.policy.yaml").strip()
 
 
 def main() -> int:
-    if not GANTRY.exists():
-        print(f"{GANTRY} does not exist. Run `cargo build --release` first, or pass the binary.", file=sys.stderr)
+    if not ENTERPLACE.exists():
+        print(f"{ENTERPLACE} does not exist. Run `cargo build --release` first, or pass the binary.", file=sys.stderr)
         return 2
     failures, count = [], 0
     for path in [ROOT / "README.md", *sorted((ROOT / "docs" / "src" / "content" / "docs").rglob("*.md*"))]:

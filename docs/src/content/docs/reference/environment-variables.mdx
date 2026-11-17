@@ -1,26 +1,26 @@
 ---
 title: Environment variables
-description: Every environment variable Gantry reads, from provider keys and AWS credentials to the variables of gantry serve --unchecked, gantry login and gantry kill.
+description: Every environment variable Enterplace reads, from provider keys and AWS credentials to the variables of enterplace serve --unchecked, enterplace login and enterplace kill.
 sidebar:
   order: 6
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Gantry keeps secrets out of files: every provider key, guardrail credential and client secret comes from an environment variable that the policy names. A handful of fixed variables configure the CLI.
+Enterplace keeps secrets out of files: every provider key, guardrail credential and client secret comes from an environment variable that the policy names. A handful of fixed variables configure the CLI.
 
 ## Variables the policy names
 
-The policy file holds the name of a variable, never its value. `gantry serve` reads each one at start and refuses to start while one is unset or empty. A value is trimmed of surrounding spaces.
+The policy file holds the name of a variable, never its value. `enterplace serve` reads each one at start and refuses to start while one is unset or empty. A value is trimmed of surrounding spaces.
 
 | Policy field | Holds | Read by |
 |---|---|---|
-| `providers[].key_env` | The provider's API key. For `vertex` and `vertex_anthropic`, an OAuth access token | `gantry serve`, at start |
-| `guardrails[].key_env` | A guardrail vendor's API key | `gantry serve`, at start and on each reload |
-| `guardrails[].headers_env` | A map of header name to variable: each header sent to a webhook guardrail, with its value from the variable | `gantry serve`, at start and on each reload |
-| `console.sso.client_secret_env` | The OIDC client secret | `gantry serve`, at each single sign-on |
+| `providers[].key_env` | The provider's API key. For `vertex` and `vertex_anthropic`, an OAuth access token | `enterplace serve`, at start |
+| `guardrails[].key_env` | A guardrail vendor's API key | `enterplace serve`, at start and on each reload |
+| `guardrails[].headers_env` | A map of header name to variable: each header sent to a webhook guardrail, with its value from the variable | `enterplace serve`, at start and on each reload |
+| `console.sso.client_secret_env` | The OIDC client secret | `enterplace serve`, at each single sign-on |
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -35,11 +35,11 @@ rules:
 ```
 
 ```bash
-OPENAI_PROVIDER_KEY=sk-... gantry serve gantry.policy.yaml
+OPENAI_PROVIDER_KEY=sk-... enterplace serve enterplace.policy.yaml
 ```
 
 <Aside type="caution">
-Avoid `ANTHROPIC_API_KEY` as a provider's `key_env`. Claude Code reads that variable for its own key, which is a Gantry key.
+Avoid `ANTHROPIC_API_KEY` as a provider's `key_env`. Claude Code reads that variable for its own key, which is a Enterplace key.
 </Aside>
 
 Rules for `key_env`:
@@ -49,26 +49,26 @@ Rules for `key_env`:
 - Every other provider needs one.
 - The value is read once. Rotating a provider key means a restart.
 
-If `client_secret_env` is not set, Gantry starts with a warning, and every single sign-on fails until it is set and Gantry restarted. Signing in to the console with an admin key still works.
+If `client_secret_env` is not set, Enterplace starts with a warning, and every single sign-on fails until it is set and Enterplace restarted. Signing in to the console with an admin key still works.
 
 ## Provider credentials
 
 | Variable | Default | Holds |
 |---|---|---|
-| `GANTRY_MASTER_KEY` | none | 64 hex characters (`openssl rand -hex 32`): the key provider credentials in the store are sealed with. The same on every gateway on one store. Without it (or the file), credentials are off |
-| `GANTRY_MASTER_KEY_FILE` | none | Instead of `GANTRY_MASTER_KEY`: a file that holds it. Setting both stops the start |
-| `GANTRY_METRICS_BUDGET_SCOPES` | `global,org,team,model` | The scope kinds of `limits:` whose budgets `/metrics` shows as `gantry_budget_remaining_usd`, comma-separated, or `none`. Add `person`, `key`, `customer` or `tag` only when their number is small: each is one series per entry. See [Observability](/operations/observability/#label-cardinality) |
-| `GANTRY_METRICS_DIMENSIONS` | none | Names of `x-gantry-dim-<name>` request headers to count in `gantry_requests_by_dimension_total`, comma-separated, up to 8. See [Labels from request headers](/operations/observability/#labels-from-request-headers) |
-| `GANTRY_METRICS_PUSH_URL` | none | A Prometheus Pushgateway address, job included, that Gantry pushes its metrics to. See [Push to a Pushgateway](/operations/observability/#push-to-a-pushgateway) |
-| `GANTRY_METRICS_PUSH_SECONDS` | `15` | How often it pushes |
+| `ENTERPLACE_MASTER_KEY` | none | 64 hex characters (`openssl rand -hex 32`): the key provider credentials in the store are sealed with. The same on every gateway on one store. Without it (or the file), credentials are off |
+| `ENTERPLACE_MASTER_KEY_FILE` | none | Instead of `ENTERPLACE_MASTER_KEY`: a file that holds it. Setting both stops the start |
+| `ENTERPLACE_METRICS_BUDGET_SCOPES` | `global,org,team,model` | The scope kinds of `limits:` whose budgets `/metrics` shows as `enterplace_budget_remaining_usd`, comma-separated, or `none`. Add `person`, `key`, `customer` or `tag` only when their number is small: each is one series per entry. See [Observability](/operations/observability/#label-cardinality) |
+| `ENTERPLACE_METRICS_DIMENSIONS` | none | Names of `x-enterplace-dim-<name>` request headers to count in `enterplace_requests_by_dimension_total`, comma-separated, up to 8. See [Labels from request headers](/operations/observability/#labels-from-request-headers) |
+| `ENTERPLACE_METRICS_PUSH_URL` | none | A Prometheus Pushgateway address, job included, that Enterplace pushes its metrics to. See [Push to a Pushgateway](/operations/observability/#push-to-a-pushgateway) |
+| `ENTERPLACE_METRICS_PUSH_SECONDS` | `15` | How often it pushes |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/json` | How traces are exported: `http/json`, `http/protobuf` or `grpc`. `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` sets it for traces alone. See [Traces](/operations/observability/#traces) |
-| `GANTRY_TRACE_PROPAGATION` | `caller,provider` | Which sides of a trace Gantry connects: `caller` joins the trace a caller's `traceparent` names, `provider` sends a `traceparent` to the provider, `none` neither |
+| `ENTERPLACE_TRACE_PROPAGATION` | `caller,provider` | Which sides of a trace Enterplace connects: `caller` joins the trace a caller's `traceparent` names, `provider` sends a `traceparent` to the provider, `none` neither |
 
-Read once, at start, by `gantry serve`, and by `gantry check` to check credential names. See [Provider credentials](/governance/provider-credentials/).
+Read once, at start, by `enterplace serve`, and by `enterplace check` to check credential names. See [Provider credentials](/governance/provider-credentials/).
 
 ## AWS credentials
 
-Read for every `bedrock` provider and every guardrail of the `bedrock` vendor. Gantry signs requests with AWS Signature Version 4 itself; it never calls the AWS CLI.
+Read for every `bedrock` provider and every guardrail of the `bedrock` vendor. Enterplace signs requests with AWS Signature Version 4 itself; it never calls the AWS CLI.
 
 | Variable | Required | Holds |
 |---|---|---|
@@ -88,7 +88,7 @@ A variable the policy names may hold `vault://`, `aws-sm://`, `gcp-sm://` or `az
 
 | Variable | Default | Holds |
 |---|---|---|
-| `GANTRY_SECRETS_REFRESH_SECONDS` | `300` | How often references are read again, at least 10 |
+| `ENTERPLACE_SECRETS_REFRESH_SECONDS` | `300` | How often references are read again, at least 10 |
 | `VAULT_ADDR` | none | The Vault address |
 | `VAULT_TOKEN` | none | A Vault token. Else `~/.vault-token`, else Kubernetes auth |
 | `VAULT_K8S_ROLE`, `VAULT_K8S_MOUNT`, `VAULT_K8S_TOKEN_PATH` | none, `kubernetes`, the pod's token | Vault's Kubernetes auth method |
@@ -100,37 +100,37 @@ A variable the policy names may hold `vault://`, `aws-sm://`, `gcp-sm://` or `az
 
 AWS and Google credentials are found as in the sections above.
 
-## gantry serve --unchecked
+## enterplace serve --unchecked
 
 | Variable | Default | Holds |
 |---|---|---|
-| `GANTRY_ADDR` | `127.0.0.1:8080` | The address to listen on, an IP address and port. Must be loopback. A value that is not text stops the start |
-| `GANTRY_UPSTREAM` | none | The server to forward to. Without it, requests are refused with `no_upstream` |
+| `ENTERPLACE_ADDR` | `127.0.0.1:8080` | The address to listen on, an IP address and port. Must be loopback. A value that is not text stops the start |
+| `ENTERPLACE_UPSTREAM` | none | The server to forward to. Without it, requests are refused with `no_upstream` |
 
-`gantry serve <policy>` does not read these. Its address comes from `--listen`.
+`enterplace serve <policy>` does not read these. Its address comes from `--listen`.
 
 ## CLI
 
 | Variable | Used by | Holds |
 |---|---|---|
-| `GANTRY_ADMIN_KEY` | `gantry kill`, `gantry unkill` | An admin key. Without it, the key saved by `gantry login` is used |
-| `GANTRY_URL` | `gantry kill`, `gantry unkill` | The gateway, when `--url` is not given. Without either, the URL saved by `gantry login` is used |
-| `XDG_CONFIG_HOME` | `gantry login`, `gantry logout`, `gantry kill`, `gantry unkill` | The credentials folder: `$XDG_CONFIG_HOME/gantry/` |
-| `HOME` | the same | When `XDG_CONFIG_HOME` is unset or empty, the credentials folder is `$HOME/.config/gantry/` |
+| `ENTERPLACE_ADMIN_KEY` | `enterplace kill`, `enterplace unkill` | An admin key. Without it, the key saved by `enterplace login` is used |
+| `ENTERPLACE_URL` | `enterplace kill`, `enterplace unkill` | The gateway, when `--url` is not given. Without either, the URL saved by `enterplace login` is used |
+| `XDG_CONFIG_HOME` | `enterplace login`, `enterplace logout`, `enterplace kill`, `enterplace unkill` | The credentials folder: `$XDG_CONFIG_HOME/enterplace/` |
+| `HOME` | the same | When `XDG_CONFIG_HOME` is unset or empty, the credentials folder is `$HOME/.config/enterplace/` |
 
-`gantry login` writes two files there, readable by you only: `credentials` (the key, gateway URL, name, team and expiry) and `env` (the client variables below).
+`enterplace login` writes two files there, readable by you only: `credentials` (the key, gateway URL, name, team and expiry) and `env` (the client variables below).
 
-## Variables Gantry prints for clients
+## Variables Enterplace prints for clients
 
-`gantry key new` prints these lines with a new key, and `gantry login` writes them to `~/.config/gantry/env`. Gantry does not read them; your tools do.
+`enterplace key new` prints these lines with a new key, and `enterplace login` writes them to `~/.config/enterplace/env`. Enterplace does not read them; your tools do.
 
 | Variable | Value | Read by |
 |---|---|---|
 | `ANTHROPIC_BASE_URL` | The gateway URL | Claude Code, Anthropic SDKs |
-| `ANTHROPIC_API_KEY` | The Gantry key | Claude Code, Anthropic SDKs |
+| `ANTHROPIC_API_KEY` | The Enterplace key | Claude Code, Anthropic SDKs |
 | `OPENAI_BASE_URL` | The gateway URL with `/v1` | OpenAI SDKs |
-| `OPENAI_API_KEY` | The Gantry key | OpenAI SDKs |
-| `GANTRY_KEY` | The Gantry key | Codex, through its `env_key` setting. Written by `gantry login` only |
+| `OPENAI_API_KEY` | The Enterplace key | OpenAI SDKs |
+| `ENTERPLACE_KEY` | The Enterplace key | Codex, through its `env_key` setting. Written by `enterplace login` only |
 
 See [Connect Claude Code](/integrations/claude-code/).
 
@@ -138,4 +138,4 @@ See [Connect Claude Code](/integrations/claude-code/).
 
 | Variable | Effect |
 |---|---|
-| `SOURCE_DATE_EPOCH` | Sets the build day that `gantry version` prints, for reproducible builds |
+| `SOURCE_DATE_EPOCH` | Sets the build day that `enterplace version` prints, for reproducible builds |

@@ -7,11 +7,11 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Without a probe, a deployment is found down by the first request sent to it. With `probe:`, Gantry checks it on a schedule and cools it down when it fails, so callers go to the others from the start.
+Without a probe, a deployment is found down by the first request sent to it. With `probe:`, Enterplace checks it on a schedule and cools it down when it fails, so callers go to the others from the start.
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -48,14 +48,14 @@ rules:
 | `every_seconds` | integer | required | 5 to 3600. How often the deployment is checked. |
 | `with` | string | `models` | `models` sends `GET /v1/models` (no tokens, no charge). `chat` sends a one-token request to the deployment's model, which the provider bills. |
 
-`with: models` works on `openai` and `anthropic` providers. Other kinds need `with: chat`; `gantry check` says so.
+`with: models` works on `openai` and `anthropic` providers. Other kinds need `with: chat`; `enterplace check` says so.
 
 ## Behavior
 
 - A probe that gets no answer, a 429 or a 5xx marks the deployment down: it cools down for its alias's `cooldown_seconds`, doubling on each further failure, as a failed request would make it.
 - A probe that gets any other answer marks it up and closes its circuit, so a deployment that came back is used again without waiting for its cooldown.
 - A probe has the deployment's [time limits](/routing/timeouts/) and its provider's key (the next key of a [key pool](/routing/key-pools/)).
-- With a [store](/operations/store/#cooldowns), a cooldown is shared: a deployment one replica finds down is passed over by every replica within about a second. One replica at a time probes each deployment: it holds a lease in the store (table `gantry_probe_leases`) for the probe's interval plus 5 seconds, and another replica takes the lease over once the holder stops probing.
+- With a [store](/operations/store/#cooldowns), a cooldown is shared: a deployment one replica finds down is passed over by every replica within about a second. One replica at a time probes each deployment: it holds a lease in the store (table `enterplace_probe_leases`) for the probe's interval plus 5 seconds, and another replica takes the lease over once the holder stops probing.
 
 ## Where to see it
 
@@ -65,9 +65,9 @@ rules:
 "deployments": {"ready": true, "probed": {"local/llama-4": {"up": false, "checked": "2026-11-14T09:30:02.114Z", "outcome": "upstream_unreachable"}}}
 ```
 
-`GET /metrics` has `gantry_deployment_up{deployment="local/llama-4"}`, 1 or 0.
+`GET /metrics` has `enterplace_deployment_up{deployment="local/llama-4"}`, 1 or 0.
 
-Each probe is in the audit log as the workload `gantry-probe`: a decision record with `"workload": "gantry-probe"`, `person` and `team` `gantry-probe`, and `probe: { outcome, up }`. A `with: chat` probe also writes a usage record, and its cost is charged to the `gantry-probe` person and team scopes, so it shows on the spend page and a budget can be set for it.
+Each probe is in the audit log as the workload `enterplace-probe`: a decision record with `"workload": "enterplace-probe"`, `person` and `team` `enterplace-probe`, and `probe: { outcome, up }`. A `with: chat` probe also writes a usage record, and its cost is charged to the `enterplace-probe` person and team scopes, so it shows on the spend page and a budget can be set for it.
 
 ## Related
 

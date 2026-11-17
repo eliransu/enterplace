@@ -1,22 +1,22 @@
 variable "name" {
   description = "Prefix for every resource this module creates."
   type        = string
-  default     = "gantry"
+  default     = "enterplace"
 }
 
 variable "image" {
-  description = "The gantry image, such as ghcr.io/eliransu/gantry:0.1.0. Pin a version: a moving tag makes rollbacks guesswork."
+  description = "The enterplace image, such as ghcr.io/eliransu/enterplace:0.1.0. Pin a version: a moving tag makes rollbacks guesswork."
   type        = string
 }
 
 variable "image_pull_secret_arn" {
-  description = "Secrets Manager ARN of registry credentials ({\"username\":...,\"password\":...}) for a private registry, such as your own mirror of the image. Null for ghcr.io/eliransu/gantry (public) or ECR."
+  description = "Secrets Manager ARN of registry credentials ({\"username\":...,\"password\":...}) for a private registry, such as your own mirror of the image. Null for ghcr.io/eliransu/enterplace (public) or ECR."
   type        = string
   default     = null
 }
 
 variable "policy" {
-  description = "The Gantry policy, as YAML text (for example file(\"gantry.policy.yaml\")). It must put the audit log under /var/lib/gantry and have `store: { postgres_url_env: DATABASE_URL }`. Stored in SSM Parameter Store; a change rolls the tasks."
+  description = "The Enterplace policy, as YAML text (for example file(\"enterplace.policy.yaml\")). It must put the audit log under /var/lib/enterplace and have `store: { postgres_url_env: DATABASE_URL }`. Stored in SSM Parameter Store; a change rolls the tasks."
   type        = string
 }
 
@@ -98,25 +98,25 @@ variable "bedrock_resource_arns" {
 }
 
 variable "master_key_secret_arn" {
-  description = "Optional. Secrets Manager ARN of the master key (64 hex characters) that seals provider credentials kept in the store. Becomes GANTRY_MASTER_KEY. Null makes one with a random value in the secret <name>/master-key, kept across applies (its value is in Terraform state). Keep a copy outside AWS: a lost master key cannot be recovered."
+  description = "Optional. Secrets Manager ARN of the master key (64 hex characters) that seals provider credentials kept in the store. Becomes ENTERPLACE_MASTER_KEY. Null makes one with a random value in the secret <name>/master-key, kept across applies (its value is in Terraform state). Keep a copy outside AWS: a lost master key cannot be recovered."
   type        = string
   default     = null
 }
 
 variable "export_key_secret_arn" {
-  description = "Optional. Secrets Manager ARN of the key (64 hex characters) that encrypts SIEM export destinations' secrets. Becomes GANTRY_EXPORT_KEY. Null makes one with a random value in the secret <name>/export-key, kept across applies (its value is in Terraform state)."
+  description = "Optional. Secrets Manager ARN of the key (64 hex characters) that encrypts SIEM export destinations' secrets. Becomes ENTERPLACE_EXPORT_KEY. Null makes one with a random value in the secret <name>/export-key, kept across applies (its value is in Terraform state)."
   type        = string
   default     = null
 }
 
 variable "license_secret_arn" {
-  description = "Secrets Manager ARN of the Gantry license key. Becomes GANTRY_LICENSE. Null runs without the enterprise features."
+  description = "Secrets Manager ARN of the Enterplace license key. Becomes ENTERPLACE_LICENSE. Null runs without the enterprise features."
   type        = string
   default     = null
 }
 
 variable "database_url_secret_arn" {
-  description = "Secrets Manager ARN of a DATABASE_URL for an existing Postgres. Null creates an RDS Postgres 16 and an RDS Proxy in front of it. An existing database must present a certificate that chains to a public root (Gantry checks against the Mozilla roots), and allow the output task_security_group_id."
+  description = "Secrets Manager ARN of a DATABASE_URL for an existing Postgres. Null creates an RDS Postgres 16 and an RDS Proxy in front of it. An existing database must present a certificate that chains to a public root (Enterplace checks against the Mozilla roots), and allow the output task_security_group_id."
   type        = string
   default     = null
 }
@@ -146,7 +146,7 @@ variable "deletion_protection" {
 }
 
 variable "metrics_port" {
-  description = "Serve Prometheus metrics on this port (gantry serve --metrics). Null for none. Reachable only from metrics_cidrs, never through the load balancer."
+  description = "Serve Prometheus metrics on this port (enterplace serve --metrics). Null for none. Reachable only from metrics_cidrs, never through the load balancer."
   type        = number
   default     = null
 }

@@ -7,27 +7,27 @@ sidebar:
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gantry serves an admin console at `/console` on the gateway's own address, under `gantry start` and `gantry serve` alike. It reads the policy, keys and audit files on every page, and every sign-in, issue and revoke it performs is a record in the same audit chain.
+Enterplace serves an admin console at `/console` on the gateway's own address, under `enterplace start` and `enterplace serve` alike. It reads the policy, keys and audit files on every page, and every sign-in, issue and revoke it performs is a record in the same audit chain.
 
 ## Open it
 
-`gantry start` prints a link that signs you in once, from the same machine, within 10 minutes, and opens it in your browser. No key to paste: see the [Quickstart](/getting-started/quickstart/). Later, go to `http://127.0.0.1:8080/console` (or your gateway's address). The start line names it:
+`enterplace start` prints a link that signs you in once, from the same machine, within 10 minutes, and opens it in your browser. No key to paste: see the [Quickstart](/getting-started/quickstart/). Later, go to `http://127.0.0.1:8080/console` (or your gateway's address). The start line names it:
 
 ```text
 Console: http://127.0.0.1:8080/console (sign in with an admin key)
 ```
 
-The console exists only when Gantry serves from a policy file. It is not served with `--unchecked`.
+The console exists only when Enterplace serves from a policy file. It is not served with `--unchecked`.
 
 ## Sign in
 
 <Tabs>
 <TabItem label="Admin key">
 
-Paste a Gantry key whose entry in the keys file says `admin: true`. `gantry start` printed one (`export GANTRY_KEY=...`). Without it, make one on the command line:
+Paste a Enterplace key whose entry in the keys file says `admin: true`. `enterplace start` printed one (`export ENTERPLACE_KEY=...`). Without it, make one on the command line:
 
 ```bash
-gantry key new noa.bar --team platform --admin
+enterplace key new noa.bar --team platform --admin
 ```
 
 A key that is not an admin's is refused and recorded with code `not_admin`. The page gives the same answer for an unknown key, so it does not tell which keys exist.
@@ -35,14 +35,14 @@ A key that is not an admin's is refused and recorded with code `not_admin`. The 
 </TabItem>
 <TabItem label="Single sign-on">
 
-With `console.sso` in the policy, the sign-in page shows "Sign in with single sign-on". Gantry runs the OpenID Connect authorization code flow with PKCE against your identity provider and takes the person's role from a claim in the ID token. Setup is in [Single sign-on](/governance/single-sign-on/).
+With `console.sso` in the policy, the sign-in page shows "Sign in with single sign-on". Enterplace runs the OpenID Connect authorization code flow with PKCE against your identity provider and takes the person's role from a claim in the ID token. Setup is in [Single sign-on](/governance/single-sign-on/).
 
-If `client_secret_env` names a variable that is not set, Gantry starts with a warning and every single sign-on fails. Signing in with an admin key still works.
+If `client_secret_env` names a variable that is not set, Enterplace starts with a warning and every single sign-on fails. Signing in with an admin key still works.
 
 </TabItem>
 </Tabs>
 
-The browser gets a random session ID in the `gantry_console` cookie, never the key or a token. The cookie is `HttpOnly` and `SameSite=Strict`, and `Secure` when the browser reached Gantry over TLS, directly or through a proxy that sends `X-Forwarded-Proto: https`. A session lasts 8 hours. Forms are accepted only from console pages on the same address.
+The browser gets a random session ID in the `enterplace_console` cookie, never the key or a token. The cookie is `HttpOnly` and `SameSite=Strict`, and `Secure` when the browser reached Enterplace over TLS, directly or through a proxy that sends `X-Forwarded-Proto: https`. A session lasts 8 hours. Forms are accepted only from console pages on the same address.
 
 ## Roles
 
@@ -57,27 +57,27 @@ There is no default role: a person whose claim holds neither value is refused wi
 
 | Page | Path | Shows |
 |---|---|---|
-| Start here | `/console/start` | The console's home. On an empty install it asks what you want to start with, then shows a short checklist: connect a model (or the free demo model), send a first request, and the exact settings for each coding tool and SDK. Each step turns done by itself when Gantry sees it happen |
+| Start here | `/console/start` | The console's home. On an empty install it asks what you want to start with, then shows a short checklist: connect a model (or the free demo model), send a first request, and the exact settings for each coding tool and SDK. Each step turns done by itself when Enterplace sees it happen |
 | Requests | `/console/requests` | One row per request with its person, model, tokens and cost, filtered by coding agent, model or key |
 | Analytics | `/console/analytics` | Requests, tokens and cost ranked by coding agent, model, key, person or team |
 | Provider credentials | `/console/credentials` | The provider keys pasted in the console, sealed with the master key: add, rotate and remove them. Never shown after saving |
-| Audit log | `/console/audit` | Every record, newest first, filtered by All, Blocked, Refused, Masked, Warned or Changes, and searchable by person, team, key or decision ID. Each record opens on a sheet that explains the decision: the rule, the limit or kill switch that refused it, guardrail findings, and the usage and cost of its answer. A banner shows every kill switch that is on. **Verify** runs the same check as `gantry audit verify` |
+| Audit log | `/console/audit` | Every record, newest first, filtered by All, Blocked, Refused, Masked, Warned or Changes, and searchable by person, team, key or decision ID. Each record opens on a sheet that explains the decision: the rule, the limit or kill switch that refused it, guardrail findings, and the usage and cost of its answer. A banner shows every kill switch that is on. **Verify** runs the same check as `enterplace audit verify` |
 | People and workloads | `/console/people` | Every key by name, team and hash prefix, with admin flag, expiry, its own budget and what it spent this month and today. Issue, edit and revoke keys here |
 | Teams | `/console/teams` | Each team, its people and workloads with their role (Admin or Member), the rule that decides for it and its budget |
 | Models | `/console/models` | Each model by provider, its price per million tokens and its aliases. Add a model and change a price when the policy is kept in the store |
-| Policy | `/console/policy` | The policy in force (the file, or the store's live version), with each problem `gantry check` finds placed under its line. Edit, versions and export when it is kept in the store: see [Editing the policy](/operations/console-editing/). With a store, a Gateways panel lists every replica with its version, schema and last heartbeat, healthy or silent (for roles with `see_records`) |
+| Policy | `/console/policy` | The policy in force (the file, or the store's live version), with each problem `enterplace check` finds placed under its line. Edit, versions and export when it is kept in the store: see [Editing the policy](/operations/console-editing/). With a store, a Gateways panel lists every replica with its version, schema and last heartbeat, healthy or silent (for roles with `see_records`) |
 | Spend | `/console/spend` | Spend this month (UTC) from the usage records, by model and person, against every budget in the policy |
 
 `/console` redirects to Start here, or to the sign-in page without a session.
 
 ## Issue and revoke keys
 
-A key issued in the console is appended to the keys file exactly as `gantry key new` appends it, and works as soon as the page answers. The key is shown once.
+A key issued in the console is appended to the keys file exactly as `enterplace key new` appends it, and works as soon as the page answers. The key is shown once.
 
 Revoking removes the entry from the keys file and stops the key at once. The console refuses to revoke the only admin key: mark another key `admin: true` first, so someone can still sign in.
 
 <Aside type="caution">
-The console and the admin API write the keys file. Mount it writable, and keep it readable by Gantry's user only.
+The console and the admin API write the keys file. Mount it writable, and keep it readable by Enterplace's user only.
 </Aside>
 
 ## What is recorded
@@ -89,7 +89,7 @@ Each action is an `admin` record with `"via": "console"`, written before the act
 | `console_sign_in` | A sign-in, allowed or refused. For single sign-on, `target.via` is `sso` and `target.role` is `admin` or `read_only`; a refusal carries an `sso_*` code |
 | `console_sign_out` | A sign-out |
 | `issue_key`, `revoke_key` | A key issued or revoked, with its name, team, hash prefix and admin flag in `target` |
-| `self_issue_key` | A key issued to a person by `gantry login` |
+| `self_issue_key` | A key issued to a person by `enterplace login` |
 | `console_sso_starts` | 100 or more single sign-on starts in one minute, written at most once a minute |
 | `console_sso_refusals` | Refused sign-ins from one client address past the first 100 in a minute, summed in one record with the count per code |
 
@@ -97,11 +97,11 @@ Record fields are in [Audit records](/reference/audit-records/#admin). The sign-
 
 ## Sessions
 
-Without a store, console sessions and single sign-ons in progress are held in the Gantry process, and a restart signs everyone out. With a Postgres [store](/operations/store/), sessions are shared by every replica. Removing `console.sso`, or a person's email or domain from it, ends their session at their next page, because the policy is read on every page. A change of role at the identity provider applies at the next sign-in.
+Without a store, console sessions and single sign-ons in progress are held in the Enterplace process, and a restart signs everyone out. With a Postgres [store](/operations/store/), sessions are shared by every replica. Removing `console.sso`, or a person's email or domain from it, ends their session at their next page, because the policy is read on every page. A change of role at the identity provider applies at the next sign-in.
 
 ## Next
 
 <CardGrid>
-	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="OIDC sign-in for the console and gantry login." />
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="OIDC sign-in for the console and enterplace login." />
 	<LinkCard title="Admin API" href="/reference/admin-api/" description="Issue and revoke keys and kill switches over HTTP." />
 </CardGrid>

@@ -1,13 +1,13 @@
 ---
 title: Running in production
-description: Change policy and keys without a restart, back up Gantry's files, recover from a full disk, measure overhead with the bench, and upgrade.
+description: Change policy and keys without a restart, back up Enterplace's files, recover from a full disk, measure overhead with the bench, and upgrade.
 sidebar:
   order: 5
 ---
 
 import { Aside, Steps, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gantry's state is four files. This page covers changing them while Gantry runs, keeping them safe, and what to do when the disk fills up.
+Enterplace's state is four files. This page covers changing them while Enterplace runs, keeping them safe, and what to do when the disk fills up.
 
 ## Health check
 
@@ -17,8 +17,8 @@ GET /healthz
 
 | Status | Body `status` | Meaning |
 |---|---|---|
-| 200 | `ok` | Gantry can do its job |
-| 503 | `the audit log cannot be written` | A write failed, or the log was deleted, moved, replaced or cut short (on Windows the log cannot be deleted, moved or replaced while Gantry holds it). Every request is refused until a restart |
+| 200 | `ok` | Enterplace can do its job |
+| 503 | `the audit log cannot be written` | A write failed, or the log was deleted, moved, replaced or cut short (on Windows the log cannot be deleted, moved or replaced while Enterplace holds it). Every request is refused until a restart |
 
 The body also names the versions in use and any rejected version on disk:
 
@@ -49,21 +49,21 @@ GET /readyz
 | `store` | The policy has `store:` and the database cannot be reached | Requests under a budget or a rate limit would be refused with `store_unavailable` |
 | `policy` | The policy has no keys and no `jwt:` issuer | Every request would be refused |
 | `draining` | A stop signal came | The gateway is finishing what it has and takes nothing new |
-| an embedder's field | A binary that embeds Gantry reports `{"ready": false}` for something it checks, such as a license | It would refuse requests |
+| an embedder's field | A binary that embeds Enterplace reports `{"ready": false}` for something it checks, such as a license | It would refuse requests |
 
 200 means every check is ready; 503 lists the one that is not, with the reason and the fix. Without a policy (`serve --unchecked`) or an audit log (tests), the check says so and stays ready. `/readyz` needs no key and is not recorded.
 
 ### Drain on SIGTERM
 
-On `SIGTERM` or Ctrl-C, Gantry stops accepting connections, answers `/readyz` with 503 (`draining`) on any connection still open, and gives requests in flight 30 seconds to finish, streams included. Every record handed to the audit writer is written before the process ends.
+On `SIGTERM` or Ctrl-C, Enterplace stops accepting connections, answers `/readyz` with 503 (`draining`) on any connection still open, and gives requests in flight 30 seconds to finish, streams included. Every record handed to the audit writer is written before the process ends.
 
 In Kubernetes, point readiness at `/readyz` and liveness at `/healthz`, and give the pod longer than the drain to end:
 
-```yaml title="gantry-pod.yaml"
+```yaml title="enterplace-pod.yaml"
 spec:
   terminationGracePeriodSeconds: 45
   containers:
-    - name: gantry
+    - name: enterplace
       readinessProbe:
         httpGet: { path: /readyz, port: 8080 }
         periodSeconds: 5
@@ -78,33 +78,33 @@ Kubernetes removes a terminating pod from its Service endpoints at the same time
 
 ## Change policy and keys without a restart
 
-Save the policy file or the keys file and Gantry uses the new version within 2 seconds. Gantry compares the SHA-256 of both files once a second, so an editor that saves by renaming a new file into place, and a symlink switched to another file, are both noticed.
+Save the policy file or the keys file and Enterplace uses the new version within 2 seconds. Enterplace compares the SHA-256 of both files once a second, so an editor that saves by renaming a new file into place, and a symlink switched to another file, are both noticed.
 
 <Tabs>
 <TabItem label="On save">
 
 ```bash
-$EDITOR /etc/gantry/gantry.policy.yaml
+$EDITOR /etc/enterplace/enterplace.policy.yaml
 ```
 
 </TabItem>
 <TabItem label="At once with SIGHUP">
 
 ```bash
-kill -HUP "$(pgrep -x gantry)"
+kill -HUP "$(pgrep -x enterplace)"
 ```
 
 </TabItem>
 </Tabs>
 
-A change is checked with the same rules as `gantry check`:
+A change is checked with the same rules as `enterplace check`:
 
-- **It passes.** Gantry writes a `config_loaded` record first, then decides every later request with it. The policy and keys switch together. A request decided before the switch finishes under the decision it got, its stream included.
-- **It fails.** Gantry keeps the version it has, prints every problem to stderr with its file and line, and writes one `config_rejected` record per distinct pair of files. It uses the next save that passes. A missing file is a failed change too.
+- **It passes.** Enterplace writes a `config_loaded` record first, then decides every later request with it. The policy and keys switch together. A request decided before the switch finishes under the decision it got, its stream included.
+- **It fails.** Enterplace keeps the version it has, prints every problem to stderr with its file and line, and writes one `config_rejected` record per distinct pair of files. It uses the next save that passes. A missing file is a failed change too.
 
 ```text
-/etc/gantry/gantry.policy.yaml:12: "modles" is not a key Gantry knows. Did you mean "models"?
-gantry: the change to /etc/gantry/gantry.policy.yaml or /etc/gantry/gantry.keys.yaml is not used: 1 problem above. Gantry keeps deciding with the version it has (policy 5d41402a, keys 7c211433) and uses the next save that passes `gantry check`.
+/etc/enterplace/enterplace.policy.yaml:12: "modles" is not a key Enterplace knows. Did you mean "models"?
+enterplace: the change to /etc/enterplace/enterplace.policy.yaml or /etc/enterplace/enterplace.keys.yaml is not used: 1 problem above. Enterplace keeps deciding with the version it has (policy 5d41402a, keys 7c211433) and uses the next save that passes `enterplace check`.
 ```
 
 ### What needs a restart
@@ -119,7 +119,7 @@ gantry: the change to /etc/gantry/gantry.policy.yaml or /etc/gantry/gantry.keys.
 | A provider key (its environment variable) | Yes |
 | The TLS certificate and key | Yes |
 
-A change that needs a restart is rejected while Gantry runs, with that reason, and recorded as `config_rejected`. A reload that names a guardrail credential variable that is not set is rejected too.
+A change that needs a restart is rejected while Enterplace runs, with that reason, and recorded as `config_rejected`. A reload that names a guardrail credential variable that is not set is rejected too.
 
 <Aside type="tip">
 A key removed by hand works for up to 2 seconds, until the reload picks the change up. Revoke through the console or `DELETE /admin/keys/<prefix>` to stop it at once.
@@ -152,17 +152,17 @@ Before the process ends, every record already handed to the audit writer is writ
 | Provider starts answering | 120 s | `upstream_timeout`, 504 |
 | Requests in flight after a stop signal | 30 s | Process exits |
 
-These values are fixed. A streamed answer has no time limit once it starts. Memory for a body is reserved as its bytes arrive and released once the request is handed to the provider. Nobody waits in a queue for it, so a large request cannot hold small ones up. Gantry serves HTTP/1.1.
+These values are fixed. A streamed answer has no time limit once it starts. Memory for a body is reserved as its bytes arrive and released once the request is handed to the provider. Nobody waits in a queue for it, so a large request cannot hold small ones up. Enterplace serves HTTP/1.1.
 
 ### Memory
 
-Idle, Gantry uses a few MiB. Beyond that, memory is mostly request bodies in flight (at most 256 MiB), a few hundred bytes per key, and one small entry per caller that has sent a request since start. A container memory limit of 384 MiB leaves room for the full body budget. Measure under your own load before setting it lower.
+Idle, Enterplace uses a few MiB. Beyond that, memory is mostly request bodies in flight (at most 256 MiB), a few hundred bytes per key, and one small entry per caller that has sent a request since start. A container memory limit of 384 MiB leaves room for the full body budget. Measure under your own load before setting it lower.
 
 ## Audit log on disk
 
 Each record reaches the operating system before the request is forwarded, and the file is synced to disk once a second. A process crash loses no records; a power loss can lose up to about a second of them.
 
-A decision record is about 650 bytes and a usage record about 700, so a million forwarded requests make about 1.35 GB. Gantry reads and verifies the whole file at every start, and the time that takes grows with the file. A new audit log is created with mode `0600`.
+A decision record is about 650 bytes and a usage record about 700, so a million forwarded requests make about 1.35 GB. Enterplace reads and verifies the whole file at every start, and the time that takes grows with the file. A new audit log is created with mode `0600`.
 
 ### Start a new chain
 
@@ -173,18 +173,18 @@ Rotation is not built in. To start a new chain:
 1. Verify the log and keep its count and last hash.
 
    ```bash
-   gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+   enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl
    ```
 
-2. Stop Gantry.
+2. Stop Enterplace.
 
 3. Move the file aside and keep it.
 
    ```bash
-   mv /var/lib/gantry/gantry-audit.jsonl /var/lib/gantry/gantry-audit-2026-11.jsonl
+   mv /var/lib/enterplace/enterplace-audit.jsonl /var/lib/enterplace/enterplace-audit-2026-11.jsonl
    ```
 
-4. Start Gantry. It writes a new log from record 1.
+4. Start Enterplace. It writes a new log from record 1.
 
 </Steps>
 
@@ -192,39 +192,39 @@ Rotation is not built in. To start a new chain:
 
 | File | Holds | How to keep it |
 |---|---|---|
-| `gantry.policy.yaml` | Providers, rules, guardrails, prices, console settings | Version control. It holds no secrets |
-| `gantry.keys.yaml` | The SHA-256, name, team and limits of each key | Back up with the same care as the policy: whoever can write it decides who may call. It holds no keys |
-| `gantry-audit.jsonl` | Every decision, usage and admin action | Ship it as it is written ([Observability](/operations/observability/#shipping-the-audit-log)), and keep old chains moved aside |
-| `gantry.kills.json` | Active kill switches, beside the keys file | Optional. Deleting it turns every switch off |
+| `enterplace.policy.yaml` | Providers, rules, guardrails, prices, console settings | Version control. It holds no secrets |
+| `enterplace.keys.yaml` | The SHA-256, name, team and limits of each key | Back up with the same care as the policy: whoever can write it decides who may call. It holds no keys |
+| `enterplace-audit.jsonl` | Every decision, usage and admin action | Ship it as it is written ([Observability](/operations/observability/#shipping-the-audit-log)), and keep old chains moved aside |
+| `enterplace.kills.json` | Active kill switches, beside the keys file | Optional. Deleting it turns every switch off |
 
-Keep the count and last hash of the audit log where the Gantry host cannot write, on a schedule. A chain cannot show records removed from its end; the kept hash can.
+Keep the count and last hash of the audit log where the Enterplace host cannot write, on a schedule. A chain cannot show records removed from its end; the kept hash can.
 
 ```bash
-gantry audit verify /var/lib/gantry/gantry-audit.jsonl | sed -n 's/^Last hash: //p'
+enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl | sed -n 's/^Last hash: //p'
 ```
 
 Later, check that the log still holds it:
 
 ```bash
-gantry audit verify /var/lib/gantry/gantry-audit.jsonl --expect-last <kept hash>
+enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl --expect-last <kept hash>
 ```
 
 Provider keys live only in environment variables. Keep them in your secret manager.
 
 ## Disk full and audit repair
 
-When an audit write fails, every later request is refused with `audit_unavailable`, `/healthz` answers 503, `gantry_audit_broken` turns 1, and stderr says what happened. Gantry does not write to that file again until it is restarted.
+When an audit write fails, every later request is refused with `audit_unavailable`, `/healthz` answers 503, `enterplace_audit_broken` turns 1, and stderr says what happened. Enterplace does not write to that file again until it is restarted.
 
-A write that fails part way can leave the last line cut short. `gantry serve` then refuses to start and names the command to run.
+A write that fails part way can leave the last line cut short. `enterplace serve` then refuses to start and names the command to run.
 
 <Steps>
 
-1. Free the space and stop Gantry.
+1. Free the space and stop Enterplace.
 
 2. See the cut line. Nothing is changed, and the command exits 1.
 
    ```bash
-   gantry audit repair /var/lib/gantry/gantry-audit.jsonl
+   enterplace audit repair /var/lib/enterplace/enterplace-audit.jsonl
    ```
 
    It prints the byte where the chain stops holding and the cut line itself.
@@ -232,18 +232,18 @@ A write that fails part way can leave the last line cut short. `gantry serve` th
 3. Remove only that line.
 
    ```bash
-   gantry audit repair /var/lib/gantry/gantry-audit.jsonl --yes
+   enterplace audit repair /var/lib/enterplace/enterplace-audit.jsonl --yes
    ```
 
    It appends an `audit_repaired` record holding what was removed (`removed_bytes`, `removed_sha256`, `removed_text`), so the repair is itself in the chain.
 
-4. Start Gantry.
+4. Start Enterplace.
 
 </Steps>
 
 Repair removes a last line only when it is the start of the next record cut short: it does not parse as JSON and begins as that record must (`{"n":<next number>,` or a shorter piece of it). Anything else is refused and left in place:
 
-- a changed or missing record anywhere in the chain, reported as `gantry audit verify` reports it,
+- a changed or missing record anywhere in the chain, reported as `enterplace audit verify` reports it,
 - a last line that is whole JSON without its newline,
 - a log that grows between the check and the removal.
 
@@ -251,29 +251,29 @@ A log changed in the middle is evidence, not something to repair. If the removed
 
 ### The lock file
 
-While Gantry has the log open it keeps `gantry-audit.jsonl.lock` beside it, naming its holder and rewritten every 5 seconds.
+While Enterplace has the log open it keeps `enterplace-audit.jsonl.lock` beside it, naming its holder and rewritten every 5 seconds.
 
 - `audit repair --yes` refuses while the lock file exists.
-- A second `gantry serve` on the same machine refuses to start while the process the lock names is running.
-- A holder in another container or on another machine counts as running while its lock keeps changing. A new `gantry serve` waits up to 40 seconds for it to stop, then refuses and names it. It takes the lock over once the lock has not changed for 30 seconds.
-- A Gantry that cannot rewrite its lock for 15 seconds refuses every request until it is started again, so two writers never share one chain.
-- After `kill -9` or a crash the lock file stays. The next `gantry serve` takes it over once that process is gone (at once on the same machine, after 30 seconds from another). For a repair, delete it once Gantry is surely stopped.
+- A second `enterplace serve` on the same machine refuses to start while the process the lock names is running.
+- A holder in another container or on another machine counts as running while its lock keeps changing. A new `enterplace serve` waits up to 40 seconds for it to stop, then refuses and names it. It takes the lock over once the lock has not changed for 30 seconds.
+- A Enterplace that cannot rewrite its lock for 15 seconds refuses every request until it is started again, so two writers never share one chain.
+- After `kill -9` or a crash the lock file stays. The next `enterplace serve` takes it over once that process is gone (at once on the same machine, after 30 seconds from another). For a repair, delete it once Enterplace is surely stopped.
 
 ## Stop all traffic
 
 ```bash
-gantry kill --all --reason "provider incident, stopping all AI traffic"
-gantry unkill --all
+enterplace kill --all --reason "provider incident, stopping all AI traffic"
+enterplace unkill --all
 ```
 
-`gantry kill --all` refuses every request with `killed` within 1 second on every node serving the same files. The admin API stays open so an admin can turn it off. See [Kill switches](/governance/kill-switches/).
+`enterplace kill --all` refuses every request with `killed` within 1 second on every node serving the same files. The admin API stays open so an admin can turn it off. See [Kill switches](/governance/kill-switches/).
 
 ## Bench
 
-`gantry-bench` measures what Gantry adds to a request.
+`enterplace-bench` measures what Enterplace adds to a request.
 
 ```bash
-cargo run --release -p gantry-bench -- --rps 1000 --secs 10 --max-p99-overhead-us 1000
+cargo run --release -p enterplace-bench -- --rps 1000 --secs 10 --max-p99-overhead-us 1000
 ```
 
 It runs a mock model server and the gateway in one process, sends the same open-loop load to each, and prints two figures:
@@ -281,7 +281,7 @@ It runs a mock model server and the gateway in one process, sends the same open-
 | Figure | Measures |
 |---|---|
 | added | Latency through the gateway minus latency to the mock alone, as the client sees it. Can be negative, because both runs carry noise |
-| self-time | The time Gantry reports for identifying, deciding and recording, from its `Server-Timing: gantry;dur=` header. Shown, not gated |
+| self-time | The time Enterplace reports for identifying, deciding and recording, from its `Server-Timing: enterplace;dur=` header. Shown, not gated |
 
 With the policy on (the default: 1,000 keys and a `secrets` guardrail that blocks on every rule), the run also fails unless the audit log holds exactly one decision record and one usage record per request, in an unbroken chain.
 
@@ -304,37 +304,37 @@ Read the numbers as a comparison between builds on one machine. The mock, the ga
 
 <Steps>
 
-1. Build the new release and run `gantry check` from the new binary on your current policy and keys files.
+1. Build the new release and run `enterplace check` from the new binary on your current policy and keys files.
 
    ```bash
-   gantry check /etc/gantry/gantry.policy.yaml --keys /var/lib/gantry/gantry.keys.yaml
+   enterplace check /etc/enterplace/enterplace.policy.yaml --keys /var/lib/enterplace/enterplace.keys.yaml
    ```
 
 2. Keep the audit log's last hash.
 
-3. Stop Gantry with `SIGTERM`. Requests in flight get 30 seconds.
+3. Stop Enterplace with `SIGTERM`. Requests in flight get 30 seconds.
 
 4. Replace the binary or image, and start it on the same files.
 
 5. Confirm the start line says the chain continues, and check the version.
 
    ```bash
-   gantry version
+   enterplace version
    ```
 
 </Steps>
 
 ### Rolling back
 
-Stop the new version and start the previous one on the same files. Nothing is restored from a backup: the previous version serves the keys the new one issued, continues the same audit chain, and `gantry audit verify` from either version checks the whole log. Every release is held to this by `scripts/rollback_check.py <old binary> <new binary>`, which runs the old version, upgrades, rolls back on one folder and verifies the chain with both.
+Stop the new version and start the previous one on the same files. Nothing is restored from a backup: the previous version serves the keys the new one issued, continues the same audit chain, and `enterplace audit verify` from either version checks the whole log. Every release is held to this by `scripts/rollback_check.py <old binary> <new binary>`, which runs the old version, upgrades, rolls back on one folder and verifies the chain with both.
 
 A policy that uses a field only the new version knows stops the old one at start, with the field's name and line: keep the previous policy file beside the new one until the upgrade has settled, and put it back when you roll back.
 
-The new process verifies the whole audit log before it serves and continues the same chain. Its first `config_loaded` record has `trigger: start`, and its "before" hashes are the last version the log recorded, so a change made while Gantry was stopped shows. On Kubernetes the `Recreate` strategy leaves a few seconds with no gateway.
+The new process verifies the whole audit log before it serves and continues the same chain. Its first `config_loaded` record has `trigger: start`, and its "before" hashes are the last version the log recorded, so a change made while Enterplace was stopped shows. On Kubernetes the `Recreate` strategy leaves a few seconds with no gateway.
 
 ## Next
 
 <CardGrid>
-	<LinkCard title="Security model" href="/operations/security/" description="What Gantry protects and where it stops." />
+	<LinkCard title="Security model" href="/operations/security/" description="What Enterplace protects and where it stops." />
 	<LinkCard title="CLI reference" href="/reference/cli/" description="Every command and flag." />
 </CardGrid>

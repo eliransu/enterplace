@@ -1,6 +1,6 @@
 ---
 title: Audit records
-description: The JSON schema of every record type in the Gantry audit log, with field tables and an example of each.
+description: The JSON schema of every record type in the Enterplace audit log, with field tables and an example of each.
 sidebar:
   order: 3
 ---
@@ -11,7 +11,7 @@ The audit log is a file of JSON lines, one record per line, in one hash chain. E
 
 | `event` | Record | Written |
 |---|---|---|
-| absent | [Request decision](#request-decision) | For each request Gantry decides, allowed or refused, before anything is forwarded |
+| absent | [Request decision](#request-decision) | For each request Enterplace decides, allowed or refused, before anything is forwarded |
 | `usage` | [Usage](#usage) | When a forwarded request's answer ends |
 | `attempts` | [Attempts](#attempts) | After a request that was tried more than once |
 | `upstream_error` | [Upstream error](#upstream-error) | When a forwarded request got no answer from any provider |
@@ -19,14 +19,14 @@ The audit log is a file of JSON lines, one record per line, in one hash chain. E
 | `config_loaded` | [Configuration loaded](#config_loaded) | At start, and when a change to the policy or keys file is used |
 | `config_rejected` | [Configuration rejected](#config_rejected) | When a change fails the check |
 | `admin` | [Admin](#admin) | For each admin API call and console action |
-| `secret_rotated` | [Secret rotated](#secret_rotated) | Gantry Enterprise: when a refresh finds a secret manager's value changed |
-| `secret_refresh_failed` | [Secret refresh failed](#secret_rotated) | Gantry Enterprise: when a refresh cannot read a secret manager |
-| `audit_repaired` | [Repair](#audit_repaired) | When `gantry audit repair --yes` removes a cut last line |
+| `secret_rotated` | [Secret rotated](#secret_rotated) | Enterplace Enterprise: when a refresh finds a secret manager's value changed |
+| `secret_refresh_failed` | [Secret refresh failed](#secret_rotated) | Enterplace Enterprise: when a refresh cannot read a secret manager |
+| `audit_repaired` | [Repair](#audit_repaired) | When `enterplace audit repair --yes` removes a cut last line |
 | `audit_retired` | [Retirement](#audit_retired) | Before sealed segments at the start of the chain are deleted |
-| `watch` | [Watch](#watch) | Gantry Enterprise: for each model request, error, tool decision, tool result and prompt a watched Claude Code reports, and each export's new metric sums |
-| `alert` | Alert | Gantry Enterprise: when an alert rule fires. Names the rule, the subject and the records behind it: see [Alerting](/operations/alerting/#what-is-recorded) |
+| `watch` | [Watch](#watch) | Enterplace Enterprise: for each model request, error, tool decision, tool result and prompt a watched Claude Code reports, and each export's new metric sums |
+| `alert` | Alert | Enterplace Enterprise: when an alert rule fires. Names the rule, the subject and the records behind it: see [Alerting](/operations/alerting/#what-is-recorded) |
 
-Not recorded: `GET /healthz`, `HEAD /api/hello`, `GET /metrics`, and a request so malformed that the HTTP library rejects it before Gantry sees it.
+Not recorded: `GET /healthz`, `HEAD /api/hello`, `GET /metrics`, and a request so malformed that the HTTP library rejects it before Enterplace sees it.
 
 ## Chain fields
 
@@ -38,11 +38,11 @@ Every record starts with `n` and ends with `prev` and `hash`.
 | `prev` | string | The `hash` of the record before, or 64 zeros for record 1 |
 | `hash` | string | SHA-256, in hex, of this line's text up to and including `prev` and its value, closed with `}` |
 
-`gantry audit verify` recomputes each hash and link. Times are UTC with millisecond precision, such as `2026-11-13T00:53:10.132Z`. Strings that come from the caller are cut to 200 characters. No record holds prompt text, answer text, a Gantry key or a provider key.
+`enterplace audit verify` recomputes each hash and link. Times are UTC with millisecond precision, such as `2026-11-13T00:53:10.132Z`. Strings that come from the caller are cut to 200 characters. No record holds prompt text, answer text, a Enterplace key or a provider key.
 
 ## Request decision
 
-One per request Gantry decides. It records the decision, not the provider's answer.
+One per request Enterplace decides. It records the decision, not the provider's answer.
 
 ```json
 {"n":1,"id":"01M7969SBMMKV7S7HFP6Q99SPJ","time":"2026-11-13T00:53:10.132Z","person":"maya.cohen","team":"payments","client":"127.0.0.1","key":"5d1e4a07","method":"POST","path":"/v1/chat/completions","model":"gpt-4o-mini","verdict":"allow","code":null,"rule":"payments-team","rule_line":16,"provider":"openai","policy_sha256":"6d0782...","keys_sha256":"37b02a...","prev":"0000000000000000000000000000000000000000000000000000000000000000","hash":"84347ac2..."}
@@ -50,7 +50,7 @@ One per request Gantry decides. It records the decision, not the provider's answ
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | string | The decision ID: 26 characters, sortable by time (ULID layout). The same ID is in `X-Gantry-Decision` and in every refusal message |
+| `id` | string | The decision ID: 26 characters, sortable by time (ULID layout). The same ID is in `X-Enterplace-Decision` and in every refusal message |
 | `time` | string | When the record was made |
 | `person` | string | The name the key was issued to, or `unknown` when the caller was not identified |
 | `team` | string or null | The key's team |
@@ -78,13 +78,13 @@ Fields present only in some cases:
 | `limit` | object | Refused by a limit: `{"kind":"rpm","of":"rule","value":60}`, `{"kind":"tpm","of":"rule","value":1000,"request_could_use":1228}` or `{"kind":"parallel","of":"key","value":4}`, where `of` is `rule` or `key` |
 | `key_models` | `true` | A `model_not_allowed` refusal by the key's own `models:` list |
 | `routing` | object | The model is an alias: `balance`, `reason`, `deployment`, and `region`, `regions` and `for` when they apply. See [Routing strategies](/routing/strategies/#the-record) |
-| `tags` | array | The request's tags: its key's and those sent in `x-gantry-tags` |
+| `tags` | array | The request's tags: its key's and those sent in `x-enterplace-tags` |
 | `key_rotated` | object | The key was rotated and is in its grace: `{"replaced_by": "8a41c2d0", "expires": "2026-11-16T09:14:02Z"}` |
 | `auth`, `jwt_issuer`, `jwt_subject` | string | The caller sent a [JWT](/governance/access-control/#jwts-from-your-identity-provider): `auth` is `jwt`, with the token's issuer and subject. Never the token |
 | `ip_not_allowed` | string | An `ip_not_allowed` refusal: `key` or `rule`, whichever `from` list refused it |
 | `outcome` | string | `would_refuse`: the request was forwarded, and observe mode or a `shadow_until` let through at least one decision against it. See [`would_refuse`](#would_refuse) |
 | `would_refuse` | array | What would have refused it: one entry per decision. See [`would_refuse`](#would_refuse) |
-| `session` | string | The session the request belongs to, on every request Gantry forwards or answers from the cache, and on its `usage` record: read from `x-gantry-session`, `x-session-id`, Claude Code's or Codex's marker, `prompt_cache_key`, else from the first message, as an [events guardrail](/governance/plugin-events/) reads it. A request that names its session costs no second read of its body. Absent for a body with no text |
+| `session` | string | The session the request belongs to, on every request Enterplace forwards or answers from the cache, and on its `usage` record: read from `x-enterplace-session`, `x-session-id`, Claude Code's or Codex's marker, `prompt_cache_key`, else from the first message, as an [events guardrail](/governance/plugin-events/) reads it. A request that names its session costs no second read of its body. Absent for a body with no text |
 | `turn` | string | The rule has an [events guardrail](/governance/plugin-events/): the conversation's turn. On the `usage` record too |
 | `required_missing` | array | On a `required_missing` refusal: each header and body field the rule's `require:` asks for and the request lacks |
 | `guardrail_check` | string | On `POST /v1/guardrails/check`: `request` or `answer`, the side checked. `cost_usd` is 0 |
@@ -145,7 +145,7 @@ Written when a forwarded request's answer ends: its whole body sent, its stream 
 | `reserved_usd` | number or null | What the request reserved against its budget. `null` without one |
 | `charged_usd` | number | What counts against budgets (below) |
 | `latency_ms` | integer | Milliseconds from the decision to the end of the answer |
-| `stages_ms` | object | Where the request's time went inside Gantry, in milliseconds with microsecond precision, in the order it passed them: `auth`, `read`, `policy`, `guardrails`, `cache`, `audit`, `connect`, `first_byte`, `stream`. See [Time by stage](/operations/observability/#time-by-stage). Absent on a cache hit and on usage records written outside a live request (batches, probes, realtime) |
+| `stages_ms` | object | Where the request's time went inside Enterplace, in milliseconds with microsecond precision, in the order it passed them: `auth`, `read`, `policy`, `guardrails`, `cache`, `audit`, `connect`, `first_byte`, `stream`. See [Time by stage](/operations/observability/#time-by-stage). Absent on a cache hit and on usage records written outside a live request (batches, probes, realtime) |
 | `guardrail_ms` | object | The time of each guardrail call on the request, by guardrail name: `builtin` for the built-in detectors, `events` for events plugins. Absent when none was called |
 | `body` | string | `captured` when the rule's `capture:` kept the redacted request and answer. Absent otherwise |
 | `policy_sha256`, `keys_sha256` | string | The version that decided the request |
@@ -159,7 +159,7 @@ Written when a forwarded request's answer ends: its whole body sent, its stream 
 | `caller_left` | The caller hung up after forwarding and before the answer started. No counts, charged the reservation (or the estimate of the most it could cost) and counted in full against tokens per minute |
 | `cache_hit` | Served from the cache |
 
-`charged_usd` for a 2xx answer is `cost_usd` when usage is whole, the larger of `cost_usd` and the reservation when `partial`, and the reservation when no usage was reported (without a budget, the estimate of the most the request could cost). Otherwise it is `cost_usd`, or `0`. At start, Gantry sums `charged_usd` over the current period to restore budgets.
+`charged_usd` for a 2xx answer is `cost_usd` when usage is whole, the larger of `cost_usd` and the reservation when `partial`, and the reservation when no usage was reported (without a budget, the estimate of the most the request could cost). Otherwise it is `cost_usd`, or `0`. At start, Enterplace sums `charged_usd` over the current period to restore budgets.
 
 ## Attempts
 
@@ -187,8 +187,8 @@ Follows a request record, with the same `id`, when the request was forwarded and
 |---|---|---|
 | `event` | string | `upstream_error` |
 | `id` | string | The decision ID of the request |
-| `status` | integer | The HTTP status Gantry answered with |
-| `code` | string | The refusal code Gantry answered with, such as `upstream_timeout` |
+| `status` | integer | The HTTP status Enterplace answered with |
+| `code` | string | The refusal code Enterplace answered with, such as `upstream_timeout` |
 | `provider` | string | The provider of the last try (for an alias, the deployment). Absent when no provider was tried |
 | `tries` | integer | How many tries were made. With more than one, the [attempts record](#attempts) lists them |
 | `latency_ms` | integer | Milliseconds from the request's arrival to the failure |
@@ -236,17 +236,17 @@ Written at start and when a change to the policy or keys file passes the check, 
 | `event` | string | `config_loaded` |
 | `time` | string | When it was loaded |
 | `trigger` | string | `start`, `file_change` or `signal` (`SIGHUP`) |
-| `policy_sha256_before`, `keys_sha256_before` | string or null | The version before. At start, the last version the log recorded, so a change made while Gantry was stopped shows. `null` on a new log |
+| `policy_sha256_before`, `keys_sha256_before` | string or null | The version before. At start, the last version the log recorded, so a change made while Enterplace was stopped shows. `null` on a new log |
 | `policy_sha256`, `keys_sha256` | string | The version now in use |
 | `policy` | string | The whole policy text. It holds no secrets |
 | `keys_added`, `keys_removed` | array | Each `{"name", "team", "sha256_prefix"}` |
 
 ## config_rejected
 
-Written once per distinct pair of files that fails the check. Gantry keeps the version it has.
+Written once per distinct pair of files that fails the check. Enterplace keeps the version it has.
 
 ```json
-{"n":6,"event":"config_rejected","time":"2026-11-13T00:51:40.300Z","trigger":"file_change","policy_sha256_before":"6d0782...","keys_sha256_before":"9c4e11...","policy_sha256":"b1a9f0...","keys_sha256":"9c4e11...","problem_count":1,"problems":["/etc/gantry/gantry.policy.yaml:12: \"modles\" is not a key Gantry knows. Did you mean \"models\"?"],"prev":"...","hash":"..."}
+{"n":6,"event":"config_rejected","time":"2026-11-13T00:51:40.300Z","trigger":"file_change","policy_sha256_before":"6d0782...","keys_sha256_before":"9c4e11...","policy_sha256":"b1a9f0...","keys_sha256":"9c4e11...","problem_count":1,"problems":["/etc/enterplace/enterplace.policy.yaml:12: \"modles\" is not a key Enterplace knows. Did you mean \"models\"?"],"prev":"...","hash":"..."}
 ```
 
 | Field | Type | Description |
@@ -263,7 +263,7 @@ Written once per distinct pair of files that fails the check. Gantry keeps the v
 With the `secrets` feature, each refresh of the [secret managers](/operations/secret-managers/) writes one record per variable whose value changed (`secret_rotated`) and one per variable it could not read (`secret_refresh_failed`). The value is never written, in either record.
 
 ```json
-{"n":12,"event":"secret_refresh_failed","time":"2026-11-14T09:05:00.112Z","variable":"OPENAI_PROVIDER_KEY","reference":"vault://secret/data/gantry#openai","source":"vault","code":"secret_refresh_failed","reason":"Vault answered 403. Check the address and that the credentials may read the secret.","prev":"...","hash":"..."}
+{"n":12,"event":"secret_refresh_failed","time":"2026-11-14T09:05:00.112Z","variable":"OPENAI_PROVIDER_KEY","reference":"vault://secret/data/enterplace#openai","source":"vault","code":"secret_refresh_failed","reason":"Vault answered 403. Check the address and that the credentials may read the secret.","prev":"...","hash":"..."}
 ```
 
 | Field | Type | Meaning |
@@ -306,7 +306,7 @@ One per admin API call and console action, allowed or refused, written before th
 | `list_keys`, `issue_key`, `revoke_key`, `revoke_own_key` | `/admin/keys` |
 | `list_kills`, `set_kill`, `clear_kill` | `/admin/kills` |
 | `issue_key`, `revoke_key` | The console's People page |
-| `self_issue_key` | `gantry login` |
+| `self_issue_key` | `enterplace login` |
 | `console_sign_in`, `console_sign_out` | The console sign-in and sign-out |
 | `view_body` | Reading a kept body on the console's Requests page. `target` holds `id` and `rule`. Refused with `not_a_viewer` for someone the rule does not name, or `no_body` when none is kept |
 | `console_sso_starts` | 100 or more single sign-on starts in a minute. `target` holds `starts` and `within_seconds` |
@@ -314,7 +314,7 @@ One per admin API call and console action, allowed or refused, written before th
 
 ## watch
 
-Gantry Enterprise, [watch mode](/integrations/claude-team/). Written for what a watched Claude Code reports about itself through its telemetry: Gantry did not decide or forward these requests. One record per model request, API error, refusal, tool decision, tool result and prompt, and one per export, person and session for new metric sums. An export received twice writes its records once.
+Enterplace Enterprise, [watch mode](/integrations/claude-team/). Written for what a watched Claude Code reports about itself through its telemetry: Enterplace did not decide or forward these requests. One record per model request, API error, refusal, tool decision, tool result and prompt, and one per export, person and session for new metric sums. An export received twice writes its records once.
 
 ```json
 {"n":88,"event":"watch","id":"01M7969SBMMKV7S7HFP6Q99SPJ","time":"2026-11-14T18:05:47.101Z","source":"watch","kind":"api_request","at":"2026-11-14T18:05:46.771Z","person":"maya.cohen@example.com","team":"payments","token":"wt-1a2b3c4d","session":"cef9c394-3421-43ba-a4f6-a456a0790968","user_agent":"claude-code/2.1.325","provider":"anthropic","model":"claude-sonnet-5-5","latency_ms":7,"input_tokens":1200,"output_tokens":40,"cache_read_tokens":5000,"cache_write_tokens":300,"cost_usd":0.00405,"prev":"...","hash":"..."}
@@ -325,7 +325,7 @@ Gantry Enterprise, [watch mode](/integrations/claude-team/). Written for what a 
 | `event`, `source` | string | `watch` |
 | `kind` | string | `api_request`, `api_error`, `api_refusal`, `tool_decision`, `tool_result`, `user_prompt` or `metrics` |
 | `id` | string | An ID of the record's own, in the decision ID layout |
-| `time`, `at` | string | When Gantry received it, and when Claude Code says it happened |
+| `time`, `at` | string | When Enterplace received it, and when Claude Code says it happened |
 | `person` | string | The watch token's person. On a team token, the name of the key holder with the email address Claude Code signed in with, else that address ([one name per person](/integrations/claude-team/#one-name-per-person)); `unknown` without either |
 | `email` | string | The address Claude Code reported, when `person` is a key holder's name instead. Absent otherwise |
 | `team` | string or null | The watch token's team |
@@ -351,7 +351,7 @@ By kind:
 
 ## audit_repaired
 
-Appended by `gantry audit repair --yes` after it removes a cut last line, so the repair is in the chain.
+Appended by `enterplace audit repair --yes` after it removes a cut last line, so the repair is in the chain.
 
 ```json
 {"n":1204,"event":"audit_repaired","time":"2026-11-13T09:12:44.017Z","removed_bytes":57,"removed_sha256":"e3b0c4...","removed_text":"{\"n\":1204,\"event\":\"usage\",\"id\":\"01M79...\",\"time\":\"2026-1","prev":"...","hash":"..."}
@@ -365,7 +365,7 @@ Appended by `gantry audit repair --yes` after it removes a cut last line, so the
 | `removed_sha256` | string | SHA-256 of the removed bytes |
 | `removed_text` | string | The removed line itself |
 
-`gantry audit verify` counts request records, configuration records (`config_loaded`, `config_rejected` and `answer_guardrails`), admin records (`admin` and `audit_repaired`), usage records and attempts records apart.
+`enterplace audit verify` counts request records, configuration records (`config_loaded`, `config_rejected` and `answer_guardrails`), admin records (`admin` and `audit_repaired`), usage records and attempts records apart.
 
 <Aside type="note">
 The examples shorten hashes with `...`. Real records carry 64 hex characters in `prev`, `hash`, `policy_sha256` and `keys_sha256`.
@@ -373,7 +373,7 @@ The examples shorten hashes with `...`. Real records carry 64 hex characters in 
 
 ## audit_retired
 
-Appended before the oldest sealed segments of a log are deleted (Gantry Enterprise retention, or any program that calls `gantry_core::audit::retire`). It names what goes, so `gantry audit verify` accepts a chain that starts after them and says so. See [Sealed segments and retirement](/governance/audit-log/#sealed-segments-and-retirement).
+Appended before the oldest sealed segments of a log are deleted (Enterplace Enterprise retention, or any program that calls `enterplace_core::audit::retire`). It names what goes, so `enterplace audit verify` accepts a chain that starts after them and says so. See [Sealed segments and retirement](/governance/audit-log/#sealed-segments-and-retirement).
 
 ```json
 {"n":91234,"event":"audit_retired","time":"2026-11-13T03:00:00.512Z","from_n":1,"from_prev":"0000...0000","through_n":40211,"through_hash":"9c1f...","records":40211,"segments":[{"file":"00000000000000000001-00000000000000040211.jsonl","first_n":1,"last_n":40211,"bytes":27014233,"sha256":"5b2e..."}],"prev":"...","hash":"..."}
@@ -388,4 +388,4 @@ Appended before the oldest sealed segments of a log are deleted (Gantry Enterpri
 | `through_hash` | string | The hash of the last removed record: the `prev` of the first record kept |
 | `records` | integer | How many records were removed |
 | `segments` | array | Each removed file: its name, first and last record, size and SHA-256, to match an archived copy |
-| `kept` | string | Only when the segments left the disk because they are kept elsewhere (`gantry_core::audit::retire_kept`, such as Gantry Enterprise's audit segments in object storage): where. The request log then keeps its rows for those records; after any other retirement it deletes them and their kept bodies |
+| `kept` | string | Only when the segments left the disk because they are kept elsewhere (`enterplace_core::audit::retire_kept`, such as Enterplace Enterprise's audit segments in object storage): where. The request log then keeps its rows for those records; after any other retirement it deletes them and their kept bodies |

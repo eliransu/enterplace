@@ -1,12 +1,12 @@
 """Signs in to the console in a real headless Chrome, issues a key, revokes it and verifies the chain.
 
-Usage: python3 scripts/browser_check.py [--gantry target/debug/gantry] [--chrome PATH] [--port 20650]
+Usage: python3 scripts/browser_check.py [--enterplace target/debug/enterplace] [--chrome PATH] [--port 20650]
 
 The console's own tests set the Origin header by hand, so they cannot see what a browser really sends. This drives
 Google Chrome over the DevTools protocol on a pipe (--remote-debugging-pipe), with the standard library only, and
 types and presses keys as a person does. It also checks that a form posted from another site is refused, that the
 one-time key fits its dialog at 1440 and 1024, and that a record sheet holds the keyboard. Exits 1 on the first
-check that fails. Binds 127.0.0.1 only, and stops Gantry and Chrome before it ends.
+check that fails. Binds 127.0.0.1 only, and stops Enterplace and Chrome before it ends.
 """
 import argparse, hashlib, http.server, json, os, pathlib, secrets, shutil, subprocess, sys, tempfile, threading, time, urllib.request
 
@@ -126,29 +126,29 @@ def check(ok: bool, what: str):
     print(f"ok: {what}")
 
 
-def serve(gantry: str, folder: pathlib.Path, port: int) -> subprocess.Popen:
+def serve(enterplace: str, folder: pathlib.Path, port: int) -> subprocess.Popen:
     try:
         urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1)
         raise SystemExit(f"Something already answers on 127.0.0.1:{port}. Stop it, or pass another --port.")
     except OSError:
         pass
-    proc = subprocess.Popen([gantry, "serve", str(folder / "gantry.policy.yaml"), "--listen", f"127.0.0.1:{port}"],
-                            cwd=folder, stdout=open(folder / "gantry.log", "w"), stderr=subprocess.STDOUT)
+    proc = subprocess.Popen([enterplace, "serve", str(folder / "enterplace.policy.yaml"), "--listen", f"127.0.0.1:{port}"],
+                            cwd=folder, stdout=open(folder / "enterplace.log", "w"), stderr=subprocess.STDOUT)
     for _ in range(100):
         try:
             urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1)
             return proc
         except OSError:
             if proc.poll() is not None:
-                raise SystemExit((folder / "gantry.log").read_text())
+                raise SystemExit((folder / "enterplace.log").read_text())
             time.sleep(0.1)
-    raise SystemExit("gantry serve did not answer /healthz within 10 seconds")
+    raise SystemExit("enterplace serve did not answer /healthz within 10 seconds")
 
 
 def setup(folder: pathlib.Path, port: int) -> str:
     """A policy, and a keys file with one admin key, which is returned."""
-    key = "gantry_" + secrets.token_hex(32)
-    (folder / "gantry.policy.yaml").write_text(f"""version: 1
+    key = "enterplace_" + secrets.token_hex(32)
+    (folder / "enterplace.policy.yaml").write_text(f"""version: 1
 providers:
   - name: local
     kind: openai
@@ -159,9 +159,9 @@ rules:
   - name: everyone
     principals: {{ any: true }}
     models: [local-model]
-audit: {{ path: gantry-audit.jsonl }}
+audit: {{ path: enterplace-audit.jsonl }}
 """)
-    (folder / "gantry.keys.yaml").write_text(
+    (folder / "enterplace.keys.yaml").write_text(
         f"keys:\n  - name: ops.admin\n    team: platform\n    sha256: {hashlib.sha256(key.encode()).hexdigest()}\n    admin: true\n")
     return key
 
@@ -186,7 +186,7 @@ def other_site(port: int, target: str) -> http.server.ThreadingHTTPServer:
     return server
 
 
-def run(chrome: Chrome, base: str, key: str, gantry: str, folder: pathlib.Path, evil: str):
+def run(chrome: Chrome, base: str, key: str, enterplace: str, folder: pathlib.Path, evil: str):
     chrome.size(1440)
     # Sign in by typing the key and pressing Enter, as a person does.
     chrome.go(f"{base}/console/sign-in")
@@ -218,7 +218,7 @@ def run(chrome: Chrome, base: str, key: str, gantry: str, folder: pathlib.Path, 
     chrome.key("Enter")
     chrome.wait("document.getElementById('new-key')", "the new key")
     new_key = chrome.js("document.getElementById('new-key').textContent")
-    check(new_key.startswith("gantry_"), "a key is issued from a real browser form")
+    check(new_key.startswith("enterplace_"), "a key is issued from a real browser form")
     for width in (1440, 1024, 390):
         chrome.size(width)
         fits = chrome.js("""(() => {
@@ -236,17 +236,17 @@ def run(chrome: Chrome, base: str, key: str, gantry: str, folder: pathlib.Path, 
     chrome.type("browser.check")
     chrome.key("Enter")
     chrome.wait("location.search.includes('revoked=browser.check')", "the revoke to finish")
-    check(sha not in (folder / "gantry.keys.yaml").read_text(), "the key is revoked from a real browser form")
+    check(sha not in (folder / "enterplace.keys.yaml").read_text(), "the key is revoked from a real browser form")
 
     # Verify the chain, and check the hash the console shows with the CLI.
     chrome.go(f"{base}/console/audit")
     chrome.js("[...document.querySelectorAll('button')].find(b => b.textContent.includes('Verify chain now')).click()")
     chrome.wait("document.getElementById('last-hash')", "the verified chain")
     last = chrome.js("document.getElementById('last-hash').textContent")
-    out = subprocess.run([gantry, "audit", "verify", str(folder / "gantry-audit.jsonl"), "--expect-last", last],
+    out = subprocess.run([enterplace, "audit", "verify", str(folder / "enterplace-audit.jsonl"), "--expect-last", last],
                          capture_output=True, text=True)
     check(out.returncode == 0 and len(last) == 64,
-          f"the console's last hash passes gantry audit verify --expect-last ({out.stdout.strip() or out.stderr.strip()})")
+          f"the console's last hash passes enterplace audit verify --expect-last ({out.stdout.strip() or out.stderr.strip()})")
 
     # A form from another site is refused, with the console's own page.
     chrome.go(evil)
@@ -257,29 +257,29 @@ def run(chrome: Chrome, base: str, key: str, gantry: str, folder: pathlib.Path, 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--gantry", default=str(ROOT / "target" / "debug" / "gantry"))
+    parser.add_argument("--enterplace", default=str(ROOT / "target" / "debug" / "enterplace"))
     parser.add_argument("--chrome", default=CHROME)
     parser.add_argument("--port", type=int, default=20650)
     args = parser.parse_args()
-    args.gantry = str(pathlib.Path(args.gantry).resolve())  # Gantry runs in its own folder
-    folder = pathlib.Path(tempfile.mkdtemp(prefix="gantry-browser-"))
+    args.enterplace = str(pathlib.Path(args.enterplace).resolve())  # Enterplace runs in its own folder
+    folder = pathlib.Path(tempfile.mkdtemp(prefix="enterplace-browser-"))
     key = setup(folder, args.port)
-    gantry = serve(args.gantry, folder, args.port)
+    enterplace = serve(args.enterplace, folder, args.port)
     evil, chrome = None, None
     try:
         evil = other_site(args.port + 1, f"http://127.0.0.1:{args.port}")
         chrome = Chrome(args.chrome, str(folder / "chrome"))
-        run(chrome, f"http://127.0.0.1:{args.port}", key, args.gantry, folder, f"http://127.0.0.1:{args.port + 1}/")
+        run(chrome, f"http://127.0.0.1:{args.port}", key, args.enterplace, folder, f"http://127.0.0.1:{args.port + 1}/")
         print("browser check passed")
     except AssertionError as failed:
-        print(f"FAILED: {failed}\nGantry's output: {folder / 'gantry.log'}", file=sys.stderr)
+        print(f"FAILED: {failed}\nEnterplace's output: {folder / 'enterplace.log'}", file=sys.stderr)
         sys.exit(1)
     finally:
         if chrome:
             chrome.close()
         if evil:
             evil.shutdown()
-        stop(gantry)
+        stop(enterplace)
     shutil.rmtree(folder, ignore_errors=True)
 
 

@@ -1,19 +1,19 @@
 ---
 title: Guardrail webhooks
-description: Build your own guardrail service against Gantry's webhook contract, with the exact request and answer format.
+description: Build your own guardrail service against Enterplace's webhook contract, with the exact request and answer format.
 sidebar:
   order: 6
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A `webhook` guardrail sends each request's text to your service and obeys its verdict: allow, block or mask. Use it for a company's own checks, or to put a guardrail vendor Gantry does not speak to directly behind a small adapter.
+A `webhook` guardrail sends each request's text to your service and obeys its verdict: allow, block or mask. Use it for a company's own checks, or to put a guardrail vendor Enterplace does not speak to directly behind a small adapter.
 
 This is contract v1. To follow a whole agent conversation (tool calls, tool results, reasoning and MCP calls as typed events, linked by session and turn), use contract v2: [plugin events](/governance/plugin-events/).
 
 ## Policy
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 guardrails:
   - name: vendor
     type: webhook
@@ -39,13 +39,13 @@ rules:
 | `headers_env` | map | none | Header name to the environment variable holding its value. |
 | `on` | list | `[request]` | `[request]`, `[answer]` or `[request, answer]`. |
 
-`headers_env` values are read from the environment: put the whole value in the variable (`export GUARD_TOKEN="Bearer abc..."`). The value is never in the policy file, an audit record or a log; the `config_loaded` record holds the variable's name only. `gantry serve` does not start, and a reload is rejected, while a named variable is unset. `gantry check` refuses header names Gantry sets itself (`Host`, `Content-Type`, `Content-Length` and the connection headers).
+`headers_env` values are read from the environment: put the whole value in the variable (`export GUARD_TOKEN="Bearer abc..."`). The value is never in the policy file, an audit record or a log; the `config_loaded` record holds the variable's name only. `enterplace serve` does not start, and a reload is rejected, while a named variable is unset. `enterplace check` refuses header names Enterplace sets itself (`Host`, `Content-Type`, `Content-Length` and the connection headers).
 
 Built-in guardrails run first. A webhook sees the request after built-in masking, and is not called if a built-in guardrail blocks.
 
 ## Request
 
-Gantry sends `POST <url>` with `Content-Type: application/json`, once per request the rule allows. It sends only the headers `headers_env` names and none of the caller's. The client is the one Gantry uses for providers: HTTP/1.1, reused connections, public TLS roots.
+Enterplace sends `POST <url>` with `Content-Type: application/json`, once per request the rule allows. It sends only the headers `headers_env` names and none of the caller's. The client is the one Enterplace uses for providers: HTTP/1.1, reused connections, public TLS roots.
 
 ```json
 {
@@ -63,11 +63,11 @@ Gantry sends `POST <url>` with `Content-Type: application/json`, once per reques
 
 | Field | Type | Description |
 |---|---|---|
-| `decision_id` | string | Gantry's decision and audit record ID for this request. Log it to join your records with Gantry's. |
-| `person` | string | The name on the Gantry key: a person or a workload. |
+| `decision_id` | string | Enterplace's decision and audit record ID for this request. Log it to join your records with Enterplace's. |
+| `person` | string | The name on the Enterplace key: a person or a workload. |
 | `team` | string | That key's team. |
 | `model` | string | The model the request asks for. |
-| `route` | string | The Gantry route, for example `/v1/chat/completions` or `/v1/messages`. |
+| `route` | string | The Enterplace route, for example `/v1/chat/completions` or `/v1/messages`. |
 | `messages` | list | Every text part of the request, in order, as `{ "role", "text" }`. One entry per text part, so one message with two text blocks gives two entries with the same role. |
 
 Images, tool definitions and tool arguments are not sent.
@@ -93,7 +93,7 @@ Answer `200` with a JSON body:
 | `action` | string | yes | `allow`, `block` or `mask`. |
 | `reason` | string | no | One line, at most 500 characters, no control characters. Checked, then neither shown to the caller nor recorded, because it may quote the prompt. Keep it for your own logs. |
 | `findings` | list | no | `{ "kind": "...", "message": <index> }`. `kind` is 1 to 64 letters, digits, `.`, `-` or `_`, and is written to the audit record, so it must never hold the matched text. `message` is an optional 0-based index into `messages`. |
-| `masked_messages` | list | with `mask` | Exactly one string per entry of `messages`, in the same order. Refused with any other action. Gantry writes each changed string back where it came from. |
+| `masked_messages` | list | with `mask` | Exactly one string per entry of `messages`, in the same order. Refused with any other action. Enterplace writes each changed string back where it came from. |
 
 Unknown fields are refused, so a misspelled field fails loudly.
 
@@ -103,9 +103,9 @@ A block answer:
 { "action": "block", "reason": "prompt injection detected", "findings": [ { "kind": "prompt_injection", "message": 1 } ] }
 ```
 
-### What Gantry does
+### What Enterplace does
 
-| Answer | Gantry | Recorded action |
+| Answer | Enterplace | Recorded action |
 |---|---|---|
 | `allow` | Forwards the request. | `warn`, for any findings |
 | `block` | Refuses with `guardrail_blocked` (403, Anthropic type `permission_error`, `x-should-retry: false`): `Guardrail "<name>" refused this request: the guardrail service found <kind> (<count>), ...` | `block` (kind `unspecified` with no findings) |
@@ -122,7 +122,7 @@ These count as a failure of the service, and `on_failure` applies:
 - a service that cannot be reached,
 - a malformed answer.
 
-With `fail_closed`, the caller gets `guardrail_blocked` with a message saying the guardrail could not check the request. With `fail_open`, the request is forwarded and recorded with kind `unavailable` and action `skipped`. Gantry logs the cause for the operator, for example:
+With `fail_closed`, the caller gets `guardrail_blocked` with a message saying the guardrail could not check the request. With `fail_open`, the request is forwarded and recorded with kind `unavailable` and action `skipped`. Enterplace logs the cause for the operator, for example:
 
 ```text
 missing field 'action'
@@ -140,11 +140,11 @@ a finding's kind must be 1 to 64 letters, digits, dots, dashes or underscores
 Most vendors have their own API shape. Connect one with a small adapter on the same machine or pod that speaks this contract on one side and the vendor's API on the other. The vendor key never enters the policy file.
 
 ```text
-client -> Gantry --contract JSON--> adapter on 127.0.0.1:9100 --vendor API + key--> vendor
+client -> Enterplace --contract JSON--> adapter on 127.0.0.1:9100 --vendor API + key--> vendor
                  <--allow/block/mask--                         <--vendor verdict----
 ```
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 guardrails:
   - name: vendor
     type: webhook
@@ -161,15 +161,15 @@ rules:
 
 <Steps>
 
-1. Read the contract JSON. Pass `messages` to the vendor in its format, with `person`, `team` and `decision_id` as metadata if it takes them, so its console and Gantry's audit log join on `decision_id`.
+1. Read the contract JSON. Pass `messages` to the vendor in its format, with `person`, `team` and `decision_id` as metadata if it takes them, so its console and Enterplace's audit log join on `decision_id`.
 
-2. Authenticate to the vendor with a key from the adapter's own environment. If the adapter wants a credential from Gantry, name it in `headers_env`.
+2. Authenticate to the vendor with a key from the adapter's own environment. If the adapter wants a credential from Enterplace, name it in `headers_env`.
 
 3. Map the verdict: nothing found is `{"action": "allow"}`, a finding to stop is `{"action": "block", "findings": [{"kind": "<vendor category>"}]}`, a redaction is `{"action": "mask", "masked_messages": [...]}` with one string per message received.
 
 4. Put the vendor's category name in `kind`, never the matched text.
 
-5. When the vendor errors or is slow, answer with a non-2xx status or not at all, so Gantry applies `on_failure` instead of an `allow` that hides the outage.
+5. When the vendor errors or is slow, answer with a non-2xx status or not at all, so Enterplace applies `on_failure` instead of an `allow` that hides the outage.
 
 6. Start with `action: warn`, and switch to `block` once the findings look right.
 

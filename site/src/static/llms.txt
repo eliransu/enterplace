@@ -1,24 +1,24 @@
-# Gantry
+# Enterplace
 
 > Self-hosted AI gateway, open source (MIT core). Coding agents (Claude Code, Codex, Cursor, Copilot, Gemini CLI), apps and MCP clients call models through it. Each request gets a person's name, a budget, guardrails and a line in a tamper-evident audit log. One Docker image plus Postgres, in your own cloud. Claude Code users keep their own subscription login.
 
-Install and start: `curl -fsSL https://gantry.enterplace.dev/install.sh | sh` then `gantry start`.
+Install and start: `curl -fsSL https://enterplace.dev/install.sh | sh` then `enterplace start`.
 
 ## Docs
 
-- [Docs index for agents](https://gantry-docs.enterplace.dev/llms.txt): every docs page as Markdown
-- [All docs in one file](https://gantry-docs.enterplace.dev/llms-full.txt)
-- [Quickstart](https://gantry-docs.enterplace.dev/getting-started/quickstart.md)
-- [Claude Code through Gantry](https://gantry-docs.enterplace.dev/integrations/claude-code.md)
+- [Docs index for agents](https://docs.enterplace.dev/llms.txt): every docs page as Markdown
+- [All docs in one file](https://docs.enterplace.dev/llms-full.txt)
+- [Quickstart](https://docs.enterplace.dev/getting-started/quickstart.md)
+- [Claude Code through Enterplace](https://docs.enterplace.dev/integrations/claude-code.md)
 
 ## Pages
 
-- [How it works](https://gantry.enterplace.dev/product/)
-- [Compared with LiteLLM and Bifrost](https://gantry.enterplace.dev/compare/)
-- [Deploy: Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare](https://gantry.enterplace.dev/deploy/)
-- [Security](https://gantry.enterplace.dev/security/)
-- [What is an AI gateway](https://gantry.enterplace.dev/learn/what-is-an-ai-gateway/)
+- [How it works](https://enterplace.dev/product/)
+- [Compared with LiteLLM and Bifrost](https://enterplace.dev/compare/)
+- [Deploy: Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare](https://enterplace.dev/deploy/)
+- [Security](https://enterplace.dev/security/)
+- [What is an AI gateway](https://enterplace.dev/learn/what-is-an-ai-gateway/)
 
 ## Source
 
-- [GitHub: eliransu/gantry](https://github.com/eliransu/gantry)
+- [GitHub: eliransu/enterplace](https://github.com/eliransu/enterplace)

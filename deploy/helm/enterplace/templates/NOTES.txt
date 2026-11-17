@@ -1,0 +1,17 @@
+Enterplace Enterprise is starting as {{ .Values.replicaCount }} replica(s) ({{ include "enterplace.fullname" . }}), each with its own audit log.
+{{- if .Values.postgres.enabled }}
+
+The bundled Postgres is for trials only. Use a managed database in production.
+{{- end }}
+{{- if not .Values.keys.existingSecret }}
+
+No keys yet. Make a keys file with the open source CLI and give it to the chart as a Secret:
+  enterplace key new admin --team platform --admin --keys enterplace.keys.yaml
+  kubectl create secret generic enterplace-keys --from-file=enterplace.keys.yaml
+  helm upgrade {{ .Release.Name }} <chart> --reuse-values --set keys.existingSecret=enterplace-keys
+The Secret seeds new volumes only: a replica that already has a keys file keeps it.
+{{- end }}
+
+Reach it from this machine:
+  kubectl port-forward svc/{{ include "enterplace.fullname" . }} 8080:{{ .Values.service.port }}
+  curl http://127.0.0.1:8080/healthz

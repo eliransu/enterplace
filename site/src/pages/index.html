@@ -1,44 +1,44 @@
 <!--
-title: Gantry: open source AI gateway that puts a name on every AI call
-description: Gantry is a self-hosted AI gateway. Every call from coding tools, agents, apps and MCP clients goes through it with a person's name, a budget, guardrails and a record in a hash-chained audit log. One binary or Docker image, Postgres optional for teams.
+title: Enterplace: open source AI gateway that puts a name on every AI call
+description: Enterplace is a self-hosted AI gateway. Every call from coding tools, agents, apps and MCP clients goes through it with a person's name, a budget, guardrails and a record in a hash-chained audit log. One binary or Docker image, Postgres optional for teams.
 -->
 <section class="wrap hero">
   <div class="hero-text">
     <h1>Put a name on every AI call.</h1>
-    <p class="lead">Gantry is a self-hosted AI gateway. Coding tools, agents, apps and MCP clients call models through it, and each request gets a person's name, a budget, guardrails and a line in an audit log you can verify.</p>
+    <p class="lead">Enterplace is a self-hosted AI gateway. Coding tools, agents, apps and MCP clients call models through it, and each request gets a person's name, a budget, guardrails and a line in an audit log you can verify.</p>
     <div class="actions">
       <a class="btn btn-main" href="docs:/getting-started/quickstart/">Start in two minutes</a>
       <button class="btn btn-line" type="button" data-copy="agent-setup">Set up with your agent</button>
     </div>
-    <figure class="code cmd"><pre>curl -fsSL https://gantry.enterplace.dev/install.sh | sh
-gantry start</pre></figure>
+    <figure class="code cmd"><pre>curl -fsSL https://enterplace.dev/install.sh | sh
+enterplace start</pre></figure>
     <details class="agent-setup">
       <summary class="muted">Show the agent prompt</summary>
-<pre id="agent-setup">Set up Gantry, the self-hosted AI gateway, on this machine, and route my Claude Code through it while I keep my own Claude subscription login (no API key).
+<pre id="agent-setup">Set up Enterplace, the self-hosted AI gateway, on this machine, and route my Claude Code through it while I keep my own Claude subscription login (no API key).
 
-1. Install it: curl -fsSL https://gantry.enterplace.dev/install.sh | sh
+1. Install it: curl -fsSL https://enterplace.dev/install.sh | sh
    Then open a new shell, or run the PATH line it prints.
-2. Make a folder for it (~/gantry) and run "gantry start --no-open" there in the background.
+2. Make a folder for it (~/enterplace) and run "enterplace start --no-open" there in the background.
    It serves http://127.0.0.1:8080 and already has the claude-subscriptions provider, which passes my Claude login on unchanged.
    It prints a dashboard sign-in link and an admin key once: show me the link, and never put the admin key in chat, files or commits.
 3. Optional, so my requests carry my name (without it they are recorded as unknown). In that folder, make a person token for me (ask me for my name and team):
-   gantry key new &lt;name&gt; --team &lt;team&gt; --identity-only --url http://127.0.0.1:8080
+   enterplace key new &lt;name&gt; --team &lt;team&gt; --identity-only --url http://127.0.0.1:8080
 4. Add these lines to my shell profile (the second only with a token from step 3):
    export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-   export ANTHROPIC_CUSTOM_HEADERS="x-gantry-user: &lt;token&gt;"
+   export ANTHROPIC_CUSTOM_HEADERS="x-enterplace-user: &lt;token&gt;"
    ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN must stay unset, so Claude Code keeps using my subscription.
 5. Verify: in a new shell run: claude -p "say hello". It answers, and the request shows at http://127.0.0.1:8080/console/requests once I open the sign-in link.
 
 Docs as Markdown, read them for anything not covered here:
-https://gantry-docs.enterplace.dev/getting-started/quickstart.md
-https://gantry-docs.enterplace.dev/integrations/claude-code.md
-https://gantry-docs.enterplace.dev/governance/subscriptions.md
-Every page: https://gantry-docs.enterplace.dev/llms.txt</pre>
+https://docs.enterplace.dev/getting-started/quickstart.md
+https://docs.enterplace.dev/integrations/claude-code.md
+https://docs.enterplace.dev/governance/subscriptions.md
+Every page: https://docs.enterplace.dev/llms.txt</pre>
     </details>
   </div>
 
 {{gate
-label: Four callers send requests through the Gantry gate. Allowed requests pass to the provider. One request is refused because its team is over budget. Each request writes an audit record.
+label: Four callers send requests through the Enterplace gate. Allowed requests pass to the provider. One request is refused because its team is over budget. Each request writes an audit record.
 foot: Example requests.
 lane: sarah.miller | Claude Code | Anthropic
 lane: svc-invoice-bot | internal app | OpenAI
@@ -116,7 +116,7 @@ req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
 <section class="wrap sec">
   <div class="sec-head">
     <h2>What every call gets on its way through.</h2>
-    <p>Gantry sits between your tools and the model providers. It identifies the caller, decides by your policy and writes the record before anything is forwarded.</p>
+    <p>Enterplace sits between your tools and the model providers. It identifies the caller, decides by your policy and writes the record before anything is forwarded.</p>
   </div>
   <div class="split wide-right">
     <div class="stack">
@@ -130,7 +130,7 @@ req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
       <a class="more" href="/product/">How it works, stage by stage {{> arrow}}</a>
     </div>
     <div>
-      <figure class="shot"><figcaption>Gantry console: Spend <span>light theme</span></figcaption><div class="shot-in"><img src="/img/console-spend-light.webp" width="1440" height="1090" loading="lazy" alt="The Spend page of the Gantry console: spend per day, who spent most, each budget with its limit, and spend by model."></div></figure>
+      <figure class="shot"><figcaption>Enterplace console: Spend <span>light theme</span></figcaption><div class="shot-in"><img src="/img/console-spend-light.webp" width="1440" height="1090" loading="lazy" alt="The Spend page of the Enterplace console: spend per day, who spent most, each budget with its limit, and spend by model."></div></figure>
       <p class="shot-cap">The console's Spend page, on test data. Team payments reached its budget on 13 November and is refused until 1 December.</p>
     </div>
   </div>
@@ -157,12 +157,12 @@ req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
 <section class="wrap sec">
   <div class="sec-head">
     <h2>It runs where your data already is.</h2>
-    <p>Prompts and answers go from your callers, through Gantry, to the providers your policy names. Gantry never stores them, and nothing calls home.</p>
+    <p>Prompts and answers go from your callers, through Enterplace, to the providers your policy names. Enterplace never stores them, and nothing calls home.</p>
   </div>
   <div class="parts">
-    <div><b>ghcr.io/eliransu/gantry</b><h3>One image</h3><p>A single static binary in an image built from scratch, running as a non-root user. It serves the gateway, the console and the admin API.</p></div>
+    <div><b>ghcr.io/eliransu/enterplace</b><h3>One image</h3><p>A single static binary in an image built from scratch, running as a non-root user. It serves the gateway, the console and the admin API.</p></div>
     <div><b>DATABASE_URL</b><h3>Postgres, for teams</h3><p>Optional. Keys, kill switches, budgets and rate limits, shared by every replica. No Redis.</p></div>
-    <div><b>gantry.policy.yaml</b><h3>One policy file</h3><p>Providers, rules, budgets and guardrails, kept in git. An unknown field is an error with its line number.</p></div>
+    <div><b>enterplace.policy.yaml</b><h3>One policy file</h3><p>Providers, rules, budgets and guardrails, kept in git. An unknown field is an error with its line number.</p></div>
   </div>
   <div class="actions" style="margin-top: 32px">
     <a class="more" href="/deploy/">Docker, Kubernetes, AWS, Google Cloud, Azure {{> arrow}}</a>
@@ -172,7 +172,7 @@ req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
 </section>
 
 <section class="wrap sec">
-  <p class="note"><strong>Where the project stands.</strong> Gantry is at version {{version}}, pre-1.0, and has not yet had an independent security audit. There are no customer stories on this site because there are none to publish yet. The docs say what is built, what is planned, and which integrations were run against what: <a href="docs:/getting-started/status/">Project status</a>.</p>
+  <p class="note"><strong>Where the project stands.</strong> Enterplace is at version {{version}}, pre-1.0, and has not yet had an independent security audit. There are no customer stories on this site because there are none to publish yet. The docs say what is built, what is planned, and which integrations were run against what: <a href="docs:/getting-started/status/">Project status</a>.</p>
 </section>
 
 {{> cta}}

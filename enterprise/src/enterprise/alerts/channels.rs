@@ -104,7 +104,7 @@ pub struct Alert {
     pub time: String,
     /// The audit records behind it: `{replica, n, hash, id}` each.
     pub evidence: Vec<Value>,
-    /// The console, as people reach it (GANTRY_CONSOLE_URL), or empty for links relative to it.
+    /// The console, as people reach it (ENTERPLACE_CONSOLE_URL), or empty for links relative to it.
     pub console: String,
 }
 
@@ -140,7 +140,7 @@ impl Alert {
     /// The JSON body the webhook gets, and the custom details PagerDuty shows.
     pub fn json(&self) -> Value {
         json!({
-            "type": "gantry.alert",
+            "type": "enterplace.alert",
             "alert": self.id,
             "rule": self.rule,
             "kind": self.kind,
@@ -154,7 +154,7 @@ impl Alert {
     }
 
     fn title(&self) -> String {
-        format!("Gantry alert: {}", self.rule)
+        format!("Enterplace alert: {}", self.rule)
     }
 }
 
@@ -169,7 +169,7 @@ pub fn request(channel: &Channel, alert: &Alert, now: u64) -> Out {
                 .map(|id| format!("<{}|{id}>", alert.record_link(id)))
                 .collect();
             let text = format!(
-                "*{}* ({})\n{}\nRecords: {}\n<{}|Open in Gantry>",
+                "*{}* ({})\n{}\nRecords: {}\n<{}|Open in Enterplace>",
                 alert.title(),
                 alert.severity.word(),
                 alert.summary,
@@ -221,7 +221,7 @@ pub fn request(channel: &Channel, alert: &Alert, now: u64) -> Out {
                         "type": "AdaptiveCard",
                         "version": "1.4",
                         "body": body,
-                        "actions": [{ "type": "Action.OpenUrl", "title": "Open in Gantry", "url": alert.link() }],
+                        "actions": [{ "type": "Action.OpenUrl", "title": "Open in Enterplace", "url": alert.link() }],
                     },
                 }],
             });
@@ -236,15 +236,15 @@ pub fn request(channel: &Channel, alert: &Alert, now: u64) -> Out {
                 "routing_key": channel.secret,
                 "event_action": "trigger",
                 // Repeats of the same rule and subject group into one incident.
-                "dedup_key": format!("gantry-{}-{}", alert.rule, alert.key),
+                "dedup_key": format!("enterplace-{}-{}", alert.rule, alert.key),
                 "payload": {
                     "summary": format!("{}: {}", alert.rule, alert.summary).chars().take(1024).collect::<String>(),
-                    "source": "gantry",
+                    "source": "enterplace",
                     "severity": alert.severity.word(),
                     "component": alert.kind,
                     "custom_details": alert.json(),
                 },
-                "links": [{ "href": alert.link(), "text": "Open in Gantry" }],
+                "links": [{ "href": alert.link(), "text": "Open in Enterplace" }],
             });
             Out::post(
                 if channel.url.is_empty() {
@@ -266,7 +266,7 @@ pub fn request(channel: &Channel, alert: &Alert, now: u64) -> Out {
                 .header(header, value)
                 // The same HMAC of the body alone as audit export webhooks carry, for receivers already checking it.
                 .header(
-                    "x-gantry-signature",
+                    "x-enterplace-signature",
                     format!(
                         "sha256={}",
                         signature(&channel.secret, &alert.json().to_string().into_bytes())
@@ -457,7 +457,7 @@ fn tls_client(
 /// The message as sent: headers and a plain text body, lines ending in CRLF and dot-stuffed.
 pub fn message(from: &str, to: &[String], alert: &Alert, date: &str) -> String {
     let body = format!(
-        "{}\r\n\r\nRule: {}\r\nSeverity: {}\r\nSubject: {}\r\nTime: {}\r\n\r\nAudit records behind it:\r\n{}\r\n\r\nOpen in Gantry: {}\r\n",
+        "{}\r\n\r\nRule: {}\r\nSeverity: {}\r\nSubject: {}\r\nTime: {}\r\n\r\nAudit records behind it:\r\n{}\r\n\r\nOpen in Enterplace: {}\r\n",
         alert.summary,
         alert.rule,
         alert.severity.word(),
@@ -471,7 +471,7 @@ pub fn message(from: &str, to: &[String], alert: &Alert, date: &str) -> String {
         .filter(|c| !c.is_control())
         .collect();
     let mut text = format!(
-        "From: {from}\r\nTo: {}\r\nSubject: {subject}\r\nDate: {date}\r\nMessage-ID: <gantry-alert-{}-{}@gantry>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
+        "From: {from}\r\nTo: {}\r\nSubject: {subject}\r\nDate: {date}\r\nMessage-ID: <enterplace-alert-{}-{}@enterplace>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
         to.join(", "),
         alert.id,
         date.len()
@@ -508,7 +508,7 @@ fn converse<S: Read + Write>(
         session.send(&format!("RCPT TO:<{address}>"), 250, "a recipient")?;
     }
     session.send("DATA", 354, "the message")?;
-    let date = gantry_core::audit::timestamp();
+    let date = enterplace_core::audit::timestamp();
     let text = message(from, to, alert, &date);
     session.send(&format!("{text}."), 250, "the message")?;
     let _ = session.send("QUIT", 221, "QUIT");
@@ -542,7 +542,7 @@ pub fn smtp(channel: &Channel, alert: &Alert) -> Result<(), String> {
         })?;
     let _ = tcp.set_read_timeout(Some(Duration::from_secs(20)));
     let _ = tcp.set_write_timeout(Some(Duration::from_secs(20)));
-    let helo = "EHLO gantry";
+    let helo = "EHLO enterplace";
     if target.implicit {
         let mut session = Session::new(tls_client(&target.host, tcp)?);
         session.expect(220, "the connection")?;
@@ -560,7 +560,7 @@ pub fn smtp(channel: &Channel, alert: &Alert) -> Result<(), String> {
     }
     if !local(&target.host) {
         return Err(format!(
-            "{} offers no STARTTLS, and Gantry sends email in the clear only to this machine. Use smtps://{}:465 or a server with STARTTLS.",
+            "{} offers no STARTTLS, and Enterplace sends email in the clear only to this machine. Use smtps://{}:465 or a server with STARTTLS.",
             target.host, target.host
         ));
     }

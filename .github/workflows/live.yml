@@ -1,5 +1,5 @@
 name: live
-# The live provider matrix (scripts/live_matrix.py): every route Gantry serves against each real provider kind, with
+# The live provider matrix (scripts/live_matrix.py): every route Enterplace serves against each real provider kind, with
 # a token cap per run. A provider whose secrets are not set is skipped and says so. The matrix is this run's job summary
 # and its live-matrix artifact; docs/src/data/live-matrix.json is updated from an artifact by hand (see the docs page
 # Providers > Live test matrix), so no workflow writes to main.
@@ -29,22 +29,22 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - run: cargo build --release --locked -p gantry-cli
+      - run: cargo build --release --locked -p enterplace-cli
       - name: Run every route against every provider with keys
         env:
-          GANTRY_LIVE_MAX_TOKENS: ${{ inputs.max_tokens || '20000' }}
-          GANTRY_LIVE_OPENAI_KEY: ${{ secrets.GANTRY_LIVE_OPENAI_KEY }}
-          GANTRY_LIVE_ANTHROPIC_KEY: ${{ secrets.GANTRY_LIVE_ANTHROPIC_KEY }}
-          GANTRY_LIVE_AZURE_KEY: ${{ secrets.GANTRY_LIVE_AZURE_KEY }}
-          GANTRY_LIVE_AZURE_URL: ${{ secrets.GANTRY_LIVE_AZURE_URL }}
-          GANTRY_LIVE_AZURE_DEPLOYMENT: ${{ secrets.GANTRY_LIVE_AZURE_DEPLOYMENT }}
-          GANTRY_LIVE_AWS_ACCESS_KEY_ID: ${{ secrets.GANTRY_LIVE_AWS_ACCESS_KEY_ID }}
-          GANTRY_LIVE_AWS_SECRET_ACCESS_KEY: ${{ secrets.GANTRY_LIVE_AWS_SECRET_ACCESS_KEY }}
-          GANTRY_LIVE_GEMINI_KEY: ${{ secrets.GANTRY_LIVE_GEMINI_KEY }}
-          GANTRY_LIVE_VERTEX_SA_JSON: ${{ secrets.GANTRY_LIVE_VERTEX_SA_JSON }}
-          GANTRY_LIVE_GROQ_KEY: ${{ secrets.GANTRY_LIVE_GROQ_KEY }}
-          GANTRY_LIVE_MISTRAL_KEY: ${{ secrets.GANTRY_LIVE_MISTRAL_KEY }}
-        run: python3 scripts/live_matrix.py --gantry target/release/gantry --out live-matrix.json
+          ENTERPLACE_LIVE_MAX_TOKENS: ${{ inputs.max_tokens || '20000' }}
+          ENTERPLACE_LIVE_OPENAI_KEY: ${{ secrets.ENTERPLACE_LIVE_OPENAI_KEY }}
+          ENTERPLACE_LIVE_ANTHROPIC_KEY: ${{ secrets.ENTERPLACE_LIVE_ANTHROPIC_KEY }}
+          ENTERPLACE_LIVE_AZURE_KEY: ${{ secrets.ENTERPLACE_LIVE_AZURE_KEY }}
+          ENTERPLACE_LIVE_AZURE_URL: ${{ secrets.ENTERPLACE_LIVE_AZURE_URL }}
+          ENTERPLACE_LIVE_AZURE_DEPLOYMENT: ${{ secrets.ENTERPLACE_LIVE_AZURE_DEPLOYMENT }}
+          ENTERPLACE_LIVE_AWS_ACCESS_KEY_ID: ${{ secrets.ENTERPLACE_LIVE_AWS_ACCESS_KEY_ID }}
+          ENTERPLACE_LIVE_AWS_SECRET_ACCESS_KEY: ${{ secrets.ENTERPLACE_LIVE_AWS_SECRET_ACCESS_KEY }}
+          ENTERPLACE_LIVE_GEMINI_KEY: ${{ secrets.ENTERPLACE_LIVE_GEMINI_KEY }}
+          ENTERPLACE_LIVE_VERTEX_SA_JSON: ${{ secrets.ENTERPLACE_LIVE_VERTEX_SA_JSON }}
+          ENTERPLACE_LIVE_GROQ_KEY: ${{ secrets.ENTERPLACE_LIVE_GROQ_KEY }}
+          ENTERPLACE_LIVE_MISTRAL_KEY: ${{ secrets.ENTERPLACE_LIVE_MISTRAL_KEY }}
+        run: python3 scripts/live_matrix.py --enterplace target/release/enterplace --out live-matrix.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -29,7 +29,7 @@ POST https://runtime.sagemaker.eu-west-1.amazonaws.com/endpoints/my-llama-endpoi
 POST https://runtime.sagemaker.eu-west-1.amazonaws.com/endpoints/my-llama-endpoint/invocations-response-stream   (stream: true)
 ```
 
-The body goes as sent. A streamed answer comes in SageMaker's event stream, whose `PayloadPart` events carry the container's output cut anywhere; Gantry joins them into whole lines and passes each on as a chat completions `data:` event, ending with `data: [DONE]`. Usage is read from the answer's `usage` (LMI reports it whole; a stream that reports none is charged its reservation). `POST /v1/responses` reaches the endpoint translated to chat. Through `/passthrough/<provider>/endpoints/<endpoint>/...` a rule can reach any endpoint's own API, signed, with the endpoint decided as its model.
+The body goes as sent. A streamed answer comes in SageMaker's event stream, whose `PayloadPart` events carry the container's output cut anywhere; Enterplace joins them into whole lines and passes each on as a chat completions `data:` event, ending with `data: [DONE]`. Usage is read from the answer's `usage` (LMI reports it whole; a stream that reports none is charged its reservation). `POST /v1/responses` reaches the endpoint translated to chat. Through `/passthrough/<provider>/endpoints/<endpoint>/...` a rule can reach any endpoint's own API, signed, with the endpoint decided as its model.
 
 ## Replicate
 
@@ -58,7 +58,7 @@ Cancel-After: 60s
 
 ### Streaming
 
-A request with `stream: true` streams live. The prediction is created with `"stream": true` and no wait, and Gantry reads its `urls.stream` (server-sent events, `Accept: text/event-stream`) as Replicate's streaming guide describes. Each `output` event becomes a chat completions chunk as it arrives; `done` ends the answer with its finish chunk; an `error` event (or a `done` with a reason) ends it with an error event. Once the stream is done, Gantry reads the prediction (`urls.get`) once for its `metrics`, and the usage is metered from them. The usage chunk is passed on only when the request asks for it (`stream_options.include_usage`). A streamed prediction is cancelled by Replicate after 300 seconds (`Cancel-After: 300s`). A model that does not stream (no `urls.stream`) is refused with a 502 that says to send it without `stream`. The provider key is sent only to Replicate's own hosts.
+A request with `stream: true` streams live. The prediction is created with `"stream": true` and no wait, and Enterplace reads its `urls.stream` (server-sent events, `Accept: text/event-stream`) as Replicate's streaming guide describes. Each `output` event becomes a chat completions chunk as it arrives; `done` ends the answer with its finish chunk; an `error` event (or a `done` with a reason) ends it with an error event. Once the stream is done, Enterplace reads the prediction (`urls.get`) once for its `metrics`, and the usage is metered from them. The usage chunk is passed on only when the request asks for it (`stream_options.include_usage`). A streamed prediction is cancelled by Replicate after 300 seconds (`Cancel-After: 300s`). A model that does not stream (no `urls.stream`) is refused with a 502 that says to send it without `stream`. The provider key is sent only to Replicate's own hosts.
 
 ### Input fields by model family
 
@@ -107,7 +107,7 @@ providers:
 ```
 
 - The tenancy, user and fingerprint are the ones the OCI console shows for the user's API key. The private key is the PEM file the console gave (PKCS #8, or PKCS #1 `BEGIN RSA PRIVATE KEY`), RSA of 2048 bits or more, without a passphrase. It is read once at start.
-- A provider with `oci_signing` takes no `key_env`, `key_file` or `credential`; `gantry check` says so. The user needs an IAM policy that lets it use Generative AI in the compartment.
+- A provider with `oci_signing` takes no `key_env`, `key_file` or `credential`; `enterplace check` says so. The user needs an IAM policy that lets it use Generative AI in the compartment.
 - The gateway's clock must be within 5 minutes of OCI's, or OCI answers 401.
 
 ## NVIDIA Triton Inference Server
@@ -135,7 +135,7 @@ rules:
 ```
 
 - The model is the path segment after `/v2/models/`, decided by the rule as on a model route, and priced by that name.
-- Triton's generate answer carries no token counts of its own. Gantry meters it from the model's `num_input_tokens` and `num_output_tokens` outputs when the model reports them: vLLM's backend does when the request sets `return_num_input_tokens` and `return_num_output_tokens` (for example in `parameters`, or as top-level fields). A stream's `num_output_tokens` are added up across its responses. `parameters.max_tokens` sizes the budget reservation, else the price's `max_output`.
+- Triton's generate answer carries no token counts of its own. Enterplace meters it from the model's `num_input_tokens` and `num_output_tokens` outputs when the model reports them: vLLM's backend does when the request sets `return_num_input_tokens` and `return_num_output_tokens` (for example in `parameters`, or as top-level fields). A stream's `num_output_tokens` are added up across its responses. `parameters.max_tokens` sizes the budget reservation, else the price's `max_output`.
 - A model that reports no counts is passthrough without metering: under a budget it is charged its reservation, and without one an estimate from the prompt. A model that has no price under a budget is refused with `no_price` before it is sent; add its price under `prices:` to reach it under a budget.
 
 ## Related

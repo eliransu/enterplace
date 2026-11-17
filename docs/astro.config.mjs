@@ -3,7 +3,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 // Served at the root of its own domain on Cloudflare.
-const site = process.env.DOCS_SITE ?? 'https://gantry-docs.enterplace.dev';
+const site = process.env.DOCS_SITE ?? 'https://docs.enterplace.dev';
 const base = process.env.DOCS_BASE ?? '/';
 
 const group = (label, directory) => ({ label, items: [{ autogenerate: { directory } }] });
@@ -13,13 +13,13 @@ export default defineConfig({
 	base,
 	integrations: [
 		starlight({
-			title: 'Gantry',
+			title: 'Enterplace',
 			description: 'The open source AI gateway built for governance: identity, policy and a tamper-evident audit log on every model request.',
 			logo: { light: './src/assets/logo-light.svg', dark: './src/assets/logo-dark.svg' },
 			favicon: '/favicon.svg',
-			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/eliransu/gantry' }],
-			editLink: { baseUrl: 'https://github.com/eliransu/gantry/edit/main/docs/' },
-			customCss: ['./src/styles/gantry.css'],
+			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/eliransu/enterplace' }],
+			editLink: { baseUrl: 'https://github.com/eliransu/enterplace/edit/main/docs/' },
+			customCss: ['./src/styles/enterplace.css'],
 			// Copy page and Open in Claude or ChatGPT under each title; the Markdown twins come from scripts/agent-docs.mjs.
 			head: [{ tag: 'script', attrs: { src: '/agent-tools.js', defer: true } }, { tag: 'script', attrs: { src: '/_t.js', defer: true } }],
 			lastUpdated: true,

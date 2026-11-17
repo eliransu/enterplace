@@ -1,5 +1,5 @@
 //! The enterprise features, added to the open source gateway through its extension points
-//! (`gantry_server::serve_policy_with`): routes, console pages, tables in the store's Postgres and /healthz fields.
+//! (`enterplace_server::serve_policy_with`): routes, console pages, tables in the store's Postgres and /healthz fields.
 //! A feature is added only when the license unlocks it; without one the gateway and console are the open source ones.
 //!
 //! How a feature registers is written up in docs/porting.md.
@@ -17,7 +17,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use gantry_server::{
+use enterplace_server::{
     Extension, Host,
     store::{PgStore, tokio_postgres::Client},
 };
@@ -26,7 +26,7 @@ use serde_json::json;
 use crate::license::{self, State, Status};
 
 /// Each feature's tables, one migration per entry, applied in order under the feature's own namespace (its own
-/// version row in `gantry_migrations`), and only when the license unlocks the feature. Never edit an entry that has
+/// version row in `enterplace_migrations`), and only when the license unlocks the feature. Never edit an entry that has
 /// shipped: add one.
 const MEMBERS: &[&str] = &[members::MIGRATION];
 /// Alters members' table, so it runs after `MEMBERS`, and only with members on.
@@ -53,9 +53,9 @@ const ALERTS: &[&str] = &[alerts::MIGRATION, alerts::DAILY];
 /// none of that DDL runs again. It runs once, as the namespace `enterprise.split`, before any feature's migrations;
 /// on a new database it records nothing. The old row stays, so an older replica in a rolling upgrade still starts.
 const SPLIT: &[&str] = &["
-INSERT INTO gantry_migrations (namespace, version)
+INSERT INTO enterplace_migrations (namespace, version)
 SELECT feature, 1
-FROM gantry_migrations, (VALUES ('enterprise.members', 1), ('enterprise.scim', 2), ('enterprise.siem', 3)) AS old (feature, entry)
+FROM enterplace_migrations, (VALUES ('enterprise.members', 1), ('enterprise.scim', 2), ('enterprise.siem', 3)) AS old (feature, entry)
 WHERE namespace = 'enterprise' AND version >= entry
 ON CONFLICT (namespace) DO NOTHING;
 "];
@@ -131,7 +131,7 @@ pub fn extend_with(
     let limit = read_limit();
     // Each organization's chain (`audit: { per_org: true }`) is exported, retained and shipped as the install's is,
     // each with its own read-through limit.
-    let orgs: Vec<(gantry_server::OrgChain, Arc<AtomicU64>)> = host
+    let orgs: Vec<(enterplace_server::OrgChain, Arc<AtomicU64>)> = host
         .org_chains
         .iter()
         .map(|chain| (chain.clone(), read_limit()))
@@ -175,18 +175,19 @@ pub fn extend_with(
             .extend(shippers);
     }
     // An organization a reload adds is shipped from then on, as those open at start are.
-    let org_hook = |siem: Option<OrgSiem>| -> Arc<dyn Fn(gantry_server::OrgChain) + Send + Sync> {
-        let (segment_store, env) = (segment_store.clone(), env.clone());
-        Arc::new(move |chain| {
-            new_org(
-                &chain,
-                segment_store.as_deref(),
-                &env,
-                export_reads,
-                siem.as_ref(),
-            );
-        })
-    };
+    let org_hook =
+        |siem: Option<OrgSiem>| -> Arc<dyn Fn(enterplace_server::OrgChain) + Send + Sync> {
+            let (segment_store, env) = (segment_store.clone(), env.clone());
+            Arc::new(move |chain| {
+                new_org(
+                    &chain,
+                    segment_store.as_deref(),
+                    &env,
+                    export_reads,
+                    siem.as_ref(),
+                );
+            })
+        };
     extension.on_org = Some(org_hook(None));
     let watch_on = status.unlocked(watch::FEATURE);
     if !watch_on {
@@ -251,7 +252,7 @@ pub fn extend_with(
         if let Some(captures) = &captures {
             extension.capture = Some(captures.clone());
         }
-        let setup = |log: &Arc<gantry_core::audit::AuditLog>,
+        let setup = |log: &Arc<enterplace_core::audit::AuditLog>,
                      path: &Path,
                      read_through: &Arc<AtomicU64>| siem::Setup {
             db: db.clone(),
@@ -326,7 +327,7 @@ struct OrgSiem {
     retention: bool,
     alerts: bool,
     captures: Option<Arc<capture::Captures>>,
-    policy_now: gantry_server::PolicyNow,
+    policy_now: enterplace_server::PolicyNow,
     /// The keys and policy files, for the rules on expiring keys and on regions.
     keys: std::path::PathBuf,
     policy: std::path::PathBuf,
@@ -335,7 +336,7 @@ struct OrgSiem {
 /// The chain of an organization a policy reload added: shipped, exported, retained and alerted on as the chains
 /// open at start are. Runs on the gateway's runtime, which the gateway entered.
 fn new_org(
-    chain: &gantry_server::OrgChain,
+    chain: &enterplace_server::OrgChain,
     segment_store: Option<&segments::Store>,
     env: &siem::sinks::Env,
     export_reads: bool,
@@ -395,7 +396,7 @@ fn new_org(
 /// Where an organization's segments go in the bucket, beside the install's: `orgs/<org>`, the name as its chain's
 /// file has it.
 fn org_prefix(org: &str) -> String {
-    let file = gantry_core::audit::org_path(Path::new(""), org);
+    let file = enterplace_core::audit::org_path(Path::new(""), org);
     let name = file
         .file_stem()
         .map(|n| n.to_string_lossy().into_owned())
@@ -404,14 +405,14 @@ fn org_prefix(org: &str) -> String {
 }
 
 /// Before `serve` opens the audit log: on an empty disk, fetches the chain's newest segments from the store
-/// `GANTRY_AUDIT_SEGMENTS_URL` names, so the gateway continues it. Nothing when it is unset.
+/// `ENTERPLACE_AUDIT_SEGMENTS_URL` names, so the gateway continues it. Nothing when it is unset.
 pub fn restore_audit(policy: &Path, keys: Option<&Path>) -> Result<(), String> {
     let env: siem::sinks::Env = Arc::new(|variable| std::env::var(variable).ok());
     let Some(store) = segments::Store::from_env(&env)? else {
         return Ok(());
     };
     // A policy that does not load is reported by `serve` itself, with every error in it.
-    let Ok(loaded) = gantry_core::config::load(policy, keys) else {
+    let Ok(loaded) = enterplace_core::config::load(policy, keys) else {
         return Ok(());
     };
     eprintln!(
@@ -424,7 +425,7 @@ pub fn restore_audit(policy: &Path, keys: Option<&Path>) -> Result<(), String> {
                 "audit segments of organization {org}: {}",
                 segments::restore(
                     &store.within(&org_prefix(org)),
-                    &gantry_core::audit::org_path(&loaded.audit_path, org)
+                    &enterplace_core::audit::org_path(&loaded.audit_path, org)
                 )?
             );
         }
@@ -448,7 +449,7 @@ pub fn finish_audit() {
 }
 
 /// The license as /healthz shows it: who it is for and until when, never the token.
-fn health(status: &Status) -> gantry_server::Health {
+fn health(status: &Status) -> enterplace_server::Health {
     let state = match status.state {
         State::Missing => "missing",
         State::Valid => "valid",
@@ -498,7 +499,7 @@ impl Db {
 
 #[cfg(test)]
 pub(crate) mod testing {
-    //! A gateway with the enterprise features, on a fresh database of the Postgres GANTRY_TEST_DATABASE_URL names.
+    //! A gateway with the enterprise features, on a fresh database of the Postgres ENTERPLACE_TEST_DATABASE_URL names.
 
     use std::path::PathBuf;
 
@@ -514,7 +515,7 @@ pub(crate) mod testing {
 
     pub type Error = Box<dyn std::error::Error>;
     pub const HOST: &str = "127.0.0.1:19870";
-    pub const ADMIN_KEY: &str = "gantry_admin_0123456789abcdef0123456789";
+    pub const ADMIN_KEY: &str = "enterplace_admin_0123456789abcdef0123456789";
 
     pub fn licensed(features: &[&str]) -> Status {
         Status {
@@ -537,11 +538,13 @@ pub(crate) mod testing {
         }
     }
 
-    /// A fresh database, as a connection string. `None` (and a line saying so) when GANTRY_TEST_DATABASE_URL is not
+    /// A fresh database, as a connection string. `None` (and a line saying so) when ENTERPLACE_TEST_DATABASE_URL is not
     /// set, so a machine without Postgres skips these tests; CI sets it.
-    pub async fn database(test: &str) -> Result<Option<gantry_server::store::TestDatabase>, Error> {
-        gantry_server::store::TestDatabase::create(&format!(
-            "gantry_ent_{}_{test}",
+    pub async fn database(
+        test: &str,
+    ) -> Result<Option<enterplace_server::store::TestDatabase>, Error> {
+        enterplace_server::store::TestDatabase::create(&format!(
+            "enterplace_ent_{}_{test}",
             std::process::id()
         ))
         .await
@@ -552,16 +555,16 @@ pub(crate) mod testing {
         pub keys: PathBuf,
         pub dir: PathBuf,
         /// The gateway's audit log, and its path.
-        pub log: std::sync::Arc<gantry_core::audit::AuditLog>,
+        pub log: std::sync::Arc<enterplace_core::audit::AuditLog>,
         pub audit: PathBuf,
-        pub governed: gantry_server::Governed,
+        pub governed: enterplace_server::Governed,
         _store: Closes,
     }
 
     /// Closes the gateway's store when the test drops its gateway. The reloader and the store's own tasks hold the
     /// store for as long as the process runs, so without this every finished test left its connections open and a
     /// run on many cores passed Postgres's default of 100.
-    struct Closes(Option<std::sync::Arc<gantry_server::store::PgStore>>);
+    struct Closes(Option<std::sync::Arc<enterplace_server::store::PgStore>>);
 
     impl Drop for Closes {
         fn drop(&mut self) {
@@ -578,7 +581,7 @@ pub(crate) mod testing {
 
     /// `gateway`, with the enterprise features reading `env` as their environment.
     /// The policy of every test gateway: one provider, one rule for everyone.
-    pub const POLICY: &str = "version: 1\nstore: { postgres_url_env: GANTRY_STORE_URL }\nproviders:\n  - name: mock\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m]\nrules:\n  - name: all\n    principals: { any: true }\n    models: [m]\n";
+    pub const POLICY: &str = "version: 1\nstore: { postgres_url_env: ENTERPLACE_STORE_URL }\nproviders:\n  - name: mock\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m]\nrules:\n  - name: all\n    principals: { any: true }\n    models: [m]\n";
 
     pub fn gateway_with(
         test: &str,
@@ -597,17 +600,18 @@ pub(crate) mod testing {
         vars: &[(&str, &str)],
         policy_text: &str,
     ) -> Result<Gateway, Error> {
-        let dir = std::env::temp_dir().join(format!("gantry-ent-{}-{test}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("enterplace-ent-{}-{test}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
-        let policy = dir.join("gantry.policy.yaml");
+        let policy = dir.join("enterplace.policy.yaml");
         std::fs::write(&policy, policy_text)?;
         let url = url.to_string();
         let env = move |variable: &str| match variable {
-            "GANTRY_STORE_URL" => Some(url.clone()),
+            "ENTERPLACE_STORE_URL" => Some(url.clone()),
             // Unset, as on a gateway that keeps no provider credentials in the store: a catch-all answer would set
             // both of these, which the gateway refuses.
-            "GANTRY_MASTER_KEY" | "GANTRY_MASTER_KEY_FILE" => None,
+            "ENTERPLACE_MASTER_KEY" | "ENTERPLACE_MASTER_KEY_FILE" => None,
             _ => Some("provider-secret".into()),
         };
         let vars: std::collections::HashMap<String, String> = vars
@@ -617,7 +621,7 @@ pub(crate) mod testing {
         let vars: super::siem::sinks::Env =
             std::sync::Arc::new(move |name| vars.get(name).cloned());
         let store = std::sync::Mutex::new(None);
-        let gw = gantry_server::governed_with(&policy, None, &env, &|host| {
+        let gw = enterplace_server::governed_with(&policy, None, &env, &|host| {
             if let Ok(mut store) = store.lock() {
                 *store = host.postgres.cloned();
             }
@@ -625,9 +629,9 @@ pub(crate) mod testing {
         })?;
         let store = Closes(store.into_inner().ok().flatten());
         let keys = gw.loaded.keys_path.clone();
-        gantry_core::keyfile::add_entry("noa", "platform", ADMIN_KEY, true, &keys)?;
+        enterplace_core::keyfile::add_entry("noa", "platform", ADMIN_KEY, true, &keys)?;
         // In effect at once, so the admin API knows the key too, not only the console.
-        gw.reloader.check(gantry_server::Trigger::FileChange);
+        gw.reloader.check(enterplace_server::Trigger::FileChange);
         Ok(Gateway {
             app: gw.router.clone(),
             keys,
@@ -641,8 +645,8 @@ pub(crate) mod testing {
 
     /// Two roles that may issue and revoke: one kept to organization acme, one kept to team payments.
     pub const CONFINED: &str = "orgs: [acme, globex]\nroles:\n  - name: acme-admin\n    permissions: [issue_keys, revoke_keys]\n    org: acme\n  - name: payments-admin\n    permissions: [issue_keys, revoke_keys]\n    teams: [payments]\n";
-    pub const ACME_KEY: &str = "gantry_acme_0123456789abcdef0123456789ab";
-    pub const PAYMENTS_KEY: &str = "gantry_pay_0123456789abcdef0123456789abc";
+    pub const ACME_KEY: &str = "enterplace_acme_0123456789abcdef0123456789ab";
+    pub const PAYMENTS_KEY: &str = "enterplace_pay_0123456789abcdef0123456789abc";
 
     /// Adds an admin key for each role of [`CONFINED`], which the gateway's policy must hold.
     pub fn confined_admins(gw: &Gateway) -> Result<(), Error> {
@@ -650,16 +654,16 @@ pub(crate) mod testing {
             ("ada", ACME_KEY, "acme-admin"),
             ("pia", PAYMENTS_KEY, "payments-admin"),
         ] {
-            let attributes = gantry_core::keyfile::Attributes {
+            let attributes = enterplace_core::keyfile::Attributes {
                 admin: true,
                 role: Some(role.into()),
                 ..Default::default()
             };
-            gantry_core::keyfile::add_with(name, "platform", key, &attributes, &gw.keys)?;
+            enterplace_core::keyfile::add_with(name, "platform", key, &attributes, &gw.keys)?;
         }
         gw.governed
             .reloader
-            .check(gantry_server::Trigger::FileChange);
+            .check(enterplace_server::Trigger::FileChange);
         Ok(())
     }
 
@@ -716,7 +720,7 @@ pub(crate) mod testing {
         fn keep(&mut self, headers: &HeaderMap) {
             for cookie in headers.get_all(header::SET_COOKIE) {
                 if let Some(pair) = cookie.to_str().ok().and_then(|c| c.split(';').next())
-                    && pair.starts_with("gantry_console=")
+                    && pair.starts_with("enterplace_console=")
                 {
                     self.cookie = pair.to_string();
                 }
@@ -797,14 +801,14 @@ mod migration_tests {
     #[test]
     fn the_migration_fingerprints_file_matches_the_code() -> Result<(), Error> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations.txt");
-        gantry_server::store::PgStore::check_migration_manifest(
+        enterplace_server::store::PgStore::check_migration_manifest(
             &path,
             super::NAMESPACES,
-            "cargo test -p gantry-enterprise the_migration_fingerprints_file_matches_the_code",
+            "cargo test -p enterplace-enterprise the_migration_fingerprints_file_matches_the_code",
         )?;
         Ok(())
     }
-    use gantry_server::store::tokio_postgres::{self, Client, NoTls};
+    use enterplace_server::store::tokio_postgres::{self, Client, NoTls};
 
     async fn connect(url: &str) -> Result<Client, Error> {
         let (client, connection) = tokio_postgres::connect(url, NoTls).await?;
@@ -816,7 +820,7 @@ mod migration_tests {
         let mut rows = Vec::new();
         for row in client
             .query(
-                "SELECT namespace, version FROM gantry_migrations WHERE namespace LIKE 'enterprise%' ORDER BY namespace",
+                "SELECT namespace, version FROM enterplace_migrations WHERE namespace LIKE 'enterprise%' ORDER BY namespace",
                 &[],
             )
             .await?
@@ -834,7 +838,7 @@ mod migration_tests {
         client: &Client,
         features: &[&str],
     ) -> Result<(), Error> {
-        client.batch_execute("DELETE FROM gantry_keys").await?;
+        client.batch_execute("DELETE FROM enterplace_keys").await?;
         gateway(test, url, &licensed(features))?;
         Ok(())
     }
@@ -845,7 +849,7 @@ mod migration_tests {
         let client = connect(url).await?;
         client
             .batch_execute(
-                "CREATE TABLE gantry_migrations (namespace text PRIMARY KEY, version integer NOT NULL)",
+                "CREATE TABLE enterplace_migrations (namespace text PRIMARY KEY, version integer NOT NULL)",
             )
             .await?;
         let old = [
@@ -859,7 +863,7 @@ mod migration_tests {
         let version = i32::try_from(ran)?;
         client
             .execute(
-                "INSERT INTO gantry_migrations VALUES ('enterprise', $1)",
+                "INSERT INTO enterplace_migrations VALUES ('enterprise', $1)",
                 &[&version],
             )
             .await?;

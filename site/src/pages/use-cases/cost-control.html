@@ -11,7 +11,7 @@ nav: use-cases
 
 <section class="wrap sec" style="padding-top: 40px">
 {{gate
-label: Four teams send requests through Gantry. Three are inside their budget. Team support is refused because it reached its monthly budget.
+label: Four teams send requests through Enterplace. Three are inside their budget. Team support is refused because it reached its monthly budget.
 foot: Example requests. Team support reached its 500 USD monthly budget.
 lane: sarah.miller | payments | 212 of 500 USD
 lane: svc-triage-agent | support | 500 of 500 USD
@@ -47,7 +47,7 @@ req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
     <li class="no-code">
       <div class="guide-text">
         <h3>See spend per person, team and model</h3>
-        <p>Once tools point at Gantry and each person has a key, the console's Analytics page ranks requests, tokens and cost by person, team, key, model or coding agent. Gantry prices each answer from a built-in table for most models, and <code>gantry prices</code> prints it.</p>
+        <p>Once tools point at Enterplace and each person has a key, the console's Analytics page ranks requests, tokens and cost by person, team, key, model or coding agent. Enterplace prices each answer from a built-in table for most models, and <code>enterplace prices</code> prints it.</p>
         <a class="more" href="/learn/five-steps/#see">Steps 1 and 2: See and Know {{> arrow}}</a>
       </div>
     </li>
@@ -57,15 +57,15 @@ req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
         <p>Pick the amount from what step one showed you. While the policy is in observe mode, a request over the budget is forwarded and recorded as <code>would_refuse</code>. Its cost still counts, so the numbers are real on the day you enforce.</p>
         <a class="more" href="docs:/start/step-3-limit/">Step 3 in the docs {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml (added)</figcaption><pre>limits:
+      <figure class="code"><figcaption>enterplace.policy.yaml (added)</figcaption><pre>limits:
   - { team: "*", budget: { usd: 500, per: month } }</pre></figure>
     </li>
     <li>
       <div class="guide-text">
         <h3>Enforce it</h3>
-        <p>Delete the <code>mode: observe</code> line. From the next request, a team that reaches its budget is refused with <code>budget_exceeded</code>, and the message says when the budget starts again. Gantry reserves the most a request could cost before it is sent, so a budget cannot be overrun.</p>
+        <p>Delete the <code>mode: observe</code> line. From the next request, a team that reaches its budget is refused with <code>budget_exceeded</code>, and the message says when the budget starts again. Enterplace reserves the most a request could cost before it is sent, so a budget cannot be overrun.</p>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml (removed)</figcaption><pre><span class="no">- mode: observe</span></pre></figure>
+      <figure class="code"><figcaption>enterplace.policy.yaml (removed)</figcaption><pre><span class="no">- mode: observe</span></pre></figure>
     </li>
     <li>
       <div class="guide-text">
@@ -73,7 +73,7 @@ req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
         <p>A daily budget per person, a cap on one costly model, a rate limit, a budget on a single key. A new limit can run on trial by itself with <code>shadow_until</code>, while the rest of the policy is enforced.</p>
         <a class="more" href="docs:/governance/budgets-and-rate-limits/">Budgets and rate limits {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>limits:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>limits:
   - { team: "*", budget: { usd: 500, per: month } }
   - { person: "*", budget: { usd: 20, per: day },
       shadow_until: 2026-12-15 }
@@ -100,10 +100,10 @@ req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
         <li>Who spent most, with a link to their requests.</li>
         <li>Spend by model and provider, and the requests stopped before sending.</li>
       </ul>
-      <p class="muted">Alerts to Slack, Teams, PagerDuty or email before a budget runs out are part of Gantry Enterprise. <span class="ent">Enterprise</span></p>
+      <p class="muted">Alerts to Slack, Teams, PagerDuty or email before a budget runs out are part of Enterplace Enterprise. <span class="ent">Enterprise</span></p>
     </div>
     <div>
-      <figure class="shot"><figcaption>Gantry console: Spend <span>light theme</span></figcaption><div class="shot-in"><img src="/img/console-spend-light.webp" width="1440" height="1090" loading="lazy" alt="The Spend page of the Gantry console: spend per day, who spent most, each budget with its limit, and spend by model."></div></figure>
+      <figure class="shot"><figcaption>Enterplace console: Spend <span>light theme</span></figcaption><div class="shot-in"><img src="/img/console-spend-light.webp" width="1440" height="1090" loading="lazy" alt="The Spend page of the Enterplace console: spend per day, who spent most, each budget with its limit, and spend by model."></div></figure>
       <p class="shot-cap">The console's Spend page, on test data.</p>
     </div>
   </div>
@@ -115,7 +115,7 @@ req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
     <li><strong>Cost is computed from token counts and a price table.</strong> It will be close to your invoice and not identical to it, for example where you have a negotiated rate. You can set your own prices in the policy.</li>
     <li><strong>A budget needs a price.</strong> A request for a model with no known price, under a rule with a budget, is refused with <code>no_price</code> until you add one.</li>
     <li><strong>Claude Team and Enterprise seats are not billed per dollar.</strong> In the watch setup, costs are Claude Code's own estimates at list price. Read them as relative usage.</li>
-    <li><strong>Gantry counts what goes through it.</strong> A tool that still calls a provider directly spends outside every budget.</li>
+    <li><strong>Enterplace counts what goes through it.</strong> A tool that still calls a provider directly spends outside every budget.</li>
   </ul>
 </section>
 

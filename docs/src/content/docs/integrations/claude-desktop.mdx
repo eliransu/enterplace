@@ -1,16 +1,16 @@
 ---
 title: Claude Desktop
-description: Point Claude Desktop's third-party inference mode at Gantry through MDM-managed settings.
+description: Point Claude Desktop's third-party inference mode at Enterplace through MDM-managed settings.
 sidebar:
   order: 17
 ---
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Claude Desktop has a third-party inference mode with a gateway provider. Set it to Gantry, and conversations go to Gantry's `POST /v1/messages` instead of Anthropic. An admin sets it through MDM; a person can set it in the app for themselves.
+Claude Desktop has a third-party inference mode with a gateway provider. Set it to Enterplace, and conversations go to Enterplace's `POST /v1/messages` instead of Anthropic. An admin sets it through MDM; a person can set it in the app for themselves.
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -18,9 +18,9 @@ You need a running Gantry and a Gantry key. `gantry start` gives both in one com
 | Key | Value |
 |---|---|
 | `inferenceProvider` | `gateway` |
-| `inferenceGatewayBaseUrl` | Gantry's address, for example `https://gantry.example.com` |
-| `inferenceGatewayApiKey` | The Gantry key |
-| `inferenceGatewayAuthScheme` | `bearer` (the default) or `x-api-key`. Gantry accepts both |
+| `inferenceGatewayBaseUrl` | Enterplace's address, for example `https://enterplace.example.com` |
+| `inferenceGatewayApiKey` | The Enterplace key |
+| `inferenceGatewayAuthScheme` | `bearer` (the default) or `x-api-key`. Enterplace accepts both |
 | `deploymentMode` | `3p`, so people cannot switch back to claude.ai sign-in |
 
 <Tabs>
@@ -38,21 +38,21 @@ Set each key as a `REG_SZ` value directly under `HKLM\SOFTWARE\Policies\Claude`,
 
 To write the profile, turn on Developer Mode (**Help**, **Troubleshooting**), open **Developer**, **Configure Third-Party Inference**, and export it as `.mobileconfig` or `.reg`.
 
-A static key in a profile is shared by everyone who gets the profile, so Gantry records them all as one person. Give each person their own key: deliver per-user profiles, or set `inferenceCredentialKind: helper-script` with `inferenceCredentialHelper` naming a script that prints the key `gantry login` saved in `~/.config/gantry/credentials`.
+A static key in a profile is shared by everyone who gets the profile, so Enterplace records them all as one person. Give each person their own key: deliver per-user profiles, or set `inferenceCredentialKind: helper-script` with `inferenceCredentialHelper` naming a script that prints the key `enterplace login` saved in `~/.config/enterplace/credentials`.
 
-Claude Desktop reads the model list from `GET /v1/models`, which Gantry answers in Anthropic's shape with the models the key may use.
+Claude Desktop reads the model list from `GET /v1/models`, which Enterplace answers in Anthropic's shape with the models the key may use.
 
-## What Gantry governs
+## What Enterplace governs
 
 - Every conversation: prompts, answers and tool results go only to the gateway.
 
-## What Gantry does not see
+## What Enterplace does not see
 
 - Downloads from `downloads.claude.ai` (the workspace bundle and the Claude CLI), the model catalog (`modelCatalogEnabled: false`), auto-updates (`disableAutoUpdates`) and telemetry (`disableEssentialTelemetry`, `disableNonessentialTelemetry`). None of them carry conversation content.
-- Connectors. Managed MCP servers are called at their own URLs; route them through Gantry's [MCP gateway](/governance/mcp-gateway/) to record them.
+- Connectors. Managed MCP servers are called at their own URLs; route them through Enterplace's [MCP gateway](/governance/mcp-gateway/) to record them.
 
 <Aside type="note">
-This follows Anthropic's Claude Desktop third-party documentation (configuration, gateway, MDM, telemetry). It was not run through Gantry.
+This follows Anthropic's Claude Desktop third-party documentation (configuration, gateway, MDM, telemetry). It was not run through Enterplace.
 </Aside>
 
 ## Related

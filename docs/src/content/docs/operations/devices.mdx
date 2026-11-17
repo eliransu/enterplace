@@ -1,13 +1,13 @@
 ---
 title: Devices
-description: Enrol employee machines with the device agent, point their coding tools at Gantry, report or remove blocked MCP servers, and see which tools call a provider directly and which denied apps are installed. Enterprise feature devices.
+description: Enrol employee machines with the device agent, point their coding tools at Enterplace, report or remove blocked MCP servers, and see which tools call a provider directly and which denied apps are installed. Enterprise feature devices.
 sidebar:
   order: 12
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-With a license that includes `devices` (see [License key](/operations/license/)), Gantry adds a **Devices** page to the console and two routes for the device agent, `GET /device/profile` and `POST /device/report`. The agent (`gantry device`) runs on each employee machine (macOS, Linux and Windows). It points the coding tools a profile names at the gateway, puts them back when someone changes them, reports blocked MCP servers (or takes them out of the tools' MCP files when the profile says `remove`), and reports every coding tool, MCP server and AI app it finds. It writes only files each tool documents, and stops no process. Without the feature the page and both routes answer `license_required`.
+With a license that includes `devices` (see [License key](/operations/license/)), Enterplace adds a **Devices** page to the console and two routes for the device agent, `GET /device/profile` and `POST /device/report`. The agent (`enterplace device`) runs on each employee machine (macOS, Linux and Windows). It points the coding tools a profile names at the gateway, puts them back when someone changes them, reports blocked MCP servers (or takes them out of the tools' MCP files when the profile says `remove`), and reports every coding tool, MCP server and AI app it finds. It writes only files each tool documents, and stops no process. Without the feature the page and both routes answer `license_required`.
 
 The feature keeps its tables in the store's Postgres (namespace `enterprise.devices`), so the policy needs `store:`. See [Store](/operations/store/).
 
@@ -15,22 +15,22 @@ The feature keeps its tables in the store's Postgres (namespace `enterprise.devi
 
 <Steps>
 
-1. **Create an enrolment token.** On the console's Devices page, under **Enrolment tokens**, give it a label (where it is used, such as `jamf-engineering`), a team or none, and how many days it is valid (1 to 365, default 90). The token is shown once; Gantry keeps only its hash. A team token enrols devices into that team; a token without a team takes each device's team from the person's key.
+1. **Create an enrolment token.** On the console's Devices page, under **Enrolment tokens**, give it a label (where it is used, such as `jamf-engineering`), a team or none, and how many days it is valid (1 to 365, default 90). The token is shown once; Enterplace keeps only its hash. A team token enrols devices into that team; a token without a team takes each device's team from the person's key.
 
-2. **Set a device profile** (optional). Without one, devices send their tools to the address they reached Gantry at, and Claude Code and Codex are managed. A profile, for every team or for one team (which wins for its members), sets:
+2. **Set a device profile** (optional). Without one, devices send their tools to the address they reached Enterplace at, and Claude Code and Codex are managed. A profile, for every team or for one team (which wins for its members), sets:
 
     | Field | Means |
     |---|---|
     | Gateway URL | The address tools send requests to, https, without `/v1` |
     | Tools to manage | Any of `claude-code`, `codex`, `opencode`, `kilo-code`, `continue`, `zed`, `gemini-cli`, `qwen-code`, `aider`. See [What the agent configures](#what-the-agent-configures) |
     | Denied apps, Allowed apps | AI apps and command line tools to report. See [Apps](#apps-allowed-and-denied) |
-    | Approved MCP servers through Gantry | `yes` points each approved HTTP MCP server at the gateway's `/mcp`. See [MCP servers](#mcp-servers) |
+    | Approved MCP servers through Enterplace | `yes` points each approved HTTP MCP server at the gateway's `/mcp`. See [MCP servers](#mcp-servers) |
     | Blocked MCP servers | `report` (the default) lists a blocked server the agent finds; `remove` takes it out of the tool's file. See [MCP servers](#mcp-servers) |
 
 3. **Run the agent.** From your device management tool (see [Device deployment](/operations/device-deployment/) for Intune, Jamf, Kandji and Linux), or by hand:
 
     ```bash
-    GANTRY_DEVICE_TOKEN=gantry_dev_... gantry device --control-plane https://gantry.example.com --dry-run
+    ENTERPLACE_DEVICE_TOKEN=enterplace_dev_... enterplace device --control-plane https://enterplace.example.com --dry-run
     ```
 
     `--control-plane` is the gateway's address. `--dry-run` prints what it would change and the report it would send, and writes nothing. Without it the agent checks every 5 minutes (`--interval`).
@@ -39,7 +39,7 @@ The feature keeps its tables in the store's Postgres (namespace `enterprise.devi
 
 ## Who a report is from
 
-The agent sends the person's Gantry key, the one `gantry login` saved on the machine (`~/.config/gantry/credentials`), in the `x-gantry-key` header beside the enrolment token. The gateway takes the person, and without a team token their team, from that key, never from the report body. A report without one is refused with `person_key_required`, one with an unknown, expired or revoked key with `invalid_person_key`: someone runs `gantry login` on the machine first.
+The agent sends the person's Enterplace key, the one `enterplace login` saved on the machine (`~/.config/enterplace/credentials`), in the `x-enterplace-key` header beside the enrolment token. The gateway takes the person, and without a team token their team, from that key, never from the report body. A report without one is refused with `person_key_required`, one with an unknown, expired or revoked key with `invalid_person_key`: someone runs `enterplace login` on the machine first.
 
 A device is bound to the first person and token scope (the token's team, or every team) that reported it. A later report for the same `device_id` from another person or a token of another scope is refused with `device_bound` and kept: the Devices page lists the last 20 under **Refused reports**. A token rotated within the same scope keeps working. When a machine changes hands, remove the device (`DELETE /console/devices/devices/<device_id>`) and its next report binds it again.
 
@@ -59,20 +59,20 @@ An admin whose role is kept to an organization or to teams reaches only its own 
 
 The same reach holds for what the role reads. `GET /console/devices/devices.json` and the Devices page hold the devices of the role's teams that enrolled with a token of the role's organization (each device carries `org`, its token's), and `GET /console/devices/mcp` holds the MCP servers of those devices, counted over them. Removing a device outside the role answers `404`. A decision on an MCP server holds for every device that has it, so such a role decides only on a server one of its own devices has: any other answers `403` with `outside_role`.
 
-| `GET /console/devices/devices.json` | Every device as last reported, the file `gantry audit coverage --devices` reads |
+| `GET /console/devices/devices.json` | Every device as last reported, the file `enterplace audit coverage --devices` reads |
 | `DELETE /console/devices/devices/<device_id>` | Removes a device and its binding, so its next report binds it again. An admin record `device_removed` |
-| `GET /console/devices/mcp` | Every MCP server devices reported, once per transport and target: `servers` (names), `tools`, `devices`, `via_gantry`, `decision` (`approved`, `blocked`, `pending`), `decided_by`, `decided_at` |
+| `GET /console/devices/mcp` | Every MCP server devices reported, once per transport and target: `servers` (names), `tools`, `devices`, `via_enterplace`, `decision` (`approved`, `blocked`, `pending`), `decided_by`, `decided_at` |
 | `POST /console/devices/mcp` | Decides one: `{"transport": "http", "target": "https://mcp.example.com/mcp", "decision": "blocked"}`; `pending` takes a decision back. An admin record `device_mcp_decided` |
 
 ```bash
-curl -X POST https://gantry.example.com/console/devices/tokens \
-  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+curl -X POST https://enterplace.example.com/console/devices/tokens \
+  -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" \
   -d '{"label": "intune-web", "team": "web", "days": 30}'
 ```
 
 ## What the agent reads
 
-For each tool the agent reports one state: `not_installed`, `installed` (found, with no endpoint set, or one kept where no documented file holds it), `gantry` (every endpoint it names is the gateway) or `direct` (an endpoint that is not the gateway, or a provider key or login with no base URL). A `direct` tool's report lists where it sends.
+For each tool the agent reports one state: `not_installed`, `installed` (found, with no endpoint set, or one kept where no documented file holds it), `enterplace` (every endpoint it names is the gateway) or `direct` (an endpoint that is not the gateway, or a provider key or login with no base URL). A `direct` tool's report lists where it sends.
 
 It reads only the files and settings each tool documents. It never reads keychains, app databases or the user's shell environment.
 
@@ -98,13 +98,13 @@ A tool configured with no endpoint at all (Claude Code signed in with a Claude a
 
 ## What the agent configures
 
-For each tool the profile names under **Tools to manage**, the agent writes the gateway where the tool's own documentation says its endpoint goes, and keeps every other line and key of the file. It sets the endpoint, never a key or a sign-in: each person uses their Gantry key, from `gantry login`.
+For each tool the profile names under **Tools to manage**, the agent writes the gateway where the tool's own documentation says its endpoint goes, and keeps every other line and key of the file. It sets the endpoint, never a key or a sign-in: each person uses their Enterplace key, from `enterplace login`.
 
 | Tool | File | What is set |
 |---|---|---|
 | Claude Code | The managed settings as root (`/Library/Application Support/ClaudeCode/managed-settings.json`, `/etc/claude-code/managed-settings.json`), else `~/.claude/settings.json` | `env.ANTHROPIC_BASE_URL` |
-| Codex | `~/.codex/config.toml` | `model_provider = "gantry"` and a `[model_providers.gantry]` table that reads the key from `GANTRY_KEY` |
-| OpenCode | `~/.config/opencode/opencode.json` | `provider.openai.options.baseURL` and `provider.anthropic.options.baseURL` (the gateway with `/v1`), and `apiKey: "{env:GANTRY_KEY}"` where none is set |
+| Codex | `~/.codex/config.toml` | `model_provider = "enterplace"` and a `[model_providers.enterplace]` table that reads the key from `ENTERPLACE_KEY` |
+| OpenCode | `~/.config/opencode/opencode.json` | `provider.openai.options.baseURL` and `provider.anthropic.options.baseURL` (the gateway with `/v1`), and `apiKey: "{env:ENTERPLACE_KEY}"` where none is set |
 | Kilo Code | `~/.config/kilo/kilo.json`, the Kilo CLI's file | The same as OpenCode |
 | Continue | `~/.continue/config.yaml` | `apiBase` (the gateway with `/v1`) on every model of `provider: openai`, the provider Continue documents `apiBase` for. No model is added, and a model of another provider stays and reads `direct` |
 | Zed | Zed's `settings.json` | `language_models.openai.api_url` (with `/v1`) and `language_models.anthropic.api_url` |
@@ -112,7 +112,7 @@ For each tool the profile names under **Tools to manage**, the agent writes the 
 | Qwen Code | `~/.qwen/.env`, and `~/.qwen/settings.json` when it lists providers | `OPENAI_BASE_URL` (with `/v1`), and `baseUrl` on every `modelProviders.openai` entry |
 | Aider | `~/.aider.conf.yml` | `openai-api-base` (with `/v1`) |
 
-Before the agent changes a file that exists, it copies it beside itself as `<name>.gantry-backup`. Zed's and OpenCode's settings may hold comments: a changed file is written as plain JSON, and the backup keeps the comments. A settings file that is not valid JSON is named in the agent's log and left as it is.
+Before the agent changes a file that exists, it copies it beside itself as `<name>.enterplace-backup`. Zed's and OpenCode's settings may hold comments: a changed file is written as plain JSON, and the backup keeps the comments. A settings file that is not valid JSON is named in the agent's log and left as it is.
 
 **Drift.** Once the agent has configured a tool, a later check that finds the file changed puts it back and reports the tool with `drift`; the Devices page lists the last 20.
 
@@ -127,12 +127,12 @@ A tool whose endpoint no documented file holds cannot be configured. It stays `i
 | Claude Desktop | The gateway is the managed preference `inferenceGatewayBaseUrl`, which your device management tool delivers |
 
 <Aside type="caution">
-`installed` is not proof of coverage. A Cursor, Cline, JetBrains or Roo Code with its own provider key shows as `installed`; the audit log then shows whether it reached Gantry.
+`installed` is not proof of coverage. A Cursor, Cline, JetBrains or Roo Code with its own provider key shows as `installed`; the audit log then shows whether it reached Enterplace.
 </Aside>
 
 ## MCP servers
 
-Each report carries the device's OS (`macos`, `linux`, `windows`) and the MCP servers configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed: the tool, the file, the server's name, its transport (`http` or `stdio`), its target (the URL without query or login, or the command's file name) and whether it is Gantry's MCP gateway (`<gateway>/mcp` or a bundle under it). Arguments, environment variables and headers are never sent, and the gateway strips a query or login from a target before it stores it. An agent from before the inventory sends none, and its device keeps what it last listed.
+Each report carries the device's OS (`macos`, `linux`, `windows`) and the MCP servers configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed: the tool, the file, the server's name, its transport (`http` or `stdio`), its target (the URL without query or login, or the command's file name) and whether it is Enterplace's MCP gateway (`<gateway>/mcp` or a bundle under it). Arguments, environment variables and headers are never sent, and the gateway strips a query or login from a target before it stores it. An agent from before the inventory sends none, and its device keeps what it last listed.
 
 An owner or admin approves or blocks a server on the Devices page (**MCP servers**) or with `POST /console/devices/mcp`; each decision is an admin record, written before it is kept. A server is named by its transport and target, so one decision covers every device and tool that has it, and a decision outlives the configuration it was made for. The device profile (`GET /device/profile`) carries the decisions as `mcp: {"approved": [...], "blocked": [...], "via_gateway": false, "enforcement": "report"}`.
 
@@ -149,10 +149,10 @@ On its next check the agent enforces the decisions in each tool's MCP file in th
 | Zed | Zed's `settings.json` | `context_servers` |
 
 - A **blocked** server is reported and stays, unless **Blocked MCP servers** is `remove` in the profile (`mcp_enforcement`): then it is taken out of the file. Start with `report`, see which devices have it, and switch to `remove` once people have been told.
-- With **Approved MCP servers through Gantry** set to `yes` in the profile, an **approved** HTTP server that is not the gateway is pointed at `<gateway>/mcp`, without the `headers` that held its own credential; when the file already has the gateway, the entry is taken out instead. Turn this on once the servers you approved are listed under `mcp:` in the policy, which is what makes `/mcp` serve them: see [MCP gateway](/governance/mcp-gateway/). A stdio server is never rewritten.
+- With **Approved MCP servers through Enterplace** set to `yes` in the profile, an **approved** HTTP server that is not the gateway is pointed at `<gateway>/mcp`, without the `headers` that held its own credential; when the file already has the gateway, the entry is taken out instead. Turn this on once the servers you approved are listed under `mcp:` in the policy, which is what makes `/mcp` serve them: see [MCP gateway](/governance/mcp-gateway/). A stdio server is never rewritten.
 - A server with no decision stays.
 
-Before a file is changed, it is copied beside itself as `<name>.gantry-backup`, and every other key of the file is kept. Each change is in the report as `mcp_actions` (`removed` or `rewritten`, with the backup's path) and on the Devices page under **MCP enforcement**, the last 20. `--dry-run` prints what would change and changes nothing.
+Before a file is changed, it is copied beside itself as `<name>.enterplace-backup`, and every other key of the file is kept. Each change is in the report as `mcp_actions` (`removed` or `rewritten`, with the backup's path) and on the Devices page under **MCP enforcement**, the last 20. `--dry-run` prints what would change and changes nothing.
 
 The agent leaves two places alone, and warns about a blocked server in them: Claude Code's managed MCP file (`managed-mcp.json`), which is your device management tool's, and project files (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`), since it does not walk the disk for repositories. A blocked server that is still configured shows as a `blocked MCP` tag on its person's row until it is gone.
 
@@ -168,17 +168,17 @@ A profile lists AI apps and command line tools as denied or allowed. The agent r
 
 The apps it looks for are the coding tools above and `chatgpt`, `windsurf`, `ollama`, `lm-studio` and `perplexity`. An app is found by where its vendor's installer puts it (`/Applications` or `~/Applications` on macOS, `%LOCALAPPDATA%\Programs` on Windows, a command on the path, the folder it keeps in the home) or, for the desktop apps, by a running process of its name (`running: true`), read from `ps` or `tasklist`.
 
-This is detection only. The agent stops no process and removes no app: a denied app shows as a `denied app` tag on its person's row of the Devices page, in `devices.json` (`apps`) and in `gantry audit coverage --devices`. Remove or block the app itself with your device management tool.
+This is detection only. The agent stops no process and removes no app: a denied app shows as a `denied app` tag on its person's row of the Devices page, in `devices.json` (`apps`) and in `enterplace audit coverage --devices`. Remove or block the app itself with your device management tool.
 
 ## The Devices page
 
-- **Coverage**: one row per person from the audit log and the reports: the tools their traffic came from, their device count, devices not seen in 24 hours, the tools set to go through Gantry, and the installed tools that are set by hand. Then one tag for each thing to act on: `direct` per tool going to a provider (`codex on mbp-ana`), `denied app` per denied app installed (`chatgpt on mbp-ana`), `blocked MCP` per blocked server still configured (`github in cursor on mbp-ana`). Below the rows, why each tool set by hand cannot be configured from a file. Traffic is read from the store's shared request index, so it holds every replica's requests (those of the last second may not be copied yet).
+- **Coverage**: one row per person from the audit log and the reports: the tools their traffic came from, their device count, devices not seen in 24 hours, the tools set to go through Enterplace, and the installed tools that are set by hand. Then one tag for each thing to act on: `direct` per tool going to a provider (`codex on mbp-ana`), `denied app` per denied app installed (`chatgpt on mbp-ana`), `blocked MCP` per blocked server still configured (`github in cursor on mbp-ana`). Below the rows, why each tool set by hand cannot be configured from a file. Traffic is read from the store's shared request index, so it holds every replica's requests (those of the last second may not be copied yet).
 - **MCP servers**, **Enrolment tokens** and **Device profiles**, as above.
 - **Drift**: the last 20 times a managed setting was changed back and re-applied.
 - **MCP enforcement**: the last 20 servers the agent took out of a tool's MCP file or pointed at the gateway.
 - **Refused reports**: the last 20 reports refused because the device is bound to another person or token scope.
 
-**Download devices.json** gives the reports to `gantry audit coverage --devices`. See [Coverage](/governance/coverage/).
+**Download devices.json** gives the reports to `enterplace audit coverage --devices`. See [Coverage](/governance/coverage/).
 
 ## Related
 

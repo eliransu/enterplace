@@ -11,7 +11,7 @@ nav: use-cases
 
 <section class="wrap sec" style="padding-top: 40px">
 {{gate
-label: Four requests go through Gantry. Requests for the clinical team go to an EU deployment. One request is refused because no deployment in an allowed region can serve it.
+label: Four requests go through Enterplace. Requests for the clinical team go to an EU deployment. One request is refused because no deployment in an allowed region can serve it.
 foot: Example requests. Team clinical may reach deployments labelled eu only.
 lane: ruth.adler | clinical | azure-eu, region eu
 lane: mike.johnson | research | openai, region us
@@ -41,16 +41,16 @@ req: 0 | ruth.adler | clinical | allow | clinical, region eu
 <section class="wrap sec">
   <div class="sec-head">
     <h2>The steps</h2>
-    <p>Gantry runs in your own cloud account, so prompts go from your callers to the providers your policy names and nowhere else.</p>
+    <p>Enterplace runs in your own cloud account, so prompts go from your callers to the providers your policy names and nowhere else.</p>
   </div>
   <ol class="guide">
     <li>
       <div class="guide-text">
         <h3>Run it in your own account and region</h3>
-        <p>The Terraform modules put the gateway, Postgres and the audit volume in an account and region you pick. Gantry never stores prompts or answers: not in the audit log and not in Postgres.</p>
+        <p>The Terraform modules put the gateway, Postgres and the audit volume in an account and region you pick. Enterplace never stores prompts or answers: not in the audit log and not in Postgres.</p>
         <a class="more" href="/deploy/">Deploy {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>What stays where</figcaption><pre>prompts, answers   caller -> Gantry -> provider
+      <figure class="code"><figcaption>What stays where</figcaption><pre>prompts, answers   caller -> Enterplace -> provider
 audit log          your volume
 keys, spend        your Postgres
 license check      offline, no network call</pre></figure>
@@ -61,7 +61,7 @@ license check      offline, no network call</pre></figure>
         <p>An alias serves one model name from several deployments. Label each one with its region. A rule with <code>regions: [eu]</code> reaches only those. A request with nowhere allowed to go is refused with <code>region_not_allowed</code>. It is never sent elsewhere, even when every allowed deployment is failing.</p>
         <a class="more" href="docs:/routing/strategies/">Residency in the docs {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>aliases:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>aliases:
   - name: clinical
     deployments:
       - { provider: azure-eu, model: gpt-4o, region: eu }
@@ -78,7 +78,7 @@ rules:
         <p>The <code>pii</code> detector finds email addresses, phone numbers, card numbers and similar. <code>mask</code> replaces each finding and forwards the rest. A <code>regex</code> guardrail does the same for identifiers only you know, such as a record number.</p>
         <a class="more" href="docs:/governance/guardrails/">Guardrails in the docs {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>guardrails:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>guardrails:
   - { name: mask-pii, type: pii, action: mask }
   - name: patient-ids
     type: regex
@@ -94,18 +94,18 @@ rules:
     <li>
       <div class="guide-text">
         <h3>Keep the record, and check it</h3>
-        <p>Put the audit log on storage that outlives the container and verify its chain. Copy the last hash somewhere the Gantry host cannot write. Each record carries the regions the rule allows and the region the request went to.</p>
+        <p>Put the audit log on storage that outlives the container and verify its chain. Copy the last hash somewhere the Enterplace host cannot write. Each record carries the regions the rule allows and the region the request went to.</p>
         <a class="more" href="docs:/start/step-5-prove/">Step 5 in the docs {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>Verify, then pin the last hash</figcaption><pre>gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+      <figure class="code"><figcaption>Verify, then pin the last hash</figcaption><pre>enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl
 
-gantry audit verify /var/lib/gantry/gantry-audit.jsonl \
+enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl \
   --expect-last 1ae338b7...</pre></figure>
     </li>
     <li class="no-code">
       <div class="guide-text">
         <h3>Add export, retention and legal hold <span class="ent">Enterprise</span></h3>
-        <p>Gantry Enterprise sends every record to Splunk, Datadog, Elasticsearch, Microsoft Sentinel or object storage as it is written. Retention deletes records older than a set number of days while the chain stays verifiable, and a legal hold stops all deletion until an owner lifts it. In the open source edition you ship the audit file with Vector, Fluent Bit or the OpenTelemetry Collector.</p>
+        <p>Enterplace Enterprise sends every record to Splunk, Datadog, Elasticsearch, Microsoft Sentinel or object storage as it is written. Retention deletes records older than a set number of days while the chain stays verifiable, and a legal hold stops all deletion until an owner lifts it. In the open source edition you ship the audit file with Vector, Fluent Bit or the OpenTelemetry Collector.</p>
         <a class="more" href="docs:/operations/retention/">Retention and legal hold {{> arrow}}</a>
       </div>
     </li>
@@ -115,9 +115,9 @@ gantry audit verify /var/lib/gantry/gantry-audit.jsonl \
 <section class="wrap sec doc">
   <h2>Limits to know before you start</h2>
   <ul class="ticks out">
-    <li><strong>The region label is yours to set.</strong> Gantry enforces it exactly. It does not check where a provider runs. Label a deployment with the region of the endpoint and the data processing terms you have with that provider.</li>
+    <li><strong>The region label is yours to set.</strong> Enterplace enforces it exactly. It does not check where a provider runs. Label a deployment with the region of the endpoint and the data processing terms you have with that provider.</li>
     <li><strong>Built-in guardrails match plain text.</strong> Text that is encoded, split across messages or translated is not found, and the detectors do not find names or street addresses. Add a vendor guardrail or your own service by webhook for those.</li>
-    <li><strong>Gantry holds no compliance certification</strong> and has not yet had an independent security audit. It gives you controls and a record. Your compliance program decides whether they are enough.</li>
+    <li><strong>Enterplace holds no compliance certification</strong> and has not yet had an independent security audit. It gives you controls and a record. Your compliance program decides whether they are enough.</li>
     <li><strong>Anyone who can write the audit file can rewrite the chain.</strong> The last hash kept somewhere else is what catches that.</li>
   </ul>
 </section>
@@ -126,7 +126,7 @@ gantry audit verify /var/lib/gantry/gantry-audit.jsonl \
   <h2>Questions people ask</h2>
   <div class="qa">
     <details><summary>Does the audit log itself hold personal data?</summary><p>It holds the person or workload that asked, the team, the model, the decision and the cost. It holds no prompt text, no answer text and never the text a guardrail matched.</p></details>
-    <details><summary>Can we see what a guardrail would do before it changes anything?</summary><p>Yes. Give it a <code>shadow_until</code> date and it records findings and changes nothing until then. You can also run it over a file of example prompts with <code>gantry guardrail test</code>.</p></details>
+    <details><summary>Can we see what a guardrail would do before it changes anything?</summary><p>Yes. Give it a <code>shadow_until</code> date and it records findings and changes nothing until then. You can also run it over a file of example prompts with <code>enterplace guardrail test</code>.</p></details>
     <details><summary>What about models that are not behind an alias?</summary><p>A model that is not an alias has no region label, so where it runs cannot be shown. Under a rule with <code>regions</code>, a request for it is refused.</p></details>
   </div>
 </section>
@@ -134,7 +134,7 @@ gantry audit verify /var/lib/gantry/gantry-audit.jsonl \
 <section class="wrap sec">
   <div class="sec-head solo"><h2>Read next</h2></div>
   <nav class="rows tight" aria-label="Read next">
-    <a href="/security/"><strong>Security</strong><span>What Gantry protects, what it does not, and where your data goes.</span>{{> arrow}}</a>
+    <a href="/security/"><strong>Security</strong><span>What Enterplace protects, what it does not, and where your data goes.</span>{{> arrow}}</a>
     <a href="/use-cases/local-models/"><strong>Local and self-hosted models</strong><span>When the data may not leave your network at all.</span>{{> arrow}}</a>
     <a href="/for/security/"><strong>For security teams</strong><span>The controls and the record, from your side of the table.</span>{{> arrow}}</a>
   </nav>

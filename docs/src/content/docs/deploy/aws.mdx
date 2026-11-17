@@ -1,13 +1,13 @@
 ---
 title: AWS
-description: Deploy Gantry Enterprise on AWS with the aws-ecs Terraform module, ECS on Fargate behind an HTTPS load balancer with RDS and EFS, then verify and run it in production.
+description: Deploy Enterplace Enterprise on AWS with the aws-ecs Terraform module, ECS on Fargate behind an HTTPS load balancer with RDS and EFS, then verify and run it in production.
 sidebar:
   order: 5
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the gateways on ECS Fargate behind an HTTPS Application Load Balancer, with RDS Postgres 16 for the store and EFS for each gateway's audit log. Everything here is done with Terraform and the AWS console.
+The Terraform module `aws-ecs`, which ships inside the `enterplace` image, runs the gateways on ECS Fargate behind an HTTPS Application Load Balancer, with RDS Postgres 16 for the store and EFS for each gateway's audit log. Everything here is done with Terraform and the AWS console.
 
 ## What it creates
 
@@ -15,13 +15,13 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
 |---|---|
 | Application Load Balancer: HTTPS on 443 with your ACM certificate, HTTP on 80 redirecting to it | TLS ends at the load balancer. Health check `GET /healthz`. Cookie stickiness keeps a console sign-in on one gateway |
 | ECS cluster, one service of one task per replica | Each gateway writes its own audit chain, so each needs its own volume, which ECS gives per task definition |
-| EFS file system, one access point per replica (`/gantry-<n>`, owned by `65532`) | `/var/lib/gantry`, the audit log. Encrypted, backed up by AWS Backup |
+| EFS file system, one access point per replica (`/enterplace-<n>`, owned by `65532`) | `/var/lib/enterplace`, the audit log. Encrypted, backed up by AWS Backup |
 | RDS Postgres 16 (Multi-AZ, encrypted, 7-day backups) and an RDS Proxy | The store. Skipped when `database_url_secret_arn` names a database you already have |
 | Secrets Manager secret `<name>/database-url` | The whole connection string, as `DATABASE_URL` |
-| SSM parameter `/<name>/gantry.policy.yaml`, and a busybox init container per task | ECS cannot mount a parameter as a file and the image has no shell, so the init container writes the policy file |
+| SSM parameter `/<name>/enterplace.policy.yaml`, and a busybox init container per task | ECS cannot mount a parameter as a file and the image has no shell, so the init container writes the policy file |
 | Security groups | Only the load balancer reaches the tasks on 8080; only the tasks reach the proxy and EFS; only the proxy reaches RDS |
-| Secrets Manager secrets `<name>/master-key` and `<name>/export-key` | `GANTRY_MASTER_KEY`, which seals [provider credentials](/governance/provider-credentials/) kept in the store, and `GANTRY_EXPORT_KEY`, which encrypts [SIEM export](/operations/siem-export/) destination secrets. Random 64 hex characters, made on the first apply and kept on every later one. Skipped for a key you bring |
-| CloudWatch log group `/gantry/<name>`, an execution role | Logs. The role reads the secrets and the policy at start |
+| Secrets Manager secrets `<name>/master-key` and `<name>/export-key` | `ENTERPLACE_MASTER_KEY`, which seals [provider credentials](/governance/provider-credentials/) kept in the store, and `ENTERPLACE_EXPORT_KEY`, which encrypts [SIEM export](/operations/siem-export/) destination secrets. Random 64 hex characters, made on the first apply and kept on every later one. Skipped for a key you bring |
+| CloudWatch log group `/enterplace/<name>`, an execution role | Logs. The role reads the secrets and the policy at start |
 | A task role, when `bedrock_resource_arns` is set | May call `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on those models and inference profiles, and nothing else. [Bedrock](/providers/bedrock/) providers sign with it, so no AWS keys are stored. Without it the tasks have no AWS permissions |
 
 ## Prerequisites
@@ -40,7 +40,7 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
 
    | Secret name | Value | Becomes |
    |---|---|---|
-   | `gantry-license` | Plaintext: the license key | `GANTRY_LICENSE` |
+   | `enterplace-license` | Plaintext: the license key | `ENTERPLACE_LICENSE` |
    | `openai` | Plaintext: the OpenAI key | `OPENAI_PROVIDER_KEY` |
 
    Copy each secret's ARN from its page.
@@ -50,12 +50,12 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
 2. Copy the module out of the image you will run, and save a starting policy beside it. The image carries the module for its own version, so nothing is cloned.
 
    ```bash
-   mkdir gantry-aws && cd gantry-aws
-   docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
-   docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
+   mkdir enterplace-aws && cd enterplace-aws
+   docker create --name enterplace-files ghcr.io/eliransu/enterplace:<version>
+   docker cp enterplace-files:/deploy ./enterplace-deploy && docker rm enterplace-files
    ```
 
-   ```yaml title="gantry.policy.yaml"
+   ```yaml title="enterplace.policy.yaml"
    version: 1
    providers:
      - name: openai
@@ -67,11 +67,11 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
      - name: everyone
        principals: { any: true }
        models: [gpt-4o-mini]
-   audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+   audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
    store: { postgres_url_env: DATABASE_URL }
    ```
 
-   The policy must keep its last two lines: the audit log under `/var/lib/gantry` and `store: { postgres_url_env: DATABASE_URL }`. It may be at most 8 KB.
+   The policy must keep its last two lines: the audit log under `/var/lib/enterplace` and `store: { postgres_url_env: DATABASE_URL }`. It may be at most 8 KB.
 
 3. Write `main.tf`. Start with one replica: the first admin is made through a one-time link that each gateway prints for itself, and with one gateway the link is always the right one.
 
@@ -84,33 +84,33 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
      region = "eu-west-1"
    }
 
-   module "gantry" {
-     source = "./gantry-deploy/terraform/aws-ecs"
+   module "enterplace" {
+     source = "./enterplace-deploy/terraform/aws-ecs"
 
-     image              = "ghcr.io/eliransu/gantry:<version>"
-     policy             = file("gantry.policy.yaml")
+     image              = "ghcr.io/eliransu/enterplace:<version>"
+     policy             = file("enterplace.policy.yaml")
      replicas           = 1
      vpc_id             = "vpc-0123456789abcdef0"
      private_subnet_ids = ["subnet-0aaaaaaaaaaaaaaa1", "subnet-0bbbbbbbbbbbbbbb2"]
      public_subnet_ids  = ["subnet-0ccccccccccccccc3", "subnet-0ddddddddddddddd4"]
      allowed_cidrs      = ["0.0.0.0/0"]
      certificate_arn    = "arn:aws:acm:eu-west-1:123456789012:certificate/..."
-     domain_name        = "gantry.example.com"
+     domain_name        = "enterplace.example.com"
 
-     license_secret_arn       = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:gantry-license-..."
+     license_secret_arn       = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:enterplace-license-..."
      provider_key_secret_arns = { OPENAI_PROVIDER_KEY = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:openai-..." }
    }
 
    output "gateway_url" {
-     value = module.gantry.gateway_url
+     value = module.enterplace.gateway_url
    }
 
    output "alb_dns_name" {
-     value = module.gantry.alb_dns_name
+     value = module.enterplace.alb_dns_name
    }
 
    output "log_group_name" {
-     value = module.gantry.log_group_name
+     value = module.enterplace.log_group_name
    }
    ```
 
@@ -126,7 +126,7 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
 
    RDS and its proxy are the slowest part of the apply.
 
-5. Point your domain at the load balancer: a CNAME from `gantry.example.com` to the `alb_dns_name` output, or in Route 53 an alias record to it.
+5. Point your domain at the load balancer: a CNAME from `enterplace.example.com` to the `alb_dns_name` output, or in Route 53 an alias record to it.
 
 </Steps>
 
@@ -144,18 +144,18 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
 | `cpu`, `memory` | `512`, `1024` | Fargate CPU units and MiB per task |
 | `cpu_architecture` | `X86_64` | Or `ARM64`. The image is built for both |
 | `image_pull_secret_arn` | `null` | Registry credentials, for a private mirror of the image. ghcr.io needs none |
-| `license_secret_arn` | `null` | Becomes `GANTRY_LICENSE`. Null runs the open source features only |
+| `license_secret_arn` | `null` | Becomes `ENTERPLACE_LICENSE`. Null runs the open source features only |
 | `provider_key_secret_arns` | `{}` | The variable each `key_env` names, mapped to a secret ARN |
 | `bedrock_resource_arns` | `[]` | Bedrock foundation-model and inference-profile ARNs the task role may invoke. Empty or null makes no task role |
-| `master_key_secret_arn` | `null` | Optional. Your own master key secret (`GANTRY_MASTER_KEY`). Null makes `<name>/master-key` |
-| `export_key_secret_arn` | `null` | Optional. Your own export key secret (`GANTRY_EXPORT_KEY`). Null makes `<name>/export-key` |
+| `master_key_secret_arn` | `null` | Optional. Your own master key secret (`ENTERPLACE_MASTER_KEY`). Null makes `<name>/master-key` |
+| `export_key_secret_arn` | `null` | Optional. Your own export key secret (`ENTERPLACE_EXPORT_KEY`). Null makes `<name>/export-key` |
 | `database_url_secret_arn` | `null` | A `DATABASE_URL` for a database you already have. Null creates RDS and RDS Proxy |
 | `db_instance_class`, `db_allocated_storage`, `db_multi_az` | `db.t4g.small`, `20`, `true` | The created database |
 | `internal` | `false` | A load balancer reachable only inside the VPC |
 | `metrics_port`, `metrics_cidrs` | `null`, `[]` | Serve `/metrics` on this port, reachable from these ranges only, never through the load balancer |
 | `deletion_protection` | `true` | Protects the database and the load balancer |
 | `log_retention_days` | `30` | CloudWatch retention |
-| `name`, `tags` | `gantry`, `{}` | Prefix and tags for every resource |
+| `name`, `tags` | `enterplace`, `{}` | Prefix and tags for every resource |
 
 ### Outputs
 
@@ -166,9 +166,9 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
 | `service_names`, `cluster_name` | The ECS services, one per gateway, and the cluster |
 | `log_group_name` | The gateways' CloudWatch log group |
 | `database_url_secret_arn` | The secret the gateways read `DATABASE_URL` from |
-| `master_key_secret_arn`, `export_key_secret_arn` | The secrets the gateways read `GANTRY_MASTER_KEY` and `GANTRY_EXPORT_KEY` from |
+| `master_key_secret_arn`, `export_key_secret_arn` | The secrets the gateways read `ENTERPLACE_MASTER_KEY` and `ENTERPLACE_EXPORT_KEY` from |
 | `bedrock_role_arn` | The task role Bedrock providers sign with, or null |
-| `efs_file_system_id` | The file system holding each gateway's audit log, at `/gantry-<n>` |
+| `efs_file_system_id` | The file system holding each gateway's audit log, at `/enterplace-<n>` |
 | `policy_parameter_name` | The parameter holding the policy |
 | `task_security_group_id` | The gateways' security group, to allow on a database you bring |
 
@@ -177,7 +177,7 @@ The Terraform module `aws-ecs`, which ships inside the `gantry` image, runs the 
 The gateways sign Bedrock requests as their ECS task role, found through the AWS default credential chain: no access key pair is stored. Name the models and inference profiles they may invoke, and leave `key_env` out of the provider:
 
 ```hcl title="main.tf"
-module "gantry" {
+module "enterplace" {
   # ...
   bedrock_resource_arns = [
     "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5-5-v1:0",
@@ -186,7 +186,7 @@ module "gantry" {
 }
 ```
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 providers:
   - name: bedrock
     kind: bedrock
@@ -209,7 +209,7 @@ A cross-region inference profile (`us.`, `eu.`) also needs the foundation model'
    curl -s $GATEWAY/healthz
    ```
 
-2. Read what the gateway started with. In the console, open **CloudWatch**, **Log groups**, the group named by `log_group_name` (`/gantry/gantry`), and the newest stream that starts with `gantry-0/gantry/`. It holds the license line, `Keys, kill switches and budgets are shared through the store named by DATABASE_URL`, and:
+2. Read what the gateway started with. In the console, open **CloudWatch**, **Log groups**, the group named by `log_group_name` (`/enterplace/enterplace`), and the newest stream that starts with `enterplace-0/enterplace/`. It holds the license line, `Keys, kill switches and budgets are shared through the store named by DATABASE_URL`, and:
 
    ```text
    First run: no admin key yet. Open http://127.0.0.1:8080/console/setup/efe8afe6... to make the first one. The link works once.
@@ -217,14 +217,14 @@ A cross-region inference profile (`us.`, `eu.`) also needs the foundation model'
 
    A gateway that cannot reach the database stops here with the cause; ECS starts it again.
 
-3. Make the first admin and sign in to the console. Open the link with `http://127.0.0.1:8080` replaced by your `gateway_url`, such as `https://gantry.example.com/console/setup/efe8afe6...`. Give your name and team, keep the admin key it shows once, and sign in at `https://gantry.example.com/console`.
+3. Make the first admin and sign in to the console. Open the link with `http://127.0.0.1:8080` replaced by your `gateway_url`, such as `https://enterplace.example.com/console/setup/efe8afe6...`. Give your name and team, keep the admin key it shows once, and sign in at `https://enterplace.example.com/console`.
 
 4. Issue a key with the admin API and make a governed call.
 
    ```bash
-   export GANTRY_ADMIN_KEY=gantry_...
+   export ENTERPLACE_ADMIN_KEY=enterplace_...
    KEY=$(curl -s -X POST $GATEWAY/admin/keys \
-     -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H 'Content-Type: application/json' \
+     -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -H 'Content-Type: application/json' \
      -d '{"name":"maya.cohen","team":"payments"}' | sed -n 's/.*"key":"\([^"]*\)".*/\1/p')
    curl -s $GATEWAY/v1/chat/completions \
      -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
@@ -242,7 +242,7 @@ A cross-region inference profile (`us.`, `eu.`) also needs the foundation model'
 - **Deploys have a gap.** A new image or policy stops each gateway before its replacement starts, because two tasks must never write one chain. Every service deploys at once, so even with two replicas there is a short time with no gateway.
 - **The policy holds at most 8 KB.** It lives in an SSM parameter.
 - **The connection to the database is encrypted, not checked.** The module connects to RDS Proxy with `sslmode=require`: TLS on, the certificate not verified. Only the gateways' security group reaches the proxy.
-- **No machine can read EFS but the tasks.** Its security group lets in the tasks only. Use **Verify chain now** in the console. For the command line, allow an EC2 instance with Docker in the `<name>-efs` security group on port 2049, mount the file system there read-only, and run the image's own `audit verify` on it: `docker run --rm -v /mnt/efs:/mnt/efs:ro ghcr.io/eliransu/gantry:<version> audit verify /mnt/efs/gantry-0/gantry-audit.jsonl`.
+- **No machine can read EFS but the tasks.** Its security group lets in the tasks only. Use **Verify chain now** in the console. For the command line, allow an EC2 instance with Docker in the `<name>-efs` security group on port 2049, mount the file system there read-only, and run the image's own `audit verify` on it: `docker run --rm -v /mnt/efs:/mnt/efs:ro ghcr.io/eliransu/enterplace:<version> audit verify /mnt/efs/enterplace-0/enterplace-audit.jsonl`.
 - **The task role reaches Bedrock only.** With `bedrock_resource_arns` empty the tasks have no AWS permissions at all.
 - **Deletion is protected.** Set `deletion_protection = false` and apply before `terraform destroy`. RDS takes a final snapshot named `<name>-final`.
 
@@ -252,7 +252,7 @@ A cross-region inference profile (`us.`, `eu.`) also needs the foundation model'
 - **Secrets.** Provider keys and the license in Secrets Manager, referenced by ARN. `DATABASE_URL`, and the master and export keys unless you bring them, are Secrets Manager secrets the module writes. Keep the Terraform state encrypted: it holds the database password and those keys. Every gateway must keep the same master key: never rotate it in place, since the credentials sealed with it would no longer open. A changed secret is read when a task starts: in the console, **ECS**, the service, **Update service**, **Force new deployment**.
 - **Backups.** RDS keeps 7 days of automated backups with point-in-time restore. EFS has its AWS Backup policy on. Keep each gateway's last hash off AWS.
 - **Monitoring.** Set `metrics_port = 9464` and `metrics_cidrs` to your Prometheus's range. Alarm in CloudWatch on the target group's `UnHealthyHostCount` and the load balancer's `HTTPCode_Target_5XX_Count`. For traces, add `OTEL_EXPORTER_OTLP_ENDPOINT` as a secret in `provider_key_secret_arns`: the map sets any variable from a secret.
-- **Upgrades.** Take a manual RDS snapshot in the console (**RDS**, the database, **Actions**, **Take snapshot**), then change `image` and apply. A newer Gantry may update the schema; an older one refuses a database a newer one has written.
+- **Upgrades.** Take a manual RDS snapshot in the console (**RDS**, the database, **Actions**, **Take snapshot**), then change `image` and apply. A newer Enterplace may update the schema; an older one refuses a database a newer one has written.
 - **Rollback.** Set `image` back and apply. Each service also has the ECS deployment circuit breaker on: a version whose tasks do not become healthy is rolled back on its own. If the previous version refuses the database, restore the snapshot first.
 
 ### What to watch
@@ -262,7 +262,7 @@ A cross-region inference profile (`us.`, `eu.`) also needs the foundation model'
 | Unhealthy targets, or `/healthz` 503 | A gateway cannot write its audit log | Read its log stream; ECS replaces the task |
 | Refusals with `store_unavailable` | RDS or the proxy cannot be reached. Budgeted requests are refused; others are served | Check RDS events and the proxy's target health |
 | EFS storage | About 1.35 GB per million requests per gateway | Start a new chain when starts grow slow |
-| License warning in the log | The license is in its 30-day grace period | Update the `gantry-license` secret and force a new deployment |
+| License warning in the log | The license is in its 30-day grace period | Update the `enterplace-license` secret and force a new deployment |
 
 ## Next
 

@@ -1,6 +1,6 @@
 """Walks the console's first run in a real headless Chrome against a local gateway and a mock provider.
 
-Usage: python3 scripts/onboarding_check.py [--gantry target/debug/gantry] [--out DIR]
+Usage: python3 scripts/onboarding_check.py [--enterplace target/debug/enterplace] [--out DIR]
 
 An empty install: one admin key, a policy in observe mode, the provider pointed at a mock on this machine. The check
 signs in, sees the welcome, screenshots every empty page, picks coding agents, makes a key on the checklist, sends a
@@ -57,7 +57,7 @@ def ask(base: str, key: str):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--gantry", default=str(ROOT / "target" / "debug" / "gantry"))
+    parser.add_argument("--enterplace", default=str(ROOT / "target" / "debug" / "enterplace"))
     parser.add_argument("--chrome", default=CHROME)
     parser.add_argument("--out", default=str(ROOT / "target" / "onboarding-screens"))
     args = parser.parse_args()
@@ -67,8 +67,8 @@ def main():
     threading.Thread(target=provider.serve_forever, daemon=True).start()
     port = free_port()
     base = f"http://127.0.0.1:{port}"
-    folder = pathlib.Path(tempfile.mkdtemp(prefix="gantry-onboarding-"))
-    (folder / "gantry.policy.yaml").write_text(f"""version: 1
+    folder = pathlib.Path(tempfile.mkdtemp(prefix="enterplace-onboarding-"))
+    (folder / "enterplace.policy.yaml").write_text(f"""version: 1
 mode: observe
 providers:
   - name: local
@@ -82,12 +82,12 @@ rules:
     models: ["*"]
 prices:
   local-model: {{ input: 3, output: 15 }}
-audit: {{ path: gantry-audit.jsonl }}
+audit: {{ path: enterplace-audit.jsonl }}
 """)
-    admin = "gantry_" + secrets.token_hex(32)
-    (folder / "gantry.keys.yaml").write_text(
+    admin = "enterplace_" + secrets.token_hex(32)
+    (folder / "enterplace.keys.yaml").write_text(
         f"keys:\n  - name: alex.rivera\n    team: platform\n    sha256: {hashlib.sha256(admin.encode()).hexdigest()}\n    admin: true\n")
-    proc = serve(str(pathlib.Path(args.gantry).resolve()), folder, port)
+    proc = serve(str(pathlib.Path(args.enterplace).resolve()), folder, port)
     chrome = None
 
     def shots(name: str, phone: bool = True, dark: bool = False):
@@ -145,7 +145,7 @@ audit: {{ path: gantry-audit.jsonl }}
         chrome.wait("document.querySelector('[data-state=listening]')", "the step that listens for the first request")
         lines = chrome.js("document.getElementById('lines-coding').textContent")
         key = next((w.split("=", 1)[1] for w in lines.split() if w.startswith("ANTHROPIC_API_KEY=")), "")
-        check(key.startswith("gantry_") and f"ANTHROPIC_BASE_URL={base}" in lines, "the key made is in the lines to paste, with the gateway's address")
+        check(key.startswith("enterplace_") and f"ANTHROPIC_BASE_URL={base}" in lines, "the key made is in the lines to paste, with the gateway's address")
         shots("2-checklist-waiting", phone=False)
 
         # A real request through the gateway, mid-flow: the page's script sees it and the step turns done by itself.
@@ -170,7 +170,7 @@ audit: {{ path: gantry-audit.jsonl }}
         shots("5-five-steps", dark=True)
         print(f"onboarding check passed; screenshots in {out}")
     except AssertionError as failed:
-        print(f"FAILED: {failed}\nGantry's output: {folder / 'gantry.log'}", file=sys.stderr)
+        print(f"FAILED: {failed}\nEnterplace's output: {folder / 'enterplace.log'}", file=sys.stderr)
         sys.exit(1)
     finally:
         if chrome:

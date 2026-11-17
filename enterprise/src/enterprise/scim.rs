@@ -3,7 +3,7 @@
 //! such as Okta or Microsoft Entra ID creates, updates and removes people, and pushes groups, which become teams.
 //!
 //! The API is at `/console/scim/v2` (Users, Groups, ServiceProviderConfig, ResourceTypes, Schemas), so its changes
-//! are admin records in the console's audit chain. It takes a SCIM token an owner makes on the SCIM page; Gantry
+//! are admin records in the console's audit chain. It takes a SCIM token an owner makes on the SCIM page; Enterplace
 //! keeps only the token's SHA-256. Deactivating (`active: false`) or deleting a person removes them and revokes every
 //! key named with their email, as removing a member in the console does.
 //!
@@ -26,12 +26,12 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, get, post},
 };
-use gantry_console::{
+use enterplace_console::{
     Admin, Console, Form, Tls, Via, bare_page, foreign,
     html::{self, esc},
     redirect, same_origin,
 };
-use gantry_server::store::tokio_postgres::{Row, Transaction};
+use enterplace_server::store::tokio_postgres::{Row, Transaction};
 use serde_json::{Map, Value, json};
 
 use super::Db;
@@ -102,7 +102,7 @@ struct Window {
 }
 
 /// Adds the SCIM page, the API under it, and the password links for people SCIM makes. Needs `members`' tables.
-pub fn register(extension: &mut gantry_server::Extension, db: Arc<Db>, keys: PathBuf) {
+pub fn register(extension: &mut enterplace_server::Extension, db: Arc<Db>, keys: PathBuf) {
     let scim = Scim {
         members: Members { db, keys },
         limits: Arc::default(),
@@ -125,7 +125,7 @@ pub fn register(extension: &mut gantry_server::Extension, db: Arc<Db>, keys: Pat
 
 /// Without the feature (or without `members`, whose tables it writes), its addresses say why: the page as a page,
 /// the API in SCIM's error shape, so the identity provider shows the reason. No nav entry.
-pub fn locked(extension: &mut gantry_server::Extension, status: &Status) {
+pub fn locked(extension: &mut enterplace_server::Extension, status: &Status) {
     let Err(refused) = status
         .require(FEATURE)
         .and_then(|()| status.require(members::FEATURE))
@@ -607,7 +607,7 @@ impl Call<'_> {
             .unwrap_or(MAX_RESULTS)
             .clamp(0, MAX_RESULTS);
         let client = self.db().client().await.map_err(unavailable)?;
-        let params: Vec<&(dyn gantry_server::store::tokio_postgres::types::ToSql + Sync)> =
+        let params: Vec<&(dyn enterplace_server::store::tokio_postgres::types::ToSql + Sync)> =
             if condition.is_empty() {
                 vec![]
             } else {
@@ -673,7 +673,7 @@ impl Call<'_> {
         if body.get("active").and_then(bool_of) == Some(false) {
             return Err(error(
                 StatusCode::BAD_REQUEST,
-                "Gantry provisions active people only. Assign the person once they are active in the identity provider.",
+                "Enterplace provisions active people only. Assign the person once they are active in the identity provider.",
                 Some("invalidValue"),
             ));
         }
@@ -1564,7 +1564,7 @@ async fn api(
         client
             .query_opt(
                 "UPDATE enterprise_scim_tokens SET last_used = now() WHERE token_sha256 = $1 RETURNING name",
-                &[&gantry_core::id::sha256_hex(token.as_bytes())],
+                &[&enterplace_core::id::sha256_hex(token.as_bytes())],
             )
             .await
             .map_err(members::db_error)?
@@ -1899,7 +1899,7 @@ async fn create_token(
         client
             .execute(
                 "INSERT INTO enterprise_scim_tokens (token_sha256, name, created_by) VALUES ($1, $2, $3)",
-                &[&gantry_core::id::sha256_hex(token.as_bytes()), &name, &admin.name],
+                &[&enterplace_core::id::sha256_hex(token.as_bytes()), &name, &admin.name],
             )
             .await
             .map_err(members::db_error)
@@ -1913,7 +1913,7 @@ async fn create_token(
         &uri,
         "SCIM token created",
         &format!(
-            "Paste it into your identity provider now, with the base URL {}. Gantry keeps only its hash and cannot show it again.",
+            "Paste it into your identity provider now, with the base URL {}. Enterplace keeps only its hash and cannot show it again.",
             esc(&format!("{}{PATH}", members::origin(&headers, &tls)))
         ),
         &token,
@@ -2128,7 +2128,7 @@ async fn password_link(
             .execute(
                 "INSERT INTO enterprise_password_links (token_sha256, person_id, created_by, expires_at) \
                  VALUES ($1, $2, $3, now() + make_interval(days => $4))",
-                &[&gantry_core::id::sha256_hex(token.as_bytes()), &id, &admin.name, &LINK_DAYS],
+                &[&enterplace_core::id::sha256_hex(token.as_bytes()), &id, &admin.name, &LINK_DAYS],
             )
             .await
             .map_err(members::db_error)
@@ -2167,7 +2167,7 @@ async fn link_person(scim: &Scim, token: &str) -> Result<Option<(String, String)
         .query_opt(
             "SELECT p.id, p.email FROM enterprise_password_links l JOIN enterprise_people p ON p.id = l.person_id \
              WHERE l.token_sha256 = $1 AND l.used_at IS NULL AND l.expires_at > now() AND p.password_hash = '!'",
-            &[&gantry_core::id::sha256_hex(token.as_bytes())],
+            &[&enterplace_core::id::sha256_hex(token.as_bytes())],
         )
         .await
         .map_err(members::db_error)?;
@@ -2278,7 +2278,7 @@ async fn set_password(
         let used = tx
             .execute(
                 "UPDATE enterprise_password_links SET used_at = now() WHERE token_sha256 = $1 AND used_at IS NULL AND expires_at > now()",
-                &[&gantry_core::id::sha256_hex(token.as_bytes())],
+                &[&enterplace_core::id::sha256_hex(token.as_bytes())],
             )
             .await
             .map_err(members::db_error)?;

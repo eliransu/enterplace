@@ -179,7 +179,7 @@ fn on_path(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Every tool the agent looks for, by the name the coverage report gives it (`gantry_core::audit::tool_of`).
+/// Every tool the agent looks for, by the name the coverage report gives it (`enterplace_core::audit::tool_of`).
 pub const TOOLS: [&str; 15] = [
     "claude-code",
     "codex",
@@ -686,7 +686,7 @@ fn classify(found: Vec<String>, gateway: &str) -> (&'static str, Vec<String>) {
     }
     let direct: Vec<String> = found.into_iter().filter(|e| !at_gateway(e)).collect();
     if direct.is_empty() {
-        ("gantry", direct)
+        ("enterplace", direct)
     } else {
         ("direct", direct)
     }
@@ -694,8 +694,8 @@ fn classify(found: Vec<String>, gateway: &str) -> (&'static str, Vec<String>) {
 
 // ---- Desired file contents. Each takes the current text and returns the text it should be. ----
 
-/// Claude Code settings with env.ANTHROPIC_BASE_URL set to the gateway, other keys kept. With the person's Gantry key
-/// from `gantry login`, ANTHROPIC_CUSTOM_HEADERS names them in x-gantry-user, so a Claude subscription login sent
+/// Claude Code settings with env.ANTHROPIC_BASE_URL set to the gateway, other keys kept. With the person's Enterplace key
+/// from `enterplace login`, ANTHROPIC_CUSTOM_HEADERS names them in x-enterplace-user, so a Claude subscription login sent
 /// through the gateway's passthrough provider is recorded under them. Claude Code's own login stays as it is.
 fn claude_settings(current: &str, gateway: &str, person: Option<&str>) -> Result<String, String> {
     let mut v: Value = if current.trim().is_empty() {
@@ -713,7 +713,7 @@ fn claude_settings(current: &str, gateway: &str, person: Option<&str>) -> Result
         if let Some(person) = person {
             env.insert(
                 "ANTHROPIC_CUSTOM_HEADERS".into(),
-                json!(format!("x-gantry-user: {person}")),
+                json!(format!("x-enterplace-user: {person}")),
             );
         }
     }
@@ -723,11 +723,11 @@ fn claude_settings(current: &str, gateway: &str, person: Option<&str>) -> Result
     ))
 }
 
-/// Codex config.toml with `model_provider = "gantry"` and a `[model_providers.gantry]` table at the gateway.
+/// Codex config.toml with `model_provider = "enterplace"` and a `[model_providers.enterplace]` table at the gateway.
 /// ponytail: line-based TOML edit (no toml crate); it owns only those two places and keeps every other line.
 fn codex_config(current: &str, gateway: &str) -> String {
     let section = format!(
-        "[model_providers.gantry]\nname = \"Gantry\"\nbase_url = \"{gateway}/v1\"\nenv_key = \"GANTRY_KEY\"\nwire_api = \"responses\"\nstream_max_retries = 0\n"
+        "[model_providers.enterplace]\nname = \"Enterplace\"\nbase_url = \"{gateway}/v1\"\nenv_key = \"ENTERPLACE_KEY\"\nwire_api = \"responses\"\nstream_max_retries = 0\n"
     );
     let mut top = Vec::new();
     let mut rest = Vec::new();
@@ -737,7 +737,7 @@ fn codex_config(current: &str, gateway: &str) -> String {
         let t = line.trim();
         if t.starts_with('[') {
             in_table = true;
-            skipping = t == "[model_providers.gantry]";
+            skipping = t == "[model_providers.enterplace]";
         }
         if skipping {
             continue;
@@ -754,7 +754,7 @@ fn codex_config(current: &str, gateway: &str) -> String {
     while top.last().is_some_and(|l| l.trim().is_empty()) {
         top.pop();
     }
-    let mut out = String::from("model_provider = \"gantry\"\n");
+    let mut out = String::from("model_provider = \"enterplace\"\n");
     for l in top {
         out.push_str(l);
         out.push('\n');
@@ -771,12 +771,12 @@ fn codex_config(current: &str, gateway: &str) -> String {
     out
 }
 
-/// The shell env file `gantry login` also writes: our two base URL lines replace any old ones, key lines stay.
+/// The shell env file `enterplace login` also writes: our two base URL lines replace any old ones, key lines stay.
 fn env_file(current: &str, gateway: &str) -> String {
     let mut out = String::new();
     if current.is_empty() {
         out.push_str(
-            "# Base URLs managed by the Gantry device agent. Load with: . ~/.config/gantry/env\n",
+            "# Base URLs managed by the Enterplace device agent. Load with: . ~/.config/enterplace/env\n",
         );
     }
     for l in current.lines() {
@@ -829,8 +829,8 @@ fn set_at(v: &mut Value, path: &[&str], value: &str) {
 }
 
 /// OpenCode's and Kilo CLI's configuration (opencode.ai/docs/providers, kilo.ai/docs: the same `provider` table)
-/// with the built-in `openai` and `anthropic` providers sent to the gateway: `options.baseURL`, and the Gantry key
-/// read from GANTRY_KEY unless the person set a key there.
+/// with the built-in `openai` and `anthropic` providers sent to the gateway: `options.baseURL`, and the Enterplace key
+/// read from ENTERPLACE_KEY unless the person set a key there.
 fn opencode_config(current: &str, gateway: &str) -> Result<String, String> {
     json_edit(current, |v| {
         for provider in ["openai", "anthropic"] {
@@ -844,7 +844,7 @@ fn opencode_config(current: &str, gateway: &str) -> Result<String, String> {
                 set_at(
                     v,
                     &[options.as_slice(), &["apiKey"]].concat(),
-                    "{env:GANTRY_KEY}",
+                    "{env:ENTERPLACE_KEY}",
                 );
             }
         }
@@ -1022,7 +1022,7 @@ fn write(c: &Change, owner: Option<(u32, u32)>) -> Result<(), String> {
     if let Some(dir) = c.path.parent() {
         std::fs::create_dir_all(dir).map_err(err)?;
     }
-    let tmp = c.path.with_extension("gantry-tmp");
+    let tmp = c.path.with_extension("enterplace-tmp");
     std::fs::write(&tmp, &c.desired).map_err(err)?;
     std::fs::rename(&tmp, &c.path).map_err(err)?;
     #[cfg(unix)]
@@ -1034,14 +1034,14 @@ fn write(c: &Change, owner: Option<(u32, u32)>) -> Result<(), String> {
     Ok(())
 }
 
-/// Keeps the file as it is now beside it, as `<name>.gantry-backup`, before the agent changes it. `None` when there
+/// Keeps the file as it is now beside it, as `<name>.enterplace-backup`, before the agent changes it. `None` when there
 /// is no file yet.
 fn backup(path: &Path, owner: Option<(u32, u32)>) -> Result<Option<PathBuf>, String> {
     if !path.exists() {
         return Ok(None);
     }
     let mut name = path.as_os_str().to_owned();
-    name.push(".gantry-backup");
+    name.push(".enterplace-backup");
     let kept = PathBuf::from(name);
     let err = |e: std::io::Error| format!("{} cannot be written: {e}", kept.display());
     std::fs::copy(path, &kept).map_err(err)?;
@@ -1219,7 +1219,7 @@ fn bare_url(url: &str) -> String {
 }
 
 /// One server entry as reported: its name, transport and target (a bare URL, or the command's file name only, never
-/// its arguments, environment or headers), and whether it is Gantry's MCP gateway (`<gateway>/mcp` or a bundle under
+/// its arguments, environment or headers), and whether it is Enterplace's MCP gateway (`<gateway>/mcp` or a bundle under
 /// it).
 fn mcp_entry(tool: &str, file: &Path, name: &str, entry: &Value, gateway: &str) -> Value {
     let url = ["url", "serverUrl", "httpUrl"]
@@ -1251,7 +1251,7 @@ fn mcp_entry(tool: &str, file: &Path, name: &str, entry: &Value, gateway: &str) 
         "server": name,
         "transport": transport,
         "target": target,
-        "via_gantry": via,
+        "via_enterplace": via,
     })
 }
 
@@ -1297,7 +1297,7 @@ fn decided(decisions: &Value, kind: &str, row: &Value) -> bool {
 
 /// Applies the decisions to one list of servers: with `enforcement` `remove`, a blocked server is taken out (with
 /// `report`, the default, it stays and the report marks it); with `via_gateway`, an approved
-/// HTTP server is pointed at Gantry's MCP gateway, without the headers that held its own credential, or taken out
+/// HTTP server is pointed at Enterplace's MCP gateway, without the headers that held its own credential, or taken out
 /// when the list already has the gateway. Returns what was done, each as its inventory row with an `action`.
 fn enforce_list(
     list: &mut Value,
@@ -1312,7 +1312,7 @@ fn enforce_list(
     let gateway_mcp = format!("{}/mcp", gateway.trim_end_matches('/'));
     let mut has_gateway = servers
         .iter()
-        .any(|(name, entry)| mcp_entry(tool, file, name, entry, gateway)["via_gantry"] == true);
+        .any(|(name, entry)| mcp_entry(tool, file, name, entry, gateway)["via_enterplace"] == true);
     let mut done = Vec::new();
     for name in servers.keys().cloned().collect::<Vec<_>>() {
         let Some(entry) = servers.get_mut(&name) else {
@@ -1326,7 +1326,7 @@ fn enforce_list(
         } else if !blocked
             && decisions["via_gateway"] == true
             && row["transport"] == "http"
-            && row["via_gantry"] == false
+            && row["via_enterplace"] == false
             && decided(decisions, "approved", &row)
         {
             match entry.as_object_mut() {
@@ -1354,7 +1354,7 @@ fn enforce_list(
 }
 
 /// Enforces the admin's MCP decisions in each tool's MCP file of this user, keeping the file as it was beside it
-/// (`<name>.gantry-backup`). Returns what was done, for the report. Files outside the home (Claude Code's managed
+/// (`<name>.enterplace-backup`). Returns what was done, for the report. Files outside the home (Claude Code's managed
 /// MCP file) are the device management tool's, and stay.
 fn mcp_enforce(
     p: &Paths,
@@ -1461,7 +1461,7 @@ impl Profile {
 
 /// Tools this agent has configured before, kept so a later mismatch counts as drift, not first setup.
 fn applied_path(p: &Paths) -> PathBuf {
-    p.home.join(".config/gantry/device-applied")
+    p.home.join(".config/enterplace/device-applied")
 }
 
 /// Applies the profile once and returns the report for the control plane.
@@ -1519,7 +1519,7 @@ fn cycle(p: &Paths, profile: &Profile, dry_run: bool) -> Result<Value, String> {
             "tool": tool,
             "state": state,
             "installed": inst,
-            "configured": state == "gantry",
+            "configured": state == "enterplace",
             "drift": drift,
             "endpoints": direct,
         });
@@ -1530,7 +1530,7 @@ fn cycle(p: &Paths, profile: &Profile, dry_run: bool) -> Result<Value, String> {
         tools.push(row);
     }
     if env_needed {
-        let c = plan(p.home.join(".config/gantry/env"), |c| {
+        let c = plan(p.home.join(".config/enterplace/env"), |c| {
             Ok(env_file(c, gateway))
         })?;
         if !c.matches {
@@ -1578,14 +1578,14 @@ fn cycle(p: &Paths, profile: &Profile, dry_run: bool) -> Result<Value, String> {
     }))
 }
 
-/// The person at this device: the name (their email) `gantry login` saved in the credentials file.
+/// The person at this device: the name (their email) `enterplace login` saved in the credentials file.
 fn person(home: &Path) -> Option<String> {
     saved(home, "name=")
 }
 
-/// A line of the credentials file `gantry login` wrote: `name=` or `key=`.
+/// A line of the credentials file `enterplace login` wrote: `name=` or `key=`.
 fn saved(home: &Path, prefix: &str) -> Option<String> {
-    std::fs::read_to_string(home.join(".config/gantry/credentials"))
+    std::fs::read_to_string(home.join(".config/enterplace/credentials"))
         .unwrap_or_default()
         .lines()
         .find_map(|l| l.strip_prefix(prefix).map(|v| v.trim().to_owned()))
@@ -1613,7 +1613,7 @@ fn mcp_decided(inventory: &mut Value, decisions: &Value) -> Vec<String> {
         }
         let decision = if listed("blocked", row) {
             warnings.push(format!(
-                "MCP server \"{}\" ({}) in {} is blocked by your Gantry admin. Remove it from {}.",
+                "MCP server \"{}\" ({}) in {} is blocked by your Enterplace admin. Remove it from {}.",
                 row["server"].as_str().unwrap_or(""),
                 row["target"].as_str().unwrap_or(""),
                 row["tool"].as_str().unwrap_or(""),
@@ -1641,7 +1641,7 @@ fn once(agent: &ureq::Agent, opts: &Options) -> Result<(), String> {
         other => format!("the control plane is unreachable: {other}"),
     };
     let p = paths(opts.home.as_deref())?;
-    // The person's Gantry key from `gantry login`: the gateway takes the person from it, never from the report,
+    // The person's Enterplace key from `enterplace login`: the gateway takes the person from it, never from the report,
     // and answers with the profile of their team.
     let key = saved(&p.home, "key=").unwrap_or_default();
     let ask = agent
@@ -1703,7 +1703,7 @@ mod tests {
     /// An empty home folder of this test, with one OS's paths whatever machine runs the test.
     fn home_of(test: &str, os: Os) -> Paths {
         let home =
-            std::env::temp_dir().join(format!("gantry-device-{test}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("enterplace-device-{test}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         user_paths(os, home, false)
     }
@@ -1724,11 +1724,11 @@ mod tests {
         assert_eq!(v["env"]["ANTHROPIC_BASE_URL"], GW);
         assert_eq!(claude_settings(&out, GW, None)?, out, "idempotent");
         assert!(claude_settings("not json", GW, None).is_err());
-        let named = claude_settings(&out, GW, Some("gantry_maya"))?;
+        let named = claude_settings(&out, GW, Some("enterplace_maya"))?;
         let v: Value = serde_json::from_str(&named).map_err(|e| e.to_string())?;
         assert_eq!(
             v["env"]["ANTHROPIC_CUSTOM_HEADERS"],
-            "x-gantry-user: gantry_maya"
+            "x-enterplace-user: enterplace_maya"
         );
         assert!(
             v["env"].get("ANTHROPIC_API_KEY").is_none(),
@@ -1739,23 +1739,23 @@ mod tests {
 
     #[test]
     fn codex_config_replaces_only_its_parts() {
-        let cur = "model = \"o3\"\nmodel_provider = \"openai\"\n\n[model_providers.gantry]\nbase_url = \"old\"\n\n[profiles.x]\nmodel = \"y\"\n";
+        let cur = "model = \"o3\"\nmodel_provider = \"openai\"\n\n[model_providers.enterplace]\nbase_url = \"old\"\n\n[profiles.x]\nmodel = \"y\"\n";
         let out = codex_config(cur, GW);
-        assert!(out.starts_with("model_provider = \"gantry\"\nmodel = \"o3\"\n"));
+        assert!(out.starts_with("model_provider = \"enterplace\"\nmodel = \"o3\"\n"));
         assert!(!out.contains("openai\""));
         assert!(!out.contains("old"));
         assert!(out.contains("[profiles.x]\nmodel = \"y\"\n"));
-        assert!(out.contains("base_url = \"https://gw.example.com/v1\"\nenv_key = \"GANTRY_KEY\"\nwire_api = \"responses\""));
+        assert!(out.contains("base_url = \"https://gw.example.com/v1\"\nenv_key = \"ENTERPLACE_KEY\"\nwire_api = \"responses\""));
         assert_eq!(codex_config(&out, GW), out, "idempotent");
     }
 
     #[test]
     fn env_file_keeps_key_lines() {
         let out = env_file(
-            "# login\nexport OPENAI_BASE_URL=x\nexport GANTRY_KEY=gantry_1\n",
+            "# login\nexport OPENAI_BASE_URL=x\nexport ENTERPLACE_KEY=enterplace_1\n",
             GW,
         );
-        assert!(out.contains("export GANTRY_KEY=gantry_1\n"));
+        assert!(out.contains("export ENTERPLACE_KEY=enterplace_1\n"));
         assert!(!out.contains("=x\n"));
         assert!(out.ends_with("export OPENAI_BASE_URL=https://gw.example.com/v1\n"));
         assert_eq!(env_file(&out, GW), out);
@@ -1763,7 +1763,7 @@ mod tests {
 
     #[test]
     fn cycle_applies_then_reports_drift() -> Result<(), String> {
-        let home = std::env::temp_dir().join(format!("gantry-device-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("enterplace-device-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".claude")).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(home.join(".cursor")).map_err(|e| e.to_string())?;
@@ -1778,7 +1778,7 @@ mod tests {
         let r = cycle(&p, &manage, false)?;
         assert_eq!(
             tool(&r, "claude-code"),
-            json!({"tool":"claude-code","state":"gantry","installed":true,"configured":true,"drift":false,"endpoints":[]})
+            json!({"tool":"claude-code","state":"enterplace","installed":true,"configured":true,"drift":false,"endpoints":[]})
         );
         assert_eq!(tool(&r, "codex")["state"], "not_installed");
         assert_eq!(
@@ -1791,7 +1791,7 @@ mod tests {
                 .is_some_and(|n| n.contains("Cursor Settings"))
         );
         assert_eq!(r["tools"].as_array().map(Vec::len), Some(TOOLS.len()));
-        assert!(home.join(".config/gantry/env").exists());
+        assert!(home.join(".config/enterplace/env").exists());
 
         std::fs::write(&p.claude_settings, "{}").map_err(|e| e.to_string())?;
         let r = cycle(&p, &manage, false)?;
@@ -1815,7 +1815,7 @@ mod tests {
         std::fs::write(path, text).map_err(|e| e.to_string())
     }
 
-    /// Each tool's documented configuration, pointed at a provider, reads as `direct`; at the gateway, as `gantry`.
+    /// Each tool's documented configuration, pointed at a provider, reads as `direct`; at the gateway, as `enterplace`.
     #[test]
     fn tools_configured_for_a_provider_report_direct() -> Result<(), String> {
         // macOS paths: VS Code's and Claude Desktop's files are under Library.
@@ -1857,7 +1857,7 @@ mod tests {
         put(
             h,
             ".config/kilo/kilo.json",
-            r#"{"provider":{"gantry":{"options":{"baseURL":"https://gw.example.com/v1","apiKey":"{env:GANTRY_KEY}"}}}}"#,
+            r#"{"provider":{"enterplace":{"options":{"baseURL":"https://gw.example.com/v1","apiKey":"{env:ENTERPLACE_KEY}"}}}}"#,
         )?;
         put(
             h,
@@ -1897,7 +1897,7 @@ mod tests {
             state("codex"),
             ("direct".into(), json!(["https://api.openai.com/v1"]))
         );
-        assert_eq!(state("github-copilot").0, "gantry");
+        assert_eq!(state("github-copilot").0, "enterplace");
         assert_eq!(
             state("zed"),
             ("direct".into(), json!(["https://api.openai.com/v1"]))
@@ -1910,7 +1910,7 @@ mod tests {
                 json!(["https://generativelanguage.googleapis.com"])
             )
         );
-        assert_eq!(state("kilo-code").0, "gantry");
+        assert_eq!(state("kilo-code").0, "enterplace");
         assert_eq!(state("roo-code").0, "installed");
         assert_eq!(state("jetbrains-ai").0, "installed");
         assert_eq!(
@@ -1931,7 +1931,7 @@ mod tests {
                 .and_then(|a| a.iter().find(|x| x["tool"] == t))
                 .cloned()
                 .unwrap_or_default();
-            assert_eq!(x["state"], "gantry", "{t}: {x}");
+            assert_eq!(x["state"], "enterplace", "{t}: {x}");
         }
         let _ = std::fs::remove_dir_all(&home);
         Ok(())
@@ -1975,9 +1975,10 @@ mod tests {
     }
 
     #[test]
-    fn the_mcp_inventory_lists_each_tools_servers_and_which_go_through_gantry() -> Result<(), String>
-    {
-        let home = std::env::temp_dir().join(format!("gantry-device-mcp-{}", std::process::id()));
+    fn the_mcp_inventory_lists_each_tools_servers_and_which_go_through_enterplace()
+    -> Result<(), String> {
+        let home =
+            std::env::temp_dir().join(format!("enterplace-device-mcp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         let p = user_paths(Os::Linux, home.clone(), false);
         let put = |rel: &str, text: &str| -> Result<(), String> {
@@ -1992,7 +1993,7 @@ mod tests {
         )?;
         put(
             ".claude.json",
-            r#"{"mcpServers":{"gantry":{"type":"http","url":"https://gw.example.com/mcp"}},"projects":{"/repo":{"mcpServers":{"bundle":{"type":"http","url":"https://gw.example.com/mcp/eng?key=abc"}}}}}"#,
+            r#"{"mcpServers":{"enterplace":{"type":"http","url":"https://gw.example.com/mcp"}},"projects":{"/repo":{"mcpServers":{"bundle":{"type":"http","url":"https://gw.example.com/mcp/eng?key=abc"}}}}}"#,
         )?;
         put(
             ".cursor/mcp.json",
@@ -2023,13 +2024,13 @@ mod tests {
             ),
             (json!("stdio"), json!("npx"))
         );
-        assert_eq!(row("gantry")["via_gantry"], true);
-        assert_eq!(row("bundle")["via_gantry"], true);
+        assert_eq!(row("enterplace")["via_enterplace"], true);
+        assert_eq!(row("bundle")["via_enterplace"], true);
         assert_eq!(row("bundle")["target"], "https://gw.example.com/mcp/eng");
-        assert_eq!(row("github")["via_gantry"], false);
+        assert_eq!(row("github")["via_enterplace"], false);
         assert_eq!(row("github")["target"], "https://api.githubcopilot.com/mcp");
         assert_eq!(row("docs")["tool"], "vscode");
-        assert_eq!(row("docs")["via_gantry"], true);
+        assert_eq!(row("docs")["via_enterplace"], true);
         assert_eq!(row("local")["target"], "srv.exe");
         let text = serde_json::to_string(&found).map_err(|e| e.to_string())?;
         for secret in ["t0ps3cret", "/secret/path", "key=abc", "pw@", "Bearer x"] {
@@ -2043,7 +2044,7 @@ mod tests {
     fn the_profile_marks_each_mcp_server_approved_blocked_or_pending() {
         let mut report = json!({"mcp": [
             {"tool": "cursor", "file": "/h/.cursor/mcp.json", "server": "github", "transport": "http", "target": "https://api.githubcopilot.com/mcp"},
-            {"tool": "claude-code", "file": "/h/.claude.json", "server": "gantry", "transport": "http", "target": "https://gw.example.com/mcp"},
+            {"tool": "claude-code", "file": "/h/.claude.json", "server": "enterplace", "transport": "http", "target": "https://gw.example.com/mcp"},
             {"tool": "zed", "file": "/h/.config/zed/settings.json", "server": "local", "transport": "stdio", "target": "srv"},
             {"tool": "vscode", "file": "/h/mcp.json", "error": "the file is not JSON"}
         ]});
@@ -2139,7 +2140,7 @@ mod tests {
         let r = cycle(&p, &all, false)?;
         for t in MANAGEABLE {
             let x = tool_of(&r, t);
-            assert_eq!(x["state"], "gantry", "{t}: {x}");
+            assert_eq!(x["state"], "enterplace", "{t}: {x}");
             assert_eq!(x["drift"], false, "{t}: first setup is not drift");
         }
         // What no documented file configures stays `installed`, with the reason.
@@ -2164,10 +2165,10 @@ mod tests {
         );
         assert_eq!(
             opencode["provider"]["anthropic"]["options"]["apiKey"],
-            "{env:GANTRY_KEY}"
+            "{env:ENTERPLACE_KEY}"
         );
         assert_eq!(
-            text(".config/opencode/opencode.json.gantry-backup"),
+            text(".config/opencode/opencode.json.enterplace-backup"),
             "// mine\n{\"theme\": \"dark\"}\n",
             "the file as it was is kept"
         );
@@ -2245,7 +2246,7 @@ mod tests {
             let x = tool_of(&r, t);
             assert_eq!(
                 (x["state"].clone(), x["drift"].clone()),
-                (json!("gantry"), json!(true)),
+                (json!("enterplace"), json!(true)),
                 "{t}: {x}"
             );
         }
@@ -2309,7 +2310,7 @@ mod tests {
 
     /// By default a blocked server is only reported. With `enforcement` `remove`, it leaves each tool's MCP file,
     /// the file as it was is kept beside it, and the report says what was done. With `via_gateway`, an approved HTTP
-    /// server is pointed at Gantry's MCP gateway.
+    /// server is pointed at Enterplace's MCP gateway.
     #[test]
     fn blocked_mcp_servers_are_reported_or_removed_with_a_backup_and_approved_ones_go_through_the_gateway()
     -> Result<(), String> {
@@ -2378,7 +2379,7 @@ mod tests {
             desktop
         );
         assert!(
-            !h.join(".config/Claude/claude_desktop_config.json.gantry-backup")
+            !h.join(".config/Claude/claude_desktop_config.json.enterplace-backup")
                 .exists()
         );
 
@@ -2396,10 +2397,10 @@ mod tests {
         // As paths, so Windows' separators compare equal.
         assert_eq!(
             actions[0]["backup"].as_str().map(PathBuf::from),
-            Some(h.join(".config/Claude/claude_desktop_config.json.gantry-backup"))
+            Some(h.join(".config/Claude/claude_desktop_config.json.enterplace-backup"))
         );
         assert_eq!(
-            read(&h.join(".config/Claude/claude_desktop_config.json.gantry-backup")),
+            read(&h.join(".config/Claude/claude_desktop_config.json.enterplace-backup")),
             desktop
         );
         let json_of =
@@ -2459,7 +2460,7 @@ mod tests {
             r["mcp"].as_array().is_some_and(|m| m
                 .iter()
                 .filter(|x| x["transport"] == "http")
-                .all(|x| x["via_gantry"] == true)),
+                .all(|x| x["via_enterplace"] == true)),
             "{r}"
         );
         assert_eq!(cycle(&p, &all, false)?["mcp_actions"], json!([]));
@@ -2535,7 +2536,7 @@ mod tests {
         );
         assert_eq!(
             classify(vec!["https://gw.example.com".into()], GW).0,
-            "gantry"
+            "enterplace"
         );
         assert_eq!(classify(vec!["${input:key}".into()], GW).0, "installed");
     }

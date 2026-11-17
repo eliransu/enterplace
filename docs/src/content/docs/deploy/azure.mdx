@@ -1,13 +1,13 @@
 ---
 title: Azure
-description: Deploy Gantry Enterprise on Azure with the azure-container-apps Terraform module, Container Apps with Azure Database for PostgreSQL and Azure Files, then verify and run it.
+description: Deploy Enterplace Enterprise on Azure with the azure-container-apps Terraform module, Container Apps with Azure Database for PostgreSQL and Azure Files, then verify and run it.
 sidebar:
   order: 7
 ---
 
 import { Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The Terraform module `azure-container-apps`, which ships inside the `gantry` image, runs one gateway as a Container App with HTTPS ingress, with Azure Database for PostgreSQL Flexible Server 16 for the store, the audit log on Azure Files, and secrets as Key Vault references.
+The Terraform module `azure-container-apps`, which ships inside the `enterplace` image, runs one gateway as a Container App with HTTPS ingress, with Azure Database for PostgreSQL Flexible Server 16 for the store, the audit log on Azure Files, and secrets as Key Vault references.
 
 ## What it creates
 
@@ -15,12 +15,12 @@ The Terraform module `azure-container-apps`, which ships inside the `gantry` ima
 |---|---|
 | Resource group, virtual network with a subnet for the apps and a delegated subnet for the database | A private network for everything |
 | Container Apps environment (Consumption workload profile) and app: one replica, single revision mode | HTTPS ingress on the app's address, probes on `/healthz` |
-| PostgreSQL Flexible Server 16, private access only, a private DNS zone, database `gantry` | The store, reached from the virtual network only, with `sslmode=require` |
+| PostgreSQL Flexible Server 16, private access only, a private DNS zone, database `enterplace` | The store, reached from the virtual network only, with `sslmode=require` |
 | Key Vault secret `<name>-database-url` in your vault | The app reads `DATABASE_URL`, the provider keys and the license as Key Vault references |
-| Key Vault secrets `<name>-master-key` and `<name>-export-key` in your vault | `GANTRY_MASTER_KEY`, which seals [provider credentials](/governance/provider-credentials/) kept in the store, and `GANTRY_EXPORT_KEY`, which encrypts [SIEM export](/operations/siem-export/) destination secrets. Random 64 hex characters, made on the first apply and kept on every later one. Skipped for a key you bring |
+| Key Vault secrets `<name>-master-key` and `<name>-export-key` in your vault | `ENTERPLACE_MASTER_KEY`, which seals [provider credentials](/governance/provider-credentials/) kept in the store, and `ENTERPLACE_EXPORT_KEY`, which encrypts [SIEM export](/operations/siem-export/) destination secrets. Random 64 hex characters, made on the first apply and kept on every later one. Skipped for a key you bring |
 | User-assigned identity with Key Vault Secrets User on the vault | What the app reads secrets as |
-| Storage account (ZRS) and Azure Files share `gantry-audit`, mounted at `/var/lib/gantry` | The audit log, one folder per revision |
-| A busybox init container and an EmptyDir volume | Writes the policy to `/etc/gantry/gantry.policy.yaml`: the image has no shell |
+| Storage account (ZRS) and Azure Files share `enterplace-audit`, mounted at `/var/lib/enterplace` | The audit log, one folder per revision |
+| A busybox init container and an EmptyDir volume | Writes the policy to `/etc/enterplace/enterplace.policy.yaml`: the image has no shell |
 | Log Analytics workspace | The app's logs |
 
 ## Prerequisites
@@ -39,27 +39,27 @@ The app's address comes with a managed certificate, so the first deploy needs no
 1. Make the Key Vault and put the secrets in it. The module only references them by name, so their values never enter Terraform state.
 
    ```bash
-   az group create --name gantry-secrets --location westeurope
-   az keyvault create --name acme-gantry-kv --resource-group gantry-secrets --location westeurope --enable-rbac-authorization true
+   az group create --name enterplace-secrets --location westeurope
+   az keyvault create --name acme-enterplace-kv --resource-group enterplace-secrets --location westeurope --enable-rbac-authorization true
    az role assignment create --role "Key Vault Secrets Officer" \
      --assignee "$(az ad signed-in-user show --query id -o tsv)" \
-     --scope "$(az keyvault show --name acme-gantry-kv --query id -o tsv)"
-   az keyvault secret set --vault-name acme-gantry-kv --name openai-key --value 'sk-...'
-   az keyvault secret set --vault-name acme-gantry-kv --name gantry-license --value 'eyJjdXN0b21lciI6...'
-   az keyvault show --name acme-gantry-kv --query id -o tsv
+     --scope "$(az keyvault show --name acme-enterplace-kv --query id -o tsv)"
+   az keyvault secret set --vault-name acme-enterplace-kv --name openai-key --value 'sk-...'
+   az keyvault secret set --vault-name acme-enterplace-kv --name enterplace-license --value 'eyJjdXN0b21lciI6...'
+   az keyvault show --name acme-enterplace-kv --query id -o tsv
    ```
 
    A new role assignment can take a few minutes to reach Key Vault. The last line prints the vault's ID for `main.tf`.
 
-2. Copy the module out of the image you will run, and save a starting policy beside it as `gantry.policy.yaml`. The image carries the module for its own version, so nothing is cloned.
+2. Copy the module out of the image you will run, and save a starting policy beside it as `enterplace.policy.yaml`. The image carries the module for its own version, so nothing is cloned.
 
    ```bash
-   mkdir gantry-azure && cd gantry-azure
-   docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
-   docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
+   mkdir enterplace-azure && cd enterplace-azure
+   docker create --name enterplace-files ghcr.io/eliransu/enterplace:<version>
+   docker cp enterplace-files:/deploy ./enterplace-deploy && docker rm enterplace-files
    ```
 
-   ```yaml title="gantry.policy.yaml"
+   ```yaml title="enterplace.policy.yaml"
    version: 1
    providers:
      - name: openai
@@ -71,11 +71,11 @@ The app's address comes with a managed certificate, so the first deploy needs no
      - name: everyone
        principals: { any: true }
        models: [gpt-4o-mini]
-   audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+   audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
    store: { postgres_url_env: DATABASE_URL }
    ```
 
-   The policy must keep its last two lines: the audit log under `/var/lib/gantry` and `store: { postgres_url_env: DATABASE_URL }`.
+   The policy must keep its last two lines: the audit log under `/var/lib/enterplace` and `store: { postgres_url_env: DATABASE_URL }`.
 
 3. Write `main.tf`. `resource_group_name` names a group the module creates, so it must not exist yet.
 
@@ -89,29 +89,29 @@ The app's address comes with a managed certificate, so the first deploy needs no
      subscription_id = "00000000-0000-0000-0000-000000000000"
    }
 
-   module "gantry" {
-     source = "./gantry-deploy/terraform/azure-container-apps"
+   module "enterplace" {
+     source = "./enterplace-deploy/terraform/azure-container-apps"
 
      location            = "westeurope"
-     resource_group_name = "gantry"
-     image               = "ghcr.io/eliransu/gantry:<version>"
-     policy              = file("gantry.policy.yaml")
+     resource_group_name = "enterplace"
+     image               = "ghcr.io/eliransu/enterplace:<version>"
+     policy              = file("enterplace.policy.yaml")
 
-     key_vault_id         = "/subscriptions/.../resourceGroups/gantry-secrets/providers/Microsoft.KeyVault/vaults/acme-gantry-kv"
-     license_secret       = "gantry-license"
+     key_vault_id         = "/subscriptions/.../resourceGroups/enterplace-secrets/providers/Microsoft.KeyVault/vaults/acme-enterplace-kv"
+     license_secret       = "enterplace-license"
      provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key" }
    }
 
    output "gateway_url" {
-     value = module.gantry.gateway_url
+     value = module.enterplace.gateway_url
    }
 
    output "revision_suffix" {
-     value = module.gantry.revision_suffix
+     value = module.enterplace.revision_suffix
    }
 
    output "audit_share" {
-     value = module.gantry.audit_share
+     value = module.enterplace.audit_share
    }
    ```
 
@@ -139,8 +139,8 @@ The app's address comes with a managed certificate, so the first deploy needs no
 | `key_vault_id` | required | The vault holding the provider keys and the license |
 | `provider_key_secrets` | `{}` | The variable each `key_env` names, mapped to a secret name in the vault |
 | `license_secret` | `null` | Secret name of the license. Null runs the open source features only |
-| `master_key_secret` | `null` | Optional. Your own master key's secret name in the vault (`GANTRY_MASTER_KEY`). Null makes `<name>-master-key` |
-| `export_key_secret` | `null` | Optional. Your own export key's secret name in the vault (`GANTRY_EXPORT_KEY`). Null makes `<name>-export-key` |
+| `master_key_secret` | `null` | Optional. Your own master key's secret name in the vault (`ENTERPLACE_MASTER_KEY`). Null makes `<name>-master-key` |
+| `export_key_secret` | `null` | Optional. Your own export key's secret name in the vault (`ENTERPLACE_EXPORT_KEY`). Null makes `<name>-export-key` |
 | `registry` | `null` | `server`, `username` and `password_secret` (a secret name in the vault), for a private mirror of the image. ghcr.io needs none |
 | `internal` | `false` | An environment reachable only inside the virtual network |
 | `allowed_cidrs` | `[]` | Address ranges that may reach the app. Empty allows all |
@@ -149,7 +149,7 @@ The app's address comes with a managed certificate, so the first deploy needs no
 | `db_sku`, `db_storage_mb`, `db_high_availability` | `GP_Standard_D2ds_v5`, `32768`, `false` | The database, and a zone-redundant standby |
 | `audit_share_quota_gb` | `100` | The size of the audit share |
 | `log_retention_days` | `30` | Log Analytics retention |
-| `name`, `tags` | `gantry`, `{}` | Prefix for every resource: 3 to 16 lowercase letters and digits, since it also names the storage account |
+| `name`, `tags` | `enterplace`, `{}` | Prefix for every resource: 3 to 16 lowercase letters and digits, since it also names the storage account |
 
 ### Outputs
 
@@ -159,9 +159,9 @@ The app's address comes with a managed certificate, so the first deploy needs no
 | `container_app_name` | The Container App |
 | `revision_suffix` | The current revision, and the folder on the share holding its audit log |
 | `database_fqdn` | The PostgreSQL server, reachable from the virtual network only |
-| `audit_share` | The storage account and share, as `<account>/gantry-audit` |
+| `audit_share` | The storage account and share, as `<account>/enterplace-audit` |
 | `outbound_ips` | The addresses the gateway calls providers from, for providers that allow-list callers |
-| `master_key_secret`, `export_key_secret` | The vault secrets the gateway reads `GANTRY_MASTER_KEY` and `GANTRY_EXPORT_KEY` from |
+| `master_key_secret`, `export_key_secret` | The vault secrets the gateway reads `ENTERPLACE_MASTER_KEY` and `ENTERPLACE_EXPORT_KEY` from |
 
 ## Verify
 
@@ -177,7 +177,7 @@ The app's address comes with a managed certificate, so the first deploy needs no
 2. Find the one-time link to make the first admin. The gateway prints it once at start, with the license line before it.
 
    ```bash
-   az containerapp logs show --name gantry --resource-group gantry --tail 100 | grep 'First run'
+   az containerapp logs show --name enterplace --resource-group enterplace --tail 100 | grep 'First run'
    ```
 
    ```text
@@ -189,9 +189,9 @@ The app's address comes with a managed certificate, so the first deploy needs no
 4. Issue a key with the admin API and make a governed call.
 
    ```bash
-   export GANTRY_ADMIN_KEY=gantry_...
+   export ENTERPLACE_ADMIN_KEY=enterplace_...
    KEY=$(curl -s -X POST $GATEWAY/admin/keys \
-     -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H 'Content-Type: application/json' \
+     -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -H 'Content-Type: application/json' \
      -d '{"name":"maya.cohen","team":"payments"}' | sed -n 's/.*"key":"\([^"]*\)".*/\1/p')
    curl -s $GATEWAY/v1/chat/completions \
      -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
@@ -202,10 +202,10 @@ The app's address comes with a managed certificate, so the first deploy needs no
 
    ```bash
    ACCOUNT=$(terraform output -raw audit_share | cut -d/ -f1)
-   az storage file download --account-name $ACCOUNT --share-name gantry-audit \
-     --path "$(terraform output -raw revision_suffix)/gantry-audit.jsonl" --dest gantry-audit.jsonl \
+   az storage file download --account-name $ACCOUNT --share-name enterplace-audit \
+     --path "$(terraform output -raw revision_suffix)/enterplace-audit.jsonl" --dest enterplace-audit.jsonl \
      --account-key "$(az storage account keys list --account-name $ACCOUNT --query '[0].value' -o tsv)"
-   docker run --rm -v "$PWD":/audit:ro ghcr.io/eliransu/gantry:<version> audit verify /audit/gantry-audit.jsonl
+   docker run --rm -v "$PWD":/audit:ro ghcr.io/eliransu/enterplace:<version> audit verify /audit/enterplace-audit.jsonl
    ```
 
 </Steps>
@@ -224,13 +224,13 @@ The app's address comes with a managed certificate, so the first deploy needs no
 - **Secrets.** Provider keys and the license in Key Vault, referenced by name. A new version of a secret is read when the replica restarts:
 
   ```bash
-  az containerapp revision restart --name gantry --resource-group gantry \
-    --revision "$(az containerapp show --name gantry --resource-group gantry --query properties.latestRevisionName -o tsv)"
+  az containerapp revision restart --name enterplace --resource-group enterplace \
+    --revision "$(az containerapp show --name enterplace --resource-group enterplace --query properties.latestRevisionName -o tsv)"
   ```
 
-- **Backups.** The database keeps 7 days of automated backups with point-in-time restore. Back up the share with Azure Backup (in the portal: the storage account, **File shares**, `gantry-audit`, **Backup**). Keep each revision's last hash outside the subscription.
+- **Backups.** The database keeps 7 days of automated backups with point-in-time restore. Back up the share with Azure Backup (in the portal: the storage account, **File shares**, `enterplace-audit`, **Backup**). Keep each revision's last hash outside the subscription.
 - **Monitoring.** An availability test on `$GATEWAY/healthz` in Application Insights, and alerts on the app's restarts and 5xx responses. For traces, store the collector's address in the vault and add it to the map: `provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key", OTEL_EXPORTER_OTLP_ENDPOINT = "otel-endpoint" }`. The map sets any variable from a secret.
-- **Upgrades.** Take an on-demand backup of the database first (in the portal: the server, **Backup and restore**, **Backup now**), since a newer Gantry may update the schema and an older one refuses a database a newer one has written. Then change `image` and apply. The new revision starts before the old one drains, so there is no gap.
+- **Upgrades.** Take an on-demand backup of the database first (in the portal: the server, **Backup and restore**, **Backup now**), since a newer Enterplace may update the schema and an older one refuses a database a newer one has written. Then change `image` and apply. The new revision starts before the old one drains, so there is no gap.
 - **Rollback.** Set `image` back and apply. If the previous version refuses the database because the new one changed the schema, restore the backup first.
 
 ### What to watch

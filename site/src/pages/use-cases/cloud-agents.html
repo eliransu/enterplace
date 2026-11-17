@@ -1,6 +1,6 @@
 <!--
 title: Cloud and production agents: a key, a budget and a record per workload
-description: Agents and apps in your cloud call models and MCP tools through Gantry. Each workload has its own key and budget, a looping agent can be stopped with one command, and every call is recorded. Steps with the exact policy lines.
+description: Agents and apps in your cloud call models and MCP tools through Enterplace. Each workload has its own key and budget, a looping agent can be stopped with one command, and every call is recorded. Steps with the exact policy lines.
 nav: use-cases
 -->
 <section class="wrap head">
@@ -11,7 +11,7 @@ nav: use-cases
 
 <section class="wrap sec" style="padding-top: 40px">
 {{gate
-label: Four workloads send requests through Gantry. Three are allowed. The triage agent is refused because its key reached its budget.
+label: Four workloads send requests through Enterplace. Three are allowed. The triage agent is refused because its key reached its budget.
 foot: Example requests from four workloads.
 lane: svc-invoice-bot | finance | OpenAI
 lane: svc-triage-agent | support | Bedrock
@@ -50,18 +50,18 @@ req: 0 | svc-invoice-bot | finance | allow | gpt-5-mini, rule finance-apps
         <p>Give each service or job its own name, team and budget. The key is shown once and stored as a hash. Put it in the secret store the service already reads.</p>
         <a class="more" href="docs:/governance/keys/">Keys in the docs {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>A key with its own budget</figcaption><pre>gantry key new svc-triage-agent \
+      <figure class="code"><figcaption>A key with its own budget</figcaption><pre>enterplace key new svc-triage-agent \
   --team support --budget 20/month</pre></figure>
     </li>
     <li>
       <div class="guide-text">
-        <h3>Point the SDKs at Gantry</h3>
+        <h3>Point the SDKs at Enterplace</h3>
         <p>The OpenAI and Anthropic SDKs read their base URL from the environment, so most services need no code change. The docs have a prompt you can give your coding agent to find and move every call site, then you read the diff.</p>
         <a class="more" href="docs:/integrations/connect-a-project/">Connect a project {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>Where the service runs</figcaption><pre>OPENAI_BASE_URL=https://gantry.example.com/v1
-ANTHROPIC_BASE_URL=https://gantry.example.com
-GANTRY_API_KEY=gantry_...</pre></figure>
+      <figure class="code"><figcaption>Where the service runs</figcaption><pre>OPENAI_BASE_URL=https://enterplace.example.com/v1
+ANTHROPIC_BASE_URL=https://enterplace.example.com
+ENTERPLACE_API_KEY=enterplace_...</pre></figure>
     </li>
     <li>
       <div class="guide-text">
@@ -69,7 +69,7 @@ GANTRY_API_KEY=gantry_...</pre></figure>
         <p>A rule names the team and the models it may use. Limits cap dollars, requests per minute and requests in flight. A product that serves your own customers can carry a budget per end customer.</p>
         <a class="more" href="docs:/governance/budgets-and-rate-limits/">Budgets and rate limits {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>rules:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>rules:
   - name: support-agents
     principals: { team: support }
     models: [claude-sonnet-5-5, claude-haiku-5-5]
@@ -84,11 +84,11 @@ limits:
         <p>A kill switch needs no policy change. It stops a person, a team, a key or a model, and the callers it stops see the reason and who set it.</p>
         <a class="more" href="docs:/governance/kill-switches/">Kill switches {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>When an agent loops</figcaption><pre>gantry kill --team support \
+      <figure class="code"><figcaption>When an agent loops</figcaption><pre>enterplace kill --team support \
   --reason "agent retrying one ticket in a loop"
 
 <span class="c"># when it is fixed</span>
-gantry unkill --team support</pre></figure>
+enterplace unkill --team support</pre></figure>
     </li>
   </ol>
 </section>
@@ -99,7 +99,7 @@ gantry unkill --team support</pre></figure>
       <h2>What you see afterwards</h2>
       <ul class="ticks">
         <li>Spend per service, team, end customer and model, with a forecast for each budget.</li>
-        <li>Every response carries <code>X-Gantry-Decision</code>. Log it beside your own request ID and you can find the record for any call.</li>
+        <li>Every response carries <code>X-Enterplace-Decision</code>. Log it beside your own request ID and you can find the record for any call.</li>
         <li>OpenTelemetry traces over OTLP, joined to the caller's trace, and Prometheus metrics on an address of their own.</li>
         <li>On AWS and Google Cloud, Bedrock and Vertex AI need no provider key. The gateway signs in as its own role or service account.</li>
       </ul>
@@ -117,8 +117,8 @@ gantry unkill --team support</pre></figure>
 <section class="wrap sec doc">
   <h2>Limits to know before you start</h2>
   <ul class="ticks out">
-    <li><strong>Gantry is in the request path.</strong> Run more than one replica on a Postgres store, and put it where your services can reach it. The deploy guides cover sizing.</li>
-    <li><strong>The decision record says what Gantry decided.</strong> How the provider answered arrives in a second record, with status, tokens and cost, when the answer ends.</li>
+    <li><strong>Enterplace is in the request path.</strong> Run more than one replica on a Postgres store, and put it where your services can reach it. The deploy guides cover sizing.</li>
+    <li><strong>The decision record says what Enterplace decided.</strong> How the provider answered arrives in a second record, with status, tokens and cost, when the answer ends.</li>
     <li><strong>The answer cache is per replica.</strong> Budgets, rate limits and kill switches are shared through the store. Cached answers are not.</li>
     <li><strong>One caller's requests in flight</strong> may hold at most 64 MiB of request bodies.</li>
   </ul>
@@ -127,10 +127,10 @@ gantry unkill --team support</pre></figure>
 <section class="wrap sec doc">
   <h2>Questions people ask</h2>
   <div class="qa">
-    <details><summary>Our services already hold tokens from our identity provider. Do they need a Gantry key too?</summary><p>No. Gantry accepts JWTs from issuers you trust in place of a key, and reads the person and team from claims you name. <a href="docs:/governance/access-control/">Access control</a></p></details>
-    <details><summary>Does Gantry change the request?</summary><p>The body is forwarded byte for byte, except where your policy changes it: a guardrail that masks, or a translation you opted into. An unknown query parameter is refused by name, never dropped silently.</p></details>
-    <details><summary>What if Gantry cannot write its audit log?</summary><p>Requests are refused with <code>audit_unavailable</code> until it can. That is the design: no request leaves without a record.</p></details>
-    <details><summary>Do the agents' tool calls go through it too?</summary><p>If the tools are MCP servers, yes. Put the servers behind Gantry's MCP endpoint and each call is checked and recorded like a model call. <a href="/use-cases/mcp-tools/">MCP tools</a></p></details>
+    <details><summary>Our services already hold tokens from our identity provider. Do they need a Enterplace key too?</summary><p>No. Enterplace accepts JWTs from issuers you trust in place of a key, and reads the person and team from claims you name. <a href="docs:/governance/access-control/">Access control</a></p></details>
+    <details><summary>Does Enterplace change the request?</summary><p>The body is forwarded byte for byte, except where your policy changes it: a guardrail that masks, or a translation you opted into. An unknown query parameter is refused by name, never dropped silently.</p></details>
+    <details><summary>What if Enterplace cannot write its audit log?</summary><p>Requests are refused with <code>audit_unavailable</code> until it can. That is the design: no request leaves without a record.</p></details>
+    <details><summary>Do the agents' tool calls go through it too?</summary><p>If the tools are MCP servers, yes. Put the servers behind Enterplace's MCP endpoint and each call is checked and recorded like a model call. <a href="/use-cases/mcp-tools/">MCP tools</a></p></details>
   </div>
 </section>
 

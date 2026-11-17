@@ -1,17 +1,17 @@
 ---
 title: Subscriptions
-description: Govern Claude Code on Claude seats and Codex on ChatGPT seats through Gantry, with no API key. What applies, what is estimated, and how to limit it.
+description: Govern Claude Code on Claude seats and Codex on ChatGPT seats through Enterplace, with no API key. What applies, what is estimated, and how to limit it.
 sidebar:
   order: 4
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A provider with `auth: passthrough` sends each caller's own login on to Anthropic or ChatGPT and holds no key of Gantry's. Claude Code on a Claude subscription (Pro, Max, Team or Enterprise) goes through Gantry this way, so a company governs it without buying API access for anyone. Codex on a ChatGPT login (Plus, Pro, Business, Enterprise or Edu) goes through a provider of kind `openai` at `https://chatgpt.com/backend-api/codex` the same way. Setup is on the [Claude Code](/integrations/claude-code/) and [Codex](/integrations/codex/#chatgpt-subscription) pages.
+A provider with `auth: passthrough` sends each caller's own login on to Anthropic or ChatGPT and holds no key of Enterplace's. Claude Code on a Claude subscription (Pro, Max, Team or Enterprise) goes through Enterplace this way, so a company governs it without buying API access for anyone. Codex on a ChatGPT login (Plus, Pro, Business, Enterprise or Edu) goes through a provider of kind `openai` at `https://chatgpt.com/backend-api/codex` the same way. Setup is on the [Claude Code](/integrations/claude-code/) and [Codex](/integrations/codex/#chatgpt-subscription) pages.
 
 ## The provider
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: claude-subscriptions
@@ -30,15 +30,15 @@ rules:
 | Field | Values | Default | Description |
 |---|---|---|---|
 | `auth` | `key`, `passthrough` | `key` | `passthrough`: the caller's own `Authorization` (or `x-api-key`) goes to the provider unchanged. The provider takes no `key_env`, `key_file`, `credential` or `keys`. Kind `anthropic` (Claude) or `openai` (ChatGPT) only |
-| `identity` | `required`, `optional` | `required` | `optional`: a request without `x-gantry-user` is recorded as the person `unknown`, by session. Only with `auth: passthrough` |
+| `identity` | `required`, `optional` | `required` | `optional`: a request without `x-enterplace-user` is recorded as the person `unknown`, by session. Only with `auth: passthrough` |
 
-A passthrough provider and a keyed provider may list the same model. A request that carries a login goes to the passthrough one; a request with a Gantry key goes to the keyed one. Neither ever falls back to the other.
+A passthrough provider and a keyed provider may list the same model. A request that carries a login goes to the passthrough one; a request with a Enterplace key goes to the keyed one. Neither ever falls back to the other.
 
 ## Who sent it
 
-The person comes from `x-gantry-user`, which Claude Code sends from `ANTHROPIC_CUSTOM_HEADERS` and Codex from its model provider's `http_headers`. Its value is a Gantry person token (`gantry_u_...`, from the console, `gantry key new --identity-only`, or the device agent) or any Gantry key of the person (from `gantry login`). The token names the person and team for rules, records, guardrails, kill switches and limits. On its own it reaches no model: sent as the only credential it is refused with `person_token_only`.
+The person comes from `x-enterplace-user`, which Claude Code sends from `ANTHROPIC_CUSTOM_HEADERS` and Codex from its model provider's `http_headers`. Its value is a Enterplace person token (`enterplace_u_...`, from the console, `enterplace key new --identity-only`, or the device agent) or any Enterplace key of the person (from `enterplace login`). The token names the person and team for rules, records, guardrails, kill switches and limits. On its own it reaches no model: sent as the only credential it is refused with `person_token_only`.
 
-Without `x-gantry-user`, on `identity: optional`, the person is `unknown` and the team `unknown`, and each Claude Code session is told apart by a hash of its session ID. A company can start with no setup per person and add tokens later.
+Without `x-enterplace-user`, on `identity: optional`, the person is `unknown` and the team `unknown`, and each Claude Code session is told apart by a hash of its session ID. A company can start with no setup per person and add tokens later.
 
 ## What applies
 
@@ -55,7 +55,7 @@ Without `x-gantry-user`, on `identity: optional`, the person is `unknown` and th
 
 ## Cost is an estimate
 
-A subscription is paid by the seat, not by the request. Gantry still records the tokens Anthropic reports and prices them at the API list price. The usage record says so with `"cost_basis": "api_equivalent_estimate"`, and the console shows the figure as `~$0.0123 (est.)`. Read it as relative usage across people and teams, not as an invoice.
+A subscription is paid by the seat, not by the request. Enterplace still records the tokens Anthropic reports and prices them at the API list price. The usage record says so with `"cost_basis": "api_equivalent_estimate"`, and the console shows the figure as `~$0.0123 (est.)`. Read it as relative usage across people and teams, not as an invoice.
 
 Dollar budgets limit what the organization is billed, so by default they do not count subscription traffic (the usage record says `"budget": "not_counted"`). To limit it in dollars anyway, at the estimate:
 
@@ -87,17 +87,17 @@ limits:
 
 ## What is never kept
 
-The login is taken off the request before anything reads it. It goes to the passthrough provider and nowhere else: not to a guardrail webhook, events plugin, trace, log line, audit record, request index or cache key, and no hash of it is recorded. A request without `x-gantry-user` is told apart by its session ID, or, when it names none, by a short fingerprint that cannot be turned back into the login.
+The login is taken off the request before anything reads it. It goes to the passthrough provider and nowhere else: not to a guardrail webhook, events plugin, trace, log line, audit record, request index or cache key, and no hash of it is recorded. A request without `x-enterplace-user` is told apart by its session ID, or, when it names none, by a short fingerprint that cannot be turned back into the login.
 
 ## Limits
 
 <Aside type="caution">
-Each company should check that routing its plan's traffic through its own gateway fits Anthropic's terms for that plan: the consumer terms for Pro and Max, and the commercial agreement for Team and Enterprise. Gantry does not change what Claude Code sends; it reads it on the way.
+Each company should check that routing its plan's traffic through its own gateway fits Anthropic's terms for that plan: the consumer terms for Pro and Max, and the commercial agreement for Team and Enterprise. Enterplace does not change what Claude Code sends; it reads it on the way.
 </Aside>
 
 - Anthropic only for now. OpenAI's Codex with a ChatGPT login is planned on the same `auth: passthrough` field.
-- Binding a subscription to a person without a token (by its login, the first time it is seen after a console sign-in) is not offered: Claude Code renews its login token on its own, so a binding to one token would not last. Use person tokens, `gantry login` or the device agent.
-- The `/passthrough/<provider>/...` route takes Gantry keys only.
+- Binding a subscription to a person without a token (by its login, the first time it is seen after a console sign-in) is not offered: Claude Code renews its login token on its own, so a binding to one token would not last. Use person tokens, `enterplace login` or the device agent.
+- The `/passthrough/<provider>/...` route takes Enterplace keys only.
 
 ## Related
 

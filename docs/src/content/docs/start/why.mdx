@@ -9,7 +9,7 @@ import { LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 Your people already use AI tools. Developers run Claude Code, Codex and Cursor. Other teams call model APIs from scripts and internal apps. Each tool talks to a provider on its own, so the company has no single place to look.
 
-Gantry is that place. It is one program that sits between your tools and the model providers. Tools send their requests to Gantry, and Gantry sends them on. Because every request passes through it, Gantry can show you what is happening and, when you choose, apply your rules.
+Enterplace is that place. It is one program that sits between your tools and the model providers. Tools send their requests to Enterplace, and Enterplace sends them on. Because every request passes through it, Enterplace can show you what is happening and, when you choose, apply your rules.
 
 ## Five questions
 
@@ -23,19 +23,19 @@ Gantry is that place. It is one program that sits between your tools and the mod
 
 ## What the first step asks of you
 
-Step 1 is one container (or one binary), your existing provider keys, and a settings change in each tool so it points at Gantry. It runs in observe mode: every request from a key you issued is forwarded, and nothing your people do today is blocked.
+Step 1 is one container (or one binary), your existing provider keys, and a settings change in each tool so it points at Enterplace. It runs in observe mode: every request from a key you issued is forwarded, and nothing your people do today is blocked.
 
 You decide when to go further. Each step is one change on top of the last, and each one works without the next.
 
-## What Gantry does not do
+## What Enterplace does not do
 
-- It sees the requests that are sent through it. A tool that still calls a provider directly stays invisible until you point it at Gantry. The [coverage report](/governance/coverage/) lists people who hold a key and have sent nothing.
+- It sees the requests that are sent through it. A tool that still calls a provider directly stays invisible until you point it at Enterplace. The [coverage report](/governance/coverage/) lists people who hold a key and have sent nothing.
 - Its audit log holds who asked, which model, the decision and the cost. It holds no prompt or answer text.
-- Subscription seats are billed by their vendor. Claude Code on Claude Pro, Max, Team or Enterprise seats goes through Gantry on its own login, with no API key, so every step applies; its limits are in tokens and requests, and its dollar figures are estimates. See [Subscriptions](/governance/subscriptions/). Where nothing may be routed, Gantry Enterprise has [watch mode](/integrations/claude-team/).
+- Subscription seats are billed by their vendor. Claude Code on Claude Pro, Max, Team or Enterprise seats goes through Enterplace on its own login, with no API key, so every step applies; its limits are in tokens and requests, and its dollar figures are estimates. See [Subscriptions](/governance/subscriptions/). Where nothing may be routed, Enterplace Enterprise has [watch mode](/integrations/claude-team/).
 
 ## Next
 
 <CardGrid>
-	<LinkCard title="Step 1: See" description="Run Gantry and see which tools and models are in use. Nothing is blocked." href="/start/step-1-see/" />
+	<LinkCard title="Step 1: See" description="Run Enterplace and see which tools and models are in use. Nothing is blocked." href="/start/step-1-see/" />
 	<LinkCard title="Rollout plan" description="The five steps on one page, to forward to your team." href="/start/plan/" />
 </CardGrid>

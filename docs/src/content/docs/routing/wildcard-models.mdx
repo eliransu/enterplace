@@ -11,7 +11,7 @@ A provider's `models` and a rule's `models` may hold patterns. `*` stands for an
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -40,7 +40,7 @@ rules:
 
 ## Prices and budgets
 
-A model reached through a pattern is priced like any other: from `prices:` in the policy, then the built-in price map. `gantry check` cannot know every name a pattern will reach, so it does not ask for their prices. Instead, a request under a dollar budget for a model with no price is refused at once with `no_price`, before anything is sent. A pattern never lets spend escape a budget.
+A model reached through a pattern is priced like any other: from `prices:` in the policy, then the built-in price map. `enterplace check` cannot know every name a pattern will reach, so it does not ask for their prices. Instead, a request under a dollar budget for a model with no price is refused at once with `no_price`, before anything is sent. A pattern never lets spend escape a budget.
 
 <Aside type="tip">
 Add a price under `prices:` for a new model before a budgeted team uses it. Requests without a budget go through priced or not, and their usage records carry the tokens.

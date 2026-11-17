@@ -3,24 +3,24 @@
 # Application Default Credentials.
 
 provider "google" {
-  project      = "gantry-example"
+  project      = "enterplace-example"
   region       = "europe-west1"
   access_token = "plan-only"
 }
 
-module "gantry" {
+module "enterplace" {
   source = "../.."
 
-  project = "gantry-example"
+  project = "enterplace-example"
   region  = "europe-west1"
   zone    = "europe-west1-b"
-  image   = "europe-docker.pkg.dev/gantry-example/gantry/gantry:0.1.0"
-  policy  = file("${path.module}/../../../gantry.policy.yaml")
+  image   = "europe-docker.pkg.dev/enterplace-example/enterplace/enterplace:0.1.0"
+  policy  = file("${path.module}/../../../enterplace.policy.yaml")
 
-  license_secret       = "gantry-license"
+  license_secret       = "enterplace-license"
   provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key" }
 }
 
 output "gateway_url" {
-  value = module.gantry.gateway_url
+  value = module.enterplace.gateway_url
 }

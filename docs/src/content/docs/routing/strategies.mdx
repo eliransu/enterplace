@@ -11,7 +11,7 @@ An [alias](/routing/aliases/) serves one model name from several deployments. It
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: azure-eu
@@ -45,7 +45,7 @@ rules:
     tags: [batch]
 ```
 
-Team `legal` reaches only `azure-eu`. Everyone else gets the fastest of the two general deployments, and a request sent with `x-gantry-tags: batch` goes to `gpt-4o-mini`.
+Team `legal` reaches only `azure-eu`. Everyone else gets the fastest of the two general deployments, and a request sent with `x-enterplace-tags: batch` goes to `gpt-4o-mini`.
 
 ## Balance
 
@@ -59,11 +59,11 @@ Team `legal` reaches only `azure-eu`. Everyone else gets the fastest of the two 
 
 Before any balance: a deployment cooling down after a failure is passed over, and once its cooldown ends one request probes it (`probe: ...`). The rest of the deployments follow as the chain of fallbacks, cooling ones last.
 
-**Rate limits.** A deployment whose provider said in its last answer, within the last minute, that less than 5% of a rate limit is left (the alias's `rate_limit_headroom_percent`, 0 to 100) goes after the deployments with room, before those cooling down. Gantry reads OpenAI's `x-ratelimit-remaining-requests` and `x-ratelimit-remaining-tokens` against their `x-ratelimit-limit-*`, and Anthropic's `anthropic-ratelimit-*-remaining` against `anthropic-ratelimit-*-limit`. This applies under every balance, so traffic moves off a nearly exhausted key before it starts getting 429s.
+**Rate limits.** A deployment whose provider said in its last answer, within the last minute, that less than 5% of a rate limit is left (the alias's `rate_limit_headroom_percent`, 0 to 100) goes after the deployments with room, before those cooling down. Enterplace reads OpenAI's `x-ratelimit-remaining-requests` and `x-ratelimit-remaining-tokens` against their `x-ratelimit-limit-*`, and Anthropic's `anthropic-ratelimit-*-remaining` against `anthropic-ratelimit-*-limit`. This applies under every balance, so traffic moves off a nearly exhausted key before it starts getting 429s.
 
 The 90th percentile is used rather than the average, so one slow answer does not move a deployment, while a deployment that stays slow loses its place within 32 answers. Each gateway measures its own path to the provider.
 
-**Deployment limits.** A deployment may set `max_parallel` (requests in flight at once), `rpm` and `tpm` (requests and tokens in the current minute). A request is counted in `tpm` at its estimate (the prompt's bytes over four) while it runs, and at what its answer says it used (input and output tokens) once the answer is settled. One at a limit is passed over; when every deployment of the alias is at one, the caller gets 429 `deployment_limit`. With a store the counts are every replica's: each replica writes its own with the 500 ms poll (table `gantry_deployment_load`) and reads the others' from memory, so the check costs no database call, and requests arriving at once on several replicas can pass a limit by a few within a poll. Without a store they are per gateway.
+**Deployment limits.** A deployment may set `max_parallel` (requests in flight at once), `rpm` and `tpm` (requests and tokens in the current minute). A request is counted in `tpm` at its estimate (the prompt's bytes over four) while it runs, and at what its answer says it used (input and output tokens) once the answer is settled. One at a limit is passed over; when every deployment of the alias is at one, the caller gets 429 `deployment_limit`. With a store the counts are every replica's: each replica writes its own with the 500 ms poll (table `enterplace_deployment_load`) and reads the others' from memory, so the check costs no database call, and requests arriving at once on several replicas can pass a limit by a few within a poll. Without a store they are per gateway.
 
 ```yaml
 deployments:
@@ -82,7 +82,7 @@ score = weights.latency * (p90 / slowest p90) + weights.errors * error rate + we
 - **Error rate** is a moving average of the deployment's attempts on this gateway: each failure (no answer, a timeout, a 429 or a 5xx) moves it a fifth of the way to 1, each answer a fifth of the way to 0. It is remembered after the circuit closes, so a deployment that just came back gets less traffic until it has answered for a while.
 - **Cost** is its model's price, input plus output per million tokens. A deployment with no price counts as the dearest.
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -103,7 +103,7 @@ rules:
     models: [smart]
 ```
 
-Each weight is 0 to 100, not all 0. `gantry check` refuses `weights` on any other balance.
+Each weight is 0 to 100, not all 0. `enterplace check` refuses `weights` on any other balance.
 
 ## Tags and teams pick deployments
 
@@ -113,7 +113,7 @@ A deployment with `for: { tag: <tag> }` or `for: { team: <team> }` is kept for t
 - A request that matches none goes to the deployments kept for nobody.
 - If every allowed deployment is kept for someone else, the request is refused with `no_deployment`.
 
-A request's tags are its key's [`tags`](/governance/keys/#key-fields) plus those the caller sends in `x-gantry-tags` (comma separated). A caller may send only the tags its rule lists under `tags:`: any other is refused by name with `tag_not_allowed`, so a caller cannot reach a deployment kept for a tag or charge spend to one. The header is removed before the request is forwarded. Tags are recorded on the decision record.
+A request's tags are its key's [`tags`](/governance/keys/#key-fields) plus those the caller sends in `x-enterplace-tags` (comma separated). A caller may send only the tags its rule lists under `tags:`: any other is refused by name with `tag_not_allowed`, so a caller cannot reach a deployment kept for a tag or charge spend to one. The header is removed before the request is forwarded. Tags are recorded on the decision record.
 
 ## Residency: `regions`
 
@@ -128,14 +128,14 @@ Label each deployment with `region:` (`eu`, `us`, `eu-west-1`, any label you use
 The record carries `routing.regions` (what the rule allows) and `routing.region` (where the request went first).
 
 <Aside type="caution">
-The `region:` label is yours to set. Gantry enforces it exactly; it does not check where a provider runs. Label a deployment with the region of the endpoint and data processing terms you have with that provider.
+The `region:` label is yours to set. Enterplace enforces it exactly; it does not check where a provider runs. Label a deployment with the region of the endpoint and data processing terms you have with that provider.
 </Aside>
 
 ## Session affinity for coding agents
 
 A coding agent sends many requests in one conversation, and a provider's prompt cache is per deployment. With `session_affinity: true`, a session's requests stay on the deployment its first one went to, while that deployment answers.
 
-The session is read from the first of these headers on the request: `x-gantry-session`, `x-claude-code-session-id` (Claude Code), `session_id` (Codex), `x-session-id`. It is kept per person, hashed, so one person's session ID never pins another's requests.
+The session is read from the first of these headers on the request: `x-enterplace-session`, `x-claude-code-session-id` (Claude Code), `session_id` (Codex), `x-session-id`. It is kept per person, hashed, so one person's session ID never pins another's requests.
 
 - The pinned deployment is used while it is not cooling down. When it fails, the session moves to the next deployment the balance picks, and stays there.
 - A session idle for an hour is forgotten.
@@ -167,7 +167,7 @@ Which deployments were actually tried and how each answered is in the [attempts 
 | Code | Status | Cause |
 |---|---|---|
 | `region_not_allowed` | 403 | The rule has `regions` and the request has no deployment in one: an alias with none labelled so, a model that is not an alias, or a passthrough call. |
-| `tag_not_allowed` | 403 | `x-gantry-tags` holds a tag the rule does not list. |
+| `tag_not_allowed` | 403 | `x-enterplace-tags` holds a tag the rule does not list. |
 | `no_deployment` | 403 | Every allowed deployment is kept for another team or tag. |
 
 ## Related

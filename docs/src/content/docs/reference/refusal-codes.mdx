@@ -1,6 +1,6 @@
 ---
 title: Refusal codes
-description: Every code Gantry refuses a request with, its HTTP status, what causes it and how to fix it.
+description: Every code Enterplace refuses a request with, its HTTP status, what causes it and how to fix it.
 sidebar:
   order: 2
 ---
@@ -14,20 +14,20 @@ Every refusal has a stable code, an HTTP status, a message that names the cause 
 On `/v1/messages` and `/v1/messages/count_tokens` a refusal uses Anthropic's error shape, so Claude Code and Anthropic's SDKs show the message. On Google's Gemini API routes (`/v1beta/models...`) it uses Google's shape, so Gemini CLI shows it. Everywhere else, the admin API included, it uses OpenAI's shape.
 
 ```json title="Anthropic shape"
-{"type":"error","error":{"type":"permission_error","message":"Refused (model_not_allowed): ... Decision 01M79..."},"gantry_code":"model_not_allowed","decision":"01M79..."}
+{"type":"error","error":{"type":"permission_error","message":"Refused (model_not_allowed): ... Decision 01M79..."},"enterplace_code":"model_not_allowed","decision":"01M79..."}
 ```
 
 ```json title="Google shape"
-{"error":{"code":403,"message":"Refused (model_not_allowed): ... Decision 01M79...","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"model_not_allowed","domain":"gantry","metadata":{"decision":"01M79..."}}]}}
+{"error":{"code":403,"message":"Refused (model_not_allowed): ... Decision 01M79...","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"model_not_allowed","domain":"enterplace","metadata":{"decision":"01M79..."}}]}}
 ```
 
 ```json title="OpenAI shape"
-{"error":{"message":"Refused (no_key): ... Decision 01M79...","type":"gantry_error","code":"no_key","decision":"01M79..."}}
+{"error":{"message":"Refused (no_key): ... Decision 01M79...","type":"enterplace_error","code":"no_key","decision":"01M79..."}}
 ```
 
 | Header | On | Value |
 |---|---|---|
-| `X-Gantry-Decision` | Every response | The decision ID |
+| `X-Enterplace-Decision` | Every response | The decision ID |
 | `x-should-retry` | Every refusal | `true` for `busy`, `rate_limited` and `upstream_*`, `false` otherwise |
 | `Retry-After` | `busy`, `rate_limited` | `1` for `busy`; the seconds to wait for `rate_limited` |
 
@@ -111,7 +111,7 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 
 **401.** No credential, an empty one, an `Authorization` header that is not `Bearer`, or a header that is not text. The key is checked before the route, so an unknown route without a key gets `no_key`.
 
-**Fix:** send the Gantry key as `Authorization: Bearer gantry_...` or `x-api-key: gantry_...`. On Google's Gemini API routes, `x-goog-api-key: gantry_...` or `?key=gantry_...` (Gemini CLI: `GEMINI_API_KEY`) work too.
+**Fix:** send the Enterplace key as `Authorization: Bearer enterplace_...` or `x-api-key: enterplace_...`. On Google's Gemini API routes, `x-goog-api-key: enterplace_...` or `?key=enterplace_...` (Gemini CLI: `GEMINI_API_KEY`) work too.
 
 ### ambiguous_key
 
@@ -119,7 +119,7 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 
 On Google's Gemini API routes, also a key in `x-goog-api-key` or `?key=` beside another one, there or in `Authorization` or `x-api-key`.
 
-**Fix:** send exactly one credential, the Gantry key. On the admin API, send more of the hash.
+**Fix:** send exactly one credential, the Enterplace key. On the admin API, send more of the hash.
 
 ### ambiguous_model
 
@@ -137,55 +137,55 @@ On Google's Gemini API routes, also a key in `x-goog-api-key` or `?key=` beside 
 
 **401.** The key's entry has `expires:` and that UTC date or time has come. The record names whose key it was.
 
-**Fix:** ask an admin for a new key, or run `gantry login` again.
+**Fix:** ask an admin for a new key, or run `enterplace login` again.
 
 A subscription request is never answered 401: Claude Code reads a 401 as its own login having expired.
 
 ### person_needed
 
-**403.** A request carries a login that is not a Gantry key (a Claude subscription's), names no person in `x-gantry-user`, and the [passthrough provider](/governance/subscriptions/) has `identity: required`.
+**403.** A request carries a login that is not a Enterplace key (a Claude subscription's), names no person in `x-enterplace-user`, and the [passthrough provider](/governance/subscriptions/) has `identity: required`.
 
-**Fix:** set `ANTHROPIC_CUSTOM_HEADERS="x-gantry-user: <person token>"` in Claude Code. Get a token from the console, `gantry login` or `gantry key new --identity-only`.
+**Fix:** set `ANTHROPIC_CUSTOM_HEADERS="x-enterplace-user: <person token>"` in Claude Code. Get a token from the console, `enterplace login` or `enterplace key new --identity-only`.
 
 ### person_token_only
 
-**403.** A person token (`gantry_u_...`) was sent as the request's only credential. It names a person and reaches no model on its own.
+**403.** A person token (`enterplace_u_...`) was sent as the request's only credential. It names a person and reaches no model on its own.
 
-**Fix:** send it in `x-gantry-user` beside your own Claude login, or use a Gantry key.
+**Fix:** send it in `x-enterplace-user` beside your own Claude login, or use a Enterplace key.
 
 ### login_needed
 
-**403.** The model is served only by a provider with `auth: passthrough`, which holds no key, and the request carries a Gantry key in place of a login.
+**403.** The model is served only by a provider with `auth: passthrough`, which holds no key, and the request carries a Enterplace key in place of a login.
 
-**Fix:** in Claude Code, unset `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, keep your Claude login and send your person token in `x-gantry-user`.
+**Fix:** in Claude Code, unset `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, keep your Claude login and send your person token in `x-enterplace-user`.
 
 ### login_not_accepted
 
-**403.** The request carries your own Claude login, and the model is served by a provider that uses Gantry's key, or the route is `/passthrough`. A login is never swapped for Gantry's key.
+**403.** The request carries your own Claude login, and the model is served by a provider that uses Enterplace's key, or the route is `/passthrough`. A login is never swapped for Enterplace's key.
 
-**Fix:** ask an admin to serve the model from a provider with `auth: passthrough`, or send a Gantry key instead.
+**Fix:** ask an admin to serve the model from a provider with `auth: passthrough`, or send a Enterplace key instead.
 
 ### no_login
 
-**403.** `x-gantry-user` names a person and the request carries no login to send on, or an empty one.
+**403.** `x-enterplace-user` names a person and the request carries no login to send on, or an empty one.
 
 **Fix:** sign in to Claude Code with your Claude subscription (`/login`).
 
 ### passthrough_off
 
-**400.** `x-gantry-user` arrived with a login, and no provider of this gateway has `auth: passthrough`.
+**400.** `x-enterplace-user` arrived with a login, and no provider of this gateway has `auth: passthrough`.
 
-**Fix:** ask an admin to turn on Claude subscriptions (console, **Start here**, **Coding agents**), or send your Gantry key as your only credential.
+**Fix:** ask an admin to turn on Claude subscriptions (console, **Start here**, **Coding agents**), or send your Enterplace key as your only credential.
 
 ### killed
 
 **403.** A kill switch stops this person, team, key, model or everyone. The message names the switch, the reason, the admin who set it and when.
 
-**Fix:** ask that admin. The switch stays until `gantry unkill`. See [Kill switches](/governance/kill-switches/).
+**Fix:** ask that admin. The switch stays until `enterplace unkill`. See [Kill switches](/governance/kill-switches/).
 
 ### kills_unreadable
 
-**503.** `gantry.kills.json` beside the keys file cannot be read, so Gantry cannot tell whether a switch stops the request. Every request is refused.
+**503.** `enterplace.kills.json` beside the keys file cannot be read, so Enterplace cannot tell whether a switch stops the request. Every request is refused.
 
 **Fix:** the admin fixes the file, or deletes it, which turns every switch off.
 
@@ -199,7 +199,7 @@ The key's `routes` do not include this path. Ask an admin to change the key's ro
 
 ### jwt_untrusted
 
-The bearer token is a JWT from an issuer the policy's `jwt:` does not list. Use a token from a trusted issuer, or a Gantry key.
+The bearer token is a JWT from an issuer the policy's `jwt:` does not list. Use a token from a trusted issuer, or a Enterplace key.
 
 ### jwt_invalid
 
@@ -221,7 +221,7 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 
 ### unknown_route
 
-**404.** The method and path are not one Gantry serves. See [HTTP routes](/reference/http-routes/). On the admin API, also a method and path it does not serve, or a Gantry that serves no keys file.
+**404.** The method and path are not one Enterplace serves. See [HTTP routes](/reference/http-routes/). On the admin API, also a method and path it does not serve, or a Enterplace that serves no keys file.
 
 **Fix:** check the method and the path.
 
@@ -239,7 +239,7 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 
 ### busy
 
-**429** when this caller's requests in flight already hold 64 MiB of request bodies. **503** when Gantry holds as many request bodies as its 256 MiB budget allows, across all callers. Both send `Retry-After: 1`.
+**429** when this caller's requests in flight already hold 64 MiB of request bodies. **503** when Enterplace holds as many request bodies as its 256 MiB budget allows, across all callers. Both send `Retry-After: 1`.
 
 **Fix:** wait a moment and send again.
 
@@ -262,7 +262,7 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 
 ### stored_context
 
-**400.** A budget applies to a `/v1/responses` request that names `previous_response_id`, `conversation` or `prompt`. The provider adds stored context Gantry cannot see, so the most the request could cost is unknown. The message names the fields.
+**400.** A budget applies to a `/v1/responses` request that names `previous_response_id`, `conversation` or `prompt`. The provider adds stored context Enterplace cannot see, so the most the request could cost is unknown. The message names the fields.
 
 **Fix:** send the whole conversation in `input` with `store: false`, as Codex does, or ask an admin to set `max_context` for the model under `prices:`.
 
@@ -312,25 +312,25 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 
 ### caller_provider_key_not_allowed
 
-**403.** The request carries `x-gantry-provider-key`, and the caller's rule does not set `caller_provider_key: allowed`. The request is not forwarded, with that key or with Gantry's.
+**403.** The request carries `x-enterplace-provider-key`, and the caller's rule does not set `caller_provider_key: allowed`. The request is not forwarded, with that key or with Enterplace's.
 
 **Fix:** send it without the header, or ask an admin to set `caller_provider_key: allowed` on the rule. See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key).
 
 ### caller_provider_key_unsupported
 
-**400.** The model is served on Amazon Bedrock, whose requests Gantry signs with AWS keys, so a caller's provider key cannot be used.
+**400.** The model is served on Amazon Bedrock, whose requests Enterplace signs with AWS keys, so a caller's provider key cannot be used.
 
-**Fix:** send it without `x-gantry-provider-key`.
+**Fix:** send it without `x-enterplace-provider-key`.
 
 ### caller_provider_key_invalid
 
-**400.** `x-gantry-provider-key` is empty or holds a character that cannot go in an HTTP header. Sent twice, it is `ambiguous_key` instead.
+**400.** `x-enterplace-provider-key` is empty or holds a character that cannot go in an HTTP header. Sent twice, it is `ambiguous_key` instead.
 
 **Fix:** send the provider key alone, once.
 
 ### unknown_model
 
-**403.** The rule allows the model, but no provider lists it, or an alias has no deployment Gantry can reach. It is 403, not 404, because Claude Code replaces the message of a 404 with its own and retries a 400.
+**403.** The rule allows the model, but no provider lists it, or an alias has no deployment Enterplace can reach. It is 403, not 404, because Claude Code replaces the message of a 404 with its own and retries a 400.
 
 **Fix:** check the model name, or an admin adds it to a provider. See [Providers](/providers/overview/).
 
@@ -379,7 +379,7 @@ An [events guardrail](/governance/plugin-events/) refuses with this code too: 40
 
 ### application_not_allowed
 
-**403.** The request names an application in `x-gantry-application` that its rule's `applications` does not list. See [Applications](/governance/plugin-events/#applications).
+**403.** The request names an application in `x-enterplace-application` that its rule's `applications` does not list. See [Applications](/governance/plugin-events/#applications).
 
 **Fix:** leave the header out, or ask the admin to add the application (or `"*"`) to the rule.
 
@@ -399,7 +399,7 @@ An [events guardrail](/governance/plugin-events/) refuses with this code too: 40
 
 ### batch_too_many_open
 
-**429.** You have as many batches not yet ended as the rule's `batch: { max_open }` allows, counting OpenAI batches and Anthropic message batches. A batch counts until Gantry sees it end.
+**429.** You have as many batches not yet ended as the rule's `batch: { max_open }` allows, counting OpenAI batches and Anthropic message batches. A batch counts until Enterplace sees it end.
 
 **Fix:** wait for one to end, or cancel one, and send it again.
 
@@ -435,7 +435,7 @@ An [events guardrail](/governance/plugin-events/) refuses with this code too: 40
 
 ### key_bounds_exceeded
 
-**403.** A key was asked for with a longer life, a faster budget or a model beyond what `key_bounds:` lets the issuer's role grant. On the admin API and `gantry login`.
+**403.** A key was asked for with a longer life, a faster budget or a model beyond what `key_bounds:` lets the issuer's role grant. On the admin API and `enterplace login`.
 
 **Fix:** ask for less, or leave the field out to get the most allowed. See [Bounds on issued keys](/governance/keys/#bounds-on-issued-keys).
 
@@ -447,31 +447,31 @@ An [events guardrail](/governance/plugin-events/) refuses with this code too: 40
 
 ### customer_not_allowed
 
-**403.** `x-gantry-customer` names a customer the rule's `customers:` does not list, or another customer than the one the key is for.
+**403.** `x-enterplace-customer` names a customer the rule's `customers:` does not list, or another customer than the one the key is for.
 
 **Fix:** leave the header out, use that customer's key, or ask an admin to list the customer (or `"*"`) on the rule.
 
 ### tag_not_allowed
 
-**403.** `x-gantry-tags` holds a tag the rule's `tags:` does not list. Tags are refused by name so they cannot be forged.
+**403.** `x-enterplace-tags` holds a tag the rule's `tags:` does not list. Tags are refused by name so they cannot be forged.
 
 **Fix:** remove the tag, or ask an admin to add it to the rule.
 
 ### bad_header
 
-**400.** `x-gantry-customer` or `x-gantry-tags` is sent more than once, holds a name with characters Gantry does not accept, or brings the request to more than 16 tags.
+**400.** `x-enterplace-customer` or `x-enterplace-tags` is sent more than once, holds a name with characters Enterplace does not accept, or brings the request to more than 16 tags.
 
 **Fix:** send each header once, with names in letters, digits, `.`, `-`, `_` and `@`.
 
 ### no_price
 
-**403.** A budgeted rule reached a model with no price. Only possible in a configuration built in code: `gantry check` refuses it in a policy file.
+**403.** A budgeted rule reached a model with no price. Only possible in a configuration built in code: `enterplace check` refuses it in a policy file.
 
 **Fix:** add the model's price under `prices:`.
 
 ### tag_not_allowed
 
-`x-gantry-tags` holds a tag the rule's `tags:` does not list. The message names the tag and the list.
+`x-enterplace-tags` holds a tag the rule's `tags:` does not list. The message names the tag and the list.
 
 ### region_not_allowed
 
@@ -495,13 +495,13 @@ Every deployment of the alias that the request may use is kept (`for:`) for anot
 
 ### wrong_endpoint
 
-**400.** The batch file's model runs on Bedrock or Vertex AI, and its lines name another `url` than `/v1/chat/completions`, the one Gantry translates for those batch jobs.
+**400.** The batch file's model runs on Bedrock or Vertex AI, and its lines name another `url` than `/v1/chat/completions`, the one Enterplace translates for those batch jobs.
 
 **Fix:** write the lines as chat completions requests.
 
 ### provider_refused
 
-**4xx, the provider's own.** Bedrock, Vertex AI, S3 or Cloud Storage refused what Gantry asked for a batch (keeping its file, starting or describing its job). The message carries the provider's words.
+**4xx, the provider's own.** Bedrock, Vertex AI, S3 or Cloud Storage refused what Enterplace asked for a batch (keeping its file, starting or describing its job). The message carries the provider's words.
 
 **Fix:** act on the provider's message, often a bucket permission or a model the account cannot run in batch.
 
@@ -515,19 +515,19 @@ Every deployment of the alias that the request may use is kept (`for:`) for anot
 
 ### store_unavailable
 
-**503.** A budget applies to the request, and Gantry cannot reach the Postgres [store](/operations/store/) to reserve what it could cost. It is refused rather than let through unchecked. Requests without a budget are still served, and known keys keep working.
+**503.** A budget applies to the request, and Enterplace cannot reach the Postgres [store](/operations/store/) to reserve what it could cost. It is refused rather than let through unchecked. Requests without a budget are still served, and known keys keep working.
 
 **Fix:** the admin checks the database and the connection string in the variable `store: postgres_url_env` names. Budgeted requests are served again within a second of the database answering.
 
 ### upstream_unreachable
 
-**502.** Gantry could not connect to the provider within the 5 second connect timeout.
+**502.** Enterplace could not connect to the provider within the 5 second connect timeout.
 
 **Fix:** try again. If it persists, the admin checks the provider URL and the network.
 
 ### upstream_failed
 
-**502.** The provider broke the connection before answering, or Gantry could not sign a Bedrock request with the configured credentials and region.
+**502.** The provider broke the connection before answering, or Enterplace could not sign a Bedrock request with the configured credentials and region.
 
 **Fix:** try again. If it persists, tell the admin.
 
@@ -545,9 +545,9 @@ Every deployment of the alias that the request may use is kept (`for:`) for anot
 
 ### no_upstream
 
-**503.** Only with `gantry serve --unchecked`: `GANTRY_UPSTREAM` is not set.
+**503.** Only with `enterplace serve --unchecked`: `ENTERPLACE_UPSTREAM` is not set.
 
-**Fix:** set `GANTRY_UPSTREAM` and restart.
+**Fix:** set `ENTERPLACE_UPSTREAM` and restart.
 
 <Aside type="note">
 With `retries` or a `fallback` on the provider, an `upstream_*` failure, a 429 or a 5xx is tried again before any byte reaches the caller, and an `attempts` record lists every try. The caller sees only the last outcome.
@@ -573,7 +573,7 @@ These come from `/admin/keys`, `/admin/kills` and `/admin/credentials`, in OpenA
 
 **400.** The kill switch names a person, team, key or model that no key holds and no provider serves, so it would stop nothing. The message lists names close to it.
 
-**Fix:** name one that exists, or send `"force": true` (`gantry kill --force`).
+**Fix:** name one that exists, or send `"force": true` (`enterplace kill --force`).
 
 ### already_rotated
 
@@ -593,7 +593,7 @@ These come from `/admin/keys`, `/admin/kills` and `/admin/credentials`, in OpenA
 
 ### keys_file
 
-**409.** The keys file could not be read or written, or changed while Gantry was writing it.
+**409.** The keys file could not be read or written, or changed while Enterplace was writing it.
 
 **Fix:** check the file and its permissions, then try again.
 
@@ -601,19 +601,19 @@ These come from `/admin/keys`, `/admin/kills` and `/admin/credentials`, in OpenA
 
 **409.** The kill switch file could not be read or written.
 
-**Fix:** check `gantry.kills.json` and its permissions, then try again.
+**Fix:** check `enterplace.kills.json` and its permissions, then try again.
 
 ### credentials_need_store
 
 **404.** A `/admin/credentials` call on a gateway whose policy has no `store:`.
 
-**Fix:** keep provider keys in `key_env` or `key_file`, or add `store:` and set `GANTRY_MASTER_KEY`.
+**Fix:** keep provider keys in `key_env` or `key_file`, or add `store:` and set `ENTERPLACE_MASTER_KEY`.
 
 ### no_master_key
 
-**409.** A `/admin/credentials` call on a gateway started without `GANTRY_MASTER_KEY`.
+**409.** A `/admin/credentials` call on a gateway started without `ENTERPLACE_MASTER_KEY`.
 
-**Fix:** set `GANTRY_MASTER_KEY` (the same on every gateway on the store) and restart.
+**Fix:** set `ENTERPLACE_MASTER_KEY` (the same on every gateway on the store) and restart.
 
 ### credential_exists
 
@@ -647,7 +647,7 @@ These come from `/admin/keys`, `/admin/kills` and `/admin/credentials`, in OpenA
 
 ## Single sign-on codes
 
-Console and `gantry login` sign-ins that fail show a page with the cause and the fix, and write an `admin` record with `action: console_sign_in` and one of these codes. See [Single sign-on](/governance/single-sign-on/).
+Console and `enterplace login` sign-ins that fail show a page with the cause and the fix, and write an `admin` record with `action: console_sign_in` and one of these codes. See [Single sign-on](/governance/single-sign-on/).
 
 | Code | Cause |
 |---|---|
@@ -664,24 +664,24 @@ Console and `gantry login` sign-ins that fail show a page with the cause and the
 | `sso_nonce` | The ID token's nonce does not match the sign-in |
 | `sso_email` | The ID token has no email, an email marked unverified, or one not in `allowed_emails` or `allowed_domains` |
 | `sso_role` | The role claim holds no value from `admin_values` or `read_only_values` |
-| `sso_self_issue` | `gantry login` is used and the policy has no `console.sso.self_issue` section |
-| `sso_team` | `gantry login`: the policy's `teams:` place people, place this person in no team, and `self_issue.team` is not written |
-| `saml_response` | The SAML response could not be read: not base64, not XML Gantry takes, or not exactly one assertion |
+| `sso_self_issue` | `enterplace login` is used and the policy has no `console.sso.self_issue` section |
+| `sso_team` | `enterplace login`: the policy's `teams:` place people, place this person in no team, and `self_issue.team` is not written |
+| `saml_response` | The SAML response could not be read: not base64, not XML Enterplace takes, or not exactly one assertion |
 | `saml_status` | The identity provider did not sign the person in |
 | `saml_unsigned` | The SAML assertion is not signed |
-| `saml_signature` | The SAML signature does not verify with `idp_certificate`, or uses an algorithm Gantry does not take |
+| `saml_signature` | The SAML signature does not verify with `idp_certificate`, or uses an algorithm Enterplace does not take |
 | `saml_issuer` | The assertion's issuer is not `console.saml.idp_entity_id` |
 | `saml_audience` | The assertion names no audience, or not `console.saml.sp_entity_id` |
 | `saml_recipient` | The response is addressed to another ACS URL |
 | `saml_expired` | The assertion is expired or not valid yet |
 | `saml_replay` | The response answers no request this browser started, or was used already |
 | `saml_encrypted` | The assertion is encrypted |
-| `cli_login` | A `gantry login` link was cut short or changed |
+| `cli_login` | A `enterplace login` link was cut short or changed |
 
 Inside a signed-in console session, `not_admin` is recorded for a key that is not an admin's, and `read_only` for a read-only person who tries to issue or revoke a key.
 
 ## Not a refusal
 
-A provider's own error passes through unchanged, with `X-Gantry-Decision` added. Two exceptions keep the caller's error shape: a Bedrock error is put in Anthropic's shape, and an error answer to a translated chat request is put in OpenAI's shape, each with the provider's message.
+A provider's own error passes through unchanged, with `X-Enterplace-Decision` added. Two exceptions keep the caller's error shape: a Bedrock error is put in Anthropic's shape, and an error answer to a translated chat request is put in OpenAI's shape, each with the provider's message.
 
 A request the HTTP library rejects as malformed gets a bare 400 with no body, no code and no decision ID. A client that takes more than 10 seconds to send its headers is disconnected.

@@ -7,13 +7,13 @@ sidebar:
 
 import { Aside, Steps, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-With a license that includes `scim` and `members` (see [License key](/operations/license/)), Gantry serves a SCIM 2.0 API. Your identity provider creates [members](/operations/members/), keeps their names and teams current, pushes its groups as teams, and removes people when they leave. Removing someone revokes every key named with their email at once.
+With a license that includes `scim` and `members` (see [License key](/operations/license/)), Enterplace serves a SCIM 2.0 API. Your identity provider creates [members](/operations/members/), keeps their names and teams current, pushes its groups as teams, and removes people when they leave. Removing someone revokes every key named with their email at once.
 
 SCIM writes the members tables in Postgres, so the policy needs a `store:` section (see [Shared store](/operations/store/)).
 
 ## What is provisioned
 
-| SCIM | In Gantry |
+| SCIM | In Enterplace |
 |---|---|
 | `userName` | The person's email. Keys named with this email are theirs. It does not change after creation. |
 | `name.givenName`, `name.familyName`, `name.formatted`, `displayName` | The person's name. |
@@ -41,7 +41,7 @@ A person reactivated later is provisioned again as a new member. Issue their key
 
 1. Sign in to the console as an owner (an admin key acts as an owner) and open **SCIM**.
 2. Under **SCIM tokens**, name the token after the identity provider and select **Create SCIM token**.
-3. Copy the token (`gscim_...`) and the **SCIM base URL**, which is your gateway's address followed by `/console/scim/v2`, for example `https://gantry.example.com/console/scim/v2`. Gantry keeps only the token's SHA-256 and shows it once.
+3. Copy the token (`gscim_...`) and the **SCIM base URL**, which is your gateway's address followed by `/console/scim/v2`, for example `https://enterplace.example.com/console/scim/v2`. Enterplace keeps only the token's SHA-256 and shows it once.
 
 </Steps>
 
@@ -57,7 +57,7 @@ A person reactivated later is provisioned again as a new member. Issue their key
 1. In the Okta Admin Console, open **Applications** > **Applications** > **Create App Integration**, pick **SWA** or **SAML 2.0**, and create the app.
 2. On the app's **General** tab, select **Edit** under **App Settings**, set **Provisioning** to **SCIM**, and save.
 3. On the **Provisioning** tab, under **Integration**, set:
-   - **SCIM connector base URL**: the SCIM base URL from Gantry.
+   - **SCIM connector base URL**: the SCIM base URL from Enterplace.
    - **Unique identifier field for users**: `userName`.
    - **Supported provisioning actions**: **Push New Users**, **Push Profile Updates** and **Push Groups**.
    - **Authentication Mode**: **HTTP Header**, with the SCIM token as the bearer token.
@@ -76,20 +76,20 @@ Make sure the Okta username is the person's email, since it becomes `userName`.
 
 1. In the Microsoft Entra admin center, open **Enterprise applications** > **New application** > **Create your own application**, and choose the non-gallery option.
 2. Open the app's **Provisioning** page and set **Provisioning Mode** to **Automatic**.
-3. Under **Admin Credentials**, set **Tenant URL** to the SCIM base URL from Gantry and **Secret Token** to the SCIM token. Select **Test Connection**, then **Save**.
+3. Under **Admin Credentials**, set **Tenant URL** to the SCIM base URL from Enterplace and **Secret Token** to the SCIM token. Select **Test Connection**, then **Save**.
 4. Under **Mappings**, keep **Provision Microsoft Entra ID Users** with `userName` mapped from `userPrincipalName` or `mail` (whichever holds the email) and `department` mapped to the enterprise extension's `department`. Keep **Provision Microsoft Entra ID Groups** with `displayName` and `members`.
 5. Assign users and groups under **Users and groups**, set **Scope** to **Sync only assigned users and groups**, and set **Provisioning Status** to **On**.
 
 </Steps>
 
-Entra ID sends `active` as `"False"` or, with the `aadOptscim062020` flag on the tenant URL, as `false`. Gantry accepts both.
+Entra ID sends `active` as `"False"` or, with the `aadOptscim062020` flag on the tenant URL, as `false`. Enterplace accepts both.
 
 </TabItem>
 </Tabs>
 
 ## Password links
 
-A person SCIM creates has no password. They sign in with [single sign-on](/governance/single-sign-on/), or an owner or admin gives them a link to set one: on the **SCIM** page, under **Waiting for a password**, select **Create password link**. Gantry shows the link once. It works once, for 3 days, and only while the person has no password. Setting a password of at least 12 characters signs them in.
+A person SCIM creates has no password. They sign in with [single sign-on](/governance/single-sign-on/), or an owner or admin gives them a link to set one: on the **SCIM** page, under **Waiting for a password**, select **Create password link**. Enterplace shows the link once. It works once, for 3 days, and only while the person has no password. Setting a password of at least 12 characters signs them in.
 
 ## The API
 

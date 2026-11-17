@@ -1,6 +1,6 @@
 # gcp-cloud-run
 
-Gantry on Google Cloud: a Cloud Run service with one instance, Cloud SQL Postgres 16 for keys, kill switches and
+Enterplace on Google Cloud: a Cloud Run service with one instance, Cloud SQL Postgres 16 for keys, kill switches and
 budgets, the audit log on Filestore over NFS, and the policy and secrets in Secret Manager.
 
 ## What it creates
@@ -9,20 +9,20 @@ budgets, the audit log on Filestore over NFS, and the policy and secrets in Secr
 |---|---|
 | Cloud Run service (gen2, min and max 1 instance, CPU always on) | HTTPS on the service URL. CPU stays on because the gateway syncs its audit log and polls the store between requests |
 | Cloud SQL Postgres 16 (regional, backups and point-in-time recovery), database and user | The store |
-| Cloud SQL connector volume (`/cloudsql`) | Gantry connects over a Unix socket; see below |
-| Filestore BASIC_HDD share `gantry`, mounted over NFS at `/var/lib/gantry` | The audit log, one folder per revision |
-| Secret Manager secrets for `DATABASE_URL` and the policy | The policy is mounted as `/etc/gantry/gantry.policy.yaml` |
-| Secret Manager secrets `<name>-master-key` and `<name>-export-key`, random 64 hex characters each | `GANTRY_MASTER_KEY` (seals provider credentials in the store) and `GANTRY_EXPORT_KEY` (encrypts SIEM destination secrets). Made once and kept across applies; skipped for a key you pass as `master_key_secret` or `export_key_secret` |
+| Cloud SQL connector volume (`/cloudsql`) | Enterplace connects over a Unix socket; see below |
+| Filestore BASIC_HDD share `enterplace`, mounted over NFS at `/var/lib/enterplace` | The audit log, one folder per revision |
+| Secret Manager secrets for `DATABASE_URL` and the policy | The policy is mounted as `/etc/enterplace/enterplace.policy.yaml` |
+| Secret Manager secrets `<name>-master-key` and `<name>-export-key`, random 64 hex characters each | `ENTERPLACE_MASTER_KEY` (seals provider credentials in the store) and `ENTERPLACE_EXPORT_KEY` (encrypts SIEM destination secrets). Made once and kept across applies; skipped for a key you pass as `master_key_secret` or `export_key_secret` |
 | Service account with `cloudsql.client`, `aiplatform.user` (when `vertex_ai = true`, the default) and access to each secret | What the gateway runs as, and what Vertex AI providers sign in as |
-| `allUsers` invoker (when `public = true`) | Gantry's own keys decide who may call |
+| `allUsers` invoker (when `public = true`) | Enterplace's own keys decide who may call |
 
-**Cloud SQL through the connector, not a private IP.** Gantry checks the database's TLS certificate against the
+**Cloud SQL through the connector, not a private IP.** Enterplace checks the database's TLS certificate against the
 Mozilla roots built into it. Cloud SQL's server certificates come from a per-instance authority that is not among
 them, so a direct TLS connection, private or public, is refused. The connector authenticates with IAM, encrypts with
-mutual TLS, and hands Gantry a local socket, where Gantry allows a connection without its own TLS. The instance has
+mutual TLS, and hands Enterplace a local socket, where Enterplace allows a connection without its own TLS. The instance has
 a public IP with no authorized networks and requires client certificates, so nothing but the connector can reach it.
 
-**Filestore, not Cloud Storage FUSE.** The audit log is one file Gantry appends to and syncs every second, with each
+**Filestore, not Cloud Storage FUSE.** The audit log is one file Enterplace appends to and syncs every second, with each
 record chained to the one before. GCS FUSE writes whole objects on sync and has no locking, so a crash or a second
 writer can cut the chain. NFS appends in place.
 
@@ -37,23 +37,23 @@ Create the provider key and license secrets in Secret Manager, and put the image
 repository in front of ghcr.io), then:
 
 ```hcl
-module "gantry" {
-  # Copied out of the image: docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
-  #   && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
-  source = "./gantry-deploy/terraform/gcp-cloud-run"
+module "enterplace" {
+  # Copied out of the image: docker create --name enterplace-files ghcr.io/eliransu/enterplace:<version>
+  #   && docker cp enterplace-files:/deploy ./enterplace-deploy && docker rm enterplace-files
+  source = "./enterplace-deploy/terraform/gcp-cloud-run"
 
   project = "my-project"
   region  = "europe-west1"
   zone    = "europe-west1-b"
-  image   = "europe-docker.pkg.dev/my-project/gantry/gantry:0.1.0"
-  policy  = file("gantry.policy.yaml")
+  image   = "europe-docker.pkg.dev/my-project/enterplace/enterplace:0.1.0"
+  policy  = file("enterplace.policy.yaml")
 
-  license_secret       = "gantry-license"
+  license_secret       = "enterplace-license"
   provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key" }
 }
 ```
 
-The policy must have `audit: { path: /var/lib/gantry/gantry-audit.jsonl }` and
+The policy must have `audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }` and
 `store: { postgres_url_env: DATABASE_URL }`. Then issue a key and call the output `gateway_url`.
 
 `examples/basic` is the configuration CI plans, with a fake access token and no Google account.

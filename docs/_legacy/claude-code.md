@@ -1,6 +1,6 @@
 # Claude Code
 
-Claude Code talks to Anthropic's messages API. Point it at Gantry and give it a Gantry key in place of a provider key. Each of its requests is then identified, decided and recorded.
+Claude Code talks to Anthropic's messages API. Point it at Enterplace and give it a Enterplace key in place of a provider key. Each of its requests is then identified, decided and recorded.
 
 ## Policy
 
@@ -20,14 +20,14 @@ rules:
     models: [claude-sonnet-5-5, claude-haiku-5-5]
 ```
 
-Keep the provider key in a variable of its own. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which is the Gantry key.
+Keep the provider key in a variable of its own. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which is the Enterplace key.
 
 ## Other providers
 
 Claude Code reaches more than Anthropic's API through the same two lines:
 
 - **Amazon Bedrock**: a provider of kind `bedrock` (see [Providers](providers.html)).
-- **Claude on Vertex AI**: a provider of kind `vertex_anthropic`. Gantry sends the body to `rawPredict` or `streamRawPredict`. Vertex AI names models without the date suffix (`claude-sonnet-4-6`), so map the name Claude Code sends with an alias.
+- **Claude on Vertex AI**: a provider of kind `vertex_anthropic`. Enterplace sends the body to `rawPredict` or `streamRawPredict`. Vertex AI names models without the date suffix (`claude-sonnet-4-6`), so map the name Claude Code sends with an alias.
 - **GPT, Gemini or a local model**: a provider of kind `openai`, `azure`, `gemini` or `vertex` with `accept_messages: true`. Its requests are translated to chat completions and the answers, streamed or whole, tool calls included, back to Anthropic's format (see [Translation for Claude Code](providers.html#translation-for-claude-code)).
 
 ```yaml
@@ -49,17 +49,17 @@ Claude Code warns that it does not know the model and assumes a context window; 
 
 ## Client settings
 
-With single sign-on set up, a developer runs `gantry login https://gantry.example.com` once: it signs them in through the browser, saves a personal key named by their email, and prints the two lines below with their own key (see [Keys](keys.html#developers-get-their-own-key-gantry-login)). Every request then carries their name. `gantry logout` revokes it. Or an admin hands out a key:
+With single sign-on set up, a developer runs `enterplace login https://enterplace.example.com` once: it signs them in through the browser, saves a personal key named by their email, and prints the two lines below with their own key (see [Keys](keys.html#developers-get-their-own-key-enterplace-login)). Every request then carries their name. `enterplace logout` revokes it. Or an admin hands out a key:
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-export ANTHROPIC_API_KEY=gantry_...
+export ANTHROPIC_API_KEY=enterplace_...
 export ANTHROPIC_MODEL=claude-sonnet-5-5
 export ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-5-5
 claude
 ```
 
-## What Gantry does with its requests
+## What Enterplace does with its requests
 
 - `POST /v1/messages` and `POST /v1/messages/count_tokens` are checked, recorded and forwarded as their original bytes to `anthropic` providers, including streamed answers, tool use and background calls. To `bedrock` and `vertex_anthropic` the body is rewritten as each takes it; to a provider with `accept_messages` it is translated.
 - `anthropic-version`, `anthropic-beta` and every other `anthropic-*` and `x-claude-code-*` header pass unchanged, except to a provider with `accept_messages`, which gets no `anthropic-*` header.
@@ -68,17 +68,17 @@ claude
 
 ## Model picker
 
-With `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, Claude Code asks Gantry for its model list at startup (`GET /v1/models`). Gantry answers with the models the messages route reaches (`anthropic`, `bedrock`, `vertex_anthropic`, and providers with `accept_messages: true`) that the person's rule allows, each described as `Allowed by Gantry rule "<rule>"`. Each such request is recorded. Models on chat providers without `accept_messages` are left out, because Claude Code would offer them and every request would then be refused with `wrong_route`.
+With `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, Claude Code asks Enterplace for its model list at startup (`GET /v1/models`). Enterplace answers with the models the messages route reaches (`anthropic`, `bedrock`, `vertex_anthropic`, and providers with `accept_messages: true`) that the person's rule allows, each described as `Allowed by Enterplace rule "<rule>"`. Each such request is recorded. Models on chat providers without `accept_messages` are left out, because Claude Code would offer them and every request would then be refused with `wrong_route`.
 
 ## Refusals in Claude Code
 
-On the messages routes a refusal uses Anthropic's error shape, so Claude Code shows Gantry's message:
+On the messages routes a refusal uses Anthropic's error shape, so Claude Code shows Enterplace's message:
 
 ```text
-API Error: 403 Refused (model_not_allowed): team "interns" may not use model "claude-sonnet-5-5" under rule "everyone-else". This rule allows no models. Ask a Gantry admin to change the policy if you need this one. Decision 01M7969SCWCX2P3AR3KSXZJ7VS.
+API Error: 403 Refused (model_not_allowed): team "interns" may not use model "claude-sonnet-5-5" under rule "everyone-else". This rule allows no models. Ask a Enterplace admin to change the policy if you need this one. Decision 01M7969SCWCX2P3AR3KSXZJ7VS.
 ```
 
-Claude Code labels any 403 "Failed to authenticate"; the message after that label is Gantry's. A model no provider serves is refused with 403 `unknown_model`, not 404, because Claude Code replaces the text of a 404 with its own and sends a 400 again several times; a 403 is shown as it is and sent once.
+Claude Code labels any 403 "Failed to authenticate"; the message after that label is Enterplace's. A model no provider serves is refused with 403 `unknown_model`, not 404, because Claude Code replaces the text of a 404 with its own and sends a 400 again several times; a 403 is shown as it is and sent once.
 
 Every refusal sets `x-should-retry: false`, except the ones that may clear by themselves: `busy`, `rate_limited` (with `Retry-After` set to the seconds until the minute frees a slot) and the `upstream_*` codes, which set `x-should-retry: true`. Claude Code sends those again on its own. See [Refusal codes](refusals.html).
 

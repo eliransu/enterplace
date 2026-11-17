@@ -1,8 +1,8 @@
-# Gantry Enterprise
+# Enterplace Enterprise
 
-The enterprise features of Gantry, under the Gantry Commercial License (`LICENSE` here). A member of the repository's
+The enterprise features of Enterplace, under the Enterplace Commercial License (`LICENSE` here). A member of the repository's
 Cargo workspace; it uses the open source crates as path dependencies and plugs into them through their extension hooks
-(`docs/porting.md`). Its binary ships in the image as `/gantry`.
+(`docs/porting.md`). Its binary ships in the image as `/enterplace`.
 
 ## License keys (internals)
 
@@ -16,6 +16,6 @@ The customer-facing page is `docs/src/content/docs/operations/license.mdx` at th
 - Issuing (staff only, needs `--features issuer`):
 
   ```sh
-  cargo run -p gantry-enterprise --features issuer -- license issue --signing-key <path to LICENSE_SIGNING_KEY> \
+  cargo run -p enterplace-enterprise --features issuer -- license issue --signing-key <path to LICENSE_SIGNING_KEY> \
     --customer "Acme" --id lic_001 --features scim,siem --seats 50 --issued 2026-11-13 --expires 2027-11-13
   ```

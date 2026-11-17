@@ -1,13 +1,13 @@
 ---
 title: Several replicas with a store
-description: Point two or more Gantry processes at one Postgres database so they share keys, kill switches, budgets, rate limits, cooldowns and console sessions, and act as one gateway.
+description: Point two or more Enterplace processes at one Postgres database so they share keys, kill switches, budgets, rate limits, cooldowns and console sessions, and act as one gateway.
 sidebar:
   order: 2
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Without a store, each Gantry process keeps its keys in a file, its kill switches beside it, and its spend, rate limits and console sessions in memory. That is right for one process. To run two or more behind a load balancer, give them one Postgres database: the store. They then act as one gateway.
+Without a store, each Enterplace process keeps its keys in a file, its kill switches beside it, and its spend, rate limits and console sessions in memory. That is right for one process. To run two or more behind a load balancer, give them one Postgres database: the store. They then act as one gateway.
 
 - A key issued on any replica is accepted by all within 2 seconds. A revoked key is refused by all within 2 seconds.
 - A kill switch set on any replica stops traffic on all within 1 second.
@@ -15,7 +15,7 @@ Without a store, each Gantry process keeps its keys in a file, its kill switches
 - A rate limit (`rpm`, `tpm`) is enforced once across all replicas: together they never admit more than the limit in any 60 seconds.
 - A deployment of an alias that fails on one replica is passed over by all within about a second.
 - A console sign-in on one replica is good on all. Signing out, or removing the person, ends it on all.
-- With `GANTRY_MASTER_KEY` set, provider keys can be kept here too, sealed with AES-256-GCM, and a rotation reaches all within 2 seconds. See [Provider credentials](/governance/provider-credentials/).
+- With `ENTERPLACE_MASTER_KEY` set, provider keys can be kept here too, sealed with AES-256-GCM, and a rotation reaches all within 2 seconds. See [Provider credentials](/governance/provider-credentials/).
 
 ## When to use it
 
@@ -33,41 +33,41 @@ store:
 Set the variable on every replica:
 
 ```bash
-export DATABASE_URL='postgres://gantry:...@db.example.com:5432/gantry'
-gantry serve gantry.policy.yaml
+export DATABASE_URL='postgres://enterplace:...@db.example.com:5432/enterplace'
+enterplace serve enterplace.policy.yaml
 ```
 
-- **Start.** `gantry serve` refuses to start, naming the fix, if the variable is unset or the database cannot be reached. `gantry check` checks the section without connecting.
-- **Tables.** Gantry creates its tables on first start, in the database the string names. The user needs `CREATE` on it. The schema is versioned in the binary (the `gantry_schema` table); a newer Gantry updates it. See Rolling upgrades below for which versions may share a database.
-- **Commands.** `gantry key new`, `key list`, `key revoke` and `key prune` change the store when the policy beside the keys file (or `--policy`) has `store:`, with the variable set. `gantry kill` and `unkill`, the admin API and the console change it through any replica.
+- **Start.** `enterplace serve` refuses to start, naming the fix, if the variable is unset or the database cannot be reached. `enterplace check` checks the section without connecting.
+- **Tables.** Enterplace creates its tables on first start, in the database the string names. The user needs `CREATE` on it. The schema is versioned in the binary (the `enterplace_schema` table); a newer Enterplace updates it. See Rolling upgrades below for which versions may share a database.
+- **Commands.** `enterplace key new`, `key list`, `key revoke` and `key prune` change the store when the policy beside the keys file (or `--policy`) has `store:`, with the variable set. `enterplace kill` and `unkill`, the admin API and the console change it through any replica.
 
 ### TLS
 
-Gantry reads the libpq parameters `sslmode` and `sslrootcert` in the connection string, in URL form (`?sslmode=verify-full&sslrootcert=/etc/gantry/ca.pem`) or key=value form.
+Enterplace reads the libpq parameters `sslmode` and `sslrootcert` in the connection string, in URL form (`?sslmode=verify-full&sslrootcert=/etc/enterplace/ca.pem`) or key=value form.
 
 | `sslmode` | Encrypted | What is checked |
 |---|---|---|
 | `verify-full` (the default) | yes | The certificate is signed by a trusted root and names the host in the string. |
 | `verify-ca` | yes | The certificate is signed by a trusted root. Any host name. |
 | `require` | yes | Nothing, as libpq does. With `sslrootcert`, it checks as `verify-ca`. |
-| `disable` | no | Nothing. Gantry starts with a warning that the connection is not encrypted. |
+| `disable` | no | Nothing. Enterplace starts with a warning that the connection is not encrypted. |
 
 `prefer` and `allow` are refused: they fall back to plain text without saying so.
 
-When the connection string names no `sslmode`, Gantry reads libpq's `PGSSLMODE` variable, then defaults to `verify-full`. It is for platforms that hand over a connection string they build and you cannot add to, such as Render's internal one: set `PGSSLMODE=require` beside it. The string's own `sslmode` always wins.
+When the connection string names no `sslmode`, Enterplace reads libpq's `PGSSLMODE` variable, then defaults to `verify-full`. It is for platforms that hand over a connection string they build and you cannot add to, such as Render's internal one: set `PGSSLMODE=require` beside it. The string's own `sslmode` always wins.
 
 The trusted roots are the Mozilla set built into the binary (no system certificates are read), plus the certificates in the PEM file `sslrootcert` names. For `verify-ca` with `sslrootcert`, the file's certificates are the only roots.
 
 Managed databases often sign with a CA of their own. Amazon RDS does: give its bundle.
 
 ```bash
-curl -sSfo /etc/gantry/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
-export DATABASE_URL='postgres://gantry:...@mydb.abc123.eu-west-1.rds.amazonaws.com:5432/gantry?sslrootcert=/etc/gantry/rds-global-bundle.pem'
+curl -sSfo /etc/enterplace/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+export DATABASE_URL='postgres://enterplace:...@mydb.abc123.eu-west-1.rds.amazonaws.com:5432/enterplace?sslrootcert=/etc/enterplace/rds-global-bundle.pem'
 ```
 
-Cloud SQL and Azure Database for PostgreSQL publish their server CA the same way: download it and name it with `sslrootcert`. When the certificate is not trusted, `gantry serve` refuses to start and says to add `sslrootcert`.
+Cloud SQL and Azure Database for PostgreSQL publish their server CA the same way: download it and name it with `sslrootcert`. When the certificate is not trusted, `enterplace serve` refuses to start and says to add `sslrootcert`.
 
-A Unix socket never leaves the machine and Postgres offers no TLS on one, so Gantry connects to a socket in plain text whatever `sslmode` says, with no warning, as libpq does. A host that starts with `/` is a socket directory.
+A Unix socket never leaves the machine and Postgres offers no TLS on one, so Enterplace connects to a socket in plain text whatever `sslmode` says, with no warning, as libpq does. A host that starts with `/` is a socket directory.
 
 The two common clouds:
 
@@ -75,7 +75,7 @@ The two common clouds:
 - **GCP, Cloud SQL through the Cloud SQL Auth Proxy or connector**: the connector encrypts to Cloud SQL and gives a Unix socket, so name the socket and nothing else:
 
   ```bash
-  export DATABASE_URL='host=/cloudsql/my-project:europe-west1:gantry user=gantry password=... dbname=gantry'
+  export DATABASE_URL='host=/cloudsql/my-project:europe-west1:enterplace user=enterplace password=... dbname=enterplace'
   ```
 
 A Postgres inside your Kubernetes cluster, on a private address and without TLS, needs `sslmode=disable`. Use it only on a network you trust: key hashes, kill switches and spend then cross it in plain text.
@@ -85,17 +85,17 @@ Changing the store's `postgres_url_env` or `policy_from` needs a restart. The re
 ### Moving an existing keys file in
 
 ```bash
-gantry store import --keys gantry.keys.yaml --policy gantry.policy.yaml
+enterplace store import --keys enterplace.keys.yaml --policy enterplace.policy.yaml
 ```
 
-This copies every key of the file, and the kill switches in `gantry.kills.json` beside it, into the store. Keys already there are left as they are, so running it twice is safe. The file itself is not changed. While the policy has `store:`, Gantry does not read it: keep it as a backup or delete it.
+This copies every key of the file, and the kill switches in `enterplace.kills.json` beside it, into the store. Keys already there are left as they are, so running it twice is safe. The file itself is not changed. While the policy has `store:`, Enterplace does not read it: keep it as a backup or delete it.
 
 ## What is stored, and what is not
 
 | In the store | Not in the store |
 |---|---|
 | Keys: name, team, the SHA-256 of the key, admin, expiry, budget, models, tpm. Never a key itself. | The policy. It stays a file, reviewed in git, and every replica reads its own copy. |
-| Kill switches, with their reason, who set them and when. | Prompts and answers. Gantry never stores them, here or anywhere. |
+| Kill switches, with their reason, who set them and when. | Prompts and answers. Enterplace never stores them, here or anywhere. |
 | Spend and reservations, per team, person and key, per day and month. | The audit log. Each replica keeps its own hash-chained file. |
 | Provider credentials, sealed with AES-256-GCM under the master key, with their name, vendor, last 4 characters and who added and rotated them. | The master key. It stays in each replica's environment or a file it names. |
 | Rate-limit leases: how much of each `rpm` and `tpm` each replica took, for the last minute. | The answer cache, unless `answer_cache: true` (see below). |
@@ -128,19 +128,19 @@ Hourly, daily and session request counts (`rph`, `rpd`, `session_requests`) are 
 
 ### Replicas
 
-Each replica writes a heartbeat to `gantry_replicas` every 2 seconds. `GET /admin/replicas` (needs `see_records`) and the Gateways panel on the console's Policy page list every replica that wrote one in the last day, with its host, version, store schema, start time and last heartbeat. A replica is healthy while its last heartbeat is under 10 seconds old; one that stopped stays listed as silent until it has been gone for a day.
+Each replica writes a heartbeat to `enterplace_replicas` every 2 seconds. `GET /admin/replicas` (needs `see_records`) and the Gateways panel on the console's Policy page list every replica that wrote one in the last day, with its host, version, store schema, start time and last heartbeat. A replica is healthy while its last heartbeat is under 10 seconds old; one that stopped stays listed as silent until it has been gone for a day.
 
 ```bash
-curl -s http://127.0.0.1:8080/admin/replicas -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+curl -s http://127.0.0.1:8080/admin/replicas -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY"
 ```
 
 ### Budget raises
 
-A [budget raise](/governance/budgets-and-rate-limits/#budget-raises) asked for or decided on one replica is read by the others with the 500 ms poll, from memory, so a request never waits on the database for it. The table is `gantry_raises`, in the migration namespace `gantry_ha`.
+A [budget raise](/governance/budgets-and-rate-limits/#budget-raises) asked for or decided on one replica is read by the others with the 500 ms poll, from memory, so a request never waits on the database for it. The table is `enterplace_raises`, in the migration namespace `enterplace_ha`.
 
 ### Heartbeats
 
-Each replica writes a row to `gantry_replicas` every 2 seconds: a name that is new at each start, its host name (`HOSTNAME`), its Gantry version, the store schema it knows by namespace, when it started and when it last wrote. A replica counts as healthy for 10 seconds after its last write, and its row is deleted a day after it. An embedding binary reads the list through the store interface (`Store::replicas`).
+Each replica writes a row to `enterplace_replicas` every 2 seconds: a name that is new at each start, its host name (`HOSTNAME`), its Enterplace version, the store schema it knows by namespace, when it started and when it last wrote. A replica counts as healthy for 10 seconds after its last write, and its row is deleted a day after it. An embedding binary reads the list through the store interface (`Store::replicas`).
 
 ### Rate limits
 
@@ -160,7 +160,7 @@ When a deployment of an alias fails, the replica passes it over at once and writ
 
 An alias with `session_affinity: true` keeps a coding agent's session on one deployment. With a store, every replica pins the session to the same deployment, and an alias with `balance: lowest_latency` ranks its deployments on the 90th percentile of every replica's recent answers pooled, so all replicas pick the same one.
 
-Neither costs a database call on the request path. A replica reads the pins and the latency rows from memory, refreshed with the 500 ms poll, and writes what it pinned and measured with the next poll. A pin is written again at most every 5 minutes while its session keeps sending, so other replicas know it is in use. A session pinned on one replica reaches the others within about a second; a coding agent's next request comes after its first answer, so it lands on the same deployment. Two replicas pinning a new session in the same instant settle on one within a poll. Pins idle for an hour and latency rows not written for 10 minutes are deleted. The tables are `gantry_affinity` and `gantry_latency`, in their own migration namespace, `gantry_routing`. Deployment limits (`max_parallel`, `rpm`, `tpm`) are shared the same way: each replica writes its load on each deployment with the poll (`gantry_deployment_load`, migration 3 of `gantry_routing`), and a replica that stops writing counts for nothing after 10 seconds.
+Neither costs a database call on the request path. A replica reads the pins and the latency rows from memory, refreshed with the 500 ms poll, and writes what it pinned and measured with the next poll. A pin is written again at most every 5 minutes while its session keeps sending, so other replicas know it is in use. A session pinned on one replica reaches the others within about a second; a coding agent's next request comes after its first answer, so it lands on the same deployment. Two replicas pinning a new session in the same instant settle on one within a poll. Pins idle for an hour and latency rows not written for 10 minutes are deleted. The tables are `enterplace_affinity` and `enterplace_latency`, in their own migration namespace, `enterplace_routing`. Deployment limits (`max_parallel`, `rpm`, `tpm`) are shared the same way: each replica writes its load on each deployment with the poll (`enterplace_deployment_load`, migration 3 of `enterplace_routing`), and a replica that stops writing counts for nothing after 10 seconds.
 
 Without a store, each gateway keeps its own pins and measurements, as before.
 
@@ -194,23 +194,23 @@ With `answer_cache: true`, every answer a rule caches is also kept in the store,
 `answer_cache: true` writes model answers to Postgres as the provider returned them, for at most `ttl_seconds`. They are not sealed with the master key. Leave it off where answers must not be at rest outside the audit trail's own controls.
 </Aside>
 
-The tables are `gantry_answer_cache` and `gantry_answer_vectors`, in the migration namespace `gantry_ha`.
+The tables are `enterplace_answer_cache` and `enterplace_answer_vectors`, in the migration namespace `enterplace_ha`.
 
 ## Several replicas
 
 Run every replica with the same policy and the same `DATABASE_URL`, each with its own volume for its audit log. On Kubernetes that is a StatefulSet with a volume per pod, as the Helm chart runs it: see [Kubernetes](/deploy/kubernetes/). Put a load balancer in front, with its health check on `GET /healthz`.
 
-- Each replica's audit log is a chain of its own. Verify each with `gantry audit verify`, and ship each to your SIEM.
+- Each replica's audit log is a chain of its own. Verify each with `enterplace audit verify`, and ship each to your SIEM.
 - A replica that restarts reads the keys and switches from the store, and spend is in the store: nothing is lost.
 - Console single sign-on: the identity provider's callback must reach the replica that started the sign-in, which sealed its state with a key of its own. Use session affinity on `/console/sso/`. Once signed in, the session is good on every replica.
 
 ## When Postgres is down
 
-Gantry fails closed for spend and stays up for everything else:
+Enterplace fails closed for spend and stays up for everything else:
 
 - **Known keys keep working** from memory. A key issued or revoked during the outage cannot be: the command says the store cannot be reached, and nothing is changed.
 - **Kill switches keep their last state.** A new switch cannot be set until the store is back.
-- **A request under a budget is refused** with `503` and the code [`store_unavailable`](/reference/refusal-codes/#store_unavailable): Gantry cannot reserve its cost, and it never lets it through unchecked. Requests without a budget are served.
+- **A request under a budget is refused** with `503` and the code [`store_unavailable`](/reference/refusal-codes/#store_unavailable): Enterplace cannot reserve its cost, and it never lets it through unchecked. Requests without a budget are served.
 - **A request under `rpm` or `tpm` is refused** the same way once its replica's slice is spent or its second is over: counted per replica, the replicas could admit the limit each.
 - **The console signs no one in.** A session cannot be looked up, and it may have ended on another replica. A sign-out during the outage is retried for 10 minutes, so the session does not come back with the database.
 - **Cooldowns keep their last state.** A deployment that fails on a replica is still passed over there; the others learn of it when the store is back.
@@ -231,13 +231,13 @@ A replica that dies with requests in flight leaves their reservations held until
 
 ## Rolling upgrades
 
-Two Gantry versions one minor version apart (0.2.x and 0.3.x) run on one database at the same time, so replicas can be replaced one by one while the gateway keeps serving:
+Two Enterplace versions one minor version apart (0.2.x and 0.3.x) run on one database at the same time, so replicas can be replaced one by one while the gateway keeps serving:
 
 - The newer version applies its migrations when it starts. The older replicas keep serving, accept keys the newer one issues, and the newer accepts theirs.
 - An older replica that restarts mid-rollout starts on the schema the newer one moved ahead.
-- A Gantry two or more minor versions behind refuses the database at start, naming its own version and the newer one (`the store was written by a newer Gantry (0.4.0, ...; this one is 0.2.1 ...)`). Upgrade it, or upgrade in steps of one minor version.
+- A Enterplace two or more minor versions behind refuses the database at start, naming its own version and the newer one (`the store was written by a newer Enterplace (0.4.0, ...; this one is 0.2.1 ...)`). Upgrade it, or upgrade in steps of one minor version.
 
-How it holds: every migration only adds (tables, columns, indexes). A change that removes or renames something an older version reads ships two minor versions later, when the version that read it can no longer run beside the database. The database records the newest version that started on it (`gantry_writer`), and an older binary compares itself with that. The release workflow runs `scripts/mixed_version_check.py`: the previous version and the new one on one Postgres at once, serving traffic while the new one migrates.
+How it holds: every migration only adds (tables, columns, indexes). A change that removes or renames something an older version reads ships two minor versions later, when the version that read it can no longer run beside the database. The database records the newest version that started on it (`enterplace_writer`), and an older binary compares itself with that. The release workflow runs `scripts/mixed_version_check.py`: the previous version and the new one on one Postgres at once, serving traffic while the new one migrates.
 
 The guarantee starts with the release that adds it: a version released before it refuses any newer schema when it restarts, so for that one upgrade, keep old pods from restarting during the rollout or replace every replica together.
 

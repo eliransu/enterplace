@@ -1,5 +1,5 @@
-//! Commercial edition. Runs the open source server, and runs it as a node managed by the Gantry control plane
-//! (hybrid: at the customer; hosted: in Gantry's cloud).
+//! Commercial edition. Runs the open source server, and runs it as a node managed by the Enterplace control plane
+//! (hybrid: at the customer; hosted: in Enterplace's cloud).
 
 mod device;
 mod enterprise;
@@ -13,9 +13,9 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 const USAGE: &str = "usage:
-  gantry node --control-plane <url> [--dir <folder>] [--listen <host:port>] [--interval <seconds>]
+  enterplace node --control-plane <url> [--dir <folder>] [--listen <host:port>] [--interval <seconds>]
       [--secrets NAME=<source>]... [--secrets-interval <seconds>]
-      Run a gateway managed by the control plane. The node token goes in GANTRY_NODE_TOKEN.
+      Run a gateway managed by the control plane. The node token goes in ENTERPLACE_NODE_TOKEN.
       --secrets gives the provider key the policy names NAME (key_env) from a source polled every
       --secrets-interval seconds (default 60), rotated without restarting the gateway. Sources:
       file:/path, env:OTHER, vault:<KV v2 URL>#field (token in VAULT_TOKEN),
@@ -25,28 +25,28 @@ const USAGE: &str = "usage:
       --max-offline <seconds> stops serving when the control plane has not answered for that long (fail closed).
       --metrics <host:port> serves Prometheus metrics at GET /metrics on that address.
       HTTPS_PROXY is used to reach the control plane and secret sources.
-  gantry device --control-plane <url> [--interval <seconds>] [--dry-run] [--once] [--home <folder>]
+  enterplace device --control-plane <url> [--interval <seconds>] [--dry-run] [--once] [--home <folder>]
       Point the signed-in user's Claude Code and Codex at the gateway every --interval seconds (default 300) and
-      report each coding tool's state (installed, through Gantry, or direct to a provider) and the MCP servers
+      report each coding tool's state (installed, through Enterplace, or direct to a provider) and the MCP servers
       configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed. --control-plane is the gateway's address
-      (license feature devices). The enrolment token goes in GANTRY_DEVICE_TOKEN, or in the file
-      GANTRY_DEVICE_TOKEN_FILE names (default /Library/Application Support/Gantry/device-token on macOS, which the MDM
-      profile installs; /etc/gantry/device-token on Linux; C:\\ProgramData\\Gantry\\device-token on Windows).
-  gantry watch setup --gateway <url> (--team <team> | --person <name>) [--org <org>] [--label <text>] [--days <n>] [--token <token>]
+      (license feature devices). The enrolment token goes in ENTERPLACE_DEVICE_TOKEN, or in the file
+      ENTERPLACE_DEVICE_TOKEN_FILE names (default /Library/Application Support/Enterplace/device-token on macOS, which the MDM
+      profile installs; /etc/enterplace/device-token on Linux; C:\\ProgramData\\Enterplace\\device-token on Windows).
+  enterplace watch setup --gateway <url> (--team <team> | --person <name>) [--org <org>] [--label <text>] [--days <n>] [--token <token>]
       Print the Claude Code managed settings that send its telemetry to the gateway's watch receiver (license feature
       watch): for people on Claude Team or Enterprise seats, whose requests cannot go through a gateway. Creates a
-      watch token through the admin API with the admin key in GANTRY_ADMIN_KEY, or uses the one --token gives.
-  gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>]
-      Run the gateway on local files, as `gantry serve` does.
-  gantry serve --unchecked
-  gantry license show [--keys <file>]
-      Show the license in GANTRY_LICENSE (or the file GANTRY_LICENSE_FILE names): customer, features, seats used
-      (people in the keys file, default gantry.keys.yaml) of allowed, expiry and grace state. Checked offline.
-  gantry license keygen --out <file>                         (Gantry staff builds only)
-  gantry license issue --signing-key <file> --customer <name> --id <id> --features <a,b|all>
-      --seats <n> --issued <YYYY-MM-DD> --expires <YYYY-MM-DD>              (Gantry staff builds only)
-  gantry <gantry command>
-      Every other command runs as the open source `gantry` runs it: check, init, key new|list|revoke|prune,
+      watch token through the admin API with the admin key in ENTERPLACE_ADMIN_KEY, or uses the one --token gives.
+  enterplace serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>]
+      Run the gateway on local files, as `enterplace serve` does.
+  enterplace serve --unchecked
+  enterplace license show [--keys <file>]
+      Show the license in ENTERPLACE_LICENSE (or the file ENTERPLACE_LICENSE_FILE names): customer, features, seats used
+      (people in the keys file, default enterplace.keys.yaml) of allowed, expiry and grace state. Checked offline.
+  enterplace license keygen --out <file>                         (Enterplace staff builds only)
+  enterplace license issue --signing-key <file> --customer <name> --id <id> --features <a,b|all>
+      --seats <n> --issued <YYYY-MM-DD> --expires <YYYY-MM-DD>              (Enterplace staff builds only)
+  enterplace <enterplace command>
+      Every other command runs as the open source `enterplace` runs it: check, init, key new|list|revoke|prune,
       store import, import litellm, audit verify|repair, prices, providers, kill, unkill, login, logout, version.";
 
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
@@ -56,22 +56,22 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
         .map(String::as_str)
 }
 
-/// The device enrolment token: GANTRY_DEVICE_TOKEN, else the file an MDM drops.
+/// The device enrolment token: ENTERPLACE_DEVICE_TOKEN, else the file an MDM drops.
 fn device_token() -> Option<String> {
     let set = |v: String| Some(v.trim().to_owned()).filter(|v| !v.is_empty());
-    std::env::var("GANTRY_DEVICE_TOKEN")
+    std::env::var("ENTERPLACE_DEVICE_TOKEN")
         .ok()
         .and_then(set)
         .or_else(|| {
             let default = if cfg!(target_os = "windows") {
-                r"C:\ProgramData\Gantry\device-token"
+                r"C:\ProgramData\Enterplace\device-token"
             } else if cfg!(target_os = "macos") {
-                "/Library/Application Support/Gantry/device-token"
+                "/Library/Application Support/Enterplace/device-token"
             } else {
-                "/etc/gantry/device-token"
+                "/etc/enterplace/device-token"
             };
-            let path =
-                std::env::var("GANTRY_DEVICE_TOKEN_FILE").unwrap_or_else(|_| default.to_owned());
+            let path = std::env::var("ENTERPLACE_DEVICE_TOKEN_FILE")
+                .unwrap_or_else(|_| default.to_owned());
             std::fs::read_to_string(path).ok().and_then(set)
         })
 }
@@ -80,7 +80,7 @@ fn device_token() -> Option<String> {
 fn start_license(keys: PathBuf) -> Result<(), String> {
     let status = license::start()?;
     // A keys file that does not read is reported by the server itself, with the fix.
-    if let Ok(Some(text)) = gantry_core::config::read_keys(&keys)
+    if let Ok(Some(text)) = enterplace_core::config::read_keys(&keys)
         && let Ok(used) = license::seats_used(&text)
         && let Some(warning) = status.seats_warning(used)
     {
@@ -90,29 +90,29 @@ fn start_license(keys: PathBuf) -> Result<(), String> {
 }
 
 /// Lets `*_env` variables point at secret managers (feature `secrets`), and reads them again every
-/// GANTRY_SECRETS_REFRESH_SECONDS (300 unless set): a key rotated in the manager is used within that time, or at once
+/// ENTERPLACE_SECRETS_REFRESH_SECONDS (300 unless set): a key rotated in the manager is used within that time, or at once
 /// on SIGHUP.
 fn start_secret_managers() {
     let env: managers::Env = std::sync::Arc::new(|name: &str| std::env::var(name).ok());
-    gantry_core::secrets::install(std::sync::Arc::new(managers::Managers::new(env)));
-    let every = std::env::var("GANTRY_SECRETS_REFRESH_SECONDS")
+    enterplace_core::secrets::install(std::sync::Arc::new(managers::Managers::new(env)));
+    let every = std::env::var("ENTERPLACE_SECRETS_REFRESH_SECONDS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|s| *s >= 10)
         .unwrap_or(300);
     let spawned = std::thread::Builder::new()
-        .name("gantry-secrets".into())
+        .name("enterplace-secrets".into())
         .spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_secs(every));
-                for problem in gantry_core::secrets::refresh() {
-                    eprintln!("gantry: {problem}");
+                for problem in enterplace_core::secrets::refresh() {
+                    eprintln!("enterplace: {problem}");
                 }
             }
         });
     if let Err(err) = spawned {
         eprintln!(
-            "gantry: the thread that reads secret managers again could not start ({err}). Secrets are read at start and on SIGHUP only."
+            "enterplace: the thread that reads secret managers again could not start ({err}). Secrets are read at start and on SIGHUP only."
         );
     }
 }
@@ -125,9 +125,9 @@ fn license_command(args: &[String]) -> Result<(), String> {
                 println!("{}", status.describe());
                 return Ok(());
             };
-            let keys = PathBuf::from(flag(args, "--keys").unwrap_or("gantry.keys.yaml"));
+            let keys = PathBuf::from(flag(args, "--keys").unwrap_or("enterplace.keys.yaml"));
             let seats =
-                match gantry_core::config::read_keys(&keys)?.map(|t| license::seats_used(&t)) {
+                match enterplace_core::config::read_keys(&keys)?.map(|t| license::seats_used(&t)) {
                     Some(Ok(used)) => format!("{used} used of {}", l.seats),
                     Some(Err(err)) => format!(
                         "{} allowed ({} does not read: {err})",
@@ -198,7 +198,7 @@ fn license_command(args: &[String]) -> Result<(), String> {
         }
         #[cfg(not(feature = "issuer"))]
         Some("keygen" | "issue") => Err(
-            "this build cannot sign licenses. Gantry staff build with `--features issuer`."
+            "this build cannot sign licenses. Enterplace staff build with `--features issuer`."
                 .to_owned(),
         ),
         _ => Err(USAGE.to_owned()),
@@ -208,7 +208,7 @@ fn license_command(args: &[String]) -> Result<(), String> {
 #[tokio::main]
 async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let name = format!("gantry enterprise {}", gantry_core::VERSION);
+    let name = format!("enterplace enterprise {}", enterplace_core::VERSION);
     let result: Result<(), String> = match args.first().map(String::as_str) {
         Some("node") => match flag(&args, "--control-plane") {
             Some(cp) => {
@@ -236,7 +236,7 @@ async fn main() -> ExitCode {
                     .unwrap_or(60);
                 let opts = node::Options {
                     control_plane: cp.to_owned(),
-                    dir: PathBuf::from(flag(&args, "--dir").unwrap_or("/var/lib/gantry")),
+                    dir: PathBuf::from(flag(&args, "--dir").unwrap_or("/var/lib/enterplace")),
                     listen: flag(&args, "--listen")
                         .unwrap_or("127.0.0.1:8080")
                         .to_owned(),
@@ -298,7 +298,7 @@ async fn main() -> ExitCode {
                     .unwrap_or_else(|err| Err(err.to_string()))
             }
             (None, _) => Err(format!("`device` needs --control-plane.\n{USAGE}")),
-            (_, None) => Err("no enrolment token: set GANTRY_DEVICE_TOKEN, or GANTRY_DEVICE_TOKEN_FILE to a file holding it. An owner or admin creates one on the console's Devices page.".to_owned()),
+            (_, None) => Err("no enrolment token: set ENTERPLACE_DEVICE_TOKEN, or ENTERPLACE_DEVICE_TOKEN_FILE to a file holding it. An owner or admin creates one on the console's Devices page.".to_owned()),
         },
         Some("watch") => {
             let rest = args[1..].to_vec();
@@ -310,14 +310,14 @@ async fn main() -> ExitCode {
         }
         Some("license") => license_command(&args[1..]),
         Some("serve") if args.get(1).map(String::as_str) == Some("--unchecked") => {
-            gantry_server::serve_from_env(&name, true)
+            enterplace_server::serve_from_env(&name, true)
                 .await
                 .map_err(|err| err.to_string())
         }
         Some("serve") if args.len() >= 2 => match start_license(
             flag(&args, "--keys")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| gantry_core::config::keys_path_for(Path::new(&args[1]))),
+                .unwrap_or_else(|| enterplace_core::config::keys_path_for(Path::new(&args[1]))),
         ) {
             Err(err) => Err(err),
             Ok(()) => match enterprise::restore_audit(
@@ -329,7 +329,7 @@ async fn main() -> ExitCode {
                     if license::unlocked("secrets") {
                         start_secret_managers();
                     }
-                    let served = gantry_server::serve_policy_with(
+                    let served = enterplace_server::serve_policy_with(
                         &name,
                         Path::new(&args[1]),
                         flag(&args, "--keys").map(Path::new),
@@ -349,12 +349,12 @@ async fn main() -> ExitCode {
         },
         // `serve` without a policy and `help` stay here, so the open source server never starts unlicensed from this binary.
         Some(command) if !matches!(command, "serve" | "help" | "--help" | "-h") => {
-            return gantry_cli::run(&args).await;
+            return enterplace_cli::run(&args).await;
         }
         // Asked for help: every command, the open source ones first (start is the first one a person runs).
         Some("help" | "--help" | "-h") => {
             let enterprise = USAGE.strip_prefix("usage:\n").unwrap_or(USAGE);
-            println!("{}\nEnterprise commands:\n{enterprise}", gantry_cli::USAGE);
+            println!("{}\nEnterprise commands:\n{enterprise}", enterplace_cli::USAGE);
             return ExitCode::SUCCESS;
         }
         _ => Err(USAGE.to_owned()),

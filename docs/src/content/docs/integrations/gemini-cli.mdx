@@ -1,37 +1,37 @@
 ---
 title: Gemini CLI
-description: Send Gemini CLI through Gantry on Google's own Gemini API, with every request checked, metered and recorded.
+description: Send Gemini CLI through Enterplace on Google's own Gemini API, with every request checked, metered and recorded.
 sidebar:
   order: 11
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gemini CLI speaks Google's Gemini API. Gantry serves that API on `/v1beta/models/<model>:<method>`, so Gemini CLI goes through Gantry with two environment variables. Each request is checked against your policy, guarded, metered and recorded like a chat completions request.
+Gemini CLI speaks Google's Gemini API. Enterplace serves that API on `/v1beta/models/<model>:<method>`, so Gemini CLI goes through Enterplace with two environment variables. Each request is checked against your policy, guarded, metered and recorded like a chat completions request.
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). This tool speaks Gemini's own API, so it needs a `gemini` or `vertex` provider with a key: the free demo model does not answer it. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). This tool speaks Gemini's own API, so it needs a `gemini` or `vertex` provider with a key: the free demo model does not answer it. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
 
-Point Gemini CLI at Gantry and give it your Gantry key as its Gemini API key:
+Point Gemini CLI at Enterplace and give it your Enterplace key as its Gemini API key:
 
 ```bash
-export GOOGLE_GEMINI_BASE_URL=https://gantry.example.com   # or http://127.0.0.1:8080 on this machine
-export GEMINI_API_KEY=gantry_...
+export GOOGLE_GEMINI_BASE_URL=https://enterplace.example.com   # or http://127.0.0.1:8080 on this machine
+export GEMINI_API_KEY=enterplace_...
 gemini
 ```
 
-Gemini CLI takes `http://` only for `localhost`, `127.0.0.1` and `[::1]`; any other Gantry must be on HTTPS. With `GOOGLE_GEMINI_BASE_URL` set, Gemini CLI uses its gateway sign-in and sends the key in `x-goog-api-key`. To set the sign-in in settings instead:
+Gemini CLI takes `http://` only for `localhost`, `127.0.0.1` and `[::1]`; any other Enterplace must be on HTTPS. With `GOOGLE_GEMINI_BASE_URL` set, Gemini CLI uses its gateway sign-in and sends the key in `x-goog-api-key`. To set the sign-in in settings instead:
 
 ```json title="~/.gemini/settings.json"
 { "security": { "auth": { "selectedType": "gemini-api-key" } } }
 ```
 
-On the Gantry side, the models Gemini CLI asks for must be on a provider of `kind: gemini` or `kind: vertex`, or be an alias whose deployments are there, and the caller's rule must allow them:
+On the Enterplace side, the models Gemini CLI asks for must be on a provider of `kind: gemini` or `kind: vertex`, or be an alias whose deployments are there, and the caller's rule must allow them:
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: gemini
@@ -47,7 +47,7 @@ rules:
 
 Gemini CLI picks its model with `-m` or `/model`. A model the rule does not allow is refused with `model_not_allowed`, and Gemini CLI shows the refusal with the allowed models.
 
-## What Gantry serves
+## What Enterplace serves
 
 | Route | What it does |
 |---|---|
@@ -70,17 +70,17 @@ Everything a chat completions request gets:
 - Budgets, rate and parallel limits, with usage read from `usageMetadata`. The output limit is `generationConfig.maxOutputTokens`. A whole `generateContent` answer can be cached; a stream and `countTokens` never are.
 - A decision record with the caller's user agent (`GeminiCLI/<version>/<model> ...`), and a usage record.
 
-The body goes to the provider as sent: a field Gantry does not know passes through untouched. A body that names a model other than the path's is refused with `ambiguous_model`. Refusals come back in Google's error shape (`{"error": {"code": 403, "status": "PERMISSION_DENIED", ...}}`) with Gantry's code as the reason and the decision ID in the message.
+The body goes to the provider as sent: a field Enterplace does not know passes through untouched. A body that names a model other than the path's is refused with `ambiguous_model`. Refusals come back in Google's error shape (`{"error": {"code": 403, "status": "PERMISSION_DENIED", ...}}`) with Enterplace's code as the reason and the decision ID in the message.
 
 ## Run it locally
 
-This is how the setup was checked, with Gemini CLI 0.68.0 and a mock of the Gemini API on port 9701 (any server that answers `streamGenerateContent` with an event will do). With `allow_private: true` on the provider so Gantry may reach the mock:
+This is how the setup was checked, with Gemini CLI 0.68.0 and a mock of the Gemini API on port 9701 (any server that answers `streamGenerateContent` with an event will do). With `allow_private: true` on the provider so Enterplace may reach the mock:
 
 ```bash
-gantry key new dana --team eng --keys gantry.keys.yaml
-MOCK_GEMINI_KEY=mock-key gantry serve gantry.policy.yaml --keys gantry.keys.yaml --listen 127.0.0.1:9700
+enterplace key new dana --team eng --keys enterplace.keys.yaml
+MOCK_GEMINI_KEY=mock-key enterplace serve enterplace.policy.yaml --keys enterplace.keys.yaml --listen 127.0.0.1:9700
 
-GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:9700 GEMINI_API_KEY=gantry_... GEMINI_CLI_TRUST_WORKSPACE=true \
+GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:9700 GEMINI_API_KEY=enterplace_... GEMINI_CLI_TRUST_WORKSPACE=true \
   npx @google/gemini-cli -m gemini-2.5-flash -p "Say hello"
 ```
 
@@ -94,7 +94,7 @@ usage  input_tokens 12  output_tokens 5  ended complete
 
 With `-m gemini-1.5-pro`, which the rule does not allow, Gemini CLI showed `Refused (model_not_allowed): ...` with status 403, and nothing reached the mock.
 
-## What Gantry does not see
+## What Enterplace does not see
 
 Google sign-in (not used with a key), usage statistics (`privacy.usageStatisticsEnabled`, on by default, sent to Google) and telemetry sent to an OTLP endpoint of your own do not go through the base URL. Gemini CLI's docs do not say whether its web search and URL fetch tools use it.
 
@@ -105,6 +105,6 @@ Google has replaced Gemini CLI with Antigravity CLI for free-tier users. Gemini 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Gemini provider" href="/providers/gemini/" description="Gantry sending to Google's Gemini API." />
+	<LinkCard title="Gemini provider" href="/providers/gemini/" description="Enterplace sending to Google's Gemini API." />
 	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="model_not_allowed and every other code." />
 </CardGrid>

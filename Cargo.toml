@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/gantry-core", "crates/gantry-server", "crates/gantry-cli", "crates/gantry-bench", "crates/gantry-console", "enterprise"]
+members = ["crates/enterplace-core", "crates/enterplace-server", "crates/enterplace-cli", "crates/enterplace-bench", "crates/enterplace-console", "enterprise"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,11 +9,11 @@ rust-version = "1.88"
 license = "MIT"
 
 [workspace.dependencies]
-gantry-core = { path = "crates/gantry-core", version = "0.1.0" }
-gantry-server = { path = "crates/gantry-server", version = "0.1.0" }
-gantry-console = { path = "crates/gantry-console", version = "0.1.0" }
-gantry-cli = { path = "crates/gantry-cli", version = "0.1.0" }
-# `ws`: realtime sessions (OpenAI Realtime, Gemini Live) are WebSocket connections callers open to Gantry.
+enterplace-core = { path = "crates/enterplace-core", version = "0.1.0" }
+enterplace-server = { path = "crates/enterplace-server", version = "0.1.0" }
+enterplace-console = { path = "crates/enterplace-console", version = "0.1.0" }
+enterplace-cli = { path = "crates/enterplace-cli", version = "0.1.0" }
+# `ws`: realtime sessions (OpenAI Realtime, Gemini Live) are WebSocket connections callers open to Enterplace.
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "tokio", "ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "http2", "tokio", "server-auto", "server-graceful", "service"] }
@@ -33,9 +33,9 @@ getrandom = "0.3"
 # TLS to providers, with the Mozilla root set compiled in so a container needs no system certificates.
 # Guardrail detectors: finite automata, so matching time is linear in the prompt whatever it contains.
 regex = { version = "1", default-features = false, features = ["std", "perf"] }
-# Gantry's own TLS listener (`serve --tls-cert`). Already in the build through hyper-rustls; named here to accept connections.
+# Enterplace's own TLS listener (`serve --tls-cert`). Already in the build through hyper-rustls; named here to accept connections.
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-# The Postgres store (`store:` in the policy): the wire protocol, async on the tokio runtime Gantry already runs on.
+# The Postgres store (`store:` in the policy): the wire protocol, async on the tokio runtime Enterplace already runs on.
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
 # The Mozilla roots the store trusts, with an sslrootcert file's beside them. Already in the build through hyper-rustls.
 webpki-roots = "1"

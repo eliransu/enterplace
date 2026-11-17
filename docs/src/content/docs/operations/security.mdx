@@ -1,22 +1,22 @@
 ---
 title: Security model
-description: What Gantry protects, the threats it is built against, how it strips headers and stores keys, and what it does not protect.
+description: What Enterplace protects, the threats it is built against, how it strips headers and stores keys, and what it does not protect.
 sidebar:
   order: 6
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gantry's job is to make sure no AI request leaves without a known caller, a policy decision and a record. This page states what it protects, how, and where its protection stops.
+Enterplace's job is to make sure no AI request leaves without a known caller, a policy decision and a record. This page states what it protects, how, and where its protection stops.
 
 ## Threat model
 
 | Threat | Defense |
 |---|---|
-| A caller uses a model, a budget or a provider account they were not given | Identity on every request, first-match rules, budgets reserved at admission, provider credentials owned by Gantry |
-| A caller's tool leaks the provider key | The caller never holds it. Gantry swaps its own key in and strips the caller's credentials |
+| A caller uses a model, a budget or a provider account they were not given | Identity on every request, first-match rules, budgets reserved at admission, provider credentials owned by Enterplace |
+| A caller's tool leaks the provider key | The caller never holds it. Enterplace swaps its own key in and strips the caller's credentials |
 | A request is sent and never recorded | Fail closed: the record is written before forwarding, and a request that cannot be recorded is refused |
-| Someone edits, removes or reorders audit records | A hash chain, verified at every start and by `gantry audit verify`, plus a last hash kept elsewhere |
+| Someone edits, removes or reorders audit records | A hash chain, verified at every start and by `enterplace audit verify`, plus a last hash kept elsewhere |
 | A caller smuggles something past the policy check | One credential, one `model` key, no compressed bodies, unknown query parameters refused, the body forwarded as checked |
 | A secret or personal data leaves in a prompt | Guardrails that block, mask or record, before the request is recorded and sent |
 | One caller exhausts the gateway | Bounded body size, memory per caller and in total, and bounded waits |
@@ -25,27 +25,27 @@ Gantry's job is to make sure no AI request leaves without a known caller, a poli
 
 A request that cannot be identified, decided and recorded is not forwarded.
 
-- If the audit log cannot be written, every request is refused with `audit_unavailable` and `/healthz` answers 503 until an admin restarts Gantry.
-- Gantry does not start on an audit log whose chain does not hold, on a policy or keys file with any problem, or without every provider key.
+- If the audit log cannot be written, every request is refused with `audit_unavailable` and `/healthz` answers 503 until an admin restarts Enterplace.
+- Enterplace does not start on an audit log whose chain does not hold, on a policy or keys file with any problem, or without every provider key.
 - A kill switch file that cannot be read refuses every request with `kills_unreadable`.
 - An admin call or console action that cannot be recorded is not done.
 
-## Gantry keys
+## Enterplace keys
 
-- 256 random bits from the operating system, prefixed `gantry_` so secret scanners recognize them: `gantry_` and 64 hex characters.
+- 256 random bits from the operating system, prefixed `enterplace_` so secret scanners recognize them: `enterplace_` and 64 hex characters.
 - Shown once. Only the SHA-256 is stored, in a keys file created with mode `0600`.
-- Looked up by hash, so Gantry never compares secret bytes one at a time.
+- Looked up by hash, so Enterplace never compares secret bytes one at a time.
 - A key can carry an expiry, a budget, a model list and a tokens-per-minute limit of its own. See [Keys and identity](/governance/keys/).
 
 ## Provider keys
 
-- Read from the environment variable each provider's `key_env` names, from the file its `key_file` names, or from the store, sealed, when it names a `credential`. Gantry never writes a provider key to a file.
+- Read from the environment variable each provider's `key_env` names, from the file its `key_file` names, or from the store, sealed, when it names a `credential`. Enterplace never writes a provider key to a file.
 - Held in memory marked as sensitive and never printed or recorded.
 - Sent only to the provider that needs it, in that provider's header: `Authorization: Bearer` for `openai`, `vertex` and `vertex_anthropic`, `x-api-key` for `anthropic`, `api-key` for `azure`, `x-goog-api-key` for `gemini`. Requests to `bedrock` are signed with AWS Signature Version 4.
 
 ## The master key
 
-`GANTRY_MASTER_KEY` (or the file `GANTRY_MASTER_KEY_FILE` names) is a 256-bit key you make and hold. It protects the provider credentials kept in the store:
+`ENTERPLACE_MASTER_KEY` (or the file `ENTERPLACE_MASTER_KEY_FILE` names) is a 256-bit key you make and hold. It protects the provider credentials kept in the store:
 
 - Each value is sealed with AES-256-GCM, a random nonce per value and the credential's name as associated data. A database dump, a backup or a database administrator sees sealed bytes, a name, a vendor and the last 4 characters.
 - A value is opened in the gateway's memory only, to be sent. It is never shown again after it is saved: not in the console, an API answer, a log line or an audit record.
@@ -54,43 +54,43 @@ A request that cannot be identified, decided and recorded is not forwarded.
 
 ## Caller provider keys
 
-A rule with `caller_provider_key: allowed` lets callers send their own provider key in `x-gantry-provider-key`. What changes:
+A rule with `caller_provider_key: allowed` lets callers send their own provider key in `x-enterplace-provider-key`. What changes:
 
-- The caller is still identified by their Gantry key, and every check of the rule still applies. A provider key never stands in for a Gantry key.
+- The caller is still identified by their Enterplace key, and every check of the rule still applies. A provider key never stands in for a Enterplace key.
 - The header is removed as soon as it is read: never logged, never echoed, never sent to a guardrail webhook, a trace or a fallback provider. Records hold `caller_provider_key: true` and the first 8 hex characters of its SHA-256.
 - The provider bills the caller's account, under the caller's terms with that provider. Spend is recorded as caller-paid and, with `allowed`, not counted against budgets.
 - Without the opt-in (the default) the header is refused with `caller_provider_key_not_allowed`, so it is never silently dropped or forwarded.
 
 ## Cloud credentials
 
-No static cloud key is needed on AWS or Google Cloud. A `bedrock` provider signs with the role Gantry runs as (IRSA or Pod Identity on EKS, the ECS task role, the EC2 instance profile), and a `vertex` or `vertex_anthropic` provider without `key_env` signs in as the service account Gantry runs as (GKE Workload Identity, Cloud Run, Compute Engine). These credentials last an hour or a few, are renewed in the background before they expire, and are never written to disk, printed or recorded; the start line names where they came from, never their value. Static keys still work: AWS access keys in the environment, a service account key file, or an access token in `key_env`. See [Amazon Bedrock](/providers/bedrock/#credentials) and [Vertex AI](/providers/vertex/#credentials).
+No static cloud key is needed on AWS or Google Cloud. A `bedrock` provider signs with the role Enterplace runs as (IRSA or Pod Identity on EKS, the ECS task role, the EC2 instance profile), and a `vertex` or `vertex_anthropic` provider without `key_env` signs in as the service account Enterplace runs as (GKE Workload Identity, Cloud Run, Compute Engine). These credentials last an hour or a few, are renewed in the background before they expire, and are never written to disk, printed or recorded; the start line names where they came from, never their value. Static keys still work: AWS access keys in the environment, a service account key file, or an access token in `key_env`. See [Amazon Bedrock](/providers/bedrock/#credentials) and [Vertex AI](/providers/vertex/#credentials).
 
 ## What the provider sees
 
-Gantry removes from every forwarded request:
+Enterplace removes from every forwarded request:
 
 - any header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project`, except `idempotency-key`, so a caller cannot choose the provider account or project,
 - proxy and CDN headers that carry the caller's address: `x-forwarded-*`, `forwarded`, `via`, `cf-*`, `cdn-loop`, `x-envoy-*`, `x-original-forwarded-*`, and any name ending in `-ip` or containing `client-ip`, `clientip` or `remote-addr`, so the caller's address never reaches the provider,
-- `accept-encoding`: Gantry reads every answer (usage, guardrails, translation), so it asks the provider for plain bytes,
-- any header whose name starts with `x-amz`, `x-amzn-*` included: AWS headers are Gantry's to sign and set,
-- any header that carries the caller's Gantry key in its name or value, compared without regard to case, with or without the `gantry_` prefix. A hand-made key shorter than 16 characters is found only where it stands as a word of its own,
+- `accept-encoding`: Enterplace reads every answer (usage, guardrails, translation), so it asks the provider for plain bytes,
+- any header whose name starts with `x-amz`, `x-amzn-*` included: AWS headers are Enterplace's to sign and set,
+- any header that carries the caller's Enterplace key in its name or value, compared without regard to case, with or without the `enterplace_` prefix. A hand-made key shorter than 16 characters is found only where it stands as a word of its own,
 - `Cookie`, `Host` and the hop-by-hop headers (`Connection` and the headers it names, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`).
 
 `anthropic-*` and `x-claude-code-*` headers pass unchanged to Anthropic-API providers. The full list per route is in [HTTP routes](/reference/http-routes/#headers).
 
-**One credential, one model.** Two different credentials on one request are refused with `ambiguous_key`, so Gantry never checks one credential and forwards another. A body with a second spelling of the `model` key (such as `Model`) is refused, so the policy cannot check one model while the provider runs another.
+**One credential, one model.** Two different credentials on one request are refused with `ambiguous_key`, so Enterplace never checks one credential and forwards another. A body with a second spelling of the `model` key (such as `Model`) is refused, so the policy cannot check one model while the provider runs another.
 
 **What was checked is what is sent.** A body with a `Content-Encoding` other than `identity` is refused. Unknown query parameters are refused by name, never dropped. The body is forwarded byte for byte, except where the policy changes it: a guardrail that masks, a translation the provider opts in to, and the body Bedrock expects.
 
 ## The audit chain
 
-Each record holds the hash of the one before. `gantry audit verify` finds a changed, inserted, removed or reordered record and names it. Records hold no prompt or answer text and no keys. Each names the SHA-256 of the policy and keys files that decided it. Strings from the caller are cut to 200 characters, so a caller cannot choose the size of a record.
+Each record holds the hash of the one before. `enterplace audit verify` finds a changed, inserted, removed or reordered record and names it. Records hold no prompt or answer text and no keys. Each names the SHA-256 of the policy and keys files that decided it. Strings from the caller are cut to 200 characters, so a caller cannot choose the size of a record.
 
 ## Guardrails
 
-A rule's guardrails read the text of each request it allows before the request is recorded and sent. The record, the refusal and Gantry's log name the guardrail, the kind of finding and where it was, never the matched text. A webhook's free-text `reason` is not shown or recorded either, because it may quote the prompt. What they catch:
+A rule's guardrails read the text of each request it allows before the request is recorded and sent. The record, the refusal and Enterplace's log name the guardrail, the kind of finding and where it was, never the matched text. A webhook's free-text `reason` is not shown or recorded either, because it may quote the prompt. What they catch:
 
-- **Pattern detectors.** `secrets` finds keys with a known shape: AWS access key IDs, GitHub and Slack tokens, JWTs, `sk-` keys, Gantry keys and PEM private keys. `pii` finds email addresses, phone numbers, card numbers that pass Luhn, IBANs that pass mod 97, Israeli IDs that pass their check digit and US SSNs. A password, a credentialed database URL, a name, an address or a date of birth is not found. Use a vendor or webhook guardrail for those.
+- **Pattern detectors.** `secrets` finds keys with a known shape: AWS access key IDs, GitHub and Slack tokens, JWTs, `sk-` keys, Enterplace keys and PEM private keys. `pii` finds email addresses, phone numbers, card numbers that pass Luhn, IBANs that pass mod 97, Israeli IDs that pass their check digit and US SSNs. A password, a credentialed database URL, a name, an address or a date of birth is not found. Use a vendor or webhook guardrail for those.
 - **False positives.** Any 9-digit number with a valid Israeli ID check digit, and some long digit runs that pass Luhn, are reported. Start with `warn` before you `block` or `mask`.
 - **Text parts only.** System prompts, text messages and blocks, tool results, text documents, search results, and on `/v1/responses` a tool's output and a stored prompt's variables. Tool arguments, images and files are not read.
 - **Plain text only.** Anything encoded, split across messages, spelled out or translated is not found by the built-in detectors.
@@ -103,42 +103,42 @@ See [Guardrails](/governance/guardrails/).
 
 ## Stored Responses state
 
-A `/v1/responses` request that names `previous_response_id`, `conversation` or a stored `prompt` makes the provider add text Gantry never sees, so guardrails do not check it. Every person's stored responses sit under Gantry's one provider key, so anyone who learns another person's response ID can continue that conversation through Gantry. Send `store: false` and the whole conversation in `input`, as Codex does. Under a budget, such a request is refused with `stored_context` unless the model's price sets `max_context`.
+A `/v1/responses` request that names `previous_response_id`, `conversation` or a stored `prompt` makes the provider add text Enterplace never sees, so guardrails do not check it. Every person's stored responses sit under Enterplace's one provider key, so anyone who learns another person's response ID can continue that conversation through Enterplace. Send `store: false` and the whole conversation in `input`, as Codex does. Under a budget, such a request is refused with `stored_context` unless the model's price sets `max_context`.
 
 ## Console and sign-in
 
 - Console sign-in takes an admin key or OpenID Connect single sign-on. The browser holds a random session ID, never a key or token.
 - Single sign-on uses the authorization code flow with PKCE (S256), a `state` bound to the browser and usable once within 10 minutes, and a `nonce`. ID tokens must be signed RS256 or ES256 and pass `iss`, `aud`, `azp`, `exp` (60 seconds of clock skew) and `nonce` checks. There is no default role.
 - Starting a sign-in stores nothing on the server, so a flood of starts locks nobody out. Floods are summed into one audit record a minute.
-- `gantry login` never puts a key in the browser. A one-use code valid for two minutes returns to a listener on `127.0.0.1`, and only the CLI holding the PKCE verifier can trade it for the key. The CLI sends a key only to an https address (plain http only to this machine) and saves it in a file only its owner can read.
+- `enterplace login` never puts a key in the browser. A one-use code valid for two minutes returns to a listener on `127.0.0.1`, and only the CLI holding the PKCE verifier can trade it for the key. The CLI sends a key only to an https address (plain http only to this machine) and saves it in a file only its owner can read.
 
 See [Admin console](/operations/console/) and [Single sign-on](/governance/single-sign-on/).
 
 ## Exposure
 
-- Gantry binds `127.0.0.1` unless told otherwise and warns when it listens on another address without TLS.
+- Enterplace binds `127.0.0.1` unless told otherwise and warns when it listens on another address without TLS.
 - `--tls-cert` and `--tls-key` serve HTTPS with TLS 1.2 and 1.3.
 - `--unchecked` refuses to bind anything but loopback.
-- `/metrics` is only on its own address, and Gantry warns when that address is not loopback.
-- Provider URLs on this machine or a private network are refused unless the provider says `allow_private: true`, so a policy cannot point Gantry at internal services by mistake.
+- `/metrics` is only on its own address, and Enterplace warns when that address is not loopback.
+- Provider URLs on this machine or a private network are refused unless the provider says `allow_private: true`, so a policy cannot point Enterplace at internal services by mistake.
 - A caller who is not identified is refused before their body is read.
 
 ## The container
 
-One static binary, no shell, no package manager, no other files. It runs as user `65532`. The policy is mounted read-only; only the keys folder and `/var/lib/gantry` are writable. On Kubernetes the pod also drops every capability, uses a read-only root filesystem and mounts no service account token.
+One static binary, no shell, no package manager, no other files. It runs as user `65532`. The policy is mounted read-only; only the keys folder and `/var/lib/enterplace` are writable. On Kubernetes the pod also drops every capability, uses a read-only root filesystem and mounts no service account token.
 
 ## What is not protected
 
 <Aside type="caution">
-Anyone who can write the policy file or the keys file decides who may do what. Anyone who can write the audit log can rewrite the whole chain consistently. Protect these files like the provider keys, and keep the last hash where the Gantry host cannot write.
+Anyone who can write the policy file or the keys file decides who may do what. Anyone who can write the audit log can rewrite the whole chain consistently. Protect these files like the provider keys, and keep the last hash where the Enterplace host cannot write.
 </Aside>
 
 - **Records removed from the end** leave an unbroken chain. Compare against a last hash kept elsewhere.
 - **Up to a second of records** can be lost on a power failure. They are synced to disk once a second.
 - **The decision record is of the decision.** A usage record follows each answer, and an `attempts` record each retried request. A request that got no answer at all, an `upstream_*` failure, has neither.
-- **Plain HTTP** unless Gantry serves TLS itself or sits behind a TLS proxy. Keys travel in the clear otherwise.
+- **Plain HTTP** unless Enterplace serves TLS itself or sits behind a TLS proxy. Keys travel in the clear otherwise.
 - **Private addresses are judged by what is written.** A public host name that resolves to a private address is not caught.
-- **The key search is a text match.** A Gantry key split across headers or encoded is not found. Such a header still has to pass the name filter.
+- **The key search is a text match.** A Enterplace key split across headers or encoded is not found. Such a header still has to pass the name filter.
 - **A key removed by hand works for up to 2 seconds**, until the reload. Revoking through the console or the admin API stops it at once.
 - **One node, or a store.** Without a [store](/operations/store/), budgets, rate limits, the cache and console sessions live in one process. With one, keys, kill switches and budgets are shared through Postgres; rate limits, the cache and console sessions stay per replica. A restart signs everyone out of the console. Behind a load balancer, the identity provider's callback must reach the node that started the sign-in.
 - **Kill switches across nodes.** In force on the node that sets them before it answers, and on every node serving the same files or the same store within 1 second. With files, two nodes changing switches at the same instant can lose one change; with a store, each change is one statement and none is lost.

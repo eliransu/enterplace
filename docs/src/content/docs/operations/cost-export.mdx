@@ -7,14 +7,14 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-[FOCUS](https://focus.finops.org/) is the FinOps Foundation's open format for cost and usage data. `GET /admin/usage?format=focus` writes the requests Gantry recorded in that format, so a FinOps tool that reads FOCUS files shows LLM spend beside cloud spend.
+[FOCUS](https://focus.finops.org/) is the FinOps Foundation's open format for cost and usage data. `GET /admin/usage?format=focus` writes the requests Enterplace recorded in that format, so a FinOps tool that reads FOCUS files shows LLM spend beside cloud spend.
 
 ```bash
 curl "http://127.0.0.1:8080/admin/usage?format=focus&from=2026-11-01&to=2026-11-30" \
-  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -o gantry-focus.csv
+  -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -o enterplace-focus.csv
 ```
 
-```csv title="gantry-focus.csv"
+```csv title="enterplace-focus.csv"
 BilledCost,BillingAccountId,BillingAccountName,BillingCurrency,BillingPeriodStart,BillingPeriodEnd,ChargeCategory,ChargeClass,ChargeDescription,ChargeFrequency,ChargePeriodStart,ChargePeriodEnd,ConsumedQuantity,ConsumedUnit,ContractedCost,EffectiveCost,InvoiceIssuerName,ListCost,PricingCategory,PricingQuantity,PricingUnit,ProviderName,PublisherName,ServiceCategory,ServiceName,SkuId,SubAccountId,SubAccountName,Tags,x_Requests,x_InputTokens,x_OutputTokens
 30.11,"default","default",USD,2026-11-01T00:00:00Z,2026-12-01T00:00:00Z,Usage,,"1203 requests to gpt-4o-mini at openai",Usage-Based,2026-11-14T00:00:00Z,2026-11-15T00:00:00Z,4510400,Tokens,30.11,30.11,"openai",30.11,Standard,4510400,Tokens,"openai","openai","AI and Machine Learning","openai","gpt-4o-mini","payments","payments","{""team"":""payments""}",1203,3900100,610300
 ```
@@ -27,20 +27,20 @@ The columns are those of FOCUS 1.2, by their column IDs.
 
 | FOCUS column | Value | From |
 |---|---|---|
-| `BilledCost`, `EffectiveCost`, `ListCost`, `ContractedCost` | The same number, in US dollars | The usage records' `cost_usd`, summed: tokens the provider reported at the policy's [prices](/routing/pricing/). Gantry knows one price a model, so the four are equal |
+| `BilledCost`, `EffectiveCost`, `ListCost`, `ContractedCost` | The same number, in US dollars | The usage records' `cost_usd`, summed: tokens the provider reported at the policy's [prices](/routing/pricing/). Enterplace knows one price a model, so the four are equal |
 | `BillingCurrency` | `USD` | Prices are in US dollars |
 | `BillingAccountId`, `BillingAccountName` | The organization, or `default` | The key's `org`. An install without organizations is one account |
 | `SubAccountId`, `SubAccountName` | The team | The key's `team` |
 | `BillingPeriodStart`, `BillingPeriodEnd` | The calendar month of the day, UTC, the end exclusive | The day |
 | `ChargePeriodStart`, `ChargePeriodEnd` | The day, UTC, the end exclusive | The request's time |
 | `ChargeCategory` | `Usage` | Every line is consumption |
-| `ChargeClass` | null | Gantry writes no corrections of earlier periods |
+| `ChargeClass` | null | Enterplace writes no corrections of earlier periods |
 | `ChargeFrequency` | `Usage-Based` | |
 | `ChargeDescription` | `1203 requests to gpt-4o-mini at openai` | |
 | `ConsumedQuantity`, `PricingQuantity` | Input plus output tokens | The usage records |
 | `ConsumedUnit`, `PricingUnit` | `Tokens` | |
 | `PricingCategory` | `Standard` | |
-| `ProviderName`, `PublisherName`, `InvoiceIssuerName` | The provider's name in the policy | Gantry issues no invoice: the provider bills you, so it is named as all three |
+| `ProviderName`, `PublisherName`, `InvoiceIssuerName` | The provider's name in the policy | Enterplace issues no invoice: the provider bills you, so it is named as all three |
 | `ServiceCategory` | `AI and Machine Learning` | |
 | `ServiceName` | The provider's name in the policy | |
 | `SkuId` | The model that answered | After a fallback, the model that served the request |
@@ -48,10 +48,10 @@ The columns are those of FOCUS 1.2, by their column IDs.
 | `x_Requests`, `x_InputTokens`, `x_OutputTokens` | Counts FOCUS has no column for | FOCUS reserves the `x_` prefix for a generator's own columns |
 
 <Aside type="caution">
-The costs are Gantry's count at the policy's prices, not the provider's invoice. A negotiated discount, a committed-use price or a price the policy does not have shows up as a difference between this file and the bill. A model with no price costs `0` here; `gantry_unpriced_requests_total` counts those requests.
+The costs are Enterplace's count at the policy's prices, not the provider's invoice. A negotiated discount, a committed-use price or a price the policy does not have shows up as a difference between this file and the bill. A model with no price costs `0` here; `enterplace_unpriced_requests_total` counts those requests.
 </Aside>
 
-Gantry does not claim FOCUS conformance certification. Columns FOCUS marks for commitment discounts, capacity reservations, regions, resources and invoices are left out: a gateway has no value for them.
+Enterplace does not claim FOCUS conformance certification. Columns FOCUS marks for commitment discounts, capacity reservations, regions, resources and invoices are left out: a gateway has no value for them.
 
 ## Scheduled export
 
@@ -59,8 +59,8 @@ There is no built-in schedule or push to object storage yet. Run the call from a
 
 ```bash
 day=$(date -u -d yesterday +%F)
-curl -fsS "https://gantry.example.com/admin/usage?format=focus&from=$day&to=$day" \
-  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -o "gantry-focus-$day.csv"
+curl -fsS "https://enterplace.example.com/admin/usage?format=focus&from=$day&to=$day" \
+  -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -o "enterplace-focus-$day.csv"
 ```
 
 Give the scheduler a key with a role that has `see_spend` and nothing else.

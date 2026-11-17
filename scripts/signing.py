@@ -4,8 +4,8 @@
   python3 scripts/signing.py verify <dist folder>   checks both signatures and every file's hash
   python3 scripts/signing.py predicate              prints the SLSA v1 predicate alone, for cosign attest
 
-Signing uses an SSH key (`ssh-keygen -Y sign`, namespace gantry-release): the private key comes from
-RELEASE_SIGNING_KEY (its text, as CI passes a secret) or GANTRY_SIGNING_KEY_FILE (a path). Verifying needs only
+Signing uses an SSH key (`ssh-keygen -Y sign`, namespace enterplace-release): the private key comes from
+RELEASE_SIGNING_KEY (its text, as CI passes a secret) or ENTERPLACE_SIGNING_KEY_FILE (a path). Verifying needs only
 ssh-keygen and release/allowed_signers, the public key kept in this repository. provenance.json is an in-toto
 statement with a SLSA v1 predicate: the commit, the build's inputs (Cargo.lock, Dockerfile, rust toolchain),
 SOURCE_DATE_EPOCH, and the CI run that built it. Standard library only.
@@ -13,9 +13,9 @@ SOURCE_DATE_EPOCH, and the CI run that built it. Standard library only.
 import hashlib, json, os, pathlib, platform, subprocess, sys, tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SIGNERS = pathlib.Path(os.environ.get("GANTRY_ALLOWED_SIGNERS", ROOT / "release" / "allowed_signers"))  # the override is for tests
-NAMESPACE = "gantry-release"
-IDENTITY = "release@gantry"
+SIGNERS = pathlib.Path(os.environ.get("ENTERPLACE_ALLOWED_SIGNERS", ROOT / "release" / "allowed_signers"))  # the override is for tests
+NAMESPACE = "enterplace-release"
+IDENTITY = "release@enterplace"
 SIGNED = ["SHA256SUMS", "provenance.json"]
 
 
@@ -48,7 +48,7 @@ def provenance(files):
         "predicateType": "https://slsa.dev/provenance/v1",
         "predicate": {
             "buildDefinition": {
-                "buildType": "https://gantry.dev/release/v1",
+                "buildType": "https://enterplace.dev/release/v1",
                 "externalParameters": {"commit": commit, "ref": env.get("GITHUB_REF", git("rev-parse", "--abbrev-ref", "HEAD"))},
                 "internalParameters": {
                     "SOURCE_DATE_EPOCH": env.get("SOURCE_DATE_EPOCH"),
@@ -71,15 +71,15 @@ def provenance(files):
 def key_file():
     text = os.environ.get("RELEASE_SIGNING_KEY", "")
     if text.strip():
-        f = tempfile.NamedTemporaryFile("w", delete=False, prefix="gantry-signing-")
+        f = tempfile.NamedTemporaryFile("w", delete=False, prefix="enterplace-signing-")
         os.chmod(f.name, 0o600)
         f.write(text if text.endswith("\n") else text + "\n")
         f.close()
         return f.name, True
-    path = os.environ.get("GANTRY_SIGNING_KEY_FILE", "")
+    path = os.environ.get("ENTERPLACE_SIGNING_KEY_FILE", "")
     if path and os.path.exists(path):
         return path, False
-    sys.exit("error: no signing key. Set RELEASE_SIGNING_KEY to the private key's text (the CI secret), or GANTRY_SIGNING_KEY_FILE to its path.")
+    sys.exit("error: no signing key. Set RELEASE_SIGNING_KEY to the private key's text (the CI secret), or ENTERPLACE_SIGNING_KEY_FILE to its path.")
 
 
 def sign(dist):

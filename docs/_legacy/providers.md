@@ -1,6 +1,6 @@
 # Providers
 
-A provider is a server Gantry forwards to. Each one has a `kind`, which says the API it speaks and so which routes reach it:
+A provider is a server Enterplace forwards to. Each one has a `kind`, which says the API it speaks and so which routes reach it:
 
 | `kind` | API | Routes that reach it | Provider key sent as | Tested against |
 |---|---|---|---|---|
@@ -20,13 +20,13 @@ A chat request for a model on an `anthropic` or `bedrock` provider is refused wi
 
 ## Models
 
-Each provider lists the exact model names it serves. A request goes to the one provider that lists its `model`. There is no wildcard and no alias. On `openai` and `anthropic` providers the name the client sends is the name the provider receives, because Gantry forwards the body as it came. On `azure` and `bedrock` the name picks a deployment or a model ID from the provider's map (below), and the body is otherwise unchanged except as described there.
+Each provider lists the exact model names it serves. A request goes to the one provider that lists its `model`. There is no wildcard and no alias. On `openai` and `anthropic` providers the name the client sends is the name the provider receives, because Enterplace forwards the body as it came. On `azure` and `bedrock` the name picks a deployment or a model ID from the provider's map (below), and the body is otherwise unchanged except as described there.
 
 Write model names exactly as the vendor documents them, including any prefix such as `MiniMaxAI/MiniMax-M3` or tag such as `gpt-oss:20b`. In YAML, a list written as `[a, b]` holds names with `/`, `:` and `.` without quotes.
 
 ## How the URL is built
 
-One rule, used by `gantry check` and `gantry serve` alike:
+One rule, used by `enterplace check` and `enterplace serve` alike:
 
 - `url` is `http` or `https`, a host, an optional port and an optional path. No login, query, fragment or spaces. A trailing `/` is ignored.
 - A `url` without a path gets the route as it came: a chat request goes to `<url>/v1/chat/completions`, a messages request with `?beta=true` to `<url>/v1/messages?beta=true`.
@@ -36,7 +36,7 @@ So write the vendor's documented base URL as it is, or the part before `/v1`. Bo
 
 ## OpenAI-compatible servers
 
-Each example below was checked on 2026-11-13 against the vendor's public documentation (URL given), then tested with this version of Gantry: `gantry check` on the policy, and `gantry serve` started on it. Gantry was not run against the vendors themselves: no real provider keys were used. The route Gantry calls was confirmed against a local mock: `POST <url>/v1/chat/completions` with `Authorization: Bearer <key>`.
+Each example below was checked on 2026-11-13 against the vendor's public documentation (URL given), then tested with this version of Enterplace: `enterplace check` on the policy, and `enterplace serve` started on it. Enterplace was not run against the vendors themselves: no real provider keys were used. The route Enterplace calls was confirmed against a local mock: `POST <url>/v1/chat/completions` with `Authorization: Bearer <key>`.
 
 Every example uses this rule, with the model changed:
 
@@ -49,7 +49,7 @@ rules:
 
 ### Base URLs at a glance
 
-Each `url` below is the vendor's documented OpenAI-compatible base URL, read on 2026-11-13 at the page given. All are `kind: openai`. "Routes" lists what the vendor's page says it serves of the three routes Gantry forwards to `openai` providers; Gantry forwards each route either way, and a route the vendor does not serve comes back as its 404.
+Each `url` below is the vendor's documented OpenAI-compatible base URL, read on 2026-11-13 at the page given. All are `kind: openai`. "Routes" lists what the vendor's page says it serves of the three routes Enterplace forwards to `openai` providers; Enterplace forwards each route either way, and a route the vendor does not serve comes back as its 404.
 
 | Vendor | `url` | Key | Routes the vendor documents | Docs read 2026-11-13 |
 |---|---|---|---|---|
@@ -63,15 +63,15 @@ Each `url` below is the vendor's documented OpenAI-compatible base URL, read on 
 | vLLM | `http://127.0.0.1:8000/v1` | none, or `key_env` with `vllm serve --api-key` | chat, Responses, embeddings | https://docs.vllm.ai/en/latest/serving/online_serving/ |
 | LM Studio | `http://127.0.0.1:1234/v1` | none, with `allow_private: true` | chat, Responses, embeddings | https://lmstudio.ai/docs/app/api/endpoints/openai |
 
-A `url` with a path gets the route after `/v1` (see above), so `https://api.fireworks.ai/inference/v1` reaches `https://api.fireworks.ai/inference/v1/chat/completions`. Tested against local mocks only: a path prefix (test `an_openai_compatible_server_on_a_path_prefix_gets_the_route_after_v1`) and a loopback server with no key, started from a policy file (`a_local_server_without_a_key_is_served_from_a_policy_file`). Gantry was not run against the vendors.
+A `url` with a path gets the route after `/v1` (see above), so `https://api.fireworks.ai/inference/v1` reaches `https://api.fireworks.ai/inference/v1/chat/completions`. Tested against local mocks only: a path prefix (test `an_openai_compatible_server_on_a_path_prefix_gets_the_route_after_v1`) and a loopback server with no key, started from a policy file (`a_local_server_without_a_key_is_served_from_a_policy_file`). Enterplace was not run against the vendors.
 
-A provider of kind `openai` whose `url` is on this machine or a private network (`allow_private: true`) may leave out `key_env`: no `Authorization` header is sent to it, and the caller's Gantry key never is. Every other provider needs `key_env`.
+A provider of kind `openai` whose `url` is on this machine or a private network (`allow_private: true`) may leave out `key_env`: no `Authorization` header is sent to it, and the caller's Enterplace key never is. Every other provider needs `key_env`.
 
 ### Works with this version
 
 #### Ollama
 
-Docs: https://docs.ollama.com/api/openai-compatibility. Base URL `http://localhost:11434/v1/`. The local server ignores the key, so Gantry sends none.
+Docs: https://docs.ollama.com/api/openai-compatibility. Base URL `http://localhost:11434/v1/`. The local server ignores the key, so Enterplace sends none.
 
 ```yaml
 providers:
@@ -124,13 +124,13 @@ providers:
     models: [mistral-small-latest, mistral-large-latest]
 ```
 
-### Accepted by Gantry, path not confirmed in current vendor docs
+### Accepted by Enterplace, path not confirmed in current vendor docs
 
-These start and forward, but the vendor's current page does not show the exact path Gantry calls. Send one request through before relying on them.
+These start and forward, but the vendor's current page does not show the exact path Enterplace calls. Send one request through before relying on them.
 
 #### DeepSeek
 
-Docs: https://api-docs.deepseek.com/. Base URL `https://api.deepseek.com`, and the page's example posts to `https://api.deepseek.com/chat/completions`, without `/v1`. Gantry calls `https://api.deepseek.com/v1/chat/completions`; the current page does not say whether that path is served. Models listed there: `deepseek-flash`, `deepseek-v4-pro`.
+Docs: https://api-docs.deepseek.com/. Base URL `https://api.deepseek.com`, and the page's example posts to `https://api.deepseek.com/chat/completions`, without `/v1`. Enterplace calls `https://api.deepseek.com/v1/chat/completions`; the current page does not say whether that path is served. Models listed there: `deepseek-flash`, `deepseek-v4-pro`.
 
 ```yaml
 providers:
@@ -143,7 +143,7 @@ providers:
 
 #### xAI
 
-Docs: https://docs.x.ai/docs/api-reference and https://docs.x.ai/docs/guides/chat. Base URL `https://api.x.ai/v1`. The current docs lead with the Responses API (`POST /v1/responses`), which Gantry forwards to `openai` providers, and mention chat completions without giving its path. Gantry calls `https://api.x.ai/v1/chat/completions`. Model in the examples: `grok-4.7`.
+Docs: https://docs.x.ai/docs/api-reference and https://docs.x.ai/docs/guides/chat. Base URL `https://api.x.ai/v1`. The current docs lead with the Responses API (`POST /v1/responses`), which Enterplace forwards to `openai` providers, and mention chat completions without giving its path. Enterplace calls `https://api.x.ai/v1/chat/completions`. Model in the examples: `grok-4.7`.
 
 ```yaml
 providers:
@@ -156,11 +156,11 @@ providers:
 
 ### Base URLs with a path
 
-Each base URL was checked on 2026-11-13 against the vendor's documentation, and `gantry check` and `gantry serve` were run on each example. The path Gantry calls was confirmed against a local mock with the same path (test `a_url_with_a_path_reaches_the_route_after_v1`). Gantry was not run against the vendors.
+Each base URL was checked on 2026-11-13 against the vendor's documentation, and `enterplace check` and `enterplace serve` were run on each example. The path Enterplace calls was confirmed against a local mock with the same path (test `a_url_with_a_path_reaches_the_route_after_v1`). Enterplace was not run against the vendors.
 
 #### Groq
 
-Docs: https://console.groq.com/docs/openai. Base URL `https://api.groq.com/openai/v1`. Gantry calls `https://api.groq.com/openai/v1/chat/completions`. Models: Groq's model IDs, as listed on its Models page.
+Docs: https://console.groq.com/docs/openai. Base URL `https://api.groq.com/openai/v1`. Enterplace calls `https://api.groq.com/openai/v1/chat/completions`. Models: Groq's model IDs, as listed on its Models page.
 
 ```yaml
 providers:
@@ -173,7 +173,7 @@ providers:
 
 #### OpenRouter
 
-Docs: https://openrouter.ai/docs/quickstart. Base URL `https://openrouter.ai/api/v1`. Gantry calls `https://openrouter.ai/api/v1/chat/completions`. Models are `vendor/model`, for example `anthropic/claude-sonnet-latest`; a leading `~` marks a latest alias, and YAML needs that name in quotes.
+Docs: https://openrouter.ai/docs/quickstart. Base URL `https://openrouter.ai/api/v1`. Enterplace calls `https://openrouter.ai/api/v1/chat/completions`. Models are `vendor/model`, for example `anthropic/claude-sonnet-latest`; a leading `~` marks a latest alias, and YAML needs that name in quotes.
 
 ```yaml
 providers:
@@ -199,7 +199,7 @@ providers:
 
 #### Gemini (OpenAI-compatible)
 
-Docs: https://aistudio.google.com/docs/openai (moved from https://ai.google.dev/gemini-api/docs/openai). Base URL `https://generativelanguage.googleapis.com/v1beta/openai/`. Gantry calls `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, with the key in `Authorization: Bearer`.
+Docs: https://aistudio.google.com/docs/openai (moved from https://ai.google.dev/gemini-api/docs/openai). Base URL `https://generativelanguage.googleapis.com/v1beta/openai/`. Enterplace calls `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, with the key in `Authorization: Bearer`.
 
 ```yaml
 providers:
@@ -210,7 +210,7 @@ providers:
     models: [gemini-4-hydrogen]
 ```
 
-The same rule fixes DeepSeek's path, whose page posts to `https://api.deepseek.com/chat/completions` without `/v1`: write `url: https://api.deepseek.com/v1` and Gantry calls `https://api.deepseek.com/v1/chat/completions`. Whether DeepSeek serves that path is still not confirmed by its current page.
+The same rule fixes DeepSeek's path, whose page posts to `https://api.deepseek.com/chat/completions` without `/v1`: write `url: https://api.deepseek.com/v1` and Enterplace calls `https://api.deepseek.com/v1/chat/completions`. Whether DeepSeek serves that path is still not confirmed by its current page.
 
 For tool calls, system instructions and Gemini's own usage counts, the native `gemini` kind below is the better choice.
 
@@ -225,7 +225,7 @@ providers:
     models: [gemini-2.5-flash, gemini-2.5-pro]
 ```
 
-Callers use the chat route, `POST /v1/chat/completions`, as for any OpenAI model. Gantry translates the request to Gemini's generateContent body and sends it to:
+Callers use the chat route, `POST /v1/chat/completions`, as for any OpenAI model. Enterplace translates the request to Gemini's generateContent body and sends it to:
 
 ```text
 POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
@@ -248,9 +248,9 @@ A `url` without a path gets `/v1beta`. What is translated (formats read 2026-11-
 
 The answer comes back as a `chat.completion` (text, `tool_calls`, `finish_reason` from Gemini's `finishReason`: `STOP` is `stop`, or `tool_calls` when the model called a function; `MAX_TOKENS` is `length`; the safety reasons are `content_filter`) with `usage` from `usageMetadata`. A stream comes back as `chat.completion.chunk` events ending in `data: [DONE]`, with a usage chunk when the request asked for `stream_options.include_usage`. A Gemini error comes back in OpenAI's error shape, its `status` (such as `RESOURCE_EXHAUSTED`) as the type.
 
-A field that cannot be carried across is refused with `untranslatable`, naming it, as for the messages translation: for example `logprobs`, `n` above 1, `parallel_tool_calls: false`, `reasoning_effort`, audio, a tool with `strict: true`, or a system message after the conversation has started. Gemini's finish reasons that mean the answer failed, such as `MALFORMED_FUNCTION_CALL`, are reported the same way. The fields dropped on purpose (`user`, thought parts and others) are listed with their reasons in `gantry_core::gemini::SAFE_TO_DROP`.
+A field that cannot be carried across is refused with `untranslatable`, naming it, as for the messages translation: for example `logprobs`, `n` above 1, `parallel_tool_calls: false`, `reasoning_effort`, audio, a tool with `strict: true`, or a system message after the conversation has started. Gemini's finish reasons that mean the answer failed, such as `MALFORMED_FUNCTION_CALL`, are reported the same way. The fields dropped on purpose (`user`, thought parts and others) are listed with their reasons in `enterplace_core::gemini::SAFE_TO_DROP`.
 
-Usage records read Gemini's `usageMetadata`: prompt tokens are `promptTokenCount` plus `toolUsePromptTokenCount`, less `cachedContentTokenCount` (counted as cache reads); output tokens are `candidatesTokenCount` plus `thoughtsTokenCount`. Gemini prices are built in from the LiteLLM table (`gantry prices gemini-2.5-pro`); `prices:` overrides them (see [Policy](policy.html)).
+Usage records read Gemini's `usageMetadata`: prompt tokens are `promptTokenCount` plus `toolUsePromptTokenCount`, less `cachedContentTokenCount` (counted as cache reads); output tokens are `candidatesTokenCount` plus `thoughtsTokenCount`. Gemini prices are built in from the LiteLLM table (`enterplace prices gemini-2.5-pro`); `prices:` overrides them (see [Policy](policy.html)).
 
 The request is checked by the guardrails, cached and counted against budgets in its chat form, then translated as it is sent, so a masked message is masked in what Gemini receives. A `gemini` provider can fall back to another `gemini` or a `vertex` provider, and to no other kind.
 
@@ -269,7 +269,7 @@ providers:
 
 The same translation as `gemini`, sent to `<url>/models/<model>:generateContent` (or `:streamGenerateContent?alt=sse`) with `Authorization: Bearer <token>`, the form in https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/function-calling (read 2026-11-13). The `url` must end in `/publishers/google`.
 
-Limit: `key_env` holds an OAuth access token, which Google issues for about an hour, and Gantry reads it at start. Gantry does not sign in with a service account itself, so a token that expires means a restart with a new one. Tested against a local mock only.
+Limit: `key_env` holds an OAuth access token, which Google issues for about an hour, and Enterplace reads it at start. Enterplace does not sign in with a service account itself, so a token that expires means a restart with a new one. Tested against a local mock only.
 
 ## Vertex AI (Claude)
 
@@ -282,7 +282,7 @@ providers:
     models: [claude-sonnet-4-6, claude-haiku-4-5]
 ```
 
-Claude Code (or any messages client) reaches Claude on Vertex AI through Gantry's `POST /v1/messages`. Gantry sends the messages body to `<url>/models/<model>:rawPredict`, or `:streamRawPredict` when the body says `"stream": true`, with `model` removed (it is in the path) and `"anthropic_version": "vertex-2023-10-16"` added, and `Authorization: Bearer <token>`, the form in https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/use-claude (read 2026-11-13). The answer is Anthropic's own format, streamed or whole, and goes back unchanged. The `url` must end in `/publishers/anthropic`. `accept_chat: true` lets chat clients reach it too, translated, as for `anthropic`.
+Claude Code (or any messages client) reaches Claude on Vertex AI through Enterplace's `POST /v1/messages`. Enterplace sends the messages body to `<url>/models/<model>:rawPredict`, or `:streamRawPredict` when the body says `"stream": true`, with `model` removed (it is in the path) and `"anthropic_version": "vertex-2023-10-16"` added, and `Authorization: Bearer <token>`, the form in https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/use-claude (read 2026-11-13). The answer is Anthropic's own format, streamed or whole, and goes back unchanged. The `url` must end in `/publishers/anthropic`. `accept_chat: true` lets chat clients reach it too, translated, as for `anthropic`.
 
 Vertex AI names models without Anthropic's date suffix (`claude-sonnet-4-6`). When Claude Code sends another name, map it with an alias: `aliases: [{ name: claude-sonnet-5-5, deployments: [{ provider: claude-vertex, model: claude-sonnet-4-6 }] }]`.
 
@@ -340,10 +340,10 @@ providers:
 
 ```sh
 export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...   # and AWS_SESSION_TOKEN for temporary credentials
-gantry serve gantry.policy.yaml
+enterplace serve enterplace.policy.yaml
 ```
 
-The model IDs above are examples: use the IDs your account has access to, from the Bedrock console. Gantry reads the access key from its own environment, as the AWS SDKs do; it never runs the `aws` command and reads no AWS config file. A bedrock provider takes no `key_env`. `url` is optional and defaults to `https://bedrock-runtime.<region>.amazonaws.com`; set it for a VPC endpoint.
+The model IDs above are examples: use the IDs your account has access to, from the Bedrock console. Enterplace reads the access key from its own environment, as the AWS SDKs do; it never runs the `aws` command and reads no AWS config file. A bedrock provider takes no `key_env`. `url` is optional and defaults to `https://bedrock-runtime.<region>.amazonaws.com`; set it for a VPC endpoint.
 
 A request on `/v1/messages` for `claude-sonnet-5-5` goes to InvokeModel, or to InvokeModelWithResponseStream when the body says `"stream": true`:
 
@@ -352,11 +352,11 @@ POST https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-s
 POST https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-5-5-v1%3A0/invoke-with-response-stream
 ```
 
-The body is changed as Bedrock's Anthropic documentation says (https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html, read 2026-11-13): `model` and `stream` are removed (the path carries both), `anthropic_version: bedrock-2023-05-31` is added, and the values of the `anthropic-beta` header become the `anthropic_beta` list. Every other field goes as it came. The request is signed with AWS Signature Version 4 (service `bedrock`), implemented in Gantry and tested against AWS's published test vectors.
+The body is changed as Bedrock's Anthropic documentation says (https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html, read 2026-11-13): `model` and `stream` are removed (the path carries both), `anthropic_version: bedrock-2023-05-31` is added, and the values of the `anthropic-beta` header become the `anthropic_beta` list. Every other field goes as it came. The request is signed with AWS Signature Version 4 (service `bedrock`), implemented in Enterplace and tested against AWS's published test vectors.
 
-Bedrock streams its answer as an AWS event stream. Gantry checks each message's checksums and turns each `chunk` into the Anthropic server-sent event it holds, so Claude Code and Anthropic's SDKs read it unchanged. A Bedrock error, streamed or not, reaches the caller in Anthropic's error shape with Bedrock's message, for example `{"type":"error","error":{"type":"invalid_request_error","message":"Amazon Bedrock ValidationException: ..."}}`.
+Bedrock streams its answer as an AWS event stream. Enterplace checks each message's checksums and turns each `chunk` into the Anthropic server-sent event it holds, so Claude Code and Anthropic's SDKs read it unchanged. A Bedrock error, streamed or not, reaches the caller in Anthropic's error shape with Bedrock's message, for example `{"type":"error","error":{"type":"invalid_request_error","message":"Amazon Bedrock ValidationException: ..."}}`.
 
-Limits: `/v1/messages/count_tokens` is refused with `wrong_route` for a bedrock model (Gantry does not call Bedrock's CountTokens). Betas are passed on as sent: a beta Bedrock does not offer comes back as Bedrock's 400. Tested against a local mock only: no AWS account was used.
+Limits: `/v1/messages/count_tokens` is refused with `wrong_route` for a bedrock model (Enterplace does not call Bedrock's CountTokens). Betas are passed on as sent: a beta Bedrock does not offer comes back as Bedrock's 400. Tested against a local mock only: no AWS account was used.
 
 ## Retries and fallbacks
 
@@ -382,7 +382,7 @@ Before the first byte of an answer reaches the caller, these are tried again: a 
 
 Once any byte of an answer has gone to the caller, nothing is tried again: a stream that breaks halfway breaks for the caller. A caller's own error, any 4xx other than 429, is never retried and never sent to the fallback.
 
-The fallback must take the same requests (`anthropic` and `bedrock` take messages, `openai` and `azure` take chat completions, `gemini` and `vertex` take translated chat completions) and serve each model of the provider it backs: under the same name on `openai` and `anthropic`, or through its `deployments` or `model_ids` on `azure` and `bedrock`. It does not list those models in its `models`: a model is still served by one provider. `gantry check` refuses a fallback that does not exist, names itself, speaks the other API or has no name for one of the models.
+The fallback must take the same requests (`anthropic` and `bedrock` take messages, `openai` and `azure` take chat completions, `gemini` and `vertex` take translated chat completions) and serve each model of the provider it backs: under the same name on `openai` and `anthropic`, or through its `deployments` or `model_ids` on `azure` and `bedrock`. It does not list those models in its `models`: a model is still served by one provider. `enterplace check` refuses a fallback that does not exist, names itself, speaks the other API or has no name for one of the models.
 
 The request record is written before anything is sent, so it names the first provider. When more than one try was made, a second record with the same `id` follows it:
 
@@ -390,11 +390,11 @@ The request record is written before anything is sent, so it names the first pro
 {"n":12,"event":"attempts","id":"01M7...","time":"2026-11-13T03:30:02.114Z","attempts":[{"provider":"anthropic","outcome":"529"},{"provider":"anthropic","outcome":"529"},{"provider":"anthropic","outcome":"529"},{"provider":"bedrock","outcome":"200"}],"prev":"...","hash":"..."}
 ```
 
-`outcome` is the provider's status, or the refusal code for a try that got no answer (`upstream_unreachable`, `upstream_failed`, `upstream_timeout`). `gantry audit verify` counts these as attempts records. The request's usage record follows when the answer ends, and names the provider that answered. `retries`, `fallback`, `accept_chat`, `deployments` and `model_ids` change without a restart; `region` and `api_version` need one.
+`outcome` is the provider's status, or the refusal code for a try that got no answer (`upstream_unreachable`, `upstream_failed`, `upstream_timeout`). `enterplace audit verify` counts these as attempts records. The request's usage record follows when the answer ends, and names the provider that answered. `retries`, `fallback`, `accept_chat`, `deployments` and `model_ids` change without a restart; `region` and `api_version` need one.
 
 ## Aliases and load balancing
 
-An alias is a model name callers send that Gantry serves from one or more deployments: a provider and the model it is sent to there. It is listed under `aliases:` at the top level of the policy file.
+An alias is a model name callers send that Enterplace serves from one or more deployments: a provider and the model it is sent to there. It is listed under `aliases:` at the top level of the policy file.
 
 ```yaml
 aliases:
@@ -409,10 +409,10 @@ aliases:
 ```
 
 - **Rules decide on the name the caller sent.** A rule lists `smart`, not each deployment, and `/v1/models` lists `smart` to whoever the rule allows. An admin who wants a person to reach only one deployment gives them a model name, not the alias. This keeps one decision per request and keeps a policy readable when deployments change.
-- **Picking.** `round_robin` takes the deployments in turn, each as often as its `weight` (1 to 1000). `least_busy` takes the one with the fewest requests in flight through this Gantry process, counted until the answer has been passed on. The other deployments follow in the order written.
+- **Picking.** `round_robin` takes the deployments in turn, each as often as its `weight` (1 to 1000). `least_busy` takes the one with the fewest requests in flight through this Enterplace process, counted until the answer has been passed on. The other deployments follow in the order written.
 - **Cooldown.** A deployment that fails (no connection, a timeout, a 429 or a 5xx) is passed over for `cooldown_seconds`, and the request goes on to the next deployment at once, with each provider's own `retries`. A deployment that answers is in turn again. When every deployment is cooling down, they are still tried, in order: an alias never refuses a request only because each deployment failed once. Cooldown and the in-flight count are kept in memory, per process, across reloads.
 - **The model sent.** The `model` of a deployment is the name sent to that provider: the JSON body's `model` is replaced with it (the form field `model` for an audio upload), and nothing else in the body changes. It need not be listed in the provider's `models` (listing it also lets callers ask for it by name). For `azure` and `bedrock` it must be a key of the provider's `deployments` or `model_ids`.
-- **Same API.** All deployments of an alias speak the same API (`openai` and `azure`, `anthropic` and `bedrock`, `gemini` and `vertex`); `gantry check` refuses a mix, an unknown provider, a missing map entry, a weight out of range and an alias that has the name of a model a provider lists.
+- **Same API.** All deployments of an alias speak the same API (`openai` and `azure`, `anthropic` and `bedrock`, `gemini` and `vertex`); `enterplace check` refuses a mix, an unknown provider, a missing map entry, a weight out of range and an alias that has the name of a model a provider lists.
 - **Named fallbacks.** When a deployment answers 4xx with a context window error (OpenAI's `context_length_exceeded`, Anthropic's "prompt is too long", or a message that names the maximum context length), the request is sent to `context_window_fallback`. When it answers with a content policy error (`content_policy_violation` or Azure's `content_filter`), it goes to `content_policy_fallback`. Each names a model a provider serves or another alias, taking the same API and translation as the request; its own fallbacks are not followed. The error answer is read whole only when the alias names such a fallback. Any other 4xx goes to the caller unchanged.
 - **Records.** The decision record keeps `model` as the alias the caller sent and the rule decided on, `provider` as the first deployment's provider, and adds `"alias": "smart"` and `"deployment": "openai-east/gpt-4o"`. When more than one deployment was tried, the `attempts` record names each as `provider/model`. The usage record names the provider and model that answered, and the answer is charged at that model's price; a budget reserves at the price of the first deployment picked. A rule with a budget that names an alias needs a price for each deployment's model.
 
@@ -434,17 +434,17 @@ A provider of kind `anthropic` or `bedrock` may say `accept_chat: true`. A chat 
 A field that cannot be carried across is refused with `untranslatable`, naming it, and never dropped. For example `"n": 2`:
 
 ```text
-Refused (untranslatable): The parameter "n" set to 2 has no equivalent in Anthropic's messages API, so Gantry cannot translate it. Remove it, or use a model whose provider speaks the client's format. Decision 01M7....
+Refused (untranslatable): The parameter "n" set to 2 has no equivalent in Anthropic's messages API, so Enterplace cannot translate it. Remove it, or use a model whose provider speaks the client's format. Decision 01M7....
 ```
 
-The translation is decided before the record is written, so an untranslatable request is a recorded refusal. The record of a translated request says `"translated": true`. The few fields dropped on purpose (such as `seed` and thinking blocks) are listed with their reasons in `gantry_core::translate::SAFE_TO_DROP`. Without `accept_chat`, chat requests for these models are refused with `wrong_route` as before. Messages requests are translated the other way only for a provider with `accept_messages: true`, below.
+The translation is decided before the record is written, so an untranslatable request is a recorded refusal. The record of a translated request says `"translated": true`. The few fields dropped on purpose (such as `seed` and thinking blocks) are listed with their reasons in `enterplace_core::translate::SAFE_TO_DROP`. Without `accept_chat`, chat requests for these models are refused with `wrong_route` as before. Messages requests are translated the other way only for a provider with `accept_messages: true`, below.
 
 ## Translation for Claude Code
 
 A provider of kind `openai`, `azure`, `gemini` or `vertex` may say `accept_messages: true`. A messages request (Claude Code, an Anthropic SDK) for one of its models is then translated to a chat completions request, sent (to Gemini and Vertex AI translated once more, to generateContent), and its answer translated back to the messages format:
 
 - A whole answer becomes a `message`: text and `tool_use` blocks (tool call arguments parsed to `input`), `stop_reason` from `finish_reason` (`stop` to `end_turn`, `length` to `max_tokens`, `tool_calls` to `tool_use`, `content_filter` or a refusal to `refusal`), and usage.
-- A stream becomes Anthropic's events, in the order Claude Code reads them: `message_start`, then for each text or tool call `content_block_start`, `content_block_delta` (`text_delta`, or `input_json_delta` for tool arguments) and `content_block_stop`, then `message_delta` with `stop_reason` and usage, then `message_stop`. Gantry asks the provider for `stream_options.include_usage`, so the usage record and `message_delta` carry the provider's counts. A provider error in the stream becomes an `error` event; a stream cut before `data: [DONE]` is broken off, not ended as if complete.
+- A stream becomes Anthropic's events, in the order Claude Code reads them: `message_start`, then for each text or tool call `content_block_start`, `content_block_delta` (`text_delta`, or `input_json_delta` for tool arguments) and `content_block_stop`, then `message_delta` with `stop_reason` and usage, then `message_stop`. Enterplace asks the provider for `stream_options.include_usage`, so the usage record and `message_delta` carry the provider's counts. A provider error in the stream becomes an `error` event; a stream cut before `data: [DONE]` is broken off, not ended as if complete.
 - Errors come back in Anthropic's error shape, the type chosen by status (429 is `rate_limit_error`), with the message `Provider "<name>" answered <status>: <the provider's message> Decision <id>.`, the decision ID in `decision`, the provider's own `Retry-After`, and `x-should-retry: true` for 408, 409, 429 and 5xx (`false` otherwise), so Claude Code retries only what may clear.
 - System prompts, images (base64 or URL), tools and tool results, `tool_choice`, `stop_sequences`, `temperature`, `top_p`, `metadata.user_id` (sent as `safety_identifier`; one longer than OpenAI's 64 characters, such as Claude Code's, is sent as its SHA-256) and `output_config.effort` (sent as `reasoning_effort`) are carried over.
 
@@ -457,7 +457,7 @@ A provider of kind `openai`, `azure`, `gemini` or `vertex` may say `accept_messa
     accept_messages: true
 ```
 
-What is refused with `untranslatable`, by name: thinking of type `enabled` (adaptive thinking is let through: the model decides), server tools (web search, code execution), `context_management` edits other than clearing thinking, document and other non-text tool result blocks, and any field Gantry does not know. Dropped on purpose, with reasons in `SAFE_TO_DROP`: `cache_control`, thinking blocks, `defer_loading` on tools, `context_management` that only clears thinking, and the `anthropic-*` headers. `count_tokens` for these models is refused with `wrong_route`.
+What is refused with `untranslatable`, by name: thinking of type `enabled` (adaptive thinking is let through: the model decides), server tools (web search, code execution), `context_management` edits other than clearing thinking, document and other non-text tool result blocks, and any field Enterplace does not know. Dropped on purpose, with reasons in `SAFE_TO_DROP`: `cache_control`, thinking blocks, `defer_loading` on tools, `context_management` that only clears thinking, and the `anthropic-*` headers. `count_tokens` for these models is refused with `wrong_route`.
 
 Limit: Claude Code sends `output_config.effort` (as `reasoning_effort`) on every request. A model that is not a reasoning model may refuse that field; the provider's 400 then reaches Claude Code as it was given. Tested with the real Claude Code CLI (2.1.323) against a mock OpenAI chat server, including a Bash tool call and its result; never against a real OpenAI, Gemini or Vertex model.
 
@@ -467,7 +467,7 @@ Limit: Claude Code sends `output_config.effort` (as `reasoning_effort`) on every
 
 Usage records read the Responses `usage` (`input_tokens` less `input_tokens_details.cached_tokens` and `cache_write_tokens`, which are counted apart, and `output_tokens`), from the whole answer or, for a stream, from the `response` in its `response.completed` event (or `response.incomplete` or `response.failed`). Embeddings report `usage.prompt_tokens`. A Responses request's `max_output_tokens` sizes its budget reservation. Formats read 2026-11-13: https://developers.openai.com/api/reference/resources/responses/methods/create, https://developers.openai.com/api/reference/resources/responses/streaming-events, https://developers.openai.com/api/reference/resources/embeddings/methods/create.
 
-Not built: the other Responses routes (`GET` and `DELETE /v1/responses/{id}`, input items, cancel), which are refused with `unknown_route`. A request with `previous_response_id` or `store: true` leaves the conversation stored at OpenAI under Gantry's provider key: the record shows the request, and Gantry does not track what the provider stored.
+Not built: the other Responses routes (`GET` and `DELETE /v1/responses/{id}`, input items, cancel), which are refused with `unknown_route`. A request with `previous_response_id` or `store: true` leaves the conversation stored at OpenAI under Enterplace's provider key: the record shows the request, and Enterplace does not track what the provider stored.
 
 ## Images, audio, moderations and rerank
 
@@ -483,7 +483,7 @@ These routes go to the `openai` provider that serves the request's `model` (or a
 
 Each is governed as chat requests are: identified, decided by the rule for its `model`, recorded before it is sent, rate limited, counted against budgets and tokens per minute, retried and sent to fallbacks. A request with no `model` is refused with `unreadable_request`, including a moderation request, which OpenAI would otherwise send to its default model. A form with no `model` field, or with two, is refused the same way.
 
-The form of a transcription is parsed strictly, so the field Gantry decides on is the one every standard parser reads: the body starts with its boundary, every other boundary starts a line, each part has one Content-Disposition with plain `name="..."` and `filename="..."` parameters, and the content type has one boundary. A form with an extended `name*=` parameter, spaces around `=`, a backslash or single quotes in a parameter, a folded header line, or bytes after the closing boundary is refused with `unreadable_request`.
+The form of a transcription is parsed strictly, so the field Enterplace decides on is the one every standard parser reads: the body starts with its boundary, every other boundary starts a line, each part has one Content-Disposition with plain `name="..."` and `filename="..."` parameters, and the content type has one boundary. A form with an extended `name*=` parameter, spaces around `=`, a backslash or single quotes in a parameter, a folded header line, or bytes after the closing boundary is refused with `unreadable_request`.
 
 Under a rule with guardrails, a transcription's text fields (`prompt` and the like) are checked as any text is, and what a mask changes is written back into the form; the audio itself is not read. A form with no text field is forwarded, and its record says `"guardrails": "not_run: the body is audio"` rather than that the guardrails found nothing. A rule whose guardrails must see what is spoken should not be given transcription models.
 
@@ -497,7 +497,7 @@ Not built: image edits and variations, audio translations, batches and files. Th
 
 - The body, byte for byte, except for a translated request (Gemini, Vertex AI, `accept_chat`), a request to Bedrock, and a request for an alias, whose `model` is replaced with the deployment's, as described above.
 - The path, and only the query parameters the route allows, with an allowed value (`beta=true` or `beta=false` on the messages routes, none on chat, Responses and embeddings).
-- The caller's headers, except: hop-by-hop headers, `Host`, `Cookie`, any header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), any header starting with `x-amz`, and any header that carries the caller's Gantry key.
+- The caller's headers, except: hop-by-hop headers, `Host`, `Cookie`, any header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), any header starting with `x-amz`, and any header that carries the caller's Enterplace key.
 - The provider key, in the header its kind expects, or the AWS signature for Bedrock, or nothing for a local `openai` provider without `key_env`.
 
-The provider's answer, including its errors and streamed events, returns unchanged except for hop-by-hop headers, with `X-Gantry-Decision` and a `Server-Timing: gantry;dur=<ms>` entry added. Bedrock's answers and translated answers are converted as described above.
+The provider's answer, including its errors and streamed events, returns unchanged except for hop-by-hop headers, with `X-Enterplace-Decision` and a `Server-Timing: enterplace;dur=<ms>` entry added. Bedrock's answers and translated answers are converted as described above.

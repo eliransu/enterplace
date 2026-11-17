@@ -1,12 +1,12 @@
-// LangChain.js against a local Gantry: run by scripts/langchain_check.py --js, which sets GANTRY_URL and GANTRY_KEY.
+// LangChain.js against a local Enterplace: run by scripts/langchain_check.py --js, which sets ENTERPLACE_URL and ENTERPLACE_KEY.
 import assert from "node:assert/strict";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 
-const base = process.env.GANTRY_URL;
-const key = process.env.GANTRY_KEY;
+const base = process.env.ENTERPLACE_URL;
+const key = process.env.ENTERPLACE_KEY;
 
 const getWeather = tool(async () => "sunny", {
   name: "get_weather",

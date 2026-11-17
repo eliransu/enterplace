@@ -11,7 +11,7 @@
   "parameters": {
     "name": {
       "type": "string",
-      "defaultValue": "gantry",
+      "defaultValue": "enterplace",
       "metadata": {
         "description": "Name prefix for every resource."
       }
@@ -43,9 +43,9 @@
     },
     "image": {
       "type": "string",
-      "defaultValue": "ghcr.io/eliransu/gantry:latest",
+      "defaultValue": "ghcr.io/eliransu/enterplace:latest",
       "metadata": {
-        "description": "The Gantry image. Pin a version for anything that lasts."
+        "description": "The Enterplace image. Pin a version for anything that lasts."
       }
     },
     "databasePassword": {
@@ -83,7 +83,7 @@
       },
       "properties": {
         "version": "16",
-        "administratorLogin": "gantry",
+        "administratorLogin": "enterplace",
         "administratorLoginPassword": "[parameters('databasePassword')]",
         "storage": {
           "storageSizeGB": 32
@@ -103,7 +103,7 @@
     {
       "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
       "apiVersion": "2024-08-01",
-      "name": "[format('{0}/{1}', format('{0}-db-{1}', parameters('name'), variables('suffix')), 'gantry')]",
+      "name": "[format('{0}/{1}', format('{0}-db-{1}', parameters('name'), variables('suffix')), 'enterplace')]",
       "dependsOn": [
         "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-db-{1}', parameters('name'), variables('suffix')))]"
       ]
@@ -154,7 +154,7 @@
           "secrets": [
             {
               "name": "database-url",
-              "value": "[format('postgres://gantry:{0}@{1}:5432/gantry', parameters('databasePassword'), reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-db-{1}', parameters('name'), variables('suffix'))), '2024-08-01').fullyQualifiedDomainName)]"
+              "value": "[format('postgres://enterplace:{0}@{1}:5432/enterplace', parameters('databasePassword'), reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-db-{1}', parameters('name'), variables('suffix'))), '2024-08-01').fullyQualifiedDomainName)]"
             },
             {
               "name": "provider-key",
@@ -165,7 +165,7 @@
         "template": {
           "containers": [
             {
-              "name": "gantry",
+              "name": "enterplace",
               "image": "[parameters('image')]",
               "resources": {
                 "cpu": "[json('0.5')]",
@@ -203,7 +203,7 @@
         "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/firewallRules', format('{0}-db-{1}', parameters('name'), variables('suffix')), 'AllowAzureServices')]",
         "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-db-{1}', parameters('name'), variables('suffix')))]",
         "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env-{1}', parameters('name'), variables('suffix')))]",
-        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/databases', format('{0}-db-{1}', parameters('name'), variables('suffix')), 'gantry')]"
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/databases', format('{0}-db-{1}', parameters('name'), variables('suffix')), 'enterplace')]"
       ]
     }
   ],
@@ -218,7 +218,7 @@
     },
     "adminKeyLogs": {
       "type": "string",
-      "value": "[format('az containerapp logs show --name {0} --resource-group {1} --type console --tail 300 | grep GANTRY_KEY', parameters('name'), resourceGroup().name)]"
+      "value": "[format('az containerapp logs show --name {0} --resource-group {1} --type console --tail 300 | grep ENTERPLACE_KEY', parameters('name'), resourceGroup().name)]"
     }
   }
 }

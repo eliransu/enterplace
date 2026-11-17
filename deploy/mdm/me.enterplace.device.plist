@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- LaunchDaemon for the Enterplace device agent. Runs as root so it can write Claude Code's managed settings.
+     The enrolment token is read from /Library/Application Support/Enterplace/device-token (see README.md).
+     Replace CONTROL_PLANE_URL before packaging, or let build-pkg.sh do it. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>me.enterplace.device</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/enterplace</string>
+    <string>device</string>
+    <string>--control-plane</string>
+    <string>CONTROL_PLANE_URL</string>
+    <string>--interval</string>
+    <string>300</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>StandardOutPath</key>
+  <string>/var/log/enterplace-device.log</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/enterplace-device.log</string>
+</dict>
+</plist>

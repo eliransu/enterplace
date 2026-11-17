@@ -7,11 +7,11 @@ sidebar:
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A transform rewrites the whole request before Gantry checks and sends it, or the whole answer before Gantry checks and returns it: add a system prompt, redact a codename, drop a field. It is a service you run (a `type: transform` guardrail) or code in a binary that embeds Gantry (the `Transform` extension hook). Every change is recorded as a list of the JSON paths it touched, never their values.
+A transform rewrites the whole request before Enterplace checks and sends it, or the whole answer before Enterplace checks and returns it: add a system prompt, redact a codename, drop a field. It is a service you run (a `type: transform` guardrail) or code in a binary that embeds Enterplace (the `Transform` extension hook). Every change is recorded as a list of the JSON paths it touched, never their values.
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -63,7 +63,7 @@ A `transform` guardrail takes the fields every remote guardrail shares except `a
 
 ## The service contract
 
-Gantry sends `POST {url}` with:
+Enterplace sends `POST {url}` with:
 
 ```json
 {
@@ -83,7 +83,7 @@ The service answers `200` with `{"body": {...}}`: the body to use, the same one 
 A binary that embeds the gateway sets `Extension::transform` to its own `Transform`:
 
 ```rust
-use gantry_server::{Transform, TransformContext};
+use enterplace_server::{Transform, TransformContext};
 
 struct Codenames;
 
@@ -97,7 +97,7 @@ impl Transform for Codenames {
 }
 ```
 
-`request` and `answer` both default to changing nothing. An `Err` refuses the request (or withholds the answer) with `transform_failed`; its text goes to Gantry's log, not to the caller. The hook's changes are recorded under the name `extension`.
+`request` and `answer` both default to changing nothing. An `Err` refuses the request (or withholds the answer) with `transform_failed`; its text goes to Enterplace's log, not to the caller. The hook's changes are recorded under the name `extension`.
 
 ## What is recorded
 

@@ -11,7 +11,7 @@ A provider that hangs holds every caller sent to it. Time limits turn a hang int
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -56,13 +56,13 @@ A request for `smart` gives `openai` 8 seconds to start answering. If it does no
 
 Each field is looked up on its own: the deployment's, then its alias's, then its provider's, then the gateway's default. A request for a model that is not an alias uses its provider's, then the gateway's.
 
-`gantry check` refuses a value out of range and a `total_ms` shorter than `first_byte_ms`.
+`enterplace check` refuses a value out of range and a `total_ms` shorter than `first_byte_ms`.
 
 ## Behavior
 
 **Before the answer starts.** A connect or first-byte timeout is a failure like a 5xx: the provider's `retries` apply, then the next deployment, the provider's `fallback`, or the alias's [`fallbacks`](/routing/retries-and-fallbacks/#alias-fallbacks). An alias's deployment that timed out [cools down](/routing/aliases/#behavior). The attempts record says `upstream_timeout` (first byte) or `upstream_unreachable` (connect).
 
-**After the answer starts.** Nothing is tried again once a byte has reached the caller. When `total_ms` or `idle_ms` passes, Gantry cuts the answer off: the caller's stream breaks as it would if the provider broke it, and an alias's deployment cools down, so the next request goes elsewhere. The server log names the provider and which limit passed.
+**After the answer starts.** Nothing is tried again once a byte has reached the caller. When `total_ms` or `idle_ms` passes, Enterplace cuts the answer off: the caller's stream breaks as it would if the provider broke it, and an alias's deployment cools down, so the next request goes elsewhere. The server log names the provider and which limit passed.
 
 <Aside type="note">
 `idle_ms` counts a stream's keep-alive comments and ping events as pieces, so a reasoning model that sends them while it thinks is not cut off.
@@ -70,7 +70,7 @@ Each field is looked up on its own: the deployment's, then its alias's, then its
 
 ## The worst wait
 
-`gantry check` prints, for each alias, the longest a caller can wait for the first byte: every deployment tried with its provider's `retries` and the pauses between them, each up to its first-byte limit, then each fallback in turn, and after that the longest `total_ms` of what may answer.
+`enterplace check` prints, for each alias, the longest a caller can wait for the first byte: every deployment tried with its provider's `retries` and the pauses between them, each up to its first-byte limit, then each fallback in turn, and after that the longest `total_ms` of what may answer.
 
 ```text
 alias smart: a caller waits at most 155.6 s for the first byte (5 attempts across deployments, retries and fallbacks, each to its first-byte limit), then at most 1800 s for the answer.

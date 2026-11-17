@@ -1,0 +1,33 @@
+# Every option on, for `helm lint` and `helm template` in CI. Not for installing.
+imagePullSecrets:
+  - name: ghcr
+keys:
+  existingSecret: enterplace-keys
+masterKey:
+  existingSecret: enterplace-master-key
+exportKey:
+  existingSecret: enterplace-export-key
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+ingress:
+  enabled: true
+  className: nginx
+  tlsSecretName: enterplace-tls
+networkPolicy:
+  enabled: true
+  from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: apps
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+otel:
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability:4318
+  OTEL_SERVICE_NAME: enterplace
+proxy:
+  https: http://proxy.internal:3128
+  noProxy: .svc,.cluster.local

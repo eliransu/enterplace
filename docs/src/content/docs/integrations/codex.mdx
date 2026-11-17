@@ -1,25 +1,25 @@
 ---
 title: Codex
-description: Send Codex CLI's Responses API requests through Gantry with a Gantry key, or with each developer's own ChatGPT login.
+description: Send Codex CLI's Responses API requests through Enterplace with a Enterplace key, or with each developer's own ChatGPT login.
 sidebar:
   order: 2
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Codex CLI talks to OpenAI's Responses API (`POST /v1/responses`). Give it a model provider that points at Gantry and a Gantry key, and each of its requests is identified, decided, checked by the rule's guardrails and recorded before it is forwarded.
+Codex CLI talks to OpenAI's Responses API (`POST /v1/responses`). Give it a model provider that points at Enterplace and a Enterplace key, and each of its requests is identified, decided, checked by the rule's guardrails and recorded before it is forwarded.
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
 
 <Steps>
 
-1. **Serve the model Codex asks for.** Codex speaks the Responses API. Gantry sends it as it is to `openai` and `azure` providers and [translates it](/routing/translation/#responses-to-chat-codex-on-any-provider) for every other kind, so any model the policy serves works, the free `gantry-demo` included. This example uses OpenAI's own models.
+1. **Serve the model Codex asks for.** Codex speaks the Responses API. Enterplace sends it as it is to `openai` and `azure` providers and [translates it](/routing/translation/#responses-to-chat-codex-on-any-provider) for every other kind, so any model the policy serves works, the free `enterplace-demo` included. This example uses OpenAI's own models.
 
-    ```yaml title="gantry.policy.yaml"
+    ```yaml title="enterplace.policy.yaml"
     version: 1
     providers:
       - name: openai
@@ -33,32 +33,32 @@ You need a running Gantry and a Gantry key. `gantry start` gives both in one com
         models: [gpt-5-codex, gpt-4o-mini]
     ```
 
-    Keep the provider key in a variable of its own, so the Gantry key a developer holds and the provider key Gantry holds never share a name.
+    Keep the provider key in a variable of its own, so the Enterplace key a developer holds and the provider key Enterplace holds never share a name.
 
-2. **Add Gantry as a model provider.** Edit `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`):
+2. **Add Enterplace as a model provider.** Edit `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`):
 
     ```toml title="~/.codex/config.toml"
     model = "gpt-5-codex"
-    model_provider = "gantry"
+    model_provider = "enterplace"
 
-    [model_providers.gantry]
-    name = "Gantry"
-    base_url = "http://127.0.0.1:8080/v1"   # Gantry's address, with /v1
-    env_key = "GANTRY_KEY"                  # the variable that holds the Gantry key
+    [model_providers.enterplace]
+    name = "Enterplace"
+    base_url = "http://127.0.0.1:8080/v1"   # Enterplace's address, with /v1
+    env_key = "ENTERPLACE_KEY"                  # the variable that holds the Enterplace key
     wire_api = "responses"
     stream_max_retries = 0                  # see Retries below
     ```
 
-    The provider ID must not be one Codex reserves (`openai`, `ollama`, `lmstudio` and a few more), so this one is `gantry`.
+    The provider ID must not be one Codex reserves (`openai`, `ollama`, `lmstudio` and a few more), so this one is `enterplace`.
 
 3. **Set the key and run Codex.**
 
     ```bash
-    export GANTRY_KEY=gantry_...
+    export ENTERPLACE_KEY=enterplace_...
     codex
     ```
 
-    `gantry login https://gantry.example.com` gets a personal key through single sign-on and prints `export GANTRY_KEY=...` with it; `gantry logout` revokes it. An admin can issue one with `gantry key new` instead (`--quiet` prints the key alone). Codex sends the key as `Authorization: Bearer`.
+    `enterplace login https://enterplace.example.com` gets a personal key through single sign-on and prints `export ENTERPLACE_KEY=...` with it; `enterplace logout` revokes it. An admin can issue one with `enterplace key new` instead (`--quiet` prints the key alone). Codex sends the key as `Authorization: Bearer`.
 
 </Steps>
 
@@ -66,13 +66,13 @@ For a model Codex has no built-in description of, it prints `warning: Model meta
 
 ## ChatGPT subscription
 
-Developers signed in to Codex with ChatGPT (Plus, Pro, Business, Enterprise or Edu) keep that login. Gantry sends each person's own ChatGPT login on to ChatGPT unchanged and holds no OpenAI key. Rules, guardrails, kill switches and limits apply as for any request; cost is an API-equivalent estimate. See [Subscriptions](/governance/subscriptions/).
+Developers signed in to Codex with ChatGPT (Plus, Pro, Business, Enterprise or Edu) keep that login. Enterplace sends each person's own ChatGPT login on to ChatGPT unchanged and holds no OpenAI key. Rules, guardrails, kill switches and limits apply as for any request; cost is an API-equivalent estimate. See [Subscriptions](/governance/subscriptions/).
 
 <Steps>
 
 1. **Add a passthrough provider for ChatGPT logins.**
 
-    ```yaml title="gantry.policy.yaml"
+    ```yaml title="enterplace.policy.yaml"
     version: 1
     providers:
       - name: chatgpt-subscriptions
@@ -89,39 +89,39 @@ Developers signed in to Codex with ChatGPT (Plus, Pro, Business, Enterprise or E
 
     `gpt-*` covers the models Codex picks for ChatGPT logins. A request with no person token is refused (`identity: required`, the default). Add `identity: optional` to the provider to record it as the person `unknown`, told apart by Codex's `session-id`, while tokens are rolled out.
 
-2. **Point Codex at Gantry with your ChatGPT login.** In `~/.codex/config.toml`:
+2. **Point Codex at Enterplace with your ChatGPT login.** In `~/.codex/config.toml`:
 
     ```toml title="~/.codex/config.toml"
-    model_provider = "gantry"
+    model_provider = "enterplace"
 
-    [model_providers.gantry]
-    name = "Gantry"
-    base_url = "https://gantry.example.com/v1"
+    [model_providers.enterplace]
+    name = "Enterplace"
+    base_url = "https://enterplace.example.com/v1"
     wire_api = "responses"
     requires_openai_auth = true             # send the ChatGPT login, not an API key
-    http_headers = { "x-gantry-user" = "gantry_u_..." }
+    http_headers = { "x-enterplace-user" = "enterplace_u_..." }
     stream_max_retries = 0
     ```
 
-    `requires_openai_auth = true` makes Codex send its own ChatGPT login (`Authorization` and `chatgpt-account-id`) to this provider. The person token in `http_headers` comes from the console (Start here, Coding agents), `gantry key new --identity-only`, or `gantry login`. Leave `env_key` out.
+    `requires_openai_auth = true` makes Codex send its own ChatGPT login (`Authorization` and `chatgpt-account-id`) to this provider. The person token in `http_headers` comes from the console (Start here, Coding agents), `enterplace key new --identity-only`, or `enterplace login`. Leave `env_key` out.
 
 3. **Sign in with ChatGPT and run Codex.** `codex login` (choose ChatGPT) if you are not signed in, then `codex`. **Requests** in the console shows the person, the model and an API-equivalent cost estimate. The login itself is never written to the audit log.
 
 </Steps>
 
-A request that carries a ChatGPT login is served only by a `passthrough` provider, and a request with a Gantry key only by a keyed one. If Codex is refused with `person_needed` or `login_needed`, the message names the setting to fix.
+A request that carries a ChatGPT login is served only by a `passthrough` provider, and a request with a Enterplace key only by a keyed one. If Codex is refused with `person_needed` or `login_needed`, the message names the setting to fix.
 
 ## Retries
 
-Set `stream_max_retries = 0`. Codex retries a failed streamed request up to `stream_max_retries` times (5 by default) and prints `Reconnecting... 1/5` for each. It does this for refusals too, although Gantry sends `x-should-retry: false`.
+Set `stream_max_retries = 0`. Codex retries a failed streamed request up to `stream_max_retries` times (5 by default) and prints `Reconnecting... 1/5` for each. It does this for refusals too, although Enterplace sends `x-should-retry: false`.
 
 With the default, one refused prompt makes six identical refusals, six audit records and, on a rule with a webhook guardrail, six calls to the guardrail service. With `0`, a refusal is sent and recorded once. `request_max_retries` alone does not change this.
 
 <Aside type="note">
-With `stream_max_retries = 0`, a stream cut by the network is not resumed, and the person runs the prompt again. Gantry's own retries to the provider (`retries:` on the provider) still apply. See [Retries and fallbacks](/routing/retries-and-fallbacks/).
+With `stream_max_retries = 0`, a stream cut by the network is not resumed, and the person runs the prompt again. Enterplace's own retries to the provider (`retries:` on the provider) still apply. See [Retries and fallbacks](/routing/retries-and-fallbacks/).
 </Aside>
 
-## What Gantry does with its requests
+## What Enterplace does with its requests
 
 - `POST /v1/responses` is checked, recorded and forwarded as its original bytes to the Responses endpoint of the `openai` provider that lists the model, streams included. The usage record holds the answer's tokens and cost.
 - Guardrails read the Responses `instructions` and every `input` text: a string, or the `input_text` parts of input messages.
@@ -132,14 +132,14 @@ With `stream_max_retries = 0`, a stream cut by the network is not resumed, and t
 
 ## Refusals
 
-On `/v1/responses` a refusal uses OpenAI's error shape, so Codex prints Gantry's message after its own prefix:
+On `/v1/responses` a refusal uses OpenAI's error shape, so Codex prints Enterplace's message after its own prefix:
 
 ```text
-ERROR: unexpected status 403 Forbidden: Refused (model_not_allowed): team "t" may not use model "gpt-4o" under rule "everyone". Allowed: gpt-4o-mini. Ask a Gantry admin to change the policy if you need this one. Decision 01M79K3AKCRTY593P82PZPG1GE., url: http://127.0.0.1:20770/v1/responses
+ERROR: unexpected status 403 Forbidden: Refused (model_not_allowed): team "t" may not use model "gpt-4o" under rule "everyone". Allowed: gpt-4o-mini. Ask a Enterplace admin to change the policy if you need this one. Decision 01M79K3AKCRTY593P82PZPG1GE., url: http://127.0.0.1:20770/v1/responses
 ```
 
 ```text
-ERROR: unexpected status 401 Unauthorized: Refused (unknown_key): Gantry does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask a Gantry admin. Decision 01M79K3Q28V5EXP60V1YSSA595., url: http://127.0.0.1:20770/v1/responses
+ERROR: unexpected status 401 Unauthorized: Refused (unknown_key): Enterplace does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask a Enterplace admin. Decision 01M79K3Q28V5EXP60V1YSSA595., url: http://127.0.0.1:20770/v1/responses
 ```
 
 Quote the decision ID to an admin: it finds the record. See [Refusal codes](/reference/refusal-codes/).

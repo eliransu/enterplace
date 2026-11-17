@@ -1,42 +1,42 @@
-# Gantry and Postgres on one machine, from the published image, in one command:
-#   mkdir gantry && cd gantry && curl -fsSLO https://raw.githubusercontent.com/eliransu/gantry/main/deploy/compose/compose.yaml && OPENAI_API_KEY=sk-... docker compose up -d
-# The admin key, printed once: docker compose logs gantry | grep GANTRY_KEY
+# Enterplace and Postgres on one machine, from the published image, in one command:
+#   mkdir enterplace && cd enterplace && curl -fsSLO https://raw.githubusercontent.com/eliransu/enterplace/main/deploy/compose/compose.yaml && OPENAI_API_KEY=sk-... docker compose up -d
+# The admin key, printed once: docker compose logs enterplace | grep ENTERPLACE_KEY
 # The console: http://localhost:8080/console
 # Provider keys are read from the shell or a .env file beside this one (OPENAI_API_KEY, ANTHROPIC_API_KEY,
-# GEMINI_API_KEY). The full guide, with your own policy file: https://gantry-docs.enterplace.dev/deploy/docker/
-name: gantry
+# GEMINI_API_KEY). The full guide, with your own policy file: https://docs.enterplace.dev/deploy/docker/
+name: enterplace
 
 services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: gantry
-      # Only Gantry reaches this database: it shares this container's network and publishes no Postgres port.
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gantry}
-      POSTGRES_DB: gantry
+      POSTGRES_USER: enterplace
+      # Only Enterplace reaches this database: it shares this container's network and publishes no Postgres port.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-enterplace}
+      POSTGRES_DB: enterplace
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
-      - "${GANTRY_BIND:-127.0.0.1}:${GANTRY_PORT:-8080}:8080"
+      - "${ENTERPLACE_BIND:-127.0.0.1}:${ENTERPLACE_PORT:-8080}:8080"
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "gantry", "-d", "gantry"]
+      test: ["CMD", "pg_isready", "-U", "enterplace", "-d", "enterplace"]
       interval: 2s
       timeout: 3s
       retries: 30
     restart: unless-stopped
 
-  gantry:
-    image: ${GANTRY_IMAGE:-ghcr.io/eliransu/gantry:latest}
+  enterplace:
+    image: ${ENTERPLACE_IMAGE:-ghcr.io/eliransu/enterplace:latest}
     network_mode: service:postgres
     environment:
-      DATABASE_URL: postgres://gantry:${POSTGRES_PASSWORD:-gantry}@localhost:5432/gantry?sslmode=disable
+      DATABASE_URL: postgres://enterplace:${POSTGRES_PASSWORD:-enterplace}@localhost:5432/enterplace?sslmode=disable
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GANTRY_LICENSE: ${GANTRY_LICENSE:-}
+      ENTERPLACE_LICENSE: ${ENTERPLACE_LICENSE:-}
     volumes:
       # The policy start writes and the hash-chained audit log.
-      - gantry-data:/var/lib/gantry
+      - enterplace-data:/var/lib/enterplace
     depends_on:
       postgres:
         condition: service_healthy
@@ -44,4 +44,4 @@ services:
 
 volumes:
   postgres-data:
-  gantry-data:
+  enterplace-data:

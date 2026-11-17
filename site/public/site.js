@@ -1,4 +1,4 @@
-// Gantry website. No dependencies. Each block is independent and does nothing on a page without its elements.
+// Enterplace website. No dependencies. Each block is independent and does nothing on a page without its elements.
 (() => {
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -6,7 +6,7 @@
   const root = document.documentElement;
 
 
-  // A button that copies the text of the element its data-copy names: the prompt that has a coding agent set Gantry up.
+  // A button that copies the text of the element its data-copy names: the prompt that has a coding agent set Enterplace up.
   $$('button[data-copy]').forEach((b) => b.addEventListener('click', () => {
     const source = document.getElementById(b.dataset.copy);
     if (!source || !navigator.clipboard) return;

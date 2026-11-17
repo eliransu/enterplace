@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A reference plugin for Gantry's events guardrail (contract v2). Standard library only.
+"""A reference plugin for Enterplace's events guardrail (contract v2). Standard library only.
 
 It prints every event it is sent, one line each, and blocks any tool call (the model's or an MCP one) whose tool is
 named in --block. Point a `type: events` guardrail at it:
@@ -12,7 +12,7 @@ named in --block. Point a `type: events` guardrail at it:
         url: http://127.0.0.1:9200/events
         on_failure: fail_closed
 
-With PLUGIN_SECRET set (the guardrail's secret_env names the same secret on Gantry's side) it refuses a delivery whose
+With PLUGIN_SECRET set (the guardrail's secret_env names the same secret on Enterplace's side) it refuses a delivery whose
 Standard Webhooks signature does not check out. The contract: docs/src/content/docs/governance/plugin-events.mdx.
 """
 
@@ -71,7 +71,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("content-length", 0)))
         if SECRET and not signed(self.headers, body):
-            # Not 2xx: Gantry applies the guardrail's on_failure, which is what a forged delivery deserves.
+            # Not 2xx: Enterplace applies the guardrail's on_failure, which is what a forged delivery deserves.
             return self.answer(401, {"error": "bad signature"})
         sent = json.loads(body)
         # Observe mode with a batch_url sends {"contract": 2, "batch": [envelope, ...]} and reads no verdict.

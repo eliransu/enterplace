@@ -4,7 +4,7 @@ Date: 2026-11-14. Status: draft for Eliran's approval.
 
 ## Intent
 
-Companies are confused about AI: which tools their people use, what it costs, what leaves the building, and what to do first. Gantry should teach them and walk with them, from why they need a gateway, to a first result in minutes, to full control, one simple step at a time. Keeping it simple is the point; a step that needs a meeting to understand has failed.
+Companies are confused about AI: which tools their people use, what it costs, what leaves the building, and what to do first. Enterplace should teach them and walk with them, from why they need a gateway, to a first result in minutes, to full control, one simple step at a time. Keeping it simple is the point; a step that needs a meeting to understand has failed.
 
 Two readers, both served:
 - **The decider** (CISO, head of platform, CTO at a smaller company). Needs the why and a plan they can say yes to.
@@ -12,9 +12,9 @@ Two readers, both served:
 
 ## The ladder (shared everywhere)
 
-| Step | Name | What they do | What they get | Gantry pieces |
+| Step | Name | What they do | What they get | Enterplace pieces |
 |---|---|---|---|---|
-| 1 | See | Run Gantry, point tools at it, one rule that allows everyone. Nothing is blocked. Claude subscription teams use the watch setup instead. | Which tools and models are in use and what they cost, per key, from day one | quickstart, coding-tool guides, request log, analytics, `gantry audit coverage`, Claude Team watch |
+| 1 | See | Run Enterplace, point tools at it, one rule that allows everyone. Nothing is blocked. Claude subscription teams use the watch setup instead. | Which tools and models are in use and what they cost, per key, from day one | quickstart, coding-tool guides, request log, analytics, `enterplace audit coverage`, Claude Team watch |
 | 2 | Know | A key per person and per team, or SSO/JWT so people sign in as themselves | Every request has a name and a team on it | keys, SSO, SCIM, JWT, teams |
 | 3 | Limit | Budgets per team or person, rate limits, kill switches | No surprise bills, and a stop button | budgets, limits, kill switches, alerts on spend |
 | 4 | Protect | Guardrails on prompts and answers in shadow mode first, then enforced; MCP tools behind the gateway | Secrets and personal data stay in; risky tools need approval | guardrails, shadow mode, backtest, MCP gateway |
@@ -70,10 +70,10 @@ Each step is one change on top of the last, shown as the policy lines it adds. N
 - The docs home (`index.mdx`) leads with the ladder.
 
 ### 3. Step 1 needs a true "nothing blocked" mode
-Today step 1 relies on a rule that allows everyone. Add `mode: observe` (see builder check answers 1 and 2 for its exact limits) at the policy top level: every request is forwarded, and every decision that would have refused is recorded as `would_refuse` with its code, in the same audit chain. Budgets, limits, guardrails and kill switches compute and record but do not block. Kill switches still block (a stop button must always work). `gantry check` warns when observe mode is on. The console shows an "Observe mode: nothing is blocked" banner. This lets a company turn on steps 2 to 4 safely and see what would happen before enforcing, which is the main way to keep each step low-risk.
+Today step 1 relies on a rule that allows everyone. Add `mode: observe` (see builder check answers 1 and 2 for its exact limits) at the policy top level: every request is forwarded, and every decision that would have refused is recorded as `would_refuse` with its code, in the same audit chain. Budgets, limits, guardrails and kill switches compute and record but do not block. Kill switches still block (a stop button must always work). `enterplace check` warns when observe mode is on. The console shows an "Observe mode: nothing is blocked" banner. This lets a company turn on steps 2 to 4 safely and see what would happen before enforcing, which is the main way to keep each step low-risk.
 
-### 4. `gantry start`: a guided first run (CLI)
-An interactive command that writes a step-1 policy (asks which providers they use, reads keys from env, writes `gantry.policy.yaml` with observe mode and one allow-all rule), prints the exact settings for the coding tools it detects on the machine, and starts the gateway. Non-interactive flags for CI. Replaces the copy-paste part of the quickstart.
+### 4. `enterplace start`: a guided first run (CLI)
+An interactive command that writes a step-1 policy (asks which providers they use, reads keys from env, writes `enterplace.policy.yaml` with observe mode and one allow-all rule), prints the exact settings for the coding tools it detects on the machine, and starts the gateway. Non-interactive flags for CI. Replaces the copy-paste part of the quickstart.
 
 ### 5. Console: "Your setup" (after design approval)
 - A strip on the console home: five steps, each done, current or ahead, computed from state:
@@ -95,12 +95,12 @@ An interactive command that writes a step-1 policy (asks which providers they us
 2. Both levels: top-level `mode: observe` for a first rollout, and the existing per-feature `shadow_until` (already on guardrails) extended to rules, budgets and limits, so a company that enforces budgets can trial guardrails alone. Step pages say "shadow this one feature" from step 3 on.
 3. After the repo fold, the console strip lives in the open console and asks the extension for extra step state through a hook. The open edition can complete See, Know, Limit and Protect. Prove shows its licensed parts (SIEM export, retention, legal hold) marked "Enterprise", consistent with the paid line in Q2; in the open edition Prove is done when the audit chain verifies and the audit file is kept outside the container.
 4. Step 1 promises tools, models and cost, not people. Names arrive in step 2. Step 1 still shows one line per key and per tool (user agent), so the jump to step 2 is obvious.
-5. Claude Team watch companies get a track of their own in the strip: See and Know apply from the OpenTelemetry data, Limit and Protect show "needs API traffic through Gantry" with a link explaining why, Prove applies.
+5. Claude Team watch companies get a track of their own in the strip: See and Know apply from the OpenTelemetry data, Limit and Protect show "needs API traffic through Enterplace" with a link explaining why, Prove applies.
 
 ## My calls (correct any)
 - The five names: See, Know, Limit, Protect, Prove.
 - Observe mode as a real policy mode, with kill switches still enforced.
-- `gantry start` as the guided first run.
+- `enterplace start` as the guided first run.
 - Docs section at `/start/`, absorbing Getting started.
 - Progress rules as listed under 5.
 

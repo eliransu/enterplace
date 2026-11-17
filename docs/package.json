@@ -1,5 +1,5 @@
 {
-  "name": "gantry-docs",
+  "name": "enterplace-docs",
   "version": "1.0.0",
   "scripts": {
     "dev": "astro dev",

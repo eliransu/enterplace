@@ -1,25 +1,25 @@
 ---
-title: Gantry, LiteLLM and Bifrost
-description: How Gantry compares with the LiteLLM and Bifrost open source gateways, capability by capability, and what each does better.
+title: Enterplace, LiteLLM and Bifrost
+description: How Enterplace compares with the LiteLLM and Bifrost open source gateways, capability by capability, and what each does better.
 sidebar:
   order: 3
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-This page compares Gantry 0.1.0 with LiteLLM v1.109.1 and Bifrost v2.5.1 (open source editions). The measured figures come from a hands-on review run in Docker against a mock provider on 2026-11-12, on one machine, and are not benchmarks. Gantry's capabilities are as of 0.1.0; LiteLLM's and Bifrost's are from that review and their public documentation.
+This page compares Enterplace 0.1.0 with LiteLLM v1.109.1 and Bifrost v2.5.1 (open source editions). The measured figures come from a hands-on review run in Docker against a mock provider on 2026-11-12, on one machine, and are not benchmarks. Enterplace's capabilities are as of 0.1.0; LiteLLM's and Bifrost's are from that review and their public documentation.
 
-Gantry is much younger than both and has had far less production traffic. LiteLLM still lists more providers. Where Gantry leads is governance: a verified record of every request, a policy that fails on any unknown key, and nothing dropped from a request silently.
+Enterplace is much younger than both and has had far less production traffic. LiteLLM still lists more providers. Where Enterplace leads is governance: a verified record of every request, a policy that fails on any unknown key, and nothing dropped from a request silently.
 
 ## Side by side
 
-| | Gantry 0.0.1 | LiteLLM v1.109.1 | Bifrost v2.5.1 |
+| | Enterplace 0.0.1 | LiteLLM v1.109.1 | Bifrost v2.5.1 |
 |---|---|---|---|
 | Language | Rust | Python, routing moving to Rust | Go |
 | Storage | Files for one process; Postgres (optional) for keys, kill switches, budgets, rate limits, cooldowns and console sessions shared by several | Postgres for keys and budgets, Redis for shared limits | SQLite or Postgres |
 | Image, user | A single static binary in an image built `FROM scratch`, uid 65532 | 1.33 GB, root | 286 MB, uid 1000 |
 | Memory, measured | 3.4 MiB idle | 628 to 922 MiB | 219 to 442 MiB |
-| Identity per request | Gantry key per person or workload | Virtual key | Virtual key |
+| Identity per request | Enterplace key per person or workload | Virtual key | Virtual key |
 | Policy | File, first matching rule by team, person or anyone | Per key, team, org via API | Per key, team, customer via API |
 | Budgets, rate limits | Budgets, requests and tokens per minute, hour and day, and requests in flight, per install, organization, team, person, key, end customer, tag or model | Yes | Yes |
 | Aliases, load balancing | Aliases over deployments: round robin, least busy, lowest latency, lowest cost or adaptive, session affinity for coding agents, a circuit breaker per deployment, context window and content policy fallbacks; rules decide on the alias | Yes | Yes |
@@ -29,38 +29,38 @@ Gantry is much younger than both and has had far less production traffic. LiteLL
 | Unknown request parameters | Forwarded unchanged; unknown query refused | Some standard fields dropped | Dropped |
 | Providers | Over 120 presets and 15 native kinds: OpenAI and every OpenAI-compatible API, Anthropic, Azure OpenAI, Bedrock (Claude and Converse for every family), Vertex AI (Gemini, Claude, Model Garden), Gemini, Cohere, watsonx.ai, SageMaker, Replicate, local servers. Chat, messages and Responses translated between them; Codex reaches any provider through Responses, Claude Code any chat model with `accept_messages` | 140+, translated | Many, translated |
 | SSO, roles | Open source: console sign-in by OpenID Connect (PKCE, RS256 and ES256), or SAML 2.0 (signed assertions only), roles and teams from groups, roles kept to teams, every sign-in recorded; SCIM in the enterprise build | SSO free to 5 users, then enterprise | Enterprise |
-| Developer sign-in for coding tools | `gantry login`: SSO in the browser, personal key named by the email, expiry from policy, recorded; `gantry logout` revokes it | UI login, keys copied by hand | Enterprise |
+| Developer sign-in for coding tools | `enterplace login`: SSO in the browser, personal key named by the email, expiry from policy, recorded; `enterplace logout` revokes it | UI login, keys copied by hand | Enterprise |
 | Kill switch | Person, team, key, model or everyone; reason required and shown to the caller; within 1 second on every node sharing the files; recorded | No (block a key or team by API) | No |
 | Metrics | Prometheus `/metrics` on its own address, off by default; audit log as JSONL for any log shipper | Prometheus, many callbacks | Prometheus, OpenTelemetry |
-| Provider keys kept in the database | Store credentials sealed with AES-256-GCM under `GANTRY_MASTER_KEY`, added, rotated and removed in the console or admin API, each change recorded; a rotation reaches every replica within 2 seconds; a wrong master key refused at start | Credentials encrypted with `LITELLM_SALT_KEY`, which must not change after models are added | Not reviewed |
-| Caller's own provider key | Opt-in per rule (`caller_provider_key: allowed`), header refused elsewhere; the caller still needs a Gantry key; recorded by hash prefix, spend marked caller-paid | `api_key` in the request body, accepted on any deployment | Not reviewed |
+| Provider keys kept in the database | Store credentials sealed with AES-256-GCM under `ENTERPLACE_MASTER_KEY`, added, rotated and removed in the console or admin API, each change recorded; a rotation reaches every replica within 2 seconds; a wrong master key refused at start | Credentials encrypted with `LITELLM_SALT_KEY`, which must not change after models are added | Not reviewed |
+| Caller's own provider key | Opt-in per rule (`caller_provider_key: allowed`), header refused elsewhere; the caller still needs a Enterplace key; recorded by hash prefix, spend marked caller-paid | `api_key` in the request body, accepted on any deployment | Not reviewed |
 | Multi-node | Yes, with a Postgres store: keys, kill switches, budgets, `rpm` and `tpm` (leased, never over the limit), cooldowns and console sessions shared; each audit chain per replica, the answer cache too unless `store.answer_cache` shares it. No Redis. | Yes, Redis for shared limits | Enterprise clustering |
 
 ## What LiteLLM does better
 
-- **Providers.** Over 140, against Gantry's 120 presets and 15 native kinds.
-- **Time to a first request.** 8 seconds from `docker run` with a five-line config and no database, measured in the review. Gantry's image needs nothing first: `docker run` with no config and no provider key writes its policy, serves the demo model and answers a first governed request within a second.
-- **Production history.** Years of real traffic across many deployments. Gantry's first runs with real Claude Code and Codex, on 2026-11-16, found and fixed five bugs.
+- **Providers.** Over 140, against Enterplace's 120 presets and 15 native kinds.
+- **Time to a first request.** 8 seconds from `docker run` with a five-line config and no database, measured in the review. Enterplace's image needs nothing first: `docker run` with no config and no provider key writes its policy, serves the demo model and answers a first governed request within a second.
+- **Production history.** Years of real traffic across many deployments. Enterplace's first runs with real Claude Code and Codex, on 2026-11-16, found and fixed five bugs.
 - **Admin UI.** A fuller admin UI.
-- **Fails closed on a database outage** by default, as Gantry does on an audit failure.
+- **Fails closed on a database outage** by default, as Enterplace does on an audit failure.
 
 ## What Bifrost does better
 
 - **Speed of forwarding with features on.** About 1 ms added at p50 in the review's Docker setup, with routing, budgets and logging.
 - **Governance objects in open source.** Customers, teams and virtual keys with budgets and rate limits, and immediate key deactivation through its API.
-- **Messages to any chat server by default.** It translated `/anthropic/v1/messages` to a chat-only server with no opt-in. Gantry translates messages to a chat provider only when it sets `accept_messages`, since a translated answer can differ from Anthropic's.
+- **Messages to any chat server by default.** It translated `/anthropic/v1/messages` to a chat-only server with no opt-in. Enterplace translates messages to a chat provider only when it sets `accept_messages`, since a translated answer can differ from Anthropic's.
 - **A latency split per request** in its log.
 
-## What Gantry does better
+## What Enterplace does better
 
-- **A record before every request, in the open source edition.** Every request, allowed or refused, gets a hash-chained audit record before it is forwarded, and `gantry audit verify` checks the chain. LiteLLM writes no audit rows without an enterprise license, and its audit log covers admin changes, not requests. Bifrost's audit log, with an HMAC per row, is enterprise only.
+- **A record before every request, in the open source edition.** Every request, allowed or refused, gets a hash-chained audit record before it is forwarded, and `enterplace audit verify` checks the chain. LiteLLM writes no audit rows without an enterprise license, and its audit log covers admin changes, not requests. Bifrost's audit log, with an HMAC per row, is enterprise only.
 - **Fail closed on the record.** If the record cannot be written, the request is refused. In the review, LiteLLM kept forwarding while its per-request spend rows went missing for 6,498 load-test requests.
-- **Unknown config is an error.** `gantry check` names the file, line and nearest known word for every mistake. Both others accept misspelled keys silently and start.
+- **Unknown config is an error.** `enterplace check` names the file, line and nearest known word for every mistake. Both others accept misspelled keys silently and start.
 - **Nothing dropped silently.** The body is forwarded byte for byte and an unknown query parameter is refused by name. LiteLLM removed the standard `user` and `metadata` fields; Bifrost dropped an unknown parameter.
 - **Keys shown once, stored hashed.** Bifrost's list API returns every key's full value on every read.
 - **No prompt text in the log.** Bifrost stores prompts and answers by default for 365 days.
 - **Small footprint.** A single static binary in an image built `FROM scratch`, running as a non-root user, at about 3.4 MiB of memory idle. LiteLLM's image is 1.33 GB and runs as root, using 628 to 922 MiB plus Postgres; Bifrost's is 286 MB, using 219 to 442 MiB.
-- **Provider keys under your key, and caller keys under policy.** Stored provider credentials are sealed under a master key the customer holds, checked at start, never shown after saving, and every add, rotate and remove is in the audit chain. A caller's own provider key is accepted only on rules that opt in, never in place of a Gantry key, and the rest of the policy still applies. LiteLLM's public docs describe a request-body `api_key` accepted on any deployment.
+- **Provider keys under your key, and caller keys under policy.** Stored provider credentials are sealed under a master key the customer holds, checked at start, never shown after saving, and every add, rotate and remove is in the audit chain. A caller's own provider key is accepted only on rules that opt in, never in place of a Enterplace key, and the rest of the policy still applies. LiteLLM's public docs describe a request-body `api_key` accepted on any deployment.
 - **Refusals a person can act on.** Each names the cause, the fix and a decision ID, in the error shape the client already shows.
 
 <Aside type="note">
@@ -70,6 +70,6 @@ No source code of LiteLLM or Bifrost was read for this comparison. Their figures
 ## Related
 
 <CardGrid>
-	<LinkCard title="Migrate from LiteLLM" href="/migrate/from-litellm/" description="Turn a LiteLLM config into a Gantry policy." />
+	<LinkCard title="Migrate from LiteLLM" href="/migrate/from-litellm/" description="Turn a LiteLLM config into a Enterplace policy." />
 	<LinkCard title="Project status" href="/getting-started/status/" description="What is built, what is planned, and what was tested against what." />
 </CardGrid>

@@ -1,6 +1,6 @@
 ---
 title: Live test matrix
-description: Which Gantry routes passed against each real provider in the latest live run, and how that run is made.
+description: Which Enterplace routes passed against each real provider in the latest live run, and how that run is made.
 sidebar:
   order: 9
 ---
@@ -10,11 +10,11 @@ import matrix from '../../../data/live-matrix.json';
 
 export const mark = (cell) => !cell ? 'n/a' : cell.status + (cell.translated ? ' (translated)' : '');
 
-The live matrix runs every route Gantry serves through a real `gantry serve` against each provider kind, and records pass, fail or skipped per route and provider. A provider runs only when its credentials are set, so a skipped cell means no key, never a pass.
+The live matrix runs every route Enterplace serves through a real `enterplace serve` against each provider kind, and records pass, fail or skipped per route and provider. A provider runs only when its credentials are set, so a skipped cell means no key, never a pass.
 
 ## Latest run
 
-Mode: **{matrix.mode}**. {matrix.gantry}, commit `{matrix.commit.slice(0, 12)}`, started {matrix.started}, {matrix.tokens} of {matrix.token_cap} tokens.{matrix.run ? <> <a href={matrix.run}>Workflow run</a>.</> : null}
+Mode: **{matrix.mode}**. {matrix.enterplace}, commit `{matrix.commit.slice(0, 12)}`, started {matrix.started}, {matrix.tokens} of {matrix.token_cap} tokens.{matrix.run ? <> <a href={matrix.run}>Workflow run</a>.</> : null}
 
 <table>
 	<thead>
@@ -31,7 +31,7 @@ Mode: **{matrix.mode}**. {matrix.gantry}, commit `{matrix.commit.slice(0, 12)}`,
 	{matrix.providers.map((p) => <li>{p.label} (<code>{p.model}</code>): {p.skipped ? 'skipped, ' + p.skipped : p.audit ? 'audit chain ' + (p.audit.verified ? 'verified' : 'NOT verified') + ', ' + p.audit.detail : 'ran'}</li>)}
 </ul>
 
-`n/a` means the provider's kind does not serve that route. `translated` means Gantry translated the request: chat completions to a Claude model (`accept_chat`), or messages to a chat model (`accept_messages`). See [Translation](/routing/translation/).
+`n/a` means the provider's kind does not serve that route. `translated` means Enterplace translated the request: chat completions to a Claude model (`accept_chat`), or messages to a chat model (`accept_messages`). See [Translation](/routing/translation/).
 
 ## Routes
 
@@ -48,30 +48,30 @@ Mode: **{matrix.mode}**. {matrix.gantry}, commit `{matrix.commit.slice(0, 12)}`,
 | `count_tokens` | `POST /v1/messages/count_tokens` | `input_tokens` |
 | `passthrough` | `GET` of the provider's model list through `/passthrough/<provider>/...` | A JSON answer |
 
-Every passing answer also carries `X-Gantry-Decision`. Each provider runs on its own gateway with its own key and audit log, and the run ends with `gantry audit verify` on that log.
+Every passing answer also carries `X-Enterplace-Decision`. Each provider runs on its own gateway with its own key and audit log, and the run ends with `enterplace audit verify` on that log.
 
 ## How a run is made
 
 `.github/workflows/live.yml` runs `scripts/live_matrix.py` every night and on demand. It writes the matrix as the run's job summary and as the `live-matrix` artifact (`live-matrix.json`).
 
-Spend is capped: the cheapest model of each provider, prompts of a few words, `max_tokens` 16 (64 for a tool call), and a cap on the tokens of the whole run (`GANTRY_LIVE_MAX_TOKENS`, 20,000 by default), counted from each answer's usage. Past the cap every remaining cell is skipped.
+Spend is capped: the cheapest model of each provider, prompts of a few words, `max_tokens` 16 (64 for a tool call), and a cap on the tokens of the whole run (`ENTERPLACE_LIVE_MAX_TOKENS`, 20,000 by default), counted from each answer's usage. Past the cap every remaining cell is skipped.
 
 | Provider | Repository secrets |
 |---|---|
-| OpenAI | `GANTRY_LIVE_OPENAI_KEY` |
-| Anthropic | `GANTRY_LIVE_ANTHROPIC_KEY` |
-| Azure OpenAI | `GANTRY_LIVE_AZURE_KEY`, `GANTRY_LIVE_AZURE_URL` (`https://<resource>.openai.azure.com`), `GANTRY_LIVE_AZURE_DEPLOYMENT` (a `gpt-4.1-nano` deployment) |
-| Amazon Bedrock | `GANTRY_LIVE_AWS_ACCESS_KEY_ID`, `GANTRY_LIVE_AWS_SECRET_ACCESS_KEY` (Claude Haiku 4.5 enabled in `us-east-1`) |
-| Gemini | `GANTRY_LIVE_GEMINI_KEY` |
-| Vertex AI, Gemini and Claude | `GANTRY_LIVE_VERTEX_SA_JSON`, a service account key with the Vertex AI User role. The run signs in with it for a one-hour token. |
-| Groq | `GANTRY_LIVE_GROQ_KEY` |
-| Mistral | `GANTRY_LIVE_MISTRAL_KEY` |
+| OpenAI | `ENTERPLACE_LIVE_OPENAI_KEY` |
+| Anthropic | `ENTERPLACE_LIVE_ANTHROPIC_KEY` |
+| Azure OpenAI | `ENTERPLACE_LIVE_AZURE_KEY`, `ENTERPLACE_LIVE_AZURE_URL` (`https://<resource>.openai.azure.com`), `ENTERPLACE_LIVE_AZURE_DEPLOYMENT` (a `gpt-4.1-nano` deployment) |
+| Amazon Bedrock | `ENTERPLACE_LIVE_AWS_ACCESS_KEY_ID`, `ENTERPLACE_LIVE_AWS_SECRET_ACCESS_KEY` (Claude Haiku 4.5 enabled in `us-east-1`) |
+| Gemini | `ENTERPLACE_LIVE_GEMINI_KEY` |
+| Vertex AI, Gemini and Claude | `ENTERPLACE_LIVE_VERTEX_SA_JSON`, a service account key with the Vertex AI User role. The run signs in with it for a one-hour token. |
+| Groq | `ENTERPLACE_LIVE_GROQ_KEY` |
+| Mistral | `ENTERPLACE_LIVE_MISTRAL_KEY` |
 
 Run it on your own machine with the same variables:
 
 ```bash
-cargo build --release -p gantry-cli
-GANTRY_LIVE_OPENAI_KEY=sk-... python3 scripts/live_matrix.py --out live-matrix.json
+cargo build --release -p enterplace-cli
+ENTERPLACE_LIVE_OPENAI_KEY=sk-... python3 scripts/live_matrix.py --out live-matrix.json
 ```
 
 `--mock` runs every provider against a local mock of its API instead, and `--selftest` checks both the mocks (every cell passes) and a run without keys (every cell is skipped). CI runs `--selftest` on every change.
@@ -81,5 +81,5 @@ GANTRY_LIVE_OPENAI_KEY=sk-... python3 scripts/live_matrix.py --out live-matrix.j
 This page shows `docs/src/data/live-matrix.json`. To publish a new run, download its `live-matrix` artifact, replace that file with it and commit. The workflow never writes to the repository itself.
 
 <Aside type="note">
-Until the provider secrets are set, the latest run has every cell skipped. Models, regions and the API version are set per provider with `GANTRY_LIVE_<PROVIDER>_CHAT_MODEL` and the other variables named at the top of `scripts/live_matrix.py`.
+Until the provider secrets are set, the latest run has every cell skipped. Models, regions and the API version are set per provider with `ENTERPLACE_LIVE_<PROVIDER>_CHAT_MODEL` and the other variables named at the top of `scripts/live_matrix.py`.
 </Aside>

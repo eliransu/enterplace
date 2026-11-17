@@ -16,16 +16,16 @@ variable "zone" {
 variable "name" {
   description = "Prefix for every resource this module creates. Lowercase letters, digits and hyphens."
   type        = string
-  default     = "gantry"
+  default     = "enterplace"
 }
 
 variable "image" {
-  description = "The gantry image. Cloud Run pulls from Artifact Registry (or a remote repository in front of ghcr.io), such as europe-docker.pkg.dev/my-project/gantry/gantry:0.1.0."
+  description = "The enterplace image. Cloud Run pulls from Artifact Registry (or a remote repository in front of ghcr.io), such as europe-docker.pkg.dev/my-project/enterplace/enterplace:0.1.0."
   type        = string
 }
 
 variable "policy" {
-  description = "The Gantry policy, as YAML text (for example file(\"gantry.policy.yaml\")). It must put the audit log under /var/lib/gantry and have `store: { postgres_url_env: DATABASE_URL }`. Stored in Secret Manager and mounted as /etc/gantry/gantry.policy.yaml; a change makes a new revision."
+  description = "The Enterplace policy, as YAML text (for example file(\"enterplace.policy.yaml\")). It must put the audit log under /var/lib/enterplace and have `store: { postgres_url_env: DATABASE_URL }`. Stored in Secret Manager and mounted as /etc/enterplace/enterplace.policy.yaml; a change makes a new revision."
   type        = string
 }
 
@@ -54,19 +54,19 @@ variable "vertex_ai" {
 }
 
 variable "master_key_secret" {
-  description = "Optional. Secret Manager secret ID, in this project, of the master key (64 hex characters) that seals provider credentials kept in the store. Becomes GANTRY_MASTER_KEY. Null makes one with a random value in the secret <name>-master-key, kept across applies (its value is in Terraform state). Keep a copy elsewhere: a lost master key cannot be recovered."
+  description = "Optional. Secret Manager secret ID, in this project, of the master key (64 hex characters) that seals provider credentials kept in the store. Becomes ENTERPLACE_MASTER_KEY. Null makes one with a random value in the secret <name>-master-key, kept across applies (its value is in Terraform state). Keep a copy elsewhere: a lost master key cannot be recovered."
   type        = string
   default     = null
 }
 
 variable "export_key_secret" {
-  description = "Optional. Secret Manager secret ID, in this project, of the key (64 hex characters) that encrypts SIEM export destinations' secrets. Becomes GANTRY_EXPORT_KEY. Null makes one with a random value in the secret <name>-export-key, kept across applies (its value is in Terraform state)."
+  description = "Optional. Secret Manager secret ID, in this project, of the key (64 hex characters) that encrypts SIEM export destinations' secrets. Becomes ENTERPLACE_EXPORT_KEY. Null makes one with a random value in the secret <name>-export-key, kept across applies (its value is in Terraform state)."
   type        = string
   default     = null
 }
 
 variable "license_secret" {
-  description = "Secret Manager secret ID of the Gantry license key. Becomes GANTRY_LICENSE. Null runs without the enterprise features."
+  description = "Secret Manager secret ID of the Enterplace license key. Becomes ENTERPLACE_LICENSE. Null runs without the enterprise features."
   type        = string
   default     = null
 }
@@ -84,7 +84,7 @@ variable "memory" {
 }
 
 variable "public" {
-  description = "Let anyone reach the service URL. Gantry's own keys decide who may call; with false, callers also need a Google identity token with run.invoker."
+  description = "Let anyone reach the service URL. Enterplace's own keys decide who may call; with false, callers also need a Google identity token with run.invoker."
   type        = bool
   default     = true
 }

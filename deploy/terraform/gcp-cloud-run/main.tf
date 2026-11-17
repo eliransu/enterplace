@@ -1,4 +1,4 @@
-# Gantry on Google Cloud: one Cloud Run instance, Cloud SQL Postgres through the Cloud SQL connector, the audit log
+# Enterplace on Google Cloud: one Cloud Run instance, Cloud SQL Postgres through the Cloud SQL connector, the audit log
 # on Filestore over NFS, secrets and the policy in Secret Manager. See README.md for why each was chosen.
 
 locals {
@@ -15,7 +15,7 @@ locals {
     cpu     = var.cpu
     memory  = var.memory
   })), 0, 10)}"
-  # The connector's Unix socket. Gantry allows a connection without TLS only to its own machine, and a socket is.
+  # The connector's Unix socket. Enterplace allows a connection without TLS only to its own machine, and a socket is.
   socket_dir = "/cloudsql/${google_sql_database_instance.this.connection_name}"
   # The keys the caller did not pass, which the module makes.
   generated_keys = toset(concat(
@@ -25,10 +25,10 @@ locals {
   secrets = merge(
     {
       DATABASE_URL      = google_secret_manager_secret.database_url.secret_id
-      GANTRY_MASTER_KEY = var.master_key_secret == null ? google_secret_manager_secret.generated["master-key"].secret_id : var.master_key_secret
-      GANTRY_EXPORT_KEY = var.export_key_secret == null ? google_secret_manager_secret.generated["export-key"].secret_id : var.export_key_secret
+      ENTERPLACE_MASTER_KEY = var.master_key_secret == null ? google_secret_manager_secret.generated["master-key"].secret_id : var.master_key_secret
+      ENTERPLACE_EXPORT_KEY = var.export_key_secret == null ? google_secret_manager_secret.generated["export-key"].secret_id : var.export_key_secret
     },
-    var.license_secret == null ? {} : { GANTRY_LICENSE = var.license_secret },
+    var.license_secret == null ? {} : { ENTERPLACE_LICENSE = var.license_secret },
     var.provider_key_secrets,
   )
 }
@@ -40,39 +40,39 @@ resource "google_project_service" "this" {
   disable_on_destroy = false
 }
 
-resource "google_service_account" "gantry" {
+resource "google_service_account" "enterplace" {
   project      = var.project
   account_id   = "${var.name}-run"
-  display_name = "Gantry gateway"
+  display_name = "Enterplace gateway"
 }
 
 resource "google_project_iam_member" "sql_client" {
   project = var.project
   role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${google_service_account.gantry.email}"
+  member  = "serviceAccount:${google_service_account.enterplace.email}"
 }
 
-# Vertex AI providers sign in as this service account (Gantry asks the metadata server for its token), so no key
+# Vertex AI providers sign in as this service account (Enterplace asks the metadata server for its token), so no key
 # or access token is stored.
 resource "google_project_iam_member" "vertex_ai" {
   count   = var.vertex_ai ? 1 : 0
   project = var.project
   role    = "roles/aiplatform.user"
-  member  = "serviceAccount:${google_service_account.gantry.email}"
+  member  = "serviceAccount:${google_service_account.enterplace.email}"
 }
 
-resource "google_secret_manager_secret_iam_member" "gantry" {
+resource "google_secret_manager_secret_iam_member" "enterplace" {
   for_each  = merge(local.secrets, { policy = google_secret_manager_secret.policy.secret_id })
   project   = var.project
   secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.gantry.email}"
+  member    = "serviceAccount:${google_service_account.enterplace.email}"
 }
 
 # Cloud SQL. Public IP with no authorized networks and client certificates required: only the Cloud SQL connector
 # (IAM-authorized, mutual TLS) can connect. Private IP is not used because Cloud SQL's server certificates come from
-# a per-instance authority that is not among the Mozilla roots Gantry checks against, so a direct TLS connection is
-# refused; the connector gives Gantry a local socket instead.
+# a per-instance authority that is not among the Mozilla roots Enterplace checks against, so a direct TLS connection is
+# refused; the connector gives Enterplace a local socket instead.
 resource "google_sql_database_instance" "this" {
   project             = var.project
   name                = var.name
@@ -96,10 +96,10 @@ resource "google_sql_database_instance" "this" {
   depends_on = [google_project_service.this]
 }
 
-resource "google_sql_database" "gantry" {
+resource "google_sql_database" "enterplace" {
   project  = var.project
   instance = google_sql_database_instance.this.name
-  name     = "gantry"
+  name     = "enterplace"
 }
 
 resource "random_password" "db" {
@@ -108,10 +108,10 @@ resource "random_password" "db" {
   special = false
 }
 
-resource "google_sql_user" "gantry" {
+resource "google_sql_user" "enterplace" {
   project  = var.project
   instance = google_sql_database_instance.this.name
-  name     = "gantry"
+  name     = "enterplace"
   password = random_password.db.result
 }
 
@@ -127,7 +127,7 @@ resource "google_secret_manager_secret" "database_url" {
 
 resource "google_secret_manager_secret_version" "database_url" {
   secret      = google_secret_manager_secret.database_url.id
-  secret_data = "postgres://gantry:${random_password.db.result}@${urlencode(local.socket_dir)}/gantry?sslmode=disable"
+  secret_data = "postgres://enterplace:${random_password.db.result}@${urlencode(local.socket_dir)}/enterplace?sslmode=disable"
 }
 
 # The master key (seals provider credentials kept in the store) and the export key (encrypts SIEM destination
@@ -171,7 +171,7 @@ resource "google_secret_manager_secret_version" "policy" {
   secret_data = var.policy
 }
 
-# Filestore over NFS for the audit log. Cloud Storage FUSE is not used: Gantry appends to the log and syncs it every
+# Filestore over NFS for the audit log. Cloud Storage FUSE is not used: Enterplace appends to the log and syncs it every
 # second, and GCS FUSE rewrites a whole object on each sync with no locking, so a crash or a second writer can cut
 # the hash chain. NFS appends in place.
 resource "google_filestore_instance" "this" {
@@ -181,7 +181,7 @@ resource "google_filestore_instance" "this" {
   tier     = "BASIC_HDD"
   labels   = var.labels
   file_shares {
-    name        = "gantry"
+    name        = "enterplace"
     capacity_gb = var.filestore_capacity_gb
     # Writes as root (Cloud Run creating the revision's folder) are mapped to the image's user, 65532, so the
     # gateway owns its folder.
@@ -210,7 +210,7 @@ resource "google_cloud_run_v2_service" "this" {
 
   template {
     revision                         = local.revision
-    service_account                  = google_service_account.gantry.email
+    service_account                  = google_service_account.enterplace.email
     execution_environment            = "EXECUTION_ENVIRONMENT_GEN2"
     max_instance_request_concurrency = 1000
     # Streams can run long; Cloud Run's limit is an hour.
@@ -230,7 +230,7 @@ resource "google_cloud_run_v2_service" "this" {
     }
     containers {
       image = var.image
-      args  = ["serve", "/etc/gantry/gantry.policy.yaml", "--listen", "0.0.0.0:8080"]
+      args  = ["serve", "/etc/enterplace/enterplace.policy.yaml", "--listen", "0.0.0.0:8080"]
       ports {
         container_port = 8080
       }
@@ -254,7 +254,7 @@ resource "google_cloud_run_v2_service" "this" {
       }
       volume_mounts {
         name       = "policy"
-        mount_path = "/etc/gantry"
+        mount_path = "/etc/enterplace"
       }
       volume_mounts {
         name       = "cloudsql"
@@ -262,7 +262,7 @@ resource "google_cloud_run_v2_service" "this" {
       }
       volume_mounts {
         name       = "audit"
-        mount_path = "/var/lib/gantry"
+        mount_path = "/var/lib/enterplace"
         sub_path   = local.revision
       }
       startup_probe {
@@ -286,7 +286,7 @@ resource "google_cloud_run_v2_service" "this" {
         secret = google_secret_manager_secret.policy.secret_id
         items {
           version = google_secret_manager_secret_version.policy.version
-          path    = "gantry.policy.yaml"
+          path    = "enterplace.policy.yaml"
         }
       }
     }
@@ -300,12 +300,12 @@ resource "google_cloud_run_v2_service" "this" {
       name = "audit"
       nfs {
         server = google_filestore_instance.this.networks[0].ip_addresses[0]
-        path   = "/gantry"
+        path   = "/enterplace"
       }
     }
   }
 
-  depends_on = [google_secret_manager_secret_iam_member.gantry, google_project_iam_member.sql_client, google_project_iam_member.vertex_ai, google_secret_manager_secret_version.database_url, google_secret_manager_secret_version.generated]
+  depends_on = [google_secret_manager_secret_iam_member.enterplace, google_project_iam_member.sql_client, google_project_iam_member.vertex_ai, google_secret_manager_secret_version.database_url, google_secret_manager_secret_version.generated]
 }
 
 resource "google_cloud_run_v2_service_iam_member" "public" {

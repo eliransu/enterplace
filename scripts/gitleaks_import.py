@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Turns Gitleaks' default rule set (config/gitleaks.toml, MIT license) into the JSON the `secrets` guardrail's
-`pack: gitleaks` reads: crates/gantry-core/data/gitleaks-rules.json.
+`pack: gitleaks` reads: crates/enterplace-core/data/gitleaks-rules.json.
 
 Usage: scripts/gitleaks_import.py <gitleaks.toml> <gitleaks commit sha>
 
@@ -83,7 +83,7 @@ def main():
     glob = config.get("allowlist", {})
     out = {
         "source": "https://github.com/gitleaks/gitleaks/blob/%s/config/gitleaks.toml" % sha,
-        "license": "MIT, Copyright (c) 2019 Zachary Rice. Rules imported with literal braces escaped for Rust's regex; see crates/gantry-core/data/GITLEAKS-LICENSE.",
+        "license": "MIT, Copyright (c) 2019 Zachary Rice. Rules imported with literal braces escaped for Rust's regex; see crates/enterplace-core/data/GITLEAKS-LICENSE.",
         "global": {
             "regexes": [rust(r) for r in glob.get("regexes", [])],
             "stopwords": [s.lower() for s in glob.get("stopwords", [])],

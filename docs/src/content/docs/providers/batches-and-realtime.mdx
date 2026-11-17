@@ -7,13 +7,13 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gantry serves the asynchronous and realtime APIs natively, not as passthrough. Every file, batch and job belongs to the person who created it, every batch line is decided before the provider sees the file, a batch reserves its cost against the budget when it is created, and its results are charged line by line when it ends.
+Enterplace serves the asynchronous and realtime APIs natively, not as passthrough. Every file, batch and job belongs to the person who created it, every batch line is decided before the provider sees the file, a batch reserves its cost against the budget when it is created, and its results are charged line by line when it ends.
 
 ## Routes
 
-| Route | Provider kind | What Gantry does |
+| Route | Provider kind | What Enterplace does |
 |---|---|---|
-| `POST /v1/files` | openai, bedrock, vertex, vertex_anthropic | Checks every line of a `purpose: batch` file, sets the policy's retention, records the file as yours. For a model on Bedrock or Vertex AI, Gantry keeps the file in the provider's bucket |
+| `POST /v1/files` | openai, bedrock, vertex, vertex_anthropic | Checks every line of a `purpose: batch` file, sets the policy's retention, records the file as yours. For a model on Bedrock or Vertex AI, Enterplace keeps the file in the provider's bucket |
 | `GET /v1/files`, `GET /v1/files/<id>`, `GET /v1/files/<id>/content`, `DELETE /v1/files/<id>` | openai | Yours only; a list shows only your files |
 | `POST /v1/batches` | openai, bedrock, vertex, vertex_anthropic | Only from a batch file you uploaded; decides its model again and reserves its estimate at batch prices. Bedrock and Vertex AI files start the provider's own batch job |
 | `GET /v1/batches`, `GET /v1/batches/<id>`, `POST /v1/batches/<id>/cancel` | openai, bedrock, vertex, vertex_anthropic | Yours only; an ended batch is metered when read |
@@ -28,20 +28,20 @@ Gantry serves the asynchronous and realtime APIs natively, not as passthrough. E
 
 A list or events read takes `after`, `limit`, `order`, `purpose`, `before_id`, `after_id` and `metadata` in its query, with plain values. Anything else is refused with `bad_query`.
 
-When more than one provider of the kind could take a new file or a list, name one in `x-gantry-provider: <name>`. A batch file goes to the provider that serves its model: for an alias, the first deployment on Bedrock or Vertex AI (in one of the rule's `regions:`, when it sets them).
+When more than one provider of the kind could take a new file or a list, name one in `x-enterplace-provider: <name>`. A batch file goes to the provider that serves its model: for an alias, the first deployment on Bedrock or Vertex AI (in one of the rule's `regions:`, when it sets them).
 
 ## Ownership
 
-- A file, batch, message batch or fine-tuning job is owned by the person whose Gantry key created it. Anyone else gets `404 not_found` for its ID, the same answer as for an ID that does not exist, so nobody can learn which IDs others hold.
+- A file, batch, message batch or fine-tuning job is owned by the person whose Enterplace key created it. Anyone else gets `404 not_found` for its ID, the same answer as for an ID that does not exist, so nobody can learn which IDs others hold.
 - A key with `admin: true` in the keys file reads, cancels and deletes any of them, and its lists are not filtered.
 - The output and error files a batch writes belong to the batch's owner.
-- Objects created at the provider outside Gantry are unknown to it and refused.
+- Objects created at the provider outside Enterplace are unknown to it and refused.
 - Who owns what is written to the audit log (`owned`, `owned_settled` and `owned_deleted` records) and read back at start, so a restart keeps it, and an open batch's reservation is held again.
 
 <Aside type="note">
 With a [store](/operations/store/), ownership is also kept in Postgres (namespace `batches`), so every replica behind a load balancer answers for every file, batch and job, and a batch that several replicas see end is metered once. Without a store it is kept per gateway, from its own audit log, and a replica refuses an ID another replica created.
 
-These routes take the same access checks as the model routes: a key's `routes` and `from`, a rule's `from`, JWT callers, and `x-gantry-customer` and `x-gantry-tags`. A rule with `regions:` reaches only the files and batches Gantry keeps for an alias deployment on Bedrock or Vertex AI labelled with one of its regions; everything else is refused with `region_not_allowed`, since a provider account shows no region. Batches and realtime sessions count against every budget the request would, the `limits:` list included.
+These routes take the same access checks as the model routes: a key's `routes` and `from`, a rule's `from`, JWT callers, and `x-enterplace-customer` and `x-enterplace-tags`. A rule with `regions:` reaches only the files and batches Enterplace keeps for an alias deployment on Bedrock or Vertex AI labelled with one of its regions; everything else is refused with `region_not_allowed`, since a provider account shows no region. Batches and realtime sessions count against every budget the request would, the `limits:` list included.
 </Aside>
 
 ## Batch lines
@@ -57,8 +57,8 @@ A refused line names itself: `Refused (guardrail_blocked): line 2 of the batch: 
 
 ## Budgets and metering
 
-- OpenAI, Anthropic, Bedrock and Vertex AI bill batches at half the model's price, and Gantry charges a batch line half, unless the model's price sets `batch_input` and `batch_output` (the price map carries them where the provider publishes them): then those. A batch reserves half of its lines' estimate against every budget its lines count against (the rule's, the key's and the `limits:` list's) when it is created. If that does not fit, it is refused with `budget_exceeded` and never reaches the provider.
-- When the batch ends (`completed`, `failed`, `expired` or `cancelled` for OpenAI, `processing_status: ended` for Anthropic), Gantry reads its results and writes one `usage` record per line, at half the model's price, with `batch`, `custom_id`, `line` and `price_share: 0.5`. A failed line costs nothing. A line that succeeded without usage is charged its share of the reservation. The reservation is then given back and an `owned_settled` record sums the batch.
+- OpenAI, Anthropic, Bedrock and Vertex AI bill batches at half the model's price, and Enterplace charges a batch line half, unless the model's price sets `batch_input` and `batch_output` (the price map carries them where the provider publishes them): then those. A batch reserves half of its lines' estimate against every budget its lines count against (the rule's, the key's and the `limits:` list's) when it is created. If that does not fit, it is refused with `budget_exceeded` and never reaches the provider.
+- When the batch ends (`completed`, `failed`, `expired` or `cancelled` for OpenAI, `processing_status: ended` for Anthropic), Enterplace reads its results and writes one `usage` record per line, at half the model's price, with `batch`, `custom_id`, `line` and `price_share: 0.5`. A failed line costs nothing. A line that succeeded without usage is charged its share of the reservation. The reservation is then given back and an `owned_settled` record sums the batch.
 - A batch is metered the first time it is read after it ended, or by the gateway's check of open batches once a minute, whichever comes first, and only once.
 - A fine-tuning job that ends is recorded with its `trained_tokens` and `fine_tuned_model`. OpenAI's job object carries no price, so it is not charged.
 
@@ -70,11 +70,11 @@ When you download batch results (`GET /v1/files/<id>/content` of an output file,
 - **mask** masks the text in place.
 - **record** only records.
 
-Each line a guardrail found something in gets a `batch_result_guardrails` record with its `line`, `custom_id` and `verdict`. A line that failed at the provider, or that Gantry cannot read, is passed on as it is. The lines are still metered as the provider reported them: the answer was produced.
+Each line a guardrail found something in gets a `batch_result_guardrails` record with its `line`, `custom_id` and `verdict`. A line that failed at the provider, or that Enterplace cannot read, is passed on as it is. The lines are still metered as the provider reported them: the answer was produced.
 
 ## Batch limits
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 rules:
   - name: data
     principals: { team: data }
@@ -85,7 +85,7 @@ rules:
 
 - A file upload and a batch creation (OpenAI or Anthropic) each count as one request against the rule's and the key's `rpm` and the `limits:` list's, as a model request does. Reads, lists and downloads do not. Over the limit is `rate_limited` with `Retry-After`.
 - `max_lines` is the most lines one batch may hold, checked at upload and again at creation: `batch_too_many_lines`.
-- `max_open` is the most batches a person under the rule may have not yet ended, OpenAI and Anthropic together: `batch_too_many_open`. A batch stops counting once Gantry sees it end.
+- `max_open` is the most batches a person under the rule may have not yet ended, OpenAI and Anthropic together: `batch_too_many_open`. A batch stops counting once Enterplace sees it end.
 
 In observe mode, or before a `shadow_until`, these record what they would refuse and refuse nothing.
 
@@ -93,7 +93,7 @@ In observe mode, or before a `shadow_until`, these record what they would refuse
 
 A batch file whose model runs on Amazon Bedrock or Vertex AI (Gemini, or Claude on Vertex AI) is run as the provider's own batch job, behind the same `/v1/files` and `/v1/batches` calls:
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 providers:
   - name: bedrock
     kind: bedrock
@@ -101,28 +101,28 @@ providers:
     models: [claude-sonnet]
     model_ids: { claude-sonnet: anthropic.claude-sonnet-4-5-v1:0 }
     batch:
-      bucket: s3://acme-gantry-batches/bedrock/
+      bucket: s3://acme-enterplace-batches/bedrock/
       role_arn: arn:aws:iam::123456789012:role/bedrock-batch
   - name: vertex
     kind: vertex
     url: https://us-central1-aiplatform.googleapis.com/v1/projects/acme/locations/us-central1/publishers/google
     models: [gemini-2.5-flash]
     batch:
-      bucket: gs://acme-gantry-batches/vertex/
+      bucket: gs://acme-enterplace-batches/vertex/
 ```
 
-1. **Upload.** The lines are checked as any batch file's, then translated: to Bedrock's `{"recordId", "modelInput"}` with the InvokeModel body, to Claude on Vertex AI's `{"custom_id", "request"}`, or to Gemini's `{"request"}`. Lines must be chat completions (`/v1/chat/completions`); another `url` is refused with `wrong_endpoint`. Gantry writes the file to `<bucket>input/<file id>.jsonl` and answers with an OpenAI file object (`file-gantry-...`).
-2. **Create.** `POST /v1/batches` starts `CreateModelInvocationJob` (Bedrock, with `role_arn`, the service role Bedrock assumes to read and write the bucket) or a `batchPredictionJobs` job (Vertex AI), writing to `<bucket>output/<batch id>/`, and answers with an OpenAI batch object (`batch_gantry_...`). The estimate is reserved as for any batch.
+1. **Upload.** The lines are checked as any batch file's, then translated: to Bedrock's `{"recordId", "modelInput"}` with the InvokeModel body, to Claude on Vertex AI's `{"custom_id", "request"}`, or to Gemini's `{"request"}`. Lines must be chat completions (`/v1/chat/completions`); another `url` is refused with `wrong_endpoint`. Enterplace writes the file to `<bucket>input/<file id>.jsonl` and answers with an OpenAI file object (`file-enterplace-...`).
+2. **Create.** `POST /v1/batches` starts `CreateModelInvocationJob` (Bedrock, with `role_arn`, the service role Bedrock assumes to read and write the bucket) or a `batchPredictionJobs` job (Vertex AI), writing to `<bucket>output/<batch id>/`, and answers with an OpenAI batch object (`batch_enterplace_...`). The estimate is reserved as for any batch.
 3. **Status.** `GET /v1/batches/<id>` asks the provider and answers in OpenAI's shape: `validating`, `in_progress`, `completed`, `failed`, `cancelling`, `cancelled` or `expired`. `POST .../cancel` stops the job.
-4. **Results.** When the job ends, Gantry reads what it wrote, meters each line at the batch price of the model the deployment runs, and writes the answers as OpenAI output lines (chat completions) to an output file and the failed lines to an error file, both in the bucket and both the batch owner's. Download them with `GET /v1/files/<id>/content`, through the result guardrails.
+4. **Results.** When the job ends, Enterplace reads what it wrote, meters each line at the batch price of the model the deployment runs, and writes the answers as OpenAI output lines (chat completions) to an output file and the failed lines to an error file, both in the bucket and both the batch owner's. Download them with `GET /v1/files/<id>/content`, through the result guardrails.
 
-Gantry signs S3 and Bedrock calls with the provider's AWS credentials (the same chain as its model calls), and Cloud Storage and Vertex AI calls with its Google credentials or `key_env` token. The credentials need to write and read the bucket, and start and read batch jobs. `batch.url` and `batch.storage_url` point at a private endpoint (Bedrock's control plane and S3, or Vertex AI and Cloud Storage) when the public ones are not used.
+Enterplace signs S3 and Bedrock calls with the provider's AWS credentials (the same chain as its model calls), and Cloud Storage and Vertex AI calls with its Google credentials or `key_env` token. The credentials need to write and read the bucket, and start and read batch jobs. `batch.url` and `batch.storage_url` point at a private endpoint (Bedrock's control plane and S3, or Vertex AI and Cloud Storage) when the public ones are not used.
 
 A list (`GET /v1/files`, `GET /v1/batches`) shows these beside the OpenAI provider's own, or alone when there is no OpenAI provider or your rule sets `regions:`. The policy's `file_retention_days` deletes the files from the bucket when it is up.
 
 ## Retention
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 rules:
   - name: data
     principals: { team: data }
@@ -130,19 +130,19 @@ rules:
     file_retention_days: 7
 ```
 
-`file_retention_days` (1 to 30) is how long a file uploaded under the rule is kept. Gantry adds `expires_after[anchor]=created_at` and `expires_after[seconds]` to the upload so OpenAI expires the file itself, refuses an upload that asks to keep it longer (`retention_too_long`), refuses reads after it (`expired`), and deletes at the provider whatever is still there, including batch output files and ended Anthropic message batches. Each deletion is an `owned_deleted` record with `why: retention`.
+`file_retention_days` (1 to 30) is how long a file uploaded under the rule is kept. Enterplace adds `expires_after[anchor]=created_at` and `expires_after[seconds]` to the upload so OpenAI expires the file itself, refuses an upload that asks to keep it longer (`retention_too_long`), refuses reads after it (`expired`), and deletes at the provider whatever is still there, including batch output files and ended Anthropic message batches. Each deletion is an `owned_deleted` record with `why: retention`.
 
 ## Realtime sessions
 
-- **OpenAI Realtime**: connect to `/v1/realtime?model=<model>` with your Gantry key in `Authorization`. The key, rule, model, kill switches and budget are decided before the upgrade; a refusal is an HTTP status with the usual error body. Only `model` may be in the query.
-- **Gemini Live**: connect to Google's `BidiGenerateContent` path with your Gantry key as `Authorization: Bearer <key>` or in `x-api-key`, never in the URL. The key, rule, kill switches and budget are checked at connect; the model is decided from the first message (`{"setup": {"model": "models/<model>"}}`) before anything is sent on. A refused setup closes the socket with code 1008.
+- **OpenAI Realtime**: connect to `/v1/realtime?model=<model>` with your Enterplace key in `Authorization`. The key, rule, model, kill switches and budget are decided before the upgrade; a refusal is an HTTP status with the usual error body. Only `model` may be in the query.
+- **Gemini Live**: connect to Google's `BidiGenerateContent` path with your Enterplace key as `Authorization: Bearer <key>` or in `x-api-key`, never in the URL. The key, rule, kill switches and budget are checked at connect; the model is decided from the first message (`{"setup": {"model": "models/<model>"}}`) before anything is sent on. A refused setup closes the socket with code 1008.
 - Audio and text events pass both ways as they come.
 - Each OpenAI `response.done` event is charged from its `response.usage`, and each Gemini message with `usageMetadata` from `promptTokenCount`, `cachedContentTokenCount`, `responseTokenCount` and `thoughtsTokenCount`. Audio and text are counted apart, from OpenAI's `input_token_details` and `output_token_details` and Gemini's `promptTokensDetails`, `cacheTokensDetails` and `responseTokensDetails`: the usage record carries `input_audio_tokens`, `output_audio_tokens` and `cache_read_audio_tokens` beside the text counts. Our reading of the Live API reference is that each `usageMetadata` reports one turn; the reference does not say whether the counts are per turn or for the session. Each is one `usage` record with `session` set to the session's decision ID. Audio tokens are charged at the model's `input_audio`, `output_audio` and `cache_read_audio` prices (from the price map, or under `prices:`), text tokens at its text prices. A model without audio prices charges audio at its text price, which under-counts: set them.
 - A kill switch on the person, team, key or model ends the session within a second. A response that spends the budget ends it after that response. OpenAI clients get an `error` event with the code first; every client gets a close frame with code 1008 and the code in its reason.
 - When the session ends, a `realtime_session` record names the person, model, provider, seconds, responses, `charged_usd` and `ended_by` (`client`, `provider`, `killed` or `budget`). No event content is recorded.
 
 <Aside type="note">
-`x-gantry-provider-key` is refused on these routes: files, batches and sessions live in the organization's provider account.
+`x-enterplace-provider-key` is refused on these routes: files, batches and sessions live in the organization's provider account.
 </Aside>
 
 ## Related

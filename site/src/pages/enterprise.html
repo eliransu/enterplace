@@ -1,11 +1,11 @@
 <!--
-title: Gantry editions: open source and Enterprise
-description: Gantry's gateway is open source under MIT. Gantry Enterprise is the same image with features a signed license key turns on: SCIM, SIEM export, alerts, retention and legal hold. The key is checked offline and a lapsed license never stops model traffic.
+title: Enterplace editions: open source and Enterprise
+description: Enterplace's gateway is open source under MIT. Enterplace Enterprise is the same image with features a signed license key turns on: SCIM, SIEM export, alerts, retention and legal hold. The key is checked offline and a lapsed license never stops model traffic.
 nav: enterprise
 -->
 <section class="wrap head">
   <h1>An open source gateway. A license adds what a larger company needs.</h1>
-  <p class="lead">The gateway, the console and the command line are open source under MIT, for any number of people. Gantry Enterprise is the same binary in the same image, with features that a signed license key turns on.</p>
+  <p class="lead">The gateway, the console and the command line are open source under MIT, for any number of people. Enterplace Enterprise is the same binary in the same image, with features that a signed license key turns on.</p>
 </section>
 
 <section class="wrap sec" style="padding-top: 48px">
@@ -14,8 +14,8 @@ nav: enterprise
       <h2>Open source</h2>
       <p>MIT. One binary on files, or several replicas on Postgres. No license key and no account.</p>
       <ul class="ticks">
-        <li>Keys per person and workload, <code>gantry login</code> through OpenID Connect or SAML, JWTs from your identity provider</li>
-        <li>Policy as one file, checked by <code>gantry check</code>, with observe mode and kill switches</li>
+        <li>Keys per person and workload, <code>enterplace login</code> through OpenID Connect or SAML, JWTs from your identity provider</li>
+        <li>Policy as one file, checked by <code>enterplace check</code>, with observe mode and kill switches</li>
         <li>The hash-chained audit log and the command that verifies it</li>
         <li>Guardrails, the MCP gateway, budgets, rate limits and caching</li>
         <li>Routing, retries and fallbacks across the major providers and local servers</li>
@@ -25,7 +25,7 @@ nav: enterprise
       <a class="btn btn-main" href="docs:/getting-started/quickstart/">Read the quickstart</a>
     </article>
     <article class="edition paid">
-      <h2>Gantry Enterprise</h2>
+      <h2>Enterplace Enterprise</h2>
       <p>Everything in the open source edition, plus the features the license names.</p>
       <ul class="ticks">
         <li>Console members with roles, and SCIM 2.0 provisioning from Okta and Microsoft Entra ID</li>
@@ -50,7 +50,7 @@ nav: enterprise
   <div class="split">
     <dl class="facts">
       <div><dt>Checked offline</dt><dd>The license is signed and checked against a public key built into the binary. The check never uses the network, so it works the same in an air-gapped network.</dd></div>
-      <div><dt>Nothing calls home</dt><dd>No usage data is sent to the Gantry project.</dd></div>
+      <div><dt>Nothing calls home</dt><dd>No usage data is sent to the Enterplace project.</dd></div>
       <div><dt>It never stops model traffic</dt><dd>Whatever the license says, the gateway keeps serving, governing and recording requests.</dd></div>
     </dl>
     <div class="stack">
@@ -62,9 +62,9 @@ nav: enterprise
           <tr><td>After the 30 days</td><td>Enterprise features are off. Model traffic is still served.</td></tr>
         </tbody>
       </table>
-      <figure class="code"><figcaption>Set it, and see what it unlocks</figcaption><pre>export GANTRY_LICENSE='eyJjdXN0b21lciI6...'
+      <figure class="code"><figcaption>Set it, and see what it unlocks</figcaption><pre>export ENTERPLACE_LICENSE='eyJjdXN0b21lciI6...'
 
-<span class="c">$</span> gantry license show --keys gantry.keys.yaml</pre></figure>
+<span class="c">$</span> enterplace license show --keys enterplace.keys.yaml</pre></figure>
     </div>
   </div>
 </section>
@@ -90,7 +90,7 @@ nav: enterprise
   <div class="sec-head solo"><h2>Read next</h2></div>
   <nav class="rows tight" aria-label="Read next">
     <a href="/deploy/"><strong>Deploy</strong><span>One image plus Postgres, on Docker, Kubernetes or your cloud account.</span>{{> arrow}}</a>
-    <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops.</span>{{> arrow}}</a>
+    <a href="/security/"><strong>Security</strong><span>What Enterplace protects, and where it stops.</span>{{> arrow}}</a>
     <a href="docs:/getting-started/status/"><strong>Project status</strong><span>What is built and what is planned, edition by edition.</span>{{> arrow}}</a>
   </nav>
 </section>

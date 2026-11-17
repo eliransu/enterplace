@@ -1,6 +1,6 @@
 ---
 title: Claude for Office
-description: Point the Claude add-in for Excel, PowerPoint, Word and Outlook at Gantry, with the CORS setting it needs.
+description: Point the Claude add-in for Excel, PowerPoint, Word and Outlook at Enterplace, with the CORS setting it needs.
 sidebar:
   order: 18
 ---
@@ -9,7 +9,7 @@ import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 The Claude add-in for Microsoft 365 can send to a gateway instead of Anthropic. It calls the gateway from the add-in's page in the browser, so the gateway must answer cross-origin requests from `https://pivot.claude.ai`.
 
-Allow that origin in the policy. Gantry then answers the browser's preflight itself and names the origin on every answer; no proxy is needed:
+Allow that origin in the policy. Enterplace then answers the browser's preflight itself and names the origin on every answer; no proxy is needed:
 
 ```yaml
 cors:
@@ -17,11 +17,11 @@ cors:
 ```
 
 <Aside type="caution">
-Without `cors:` (it is off by default) every request fails in the browser before it reaches Gantry. See [Browser pages (CORS)](/governance/access-control/#browser-pages-cors).
+Without `cors:` (it is off by default) every request fails in the browser before it reaches Enterplace. See [Browser pages (CORS)](/governance/access-control/#browser-pages-cors).
 </Aside>
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -30,23 +30,23 @@ Set these as manifest URL parameters when you generate `manifest.xml`, after a `
 
 | Parameter | Value |
 |---|---|
-| `gateway_url` | Gantry's public HTTPS address, without `/v1/messages` |
+| `gateway_url` | Enterplace's public HTTPS address, without `/v1/messages` |
 | `gateway_api_format` | `anthropic` |
-| `gateway_auth_header` | `x-api-key` (the default) or `authorization`. Gantry accepts both |
+| `gateway_auth_header` | `x-api-key` (the default) or `authorization`. Enterplace accepts both |
 
-The add-in uses `POST /v1/messages`, streamed and not, and `GET /v1/models`. The gateway must forward `anthropic-version`, which Gantry does. Per-user keys can come from a bootstrap endpoint or Entra ID extension attributes instead of the manifest.
+The add-in uses `POST /v1/messages`, streamed and not, and `GET /v1/models`. The gateway must forward `anthropic-version`, which Enterplace does. Per-user keys can come from a bootstrap endpoint or Entra ID extension attributes instead of the manifest.
 
-## What Gantry governs
+## What Enterplace governs
 
 - Every prompt and answer: they go only to the gateway.
 
-## What Gantry does not see
+## What Enterplace does not see
 
 - The task pane, analytics and telemetry on `pivot.claude.ai`, feature flags on `claude.ai`, Microsoft sign-in and crash reports. None carry prompts.
 - Dictation and working across apps, which are not available with a gateway.
 
 <Aside type="note">
-This follows Anthropic's Office agents documentation (third-party platforms). It was not run through Gantry.
+This follows Anthropic's Office agents documentation (third-party platforms). It was not run through Enterplace.
 </Aside>
 
 ## Related

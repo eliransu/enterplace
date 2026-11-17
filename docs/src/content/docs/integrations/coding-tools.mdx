@@ -1,15 +1,15 @@
 ---
 title: Coding tools
-description: Which coding tools and chat apps can send through Gantry, over which route, what stays outside it, and which were run against Gantry.
+description: Which coding tools and chat apps can send through Enterplace, over which route, what stays outside it, and which were run against Enterplace.
 sidebar:
   order: 0
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A coding tool goes through Gantry when it lets you set a base URL and a key for an OpenAI, Anthropic or Google Gemini API. This page lists each tool Gantry has a guide for, the route it uses, and what it sends elsewhere whatever you configure.
+A coding tool goes through Enterplace when it lets you set a base URL and a key for an OpenAI, Anthropic or Google Gemini API. This page lists each tool Enterplace has a guide for, the route it uses, and what it sends elsewhere whatever you configure.
 
-| Tool | Route on Gantry | Stays outside Gantry | Run against Gantry |
+| Tool | Route on Enterplace | Stays outside Enterplace | Run against Enterplace |
 |---|---|---|---|
 | [Claude Code](/integrations/claude-code/) | `/v1/messages` | Telemetry unless turned off | Yes |
 | [Codex](/integrations/codex/) | `/v1/responses` | | Yes |
@@ -30,7 +30,7 @@ A coding tool goes through Gantry when it lets you set a base URL and a key for 
 | [LibreChat](/integrations/librechat/) | `/v1/chat/completions`, `/v1/messages` | | No |
 | [Open WebUI](/integrations/open-webui/) | `/v1/chat/completions` | Background steps on direct connections | No |
 
-"Run against Gantry" means the tool's real client was run headless against a local Gantry and a mock provider, and the audit records were checked. No run used a real model provider.
+"Run against Enterplace" means the tool's real client was run headless against a local Enterplace and a mock provider, and the audit records were checked. No run used a real model provider.
 
 ## Tools without a guide
 
@@ -39,9 +39,9 @@ These tools offer no setting that sends their model requests to a gateway of you
 - **Windsurf** (now Devin Desktop). Models come from Cognition's catalog, and the admin controls offer an allowlist and defaults, not an endpoint. The only custom endpoint documented is a `models.json` file for federal air-gapped deployments.
 - **Amazon Q Developer** and its successor **Kiro**. Both call AWS's own service endpoints, reachable over a VPC endpoint, with no custom model endpoint. The Q IDE plugins reach end of support on April 30, 2027.
 
-## Which tools reach Gantry
+## Which tools reach Enterplace
 
-Each request record carries the caller's user agent. `gantry audit coverage` counts requests per person and tool, and names key holders who sent nothing. See [Coverage](/governance/coverage/).
+Each request record carries the caller's user agent. `enterplace audit coverage` counts requests per person and tool, and names key holders who sent nothing. See [Coverage](/governance/coverage/).
 
 <Aside type="note">
 A tool that sends its SDK's default user agent shows up as that SDK: Copilot CLI as `OpenAI/JS`.
@@ -51,5 +51,5 @@ A tool that sends its SDK's default user agent shows up as that SDK: Copilot CLI
 
 <CardGrid>
 	<LinkCard title="Coverage" href="/governance/coverage/" description="Requests per person and coding tool." />
-	<LinkCard title="Connect a project" href="/integrations/connect-a-project/" description="Move a project's own model calls to Gantry." />
+	<LinkCard title="Connect a project" href="/integrations/connect-a-project/" description="Move a project's own model calls to Enterplace." />
 </CardGrid>

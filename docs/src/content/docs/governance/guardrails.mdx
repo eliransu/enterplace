@@ -11,7 +11,7 @@ A guardrail reads the text of a request after the policy allows it and before it
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -47,10 +47,10 @@ Guardrails are defined once at the top level and named by rules. A change applie
 
 | Kind | Types | Runs |
 |---|---|---|
-| Built in | `secrets`, `pii` | Inside Gantry, no network call. |
-| Custom | `regex`, `keywords` | Your patterns and word lists, inside Gantry, no network call. |
-| Vendor | `openai_moderation`, `presidio`, `lakera`, `bedrock_guardrail`, `azure_content_safety`, `azure_prompt_shield`, `llama_guard`, `model_armor`, `pangea`, `nemo_guardrails`, `hiddenlayer`, `lasso`, `guardrails_ai`, `aporia`, `prisma_airs`, `enkrypt`, `grayswan`, `cisco_ai_defense`, `mistral_moderation`, `judge` | Gantry calls the vendor's own API. No adapter needed. |
-| Webhook | `webhook` | Your service, speaking [Gantry's contract](/governance/guardrail-webhooks/). |
+| Built in | `secrets`, `pii` | Inside Enterplace, no network call. |
+| Custom | `regex`, `keywords` | Your patterns and word lists, inside Enterplace, no network call. |
+| Vendor | `openai_moderation`, `presidio`, `lakera`, `bedrock_guardrail`, `azure_content_safety`, `azure_prompt_shield`, `llama_guard`, `model_armor`, `pangea`, `nemo_guardrails`, `hiddenlayer`, `lasso`, `guardrails_ai`, `aporia`, `prisma_airs`, `enkrypt`, `grayswan`, `cisco_ai_defense`, `mistral_moderation`, `judge` | Enterplace calls the vendor's own API. No adapter needed. |
+| Webhook | `webhook` | Your service, speaking [Enterplace's contract](/governance/guardrail-webhooks/). |
 | Events | `events` | Your service, sent the whole conversation as [typed events](/governance/plugin-events/) with a session and a turn: tool calls, tool results, reasoning, MCP calls. |
 
 ## Actions
@@ -63,7 +63,7 @@ Guardrails are defined once at the top level and named by rules. A change applie
 
 `action` is required for `secrets`, `pii`, `regex` and `keywords`. Vendors and webhooks default to `block`.
 
-Every action records what was found: one entry per guardrail and kind with `guardrail`, `detector`, `kind`, `action` (`block`, `mask`, `warn`, `shadow` or `skipped`) and `count`. The matched text is never in a record, a refusal or Gantry's log. An empty list means the guardrails ran and found nothing.
+Every action records what was found: one entry per guardrail and kind with `guardrail`, `detector`, `kind`, `action` (`block`, `mask`, `warn`, `shadow` or `skipped`) and `count`. The matched text is never in a record, a refusal or Enterplace's log. An empty list means the guardrails ran and found nothing.
 
 ### Order
 
@@ -79,7 +79,7 @@ Guardrails run before the cache, the rate limit and the budget. See [Order of ch
 
 A key adds guardrails with `guardrails:` on its entry (or in `POST /admin/keys`). They run after its rule's, and only add: a key never runs fewer guardrails than its rule. A name the policy does not define is an error at load.
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 guardrails:
   - name: no-secrets
     type: secrets
@@ -90,7 +90,7 @@ guardrails:
 default_guardrails: [no-secrets]
 ```
 
-```yaml title="gantry.keys.yaml"
+```yaml title="enterplace.keys.yaml"
 keys:
   - name: support-bot
     team: support
@@ -104,7 +104,7 @@ keys:
 
 ```bash
 curl -s http://127.0.0.1:8080/v1/guardrails/check \
-  -H "Authorization: Bearer $GANTRY_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ENTERPLACE_KEY" -H "Content-Type: application/json" \
   -d '{"text": "write to maya@corp.example.com"}'
 ```
 
@@ -123,7 +123,7 @@ The answer is always 200 when the check ran: `blocked` says whether a guardrail 
 
 | Type | Kinds found |
 |---|---|
-| `secrets` | `private_key` (the whole PEM or PGP block), `aws_access_key`, `github_token`, `slack_token`, `gantry_key`, `jwt`, `gcp_service_account_key` (the `private_key_id` of a key file; its PEM block is a `private_key` too), `gcp_api_key` (`AIza...`), `azure_connection_string` (the `AccountKey=` or `SharedAccessKey=` part), `stripe_key` (`sk_` and `rk_`, live and test; never the public `pk_`), `twilio_api_key` (`SK...`), `sendgrid_key` (`SG.`), `openai_project_key` (`sk-proj-`, `sk-svcacct-`, `sk-admin-`), `anthropic_key` (`sk-ant-api03-`, `sk-ant-admin01-`), `api_key` (any other `sk-...`), `database_url` (a `postgres`, `mysql`, `mariadb`, `mongodb`, `redis`, `amqp` or `mssql` URL with a password that is not a placeholder such as `${DB_PASSWORD}` or `password`) |
+| `secrets` | `private_key` (the whole PEM or PGP block), `aws_access_key`, `github_token`, `slack_token`, `enterplace_key`, `jwt`, `gcp_service_account_key` (the `private_key_id` of a key file; its PEM block is a `private_key` too), `gcp_api_key` (`AIza...`), `azure_connection_string` (the `AccountKey=` or `SharedAccessKey=` part), `stripe_key` (`sk_` and `rk_`, live and test; never the public `pk_`), `twilio_api_key` (`SK...`), `sendgrid_key` (`SG.`), `openai_project_key` (`sk-proj-`, `sk-svcacct-`, `sk-admin-`), `anthropic_key` (`sk-ant-api03-`, `sk-ant-admin01-`), `api_key` (any other `sk-...`), `database_url` (a `postgres`, `mysql`, `mariadb`, `mongodb`, `redis`, `amqp` or `mssql` URL with a password that is not a placeholder such as `${DB_PASSWORD}` or `password`) |
 | `pii` | `email_address`, `phone_number`, `credit_card` (Luhn checked), `iban` (mod 97 checked), `israeli_id` (check digit), `us_ssn`, `medical_record_number` and `date_of_birth` (only after a label such as `MRN:` or `DOB:`) |
 
 These are pattern detectors. A password on its own, a key with no known prefix (a Twilio auth token is 32 bare hex digits), a name, an address, or a date of birth or record number with no label is not found. Text that is encoded, split across messages, spelled out or translated is not found either. Any 9-digit number with a valid Israeli ID check digit, and some long digit runs that pass Luhn, are reported. Use a vendor such as Presidio for names, addresses and anything else beyond these patterns.
@@ -132,7 +132,7 @@ These are pattern detectors. A password on its own, a key with no known prefix (
 
 {/* detector-corpus-table:start */}
 
-Measured on the `gantry-detectors-v2` corpus.
+Measured on the `enterplace-detectors-v2` corpus.
 
 | Kind | Type | Positives | Negatives | Precision | Recall |
 |---|---|---|---|---|---|
@@ -140,7 +140,7 @@ Measured on the `gantry-detectors-v2` corpus.
 | `aws_access_key` | `secrets` | 50 | 40 | 100.0% | 100.0% |
 | `github_token` | `secrets` | 50 | 40 | 100.0% | 100.0% |
 | `slack_token` | `secrets` | 40 | 40 | 97.6% | 100.0% |
-| `gantry_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
+| `enterplace_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
 | `jwt` | `secrets` | 40 | 40 | 100.0% | 100.0% |
 | `gcp_service_account_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
 | `gcp_api_key` | `secrets` | 40 | 40 | 100.0% | 100.0% |
@@ -163,7 +163,7 @@ Measured on the `gantry-detectors-v2` corpus.
 
 {/* detector-corpus-table:end */}
 
-`gantry-detectors-v2` is 1,943 labelled lines in the repository at `crates/gantry-core/tests/corpus/gantry-detectors-v2.jsonl` (MIT), made by `scripts/make_detector_corpus.py`. It is v1 (1,223 lines, kept unchanged beside it) with `sk-proj-` and `sk-ant-` keys labelled with their own kinds, plus 40 positives and 40 hard negatives for each kind v2 added. Every key in it is random. Each kind has realistic positives in prose, chat, code, logs and JSON, and hard negatives that look like it: public keys and certificates, IAM IDs, commit hashes, base64 JSON that is not a token, order numbers, timestamps, values with a broken checksum, and labels with no value. Every value is synthetic or a published example: AWS's example key, the card networks' test numbers, RFC 2606 mail domains, fictional phone ranges. A positive is a value a careful reader would report; precision counts a finding on any line, recall counts the values found.
+`enterplace-detectors-v2` is 1,943 labelled lines in the repository at `crates/enterplace-core/tests/corpus/enterplace-detectors-v2.jsonl` (MIT), made by `scripts/make_detector_corpus.py`. It is v1 (1,223 lines, kept unchanged beside it) with `sk-proj-` and `sk-ant-` keys labelled with their own kinds, plus 40 positives and 40 hard negatives for each kind v2 added. Every key in it is random. Each kind has realistic positives in prose, chat, code, logs and JSON, and hard negatives that look like it: public keys and certificates, IAM IDs, commit hashes, base64 JSON that is not a token, order numbers, timestamps, values with a broken checksum, and labels with no value. Every value is synthetic or a published example: AWS's example key, the card networks' test numbers, RFC 2606 mail domains, fictional phone ranges. A positive is a value a careful reader would report; precision counts a finding on any line, recall counts the values found.
 
 `cargo test` measures the corpus and fails when this table differs from the measurement, or when a kind falls below its floor. A new corpus is a new version; v1 is not edited to move its numbers.
 
@@ -183,7 +183,7 @@ The corpus does not cover names, postal addresses, passwords on their own, secre
 
 ### The Gitleaks pack
 
-`pack: gitleaks` on a `secrets` guardrail reads with [Gitleaks](https://github.com/gitleaks/gitleaks)' default rule set (221 rules, MIT license, Copyright (c) 2019 Zachary Rice) in place of Gantry's own secrets kinds. Each finding's kind is the Gitleaks rule ID, such as `aws-access-token` or `github-pat`, and its detector is `gitleaks`.
+`pack: gitleaks` on a `secrets` guardrail reads with [Gitleaks](https://github.com/gitleaks/gitleaks)' default rule set (221 rules, MIT license, Copyright (c) 2019 Zachary Rice) in place of Enterplace's own secrets kinds. Each finding's kind is the Gitleaks rule ID, such as `aws-access-token` or `github-pat`, and its detector is `gitleaks`.
 
 ```yaml
 guardrails:
@@ -195,11 +195,11 @@ guardrails:
 
 Each rule is read as Gitleaks reads it: its keywords first, then its regex, its secret group, its entropy floor and its allowlists (regexes and stopwords, the rule's own and the global ones). Path allowlists do not apply to a prompt. Where two rules find the same text, a named rule wins over `generic-api-key`, so one secret is one finding.
 
-On the `gantry-detectors-v2` corpus, scored as one class of secrets, the pack measures 97.2% precision and 84.9% recall over the kinds Gitleaks has rules for (a CI test holds it to 97% and 84%). It does not find `gantry_key`, and its generic rule reports some hard negatives the built-in detector passes. The rules are at `crates/gantry-core/data/gitleaks-rules.json`, made by `scripts/gitleaks_import.py` from Gitleaks' `config/gitleaks.toml`; the only change is escaping literal braces for Rust's regex.
+On the `enterplace-detectors-v2` corpus, scored as one class of secrets, the pack measures 97.2% precision and 84.9% recall over the kinds Gitleaks has rules for (a CI test holds it to 97% and 84%). It does not find `enterplace_key`, and its generic rule reports some hard negatives the built-in detector passes. The rules are at `crates/enterplace-core/data/gitleaks-rules.json`, made by `scripts/gitleaks_import.py` from Gitleaks' `config/gitleaks.toml`; the only change is escaping literal braces for Rust's regex.
 
 ## Custom detectors: regex and keywords
 
-Your own patterns and word lists, run inside Gantry like the built-in detectors, with `block`, `mask` or `warn`, on requests, answers or both.
+Your own patterns and word lists, run inside Enterplace like the built-in detectors, with `block`, `mask` or `warn`, on requests, answers or both.
 
 ```yaml
 guardrails:
@@ -227,7 +227,7 @@ Each entry's name is the finding's kind: it is what records show, what a refusal
 | `case_sensitive` | bool | `false` | `keywords` only. Matching ignores ASCII case unless this is `true`. |
 | `whole_word` | bool | `true` | `keywords` only. A word matches only on its own, so `bluebird` does not match `bluebirds`. Set `false` to match inside words. |
 
-Patterns use RE2 syntax, read by Rust's `regex` crate: no lookaround and no backreferences, so every pattern runs in time linear in the text, whatever it is. `gantry check` refuses a pattern that does not compile, one larger than 1 MiB compiled (such as `x{1000}{1000}`), one that matches empty text, and one with a capturing group: findings are told apart by group, so write `(?:...)` for a group. Classes, `\b` and case folding are ASCII; literal text in any script still matches.
+Patterns use RE2 syntax, read by Rust's `regex` crate: no lookaround and no backreferences, so every pattern runs in time linear in the text, whatever it is. `enterplace check` refuses a pattern that does not compile, one larger than 1 MiB compiled (such as `x{1000}{1000}`), one that matches empty text, and one with a capturing group: findings are told apart by group, so write `(?:...)` for a group. Classes, `\b` and case folding are ASCII; literal text in any script still matches.
 
 In a keyword list, a phrase's spaces match any run of white space, so `Project Falcon` also matches `project   falcon` across a line break. Every keyword is literal text: `C++` means those three characters.
 
@@ -251,7 +251,7 @@ Until that UTC date (or time, `2026-12-01T09:00:00Z`) the guardrail checks every
 Run a guardrail over examples before any request meets it. The guardrail must be defined under `guardrails:`; no rule needs to name it yet.
 
 ```bash
-gantry guardrail test internal-ids --corpus examples.jsonl --policy gantry.policy.yaml
+enterplace guardrail test internal-ids --corpus examples.jsonl --policy enterplace.policy.yaml
 ```
 
 ```text
@@ -269,14 +269,14 @@ The admin API does the same, for a guardrail a rule of the running policy uses, 
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/admin/guardrails/test \
-  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+  -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" \
   -d '{"guardrail": {"name": "ids", "type": "regex", "action": "warn", "patterns": {"emp": "E[0-9]{7}"}},
        "corpus": [{"text": "badge E1234567", "expect": true}, {"text": "no id here", "expect": false}]}'
 ```
 
 It needs the `edit_policy` permission. It answers with `requests`, `hits`, `kinds`, `samples` and `labelled` (`precision`, `recall` and the four counts), and the call is recorded like every admin call.
 
-A backtest runs the `secrets`, `pii`, `regex` and `keywords` types. A vendor or webhook guardrail is refused, because a backtest would send every example to the service; use `shadow_until` for those. `--since 7d` (and `"since"` in the API) asks for recent traffic. The audit log holds no prompt text by design, so until request bodies are captured, Gantry says so and asks for a corpus.
+A backtest runs the `secrets`, `pii`, `regex` and `keywords` types. A vendor or webhook guardrail is refused, because a backtest would send every example to the service; use `shadow_until` for those. `--since 7d` (and `"since"` in the API) asks for recent traffic. The audit log holds no prompt text by design, so until request bodies are captured, Enterplace says so and asks for a corpus.
 
 ## Vendors
 
@@ -295,7 +295,7 @@ A backtest runs the `secrets`, `pii`, `regex` and `keywords` types. A vendor or 
 | `headers_env` | map | none | Extra headers from environment variables, for a proxy in front of the vendor. |
 | `on` | list | `[request]` | `[request]`, `[answer]` or `[request, answer]`. |
 
-Credentials are read from the environment when a call is made. Gantry does not start, and a reload is refused, while a variable a guardrail names is unset. No credential, matched text or vendor message reaches a record, a log line or a refusal.
+Credentials are read from the environment when a call is made. Enterplace does not start, and a reload is refused, while a variable a guardrail names is unset. No credential, matched text or vendor message reaches a record, a log line or a refusal.
 
 ### Vendor reference
 
@@ -318,11 +318,11 @@ guardrails:
 </TabItem>
 <TabItem label="Presidio">
 
-Microsoft Presidio, self-hosted. `url` is the analyzer (`POST {url}/analyze`), required. No key: run it beside Gantry, or behind a proxy that adds one through `headers_env`.
+Microsoft Presidio, self-hosted. `url` is the analyzer (`POST {url}/analyze`), required. No key: run it beside Enterplace, or behind a proxy that adds one through `headers_env`.
 
-The messages are sent as one text, in English. Each entity is a finding of its type, lowercased (`email_address`, `person`, `phone_number`). `block` refuses when anything is found. `mask` needs `anonymizer_url`: Gantry sends the analyzer's results to `POST {anonymizer_url}/anonymize` and forwards the text with `[MASKED email_address]` and the like.
+The messages are sent as one text, in English. Each entity is a finding of its type, lowercased (`email_address`, `person`, `phone_number`). `block` refuses when anything is found. `mask` needs `anonymizer_url`: Enterplace sends the analyzer's results to `POST {anonymizer_url}/anonymize` and forwards the text with `[MASKED email_address]` and the like.
 
-A message holding the character U+001E cannot be checked (Gantry joins messages with it) and counts as a service failure.
+A message holding the character U+001E cannot be checked (Enterplace joins messages with it) and counts as a service failure.
 
 ```yaml
 guardrails:
@@ -458,7 +458,7 @@ guardrails:
 
 Calls `POST {url}/v1/text/guard` with the messages as chat turns. Default `url` `https://ai-guard.aws.us.pangea.cloud`; use your project's region host. `key_env` required, sent as `Authorization: Bearer`. Optional `recipe` (Pangea's default when absent).
 
-`result.blocked: true` blocks. Each detector with `detected: true` is a finding, such as `prompt_injection` or `pii_entity`. With `action: mask` and `result.transformed: true`, Gantry forwards `result.prompt_messages`, which must hold one message per message sent. A detection the recipe does not block is recorded as a warning.
+`result.blocked: true` blocks. Each detector with `detected: true` is a finding, such as `prompt_injection` or `pii_entity`. With `action: mask` and `result.transformed: true`, Enterplace forwards `result.prompt_messages`, which must hold one message per message sent. A detection the recipe does not block is recorded as a warning.
 
 ```yaml
 guardrails:
@@ -474,7 +474,7 @@ guardrails:
 
 An NVIDIA NeMo Guardrails server (0.21 or later). Calls `POST {url}/v1/chat/completions` with the messages and `guardrails: {config_id, options: {log: {activated_rails: true}}}`. `url` and `config_id` required. Optional `model`, `key_env` (sent as `Authorization: Bearer`, for a proxy that wants one).
 
-A refusal from NeMo is an ordinary answer, so Gantry reads the activated rails: a rail with `stop: true` blocks, and its name is the finding (`self check input` becomes `self_check_input`). An answer without `guardrails.log.activated_rails` is a service failure. Cannot mask.
+A refusal from NeMo is an ordinary answer, so Enterplace reads the activated rails: a rail with `stop: true` blocks, and its name is the finding (`self check input` becomes `self_check_input`). An answer without `guardrails.log.activated_rails` is a service failure. Cannot mask.
 
 ```yaml
 guardrails:
@@ -537,7 +537,7 @@ guardrails:
 
 Calls `POST {url}/validate` with the messages and `validation_target` (`prompt`, or `response` on an answer). `url` (your project's URL) and `key_env` required; the key goes in `X-APORIA-API-KEY`.
 
-`action: block` blocks with the finding `aporia_policy`. Any other action passes, and Gantry does not take Aporia's rewritten text. Aporia's API reference is not public; this follows its integration guides, read on 2026-11-14.
+`action: block` blocks with the finding `aporia_policy`. Any other action passes, and Enterplace does not take Aporia's rewritten text. Aporia's API reference is not public; this follows its integration guides, read on 2026-11-14.
 
 ```yaml
 guardrails:
@@ -560,7 +560,7 @@ guardrails:
   - name: airs
     type: prisma_airs
     key_env: PRISMA_AIRS_API_KEY
-    profile_name: gantry-prod
+    profile_name: enterplace-prod
     on: [request, answer]
     on_failure: fail_closed
 ```
@@ -632,14 +632,14 @@ guardrails:
 
 ### LLM as a judge
 
-`type: judge` asks a model whether the conversation breaks a rubric you write. The model is called through Gantry's own `POST /v1/chat/completions`, with a Gantry key of the judge's own, so each judge call is a governed request: decided by that key's rule, recorded, priced and charged to that key's person and team. Mint the key for a scope such as a `guardrails` team and give it a budget to cap what judging costs.
+`type: judge` asks a model whether the conversation breaks a rubric you write. The model is called through Enterplace's own `POST /v1/chat/completions`, with a Enterplace key of the judge's own, so each judge call is a governed request: decided by that key's rule, recorded, priced and charged to that key's person and team. Mint the key for a scope such as a `guardrails` team and give it a budget to cap what judging costs.
 
 ```yaml
 guardrails:
   - name: no-legal-advice
     type: judge
-    url: http://127.0.0.1:8080/v1      # this Gantry
-    key_env: GANTRY_JUDGE_KEY          # a Gantry key, team guardrails
+    url: http://127.0.0.1:8080/v1      # this Enterplace
+    key_env: ENTERPLACE_JUDGE_KEY          # a Enterplace key, team guardrails
     model: gpt-5-mini
     rubric: The assistant must not give legal advice or interpret contracts.
     cache_seconds: 300
@@ -649,15 +649,15 @@ guardrails:
 
 | Field | Default | Description |
 |---|---|---|
-| `url` | required | Gantry's own address with `/v1`. |
-| `key_env` | required | The variable holding the judge's Gantry key. |
+| `url` | required | Enterplace's own address with `/v1`. |
+| `key_env` | required | The variable holding the judge's Enterplace key. |
 | `model` | required | The judging model, as the policy names it. |
 | `rubric` | required | What the judge refuses, in plain words. |
 | `cache_seconds` | `300` | How long a verdict on the same conversation, rubric and model is reused without asking again. `0` asks every time; at most `86400`. |
 
 The judge is told to answer `PASS` or `FAIL`. `FAIL` blocks with the finding `rubric`; the record never holds the model's words, which may quote the conversation. Any other answer counts as a service failure and follows `on_failure`. A judge does not run on requests made with its own key, so its calls are never judged again, even when the judge's key falls under the same rule. Cached verdicts are kept per process.
 
-Not built in: Prompt Security, Pillar Security, Noma, Qualifire and Zscaler AI Guard publish no API reference with the request and answer fields without an account, so connect them with a [webhook](/governance/guardrail-webhooks/) that calls their API. Anthropic documents no hosted moderation endpoint: its guide classifies with Claude itself, which you can do with a `llama_guard` guardrail whose `url` is a Gantry and whose `prompt` asks for `safe` or `unsafe`.
+Not built in: Prompt Security, Pillar Security, Noma, Qualifire and Zscaler AI Guard publish no API reference with the request and answer fields without an account, so connect them with a [webhook](/governance/guardrail-webhooks/) that calls their API. Anthropic documents no hosted moderation endpoint: its guide classifies with Claude itself, which you can do with a `llama_guard` guardrail whose `url` is a Enterplace and whose `prompt` asks for `safe` or `unsafe`.
 
 ## Requests and answers
 
@@ -713,7 +713,7 @@ rules:
     buffer_stream: true
 ```
 
-Gantry then holds the whole stream (up to 64 MiB), joins the text its events carry so a secret split across events is found, and runs the answer guardrails.
+Enterplace then holds the whole stream (up to 64 MiB), joins the text its events carry so a secret split across events is found, and runs the answer guardrails.
 
 | Verdict | The caller gets |
 |---|---|
@@ -721,13 +721,13 @@ Gantry then holds the whole stream (up to 64 MiB), joins the text its events car
 | Masked | A stream with the masked text in the first event of each text and later events of that text empty. |
 | Blocked | The 403 `guardrail_blocked` refusal in its own error shape, and none of the stream. |
 
-The cost is latency: the caller sees no token until the model has written its last. `gantry check` refuses `buffer_stream: true` on a rule with no `on: [answer]` guardrail.
+The cost is latency: the caller sees no token until the model has written its last. `enterplace check` refuses `buffer_stream: true` on a rule with no `on: [answer]` guardrail.
 
 ### Checking a stream as it comes: check_stream_every
 
-`check_stream_every: <characters>` is the middle way. Gantry passes the stream on a window at a time: it holds each window until the answer guardrails, webhooks included, have read the whole text so far, then sends it. When a guardrail blocks, the stream stops there. The caller has the text checked before it, then an error event in its API's shape (`code: guardrail_blocked`), and the provider's stream is dropped. Blocked text never reaches the caller.
+`check_stream_every: <characters>` is the middle way. Enterplace passes the stream on a window at a time: it holds each window until the answer guardrails, webhooks included, have read the whole text so far, then sends it. When a guardrail blocks, the stream stops there. The caller has the text checked before it, then an error event in its API's shape (`code: guardrail_blocked`), and the provider's stream is dropped. Blocked text never reaches the caller.
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -752,11 +752,11 @@ rules:
 - The caller sees text in bursts of about `check_stream_every` characters, each one guardrail round trip later than the model wrote it. 50 to 100000.
 - Each check sends the whole answer so far, so a webhook sees context, and a phrase split across windows is still found.
 - The record is one `answer_guardrails` record: `pass` at the end, or `block` with `stopped_after_chars`, the characters sent before the stop.
-- Masking cannot rewrite text already sent: `gantry check` refuses a masking answer guardrail on such a rule, and a webhook that answers `mask` stops the stream like a block. Use `buffer_stream` to mask streamed answers.
-- `gantry check` refuses it with `buffer_stream` on the same rule, and on a rule with no `on: [answer]` guardrail.
+- Masking cannot rewrite text already sent: `enterplace check` refuses a masking answer guardrail on such a rule, and a webhook that answers `mask` stops the stream like a block. Use `buffer_stream` to mask streamed answers.
+- `enterplace check` refuses it with `buffer_stream` on the same rule, and on a rule with no `on: [answer]` guardrail.
 
 <Aside type="caution">
-A Responses request that names `previous_response_id`, `conversation` or a stored `prompt` makes the provider add text Gantry never sees, so guardrails do not check it. Send `store: false` and the whole conversation in `input`.
+A Responses request that names `previous_response_id`, `conversation` or a stored `prompt` makes the provider add text Enterplace never sees, so guardrails do not check it. Send `store: false` and the whole conversation in `input`.
 </Aside>
 
 ## Realtime sessions

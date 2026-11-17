@@ -1,0 +1,11 @@
+{{- if not .Values.existingPolicyConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "enterplace.fullname" . }}-policy
+  labels:
+    {{- include "enterplace.labels" . | nindent 4 }}
+data:
+  enterplace.policy.yaml: |
+    {{- .Values.policy | nindent 4 }}
+{{- end }}

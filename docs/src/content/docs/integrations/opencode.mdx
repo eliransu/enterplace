@@ -1,16 +1,16 @@
 ---
 title: OpenCode
-description: Add Gantry as an OpenCode provider so every prompt is identified, decided and recorded.
+description: Add Enterplace as an OpenCode provider so every prompt is identified, decided and recorded.
 sidebar:
   order: 7
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-OpenCode takes a provider of its own in its configuration file. Add one that points at Gantry, and its requests go to `POST /v1/chat/completions` with the Gantry key as `Authorization: Bearer`.
+OpenCode takes a provider of its own in its configuration file. Add one that points at Enterplace, and its requests go to `POST /v1/chat/completions` with the Enterplace key as `Authorization: Bearer`.
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -23,12 +23,12 @@ You need a running Gantry and a Gantry key. `gantry start` gives both in one com
     {
       "$schema": "https://opencode.ai/config.json",
       "provider": {
-        "gantry": {
+        "enterplace": {
           "npm": "@ai-sdk/openai-compatible",
-          "name": "Gantry",
+          "name": "Enterplace",
           "options": {
             "baseURL": "http://127.0.0.1:8080/v1",
-            "apiKey": "{env:GANTRY_KEY}"
+            "apiKey": "{env:ENTERPLACE_KEY}"
           },
           "models": {
             "gpt-4o-mini": { "name": "gpt-4o-mini" }
@@ -41,8 +41,8 @@ You need a running Gantry and a Gantry key. `gantry start` gives both in one com
 2. Set the key and run a prompt:
 
     ```bash
-    export GANTRY_KEY=gantry_...
-    opencode run -m gantry/gpt-4o-mini "Say hello."
+    export ENTERPLACE_KEY=enterplace_...
+    opencode run -m enterplace/gpt-4o-mini "Say hello."
     ```
 
 </Steps>
@@ -50,8 +50,8 @@ You need a running Gantry and a Gantry key. `gantry start` gives both in one com
 | Setting | Value |
 |---|---|
 | `provider.<id>.npm` | `@ai-sdk/openai-compatible` |
-| `provider.<id>.options.baseURL` | Gantry's address with `/v1` |
-| `provider.<id>.options.apiKey` | The Gantry key, read from a variable with `{env:GANTRY_KEY}` |
+| `provider.<id>.options.baseURL` | Enterplace's address with `/v1` |
+| `provider.<id>.options.apiKey` | The Enterplace key, read from a variable with `{env:ENTERPLACE_KEY}` |
 
 <Aside type="caution">
 The example uses OpenCode's V1 configuration format, which OpenCode 1.19.5 reads. OpenCode's current documentation describes a V2 format (`providers`, `package`, `settings.baseURL`) that 1.19.5 drops without a warning, leaving the provider missing. Run `opencode debug config` to see which format your version kept.
@@ -59,15 +59,15 @@ The example uses OpenCode's V1 configuration format, which OpenCode 1.19.5 reads
 
 ## Refusals
 
-OpenCode shows Gantry's message:
+OpenCode shows Enterplace's message:
 
 ```text
 > build · gpt-4o
-Error: Refused (model_not_allowed): team "payments" may not use model "gpt-4o" under rule "payments-team". Allowed: gpt-4o-mini. Ask a Gantry admin to change the policy if you need this one. Decision 01M79QS3FKFHJAQSYW8BMX3E5F.
+Error: Refused (model_not_allowed): team "payments" may not use model "gpt-4o" under rule "payments-team". Allowed: gpt-4o-mini. Ask a Enterplace admin to change the policy if you need this one. Decision 01M79QS3FKFHJAQSYW8BMX3E5F.
 ```
 
 ```text
-Error: Refused (unknown_key): Gantry does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask a Gantry admin. Decision 01M79QS9S2XNB6ZDE3MT1TTN59.
+Error: Refused (unknown_key): Enterplace does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask a Enterplace admin. Decision 01M79QS9S2XNB6ZDE3MT1TTN59.
 ```
 
 OpenCode does not resend a request refused with 403 and marks the error not retryable.
@@ -75,7 +75,7 @@ OpenCode does not resend a request refused with 403 and marks the error not retr
 ## Behavior
 
 - Each prompt makes two requests: one for the session title and one for the answer. Both are recorded, so a refused prompt leaves two refusals in the audit log.
-- For the Anthropic route, OpenCode's V1 documentation sets `provider.anthropic.options.baseURL` to Gantry's address with `/v1` (`http://127.0.0.1:8080/v1`) and the key in `options.apiKey`. This route is untried.
+- For the Anthropic route, OpenCode's V1 documentation sets `provider.anthropic.options.baseURL` to Enterplace's address with `/v1` (`http://127.0.0.1:8080/v1`) and the key in `options.apiKey`. This route is untried.
 
 ## Related
 

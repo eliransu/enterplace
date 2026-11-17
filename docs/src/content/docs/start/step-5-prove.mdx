@@ -13,27 +13,27 @@ One record for every request, allowed or refused, kept where a restart cannot lo
 
 ## The one change
 
-Gantry has written an audit record for every request since step 1. Verify the chain and keep its last hash somewhere the Gantry host cannot write:
+Enterplace has written an audit record for every request since step 1. Verify the chain and keep its last hash somewhere the Enterplace host cannot write:
 
 ```bash
-gantry audit verify gantry-audit.jsonl
+enterplace audit verify enterplace-audit.jsonl
 ```
 
 ```text
-gantry-audit.jsonl: 9 records in an unbroken chain from record 1 to record 9.
+enterplace-audit.jsonl: 9 records in an unbroken chain from record 1 to record 9.
 5 requests, 1 configuration record, 0 admin records, 3 usage records.
 Last hash: 1ae338b73793e850d4a1a345e1648c1addde566b34dc70b1688fe50a887f7fb1
 ```
 
-Copy the `Last hash` line to a ticket or a document. Later, `gantry audit verify <file> --expect-last <hash>` shows that nothing up to that record was changed or removed.
+Copy the `Last hash` line to a ticket or a document. Later, `enterplace audit verify <file> --expect-last <hash>` shows that nothing up to that record was changed or removed.
 
 Where the file is depends on how you ran step 1:
 
-| How Gantry runs | The audit log | Kept across restarts |
+| How Enterplace runs | The audit log | Kept across restarts |
 |---|---|---|
-| `gantry start` in a folder | `gantry-audit.jsonl` in that folder | Yes, it is a file on your disk |
-| The quickstart's `docker run` | `/var/lib/gantry/gantry-audit.jsonl` on the `gantry-data` volume: `docker exec gantry /gantry audit verify /var/lib/gantry/gantry-audit.jsonl` | Yes, the volume outlives the container |
-| A container with no volume | Inside the container, lost when it is removed | No: mount a volume at `/var/lib/gantry` and set `audit: { path: /var/lib/gantry/gantry-audit.jsonl }` in the policy |
+| `enterplace start` in a folder | `enterplace-audit.jsonl` in that folder | Yes, it is a file on your disk |
+| The quickstart's `docker run` | `/var/lib/enterplace/enterplace-audit.jsonl` on the `enterplace-data` volume: `docker exec enterplace /enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl` | Yes, the volume outlives the container |
+| A container with no volume | Inside the container, lost when it is removed | No: mount a volume at `/var/lib/enterplace` and set `audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }` in the policy |
 
 Each record holds who asked, the model, the decision, the rule behind it and the cost. It holds no prompt or answer text.
 
@@ -51,9 +51,9 @@ All five steps are in place. The [rollout plan](/start/plan/) puts them on one p
 
 ## More
 
-### Gantry Enterprise
+### Enterplace Enterprise
 
-These three need Gantry Enterprise and a license:
+These three need Enterplace Enterprise and a license:
 
 | Feature | What it adds | Page |
 |---|---|---|
@@ -64,7 +64,7 @@ These three need Gantry Enterprise and a license:
 ### In the open source edition
 
 - Ship the audit file to your log system with Vector, Fluent Bit or the OpenTelemetry Collector: [Shipping the audit log](/operations/observability/#shipping-the-audit-log).
-- Report who is covered: `gantry audit coverage` counts requests per person and tool and names key holders who sent nothing. See [Coverage](/governance/coverage/).
+- Report who is covered: `enterplace audit coverage` counts requests per person and tool and names key holders who sent nothing. See [Coverage](/governance/coverage/).
 - Keep every policy change as a version, with a second admin's approval before it goes live. This needs a Postgres [store](/operations/store/): [Editing the policy](/operations/console-editing/).
 - Read what each field of a record means: [Audit records](/reference/audit-records/) and [Audit log](/governance/audit-log/).
 

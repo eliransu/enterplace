@@ -1,6 +1,6 @@
 #!/bin/sh
 # Tests install.sh against a fake release served on localhost: a stable release, an edge-only repository,
-# GANTRY_VERSION, and a tampered tarball and a bad signature, which must both fail. The fake release is signed by
+# ENTERPLACE_VERSION, and a tampered tarball and a bad signature, which must both fail. The fake release is signed by
 # scripts/signing.py with a throwaway key, so SHA256SUMS has the real format. Runs on macOS and Linux (CI: ci.yml).
 #
 #   scripts/install_check.sh            (INSTALL_SH=dash to run install.sh under another shell)
@@ -17,19 +17,19 @@ case $(uname -m) in x86_64 | amd64) arch=x86_64 ;; *) arch=aarch64 ;; esac
 if [ "$os" = apple-darwin ] && [ "$(sysctl -n sysctl.proc_translated 2> /dev/null || echo 0)" = 1 ]; then arch=aarch64; fi
 
 ssh-keygen -q -t ed25519 -N '' -C test -f "$work/key"
-printf 'release@gantry %s\n' "$(cut -d' ' -f1,2 "$work/key.pub")" > "$work/allowed_signers"
+printf 'release@enterplace %s\n' "$(cut -d' ' -f1,2 "$work/key.pub")" > "$work/allowed_signers"
 
 # release DIR VERSION: a signed fake release with tarballs for this machine and one other target.
 release() {
   mkdir -p "$1"
   for target in "$arch-$os" riscv64-unknown-linux-musl; do
-    name=gantry-$2-abc123-$target
+    name=enterplace-$2-abc123-$target
     mkdir -p "$work/pack/$name"
-    printf '#!/bin/sh\necho "gantry %s (src abc123, built 2026-11-15)"\n' "$2" > "$work/pack/$name/gantry"
-    chmod 755 "$work/pack/$name/gantry"
+    printf '#!/bin/sh\necho "enterplace %s (src abc123, built 2026-11-15)"\n' "$2" > "$work/pack/$name/enterplace"
+    chmod 755 "$work/pack/$name/enterplace"
     tar -czf "$1/$name.tar.gz" -C "$work/pack" "$name"
   done
-  GANTRY_SIGNING_KEY_FILE=$work/key RELEASE_SIGNING_KEY='' python3 scripts/signing.py sign "$1" > /dev/null
+  ENTERPLACE_SIGNING_KEY_FILE=$work/key RELEASE_SIGNING_KEY='' python3 scripts/signing.py sign "$1" > /dev/null
 }
 
 srv=$work/srv
@@ -56,12 +56,12 @@ run() {
   # A home of its own, so the PATH line goes to a startup file of the test's, never this machine's.
   mkdir -p "$work/home-$case_name"
   # XDG_CONFIG_HOME and ZDOTDIR (set on CI runners) would point the startup file outside it.
-  if env -u XDG_CONFIG_HOME -u ZDOTDIR HOME="$work/home-$case_name" SHELL=/bin/zsh "$@" GANTRY_REPO_URL="http://127.0.0.1:$port/$repo" GANTRY_INSTALL_DIR="$dir" \
-    GANTRY_ALLOWED_SIGNERS="$work/allowed_signers" "${INSTALL_SH:-sh}" "$root/install.sh" > "$work/$case_name.log" 2>&1; then
-    if [ "$expect" != fail ] && "$dir/gantry" version | grep -q "gantry $expect " && grep -q 'Next: .*gantry start' "$work/$case_name.log"; then
+  if env -u XDG_CONFIG_HOME -u ZDOTDIR HOME="$work/home-$case_name" SHELL=/bin/zsh "$@" ENTERPLACE_REPO_URL="http://127.0.0.1:$port/$repo" ENTERPLACE_INSTALL_DIR="$dir" \
+    ENTERPLACE_ALLOWED_SIGNERS="$work/allowed_signers" "${INSTALL_SH:-sh}" "$root/install.sh" > "$work/$case_name.log" 2>&1; then
+    if [ "$expect" != fail ] && "$dir/enterplace" version | grep -q "enterplace $expect " && grep -q 'Next: .*enterplace start' "$work/$case_name.log"; then
       echo "ok   $case_name"; return
     fi
-  elif [ "$expect" = fail ] && [ ! -e "$dir/gantry" ]; then
+  elif [ "$expect" = fail ] && [ ! -e "$dir/enterplace" ]; then
     echo "ok   $case_name ($(grep 'install failed' "$work/$case_name.log" | head -n 1 | cut -c1-110))"; return
   fi
   echo "FAIL $case_name"; sed 's/^/     /' "$work/$case_name.log"; failures=$((failures + 1))
@@ -69,10 +69,10 @@ run() {
 
 run latest-stable stable 0.1.0
 run edge-when-no-stable edgeonly 0.2.0-edge
-run version-edge stable 0.2.0-edge GANTRY_VERSION=edge
-run version-tag stable 0.1.0 GANTRY_VERSION=v0.1.0
-run version-missing stable fail GANTRY_VERSION=v9.9.9
-run version-invalid stable fail GANTRY_VERSION=v1/../../x
+run version-edge stable 0.2.0-edge ENTERPLACE_VERSION=edge
+run version-tag stable 0.1.0 ENTERPLACE_VERSION=v0.1.0
+run version-missing stable fail ENTERPLACE_VERSION=v9.9.9
+run version-invalid stable fail ENTERPLACE_VERSION=v1/../../x
 
 # A tarball changed after signing.
 cp -R "$srv/stable" "$srv/tampered"
@@ -88,10 +88,10 @@ awk -v n="$(basename "$t")" -v s="$sum" '$2 == n { $1 = s; print $1 "  " $2; nex
 cp "$work/sums" "$d/SHA256SUMS"
 run bad-signature resigned fail
 
-# An older gantry earlier on the PATH must be named, and the next step must use the full path.
-mkdir -p "$work/old"; printf '#!/bin/sh\necho old\n' > "$work/old/gantry"; chmod 755 "$work/old/gantry"
+# An older enterplace earlier on the PATH must be named, and the next step must use the full path.
+mkdir -p "$work/old"; printf '#!/bin/sh\necho old\n' > "$work/old/enterplace"; chmod 755 "$work/old/enterplace"
 run shadowed stable 0.1.0 PATH="$work/old:$work/bin-shadowed:$PATH"
-if grep -q "Another gantry at $work/old/gantry" "$work/shadowed.log" && grep -q "Next: $work/bin-shadowed/gantry start" "$work/shadowed.log"; then
+if grep -q "Another enterplace at $work/old/enterplace" "$work/shadowed.log" && grep -q "Next: $work/bin-shadowed/enterplace start" "$work/shadowed.log"; then
   echo "ok   shadowed-warning"
 else
   echo "FAIL shadowed-warning"; sed 's/^/     /' "$work/shadowed.log"; failures=$((failures + 1))
@@ -116,11 +116,11 @@ if [ "$os" = apple-darwin ]; then bashrc=.bash_profile; else bashrc=.bashrc; fi
 run path-bash stable 0.1.0 SHELL=/bin/bash
 expect_rc path-bash "$bashrc" 1
 run path-fish stable 0.1.0 SHELL=/usr/bin/fish
-expect_rc path-fish .config/fish/conf.d/gantry.fish 1
+expect_rc path-fish .config/fish/conf.d/enterplace.fish 1
 run path-sh stable 0.1.0 SHELL=/bin/sh
 expect_rc path-sh .profile 1
-run path-no-modify stable 0.1.0 GANTRY_NO_MODIFY_PATH=1
-if [ ! -e "$work/home-path-no-modify/.zshrc" ] && grep -q GANTRY_NO_MODIFY_PATH "$work/path-no-modify.log"; then
+run path-no-modify stable 0.1.0 ENTERPLACE_NO_MODIFY_PATH=1
+if [ ! -e "$work/home-path-no-modify/.zshrc" ] && grep -q ENTERPLACE_NO_MODIFY_PATH "$work/path-no-modify.log"; then
   echo "ok   path-no-modify-rc (left alone)"
 else
   echo "FAIL path-no-modify-rc"; sed 's/^/     /' "$work/path-no-modify.log"; failures=$((failures + 1))

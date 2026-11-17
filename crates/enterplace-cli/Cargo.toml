@@ -1,0 +1,30 @@
+[package]
+name = "enterplace-cli"
+description = "The `enterplace` binary: server and command line in one."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "enterplace"
+path = "src/main.rs"
+
+[dependencies]
+enterplace-core.workspace = true
+enterplace-server.workspace = true
+# `enterplace login`, `logout` and `kill` call a running Enterplace with the console's HTTP client.
+enterplace-console.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+# The store tests make a fresh database for each test. Already a dependency of enterplace-server.
+tokio-postgres.workspace = true
+
+[lints]
+workspace = true
+
+[build-dependencies]
+# The source hash in `enterplace version`. Already a dependency of enterplace-core.
+sha2.workspace = true

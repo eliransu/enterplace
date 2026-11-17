@@ -1,6 +1,6 @@
 ---
 title: Providers overview
-description: What a provider entry is, which routes each kind serves, how Gantry builds the upstream URL, and how keys and private addresses work.
+description: What a provider entry is, which routes each kind serves, how Enterplace builds the upstream URL, and how keys and private addresses work.
 sidebar:
   order: 1
   label: Overview
@@ -8,13 +8,13 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-A provider is a server Gantry forwards to. Each entry under `providers:` names the API it speaks (`kind`), where it is (`url`), the variable that holds its key (`key_env`) and the exact models it serves.
+A provider is a server Enterplace forwards to. Each entry under `providers:` names the API it speaks (`kind`), where it is (`url`), the variable that holds its key (`key_env`) and the exact models it serves.
 
 The shortest way to add one needs no YAML: in the console, **Start here** and **Provider credentials** take a provider key, seal it and write the entry. In a policy file, `preset: <id>` stands in for `kind` and `url` for the 120 providers of the [catalog](/reference/providers/): see [Presets](#presets).
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -40,7 +40,7 @@ rules:
 
 ## Presets
 
-For a provider in the [provider catalog](/reference/providers/), `preset: <id>` stands in for `url` and `kind`. The catalog holds over 100 providers, each with the documentation page its URL came from; `gantry providers` lists them. A `url` or `kind` written next to the preset wins, for a proxy or a regional endpoint. An id the catalog does not hold fails `gantry check`, which names the closest one.
+For a provider in the [provider catalog](/reference/providers/), `preset: <id>` stands in for `url` and `kind`. The catalog holds over 100 providers, each with the documentation page its URL came from; `enterplace providers` lists them. A `url` or `kind` written next to the preset wins, for a proxy or a regional endpoint. An id the catalog does not hold fails `enterplace check`, which names the closest one.
 
 ```yaml
 providers:
@@ -93,7 +93,7 @@ See [Translation](/routing/translation/).
 | `high` | `thinking.budget_tokens: 16384` | `thinkingBudget: 16384` | `thinkingLevel: high` | `maxReasoningEffort: high` | `reasoning_effort: high` | `token_budget: 16384` |
 | `xhigh`, `max` | `output_config.effort` with adaptive thinking (Anthropic only) | refused | refused | refused | refused | refused |
 
-- Claude reasons inside `max_tokens`: without one, Gantry sends the budget plus 8192; with one at or below the budget, the request is refused naming the budget. Claude takes no `temperature` other than 1, and no `top_p` below 0.95, while it reasons: those are refused too.
+- Claude reasons inside `max_tokens`: without one, Enterplace sends the budget plus 8192; with one at or below the budget, the request is refused naming the budget. Claude takes no `temperature` other than 1, and no `top_p` below 0.95, while it reasons: those are refused too.
 - Meta, Mistral, Cohere, AI21, DeepSeek and Qwen on Bedrock Converse take no reasoning setting, so `reasoning_effort` is refused for them.
 - The other way, Claude Code's `thinking.budget_tokens` on a request translated to chat becomes the `reasoning_effort` at or above it (up to 1024 `low`, up to 4096 `medium`, above `high`); `output_config.effort` wins when both are set.
 - Reasoning a provider returns in readable form (Claude's thinking blocks, Converse's `reasoningContent`, Cohere's thinking) reaches a chat client as `reasoning_content`, and a Responses client as a `reasoning` item. Its tokens are counted in usage either way.
@@ -107,7 +107,7 @@ See [Translation](/routing/translation/).
 | `url` | string | required | The base URL. See [How the URL is built](#how-the-url-is-built). Not needed with `preset:`. Optional for `bedrock`. |
 | `key_env` | string | required | The name of the environment variable that holds the provider key. Replaced by `key_file`, `credential` or `auth: passthrough`. Not allowed on `bedrock`. Optional on a local `openai` provider with `allow_private: true`. |
 | `key_file` | string | none | Instead of `key_env`: the path of a file that holds the provider key. Not allowed on `bedrock`. See [Provider keys](#provider-keys). |
-| `credential` | string | none | Instead of `key_env` or `key_file`: the name of a provider credential sealed under the master key, kept in the store, or in `gantry-credentials.json` beside the policy when there is none. Not allowed on `bedrock`. See [Provider credentials](/governance/provider-credentials/). |
+| `credential` | string | none | Instead of `key_env` or `key_file`: the name of a provider credential sealed under the master key, kept in the store, or in `enterplace-credentials.json` beside the policy when there is none. Not allowed on `bedrock`. See [Provider credentials](/governance/provider-credentials/). |
 | `models` | list | required | The exact model names this provider serves. Not empty, no `"*"`. |
 | `allow_private` | bool | `false` | Lets `url` point at this machine or a private network. |
 | `retries` | integer | `0` | 0 to 5. See [Retries and fallbacks](/routing/retries-and-fallbacks/). |
@@ -125,13 +125,13 @@ See [Translation](/routing/translation/).
 | `headers_env` | map | none | Headers sent with every request to this provider, each name to the environment variable that holds its value, such as `{ x-team-id: TEAM_ID_HEADER }`. Not for keys (`Authorization`, `x-api-key` and the like are refused) or `Host` and `Content-Length`. Values are never written to a record. |
 | `proxy_env` | string | none | The environment variable that holds an HTTP proxy, `http://[user:password@]host:port`. Requests to the provider are tunnelled through it with `CONNECT`, the credentials sent as `Proxy-Authorization: Basic`. Batches, realtime sessions and cloud sign-in (AWS STS, Google's token endpoint, Microsoft Entra ID, IBM Cloud IAM) use it too; the platform's metadata services (169.254.x.x, `metadata.google.internal`, loopback) are always reached directly. |
 
-Any field Gantry does not know is an error in `gantry check`, never ignored. See [Policy file](/governance/policy/).
+Any field Enterplace does not know is an error in `enterplace check`, never ignored. See [Policy file](/governance/policy/).
 
 ## Models
 
 Each provider lists the exact model names it serves, and a model may be listed by one provider only. A request goes to the one provider that lists its `model`. To spread one name over several providers, use an [alias](/routing/aliases/).
 
-On `openai` and `anthropic` providers the name the client sends is the name the provider receives, because Gantry forwards the body as it came. On `azure`, `bedrock` and `bedrock_converse` the name picks a deployment or model ID from the provider's map.
+On `openai` and `anthropic` providers the name the client sends is the name the provider receives, because Enterplace forwards the body as it came. On `azure`, `bedrock` and `bedrock_converse` the name picks a deployment or model ID from the provider's map.
 
 A model priced under neither its own name nor in the policy is priced as the Bedrock model ID or Azure deployment it is called by, when the price table knows that name (a Bedrock inference profile such as `us.anthropic...` is priced as its model). Budgets reserve and charge at that price.
 
@@ -139,7 +139,7 @@ Write model names exactly as the vendor documents them, including any prefix suc
 
 ## How the URL is built
 
-`gantry check` and `gantry serve` use one rule:
+`enterplace check` and `enterplace serve` use one rule:
 
 - `url` is `http` or `https`, a host, an optional port and an optional path. No login, query, fragment or spaces. A trailing `/` is ignored.
 - A `url` without a path gets the route as it came: a chat request goes to `<url>/v1/chat/completions`, a messages request with `?beta=true` to `<url>/v1/messages?beta=true`.
@@ -149,7 +149,7 @@ Write the vendor's documented base URL as it is, or the part before `/v1`. Both 
 
 ## Provider keys
 
-`key_env` names the variable that holds the key. The key itself never goes in the policy file. `gantry serve` refuses to start while a `key_env` variable is unset or empty.
+`key_env` names the variable that holds the key. The key itself never goes in the policy file. `enterplace serve` refuses to start while a `key_env` variable is unset or empty.
 
 To rotate a key without a restart, use `key_file` instead of `key_env`:
 
@@ -161,23 +161,23 @@ To rotate a key without a restart, use `key_file` instead of `key_env`:
     models: [gpt-4o]
 ```
 
-Gantry reads the file at start, and refuses to start while it is missing or empty. It then checks the file once a second: a new key in it is used within 2 seconds, without a restart and without a new policy version. A request already sent keeps the key it was sent with. A file that becomes missing or empty is reported, and the key in use is kept. Write the file by renaming a new one over it, so Gantry never reads half a key. Changing the `key_file` path gives the provider a new route at the next reload.
+Enterplace reads the file at start, and refuses to start while it is missing or empty. It then checks the file once a second: a new key in it is used within 2 seconds, without a restart and without a new policy version. A request already sent keeps the key it was sent with. A file that becomes missing or empty is reported, and the key in use is kept. Write the file by renaming a new one over it, so Enterplace never reads half a key. Changing the `key_file` path gives the provider a new route at the next reload.
 
 <Aside type="caution">
-Do not name a provider key variable `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if the same shell runs the clients. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be a Gantry key.
+Do not name a provider key variable `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if the same shell runs the clients. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be a Enterplace key.
 </Aside>
 
 To manage keys in the console and rotate them on every gateway at once, keep them in the store and name one with `credential:`. See [Provider credentials](/governance/provider-credentials/).
 
-A rule may also let callers send their own provider key in `x-gantry-provider-key`, with `caller_provider_key: allowed`. See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key).
+A rule may also let callers send their own provider key in `x-enterplace-provider-key`, with `caller_provider_key: allowed`. See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key).
 
-A `bedrock` or `bedrock_converse` provider takes no `key_env`: Gantry signs with the role it runs as on EKS, ECS or EC2, or with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from its environment. A `vertex`, `vertex_anthropic` or `vertex_openai` provider without `key_env` signs in as the service account it runs as on Google Cloud, or with `GOOGLE_APPLICATION_CREDENTIALS`. An `azure` provider without `key_env` signs in with Microsoft Entra ID (see [Azure OpenAI](/providers/azure/)). A `watsonx` provider's `key_env` holds an IBM Cloud API key, which Gantry trades for an IAM token and renews before it expires.
+A `bedrock` or `bedrock_converse` provider takes no `key_env`: Enterplace signs with the role it runs as on EKS, ECS or EC2, or with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from its environment. A `vertex`, `vertex_anthropic` or `vertex_openai` provider without `key_env` signs in as the service account it runs as on Google Cloud, or with `GOOGLE_APPLICATION_CREDENTIALS`. An `azure` provider without `key_env` signs in with Microsoft Entra ID (see [Azure OpenAI](/providers/azure/)). A `watsonx` provider's `key_env` holds an IBM Cloud API key, which Enterplace trades for an IAM token and renews before it expires.
 
 ## Private addresses
 
 A `url` on this machine or a private network is refused unless the provider says `allow_private: true`. Private means `localhost`, `127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, link-local, `::1`, `fc00::/7`, `fe80::/10`, IPv4-mapped IPv6 of any of these, a trailing dot, and numeric spellings such as `127.1` or `2130706433`.
 
-An `openai` provider with `allow_private: true` may leave out `key_env`. It is then sent no `Authorization` header, and never the caller's Gantry key. See [Local models](/providers/local-models/).
+An `openai` provider with `allow_private: true` may leave out `key_env`. It is then sent no `Authorization` header, and never the caller's Enterplace key. See [Local models](/providers/local-models/).
 
 ## Listing models
 
@@ -192,14 +192,14 @@ The `limit` query parameter takes 1 to 1000.
 
 - **Body.** Byte for byte, except a translated request, a request to Bedrock or Vertex AI's Claude, a masked request, and a request for an alias, whose `model` is replaced with the deployment's.
 - **Path and query.** The route, and only the query parameters it allows: `beta=true` or `beta=false` on the messages routes, none on chat, Responses and embeddings. Any other is refused by name with `unknown_query`.
-- **Headers.** The caller's, except hop-by-hop headers, `Host`, `Cookie`, any header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), any `x-amz*` header, proxy and CDN headers (`x-forwarded-*`, `forwarded`, `via`, `x-real-ip`, `true-client-ip`, `cf-*`, `cdn-loop`), and any header that carries the caller's Gantry key.
+- **Headers.** The caller's, except hop-by-hop headers, `Host`, `Cookie`, any header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), any `x-amz*` header, proxy and CDN headers (`x-forwarded-*`, `forwarded`, `via`, `x-real-ip`, `true-client-ip`, `cf-*`, `cdn-loop`), and any header that carries the caller's Enterplace key.
 - **Credentials.** The provider key in the header its kind expects, the AWS signature for Bedrock, the token kept current for Vertex AI, Entra ID and watsonx.ai, or nothing for a local `openai` provider without `key_env`.
 
-The provider's answer, errors and streamed events included, returns unchanged except for hop-by-hop headers, with `X-Gantry-Decision` and `Server-Timing: gantry;dur=<ms>` added. Bedrock and translated answers are converted.
+The provider's answer, errors and streamed events included, returns unchanged except for hop-by-hop headers, with `X-Enterplace-Decision` and `Server-Timing: enterplace;dur=<ms>` added. Bedrock and translated answers are converted.
 
 ## Changes without a restart
 
-Gantry reloads the policy within 2 seconds of a save. A provider's `models`, `deployments`, `model_ids`, `retries`, `fallback`, `accept_chat`, `accept_messages` and `chat_as_responses` change without a restart.
+Enterplace reloads the policy within 2 seconds of a save. A provider's `models`, `deployments`, `model_ids`, `retries`, `fallback`, `accept_chat`, `accept_messages` and `chat_as_responses` change without a restart.
 
 Adding or removing a provider, or changing its `kind`, `url`, `key_env`, `key_file`, `credential`, `allow_private`, `region` or `api_version`, also needs no restart: the reload builds a new route for that provider and reads its key then. A reload whose new provider has no readable key is rejected, and the version in use is kept. Rotating a provider key in an unchanged `key_env` variable needs a restart; use `key_file` or a credential instead.
 

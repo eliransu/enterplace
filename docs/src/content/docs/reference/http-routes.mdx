@@ -1,13 +1,13 @@
 ---
 title: HTTP routes
-description: Every route Gantry serves, the provider kinds behind each, the query parameters it allows, and the headers it forwards, strips and adds.
+description: Every route Enterplace serves, the provider kinds behind each, the query parameters it allows, and the headers it forwards, strips and adds.
 sidebar:
   order: 5
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Gantry serves the OpenAI and Anthropic routes your clients already call, plus a health check, the console and the metrics endpoint. Any other method or path is refused with `unknown_route` and recorded.
+Enterplace serves the OpenAI and Anthropic routes your clients already call, plus a health check, the console and the metrics endpoint. Any other method or path is refused with `unknown_route` and recorded.
 
 ## Route list
 
@@ -32,13 +32,13 @@ Gantry serves the OpenAI and Anthropic routes your clients already call, plus a 
 | `POST` | `/v1/guardrails/check` | yes | yes | Runs the caller's rule's guardrails on text, with no model call. See [Guardrails](/governance/guardrails/#check-text-from-your-application) |
 | `GET`, `POST` | `/v1/budget/raises` | yes | yes | Lists the caller's budget raises; asks for one. See [Budget raises](/governance/budgets-and-rate-limits/#budget-raises) |
 | `POST` | `/mcp` | yes | `tools/call` and refusals | The [MCP gateway](/governance/mcp-gateway/), when the policy lists `mcp:` servers |
-| `GET` | `/v1/gantry/me` | yes | no | The caller's own key: its name, team, rule and what each budget it counts against has left. See [Budget headers](/governance/budgets-and-rate-limits/#budget-headers) |
+| `GET` | `/v1/enterplace/me` | yes | no | The caller's own key: its name, team, rule and what each budget it counts against has left. See [Budget headers](/governance/budgets-and-rate-limits/#budget-headers) |
 | `GET` | `/healthz` | no | no | Liveness: the process is up. 503 only once the audit log is lost |
 | `GET` | `/readyz` | no | no | Readiness: a request sent now would be served. See [Health, readiness and drain](/operations/operations/#health-readiness-and-drain) |
 | `HEAD` | `/api/hello` | no | no | Claude Code's startup probe. Answers 200 and reaches no provider |
 | `GET`, `POST` | `/console/...` | session | sign-ins and changes | The [admin console](/operations/console/) |
 | `GET`, `POST`, `PATCH`, `DELETE` | `/admin/keys`, `/admin/keys/<prefix>`, `/admin/keys/<prefix>/rotate`, `/admin/kills` | admin key | yes | The [admin API](/reference/admin-api/) |
-| `POST` | `/otlp/v1/metrics`, `/otlp/v1/logs` | watch token | as `watch` records | Gantry Enterprise: the [watch mode](/integrations/claude-team/#the-receiver) receiver for Claude Code's own telemetry |
+| `POST` | `/otlp/v1/metrics`, `/otlp/v1/logs` | watch token | as `watch` records | Enterplace Enterprise: the [watch mode](/integrations/claude-team/#the-receiver) receiver for Claude Code's own telemetry |
 | `GET` | `/metrics` | no | no | Prometheus metrics, only on the `--metrics` address |
 
 Any method other than `GET` on `/healthz` or `/readyz`, or other than `HEAD` on `/api/hello`, is refused with `unknown_route` and recorded. The key is checked before the route, so an unknown route without a key gets `no_key`.
@@ -51,7 +51,7 @@ A request goes to the one provider that lists its model, and only if that provid
 |---|---|
 | `/v1/chat/completions` | `openai`, `azure`, `gemini` and `vertex` (the last two translated to Google's API). Also `anthropic`, `bedrock` and `vertex_anthropic` with `accept_chat: true`, translated |
 | `/v1/messages` | `anthropic`, `bedrock`, `vertex_anthropic`. Also `openai`, `azure`, `gemini` and `vertex` with `accept_messages: true`, translated |
-| `/v1/messages/count_tokens` | `anthropic`, `bedrock`, `vertex_anthropic`, counted by the provider; `gemini`, `vertex` and `bedrock_converse`, by the provider's count API; any other provider with `accept_messages: true`, estimated by Gantry (`"estimated": true` and `x-gantry-token-count: estimate`) |
+| `/v1/messages/count_tokens` | `anthropic`, `bedrock`, `vertex_anthropic`, counted by the provider; `gemini`, `vertex` and `bedrock_converse`, by the provider's count API; any other provider with `accept_messages: true`, estimated by Enterplace (`"estimated": true` and `x-enterplace-token-count: estimate`) |
 | `/v1/responses/input_tokens` | `openai` and `azure` as sent (estimated when the server has no such route); every other kind as a messages count |
 | `/v1/images/generations` | `openai`, `azure`; `gemini` and `vertex` (Imagen and Gemini image models), `bedrock_converse` (Titan Image Generator, Nova Canvas, Stability AI), translated |
 | `/v1/rerank` | `openai`, `cohere`; `vertex` and `bedrock_converse`, translated |
@@ -70,7 +70,7 @@ Lists the models the caller's rule allows, narrowed by the key's own `models:` l
 | `x-api-key` or `anthropic-version` (Anthropic clients, Claude Code) | Anthropic's: `data` of `{"type":"model","id","display_name","description"}`, with `has_more`, `first_id`, `last_id` | Models reachable on `/v1/messages`: on `anthropic`, `bedrock` and `vertex_anthropic` providers, and providers with `accept_messages` |
 | Anything else | OpenAI's: `{"object":"list","data":[{"id","object":"model","created":0,"owned_by"}]}` | Models on chat providers: `openai`, `azure`, `gemini`, `vertex` |
 
-The list is answered by Gantry and reaches no provider.
+The list is answered by Enterplace and reaches no provider.
 
 ## Query parameters
 
@@ -86,12 +86,12 @@ Every query parameter must be one the route allows, given once, with a value it 
 
 ### Caller credentials
 
-Send the Gantry key in one of:
+Send the Enterplace key in one of:
 
 | Header | Form |
 |---|---|
-| `Authorization` | `Bearer gantry_...` |
-| `x-api-key` | `gantry_...` |
+| `Authorization` | `Bearer enterplace_...` |
+| `x-api-key` | `enterplace_...` |
 
 Both with the same value is accepted. Different values, an empty one beside the other, or either header twice is refused with `ambiguous_key`.
 
@@ -99,11 +99,11 @@ Both with the same value is accepted. Different values, an empty one beside the 
 
 | Header | Why |
 |---|---|
-| Any name containing `authorization`, `key`, `token`, `secret`, `organization` or `project`, except `idempotency-key` | Credentials and account selection are Gantry's |
-| `x-forwarded-*`, `forwarded`, `via`, `cf-*`, `cdn-loop`, `x-envoy-*`, `x-original-forwarded-*`, names ending in `-ip` or containing `client-ip`, `clientip` or `remote-addr` | The caller's address stays with Gantry, and providers behind a CDN refuse its headers |
-| `accept-encoding` | Gantry reads every answer for usage, guardrails and translation, so the provider sends plain bytes |
-| Any name starting with `x-amz` | AWS headers are Gantry's to sign and set |
-| Any header carrying the caller's Gantry key in its name or value | The caller's key never reaches a provider |
+| Any name containing `authorization`, `key`, `token`, `secret`, `organization` or `project`, except `idempotency-key` | Credentials and account selection are Enterplace's |
+| `x-forwarded-*`, `forwarded`, `via`, `cf-*`, `cdn-loop`, `x-envoy-*`, `x-original-forwarded-*`, names ending in `-ip` or containing `client-ip`, `clientip` or `remote-addr` | The caller's address stays with Enterplace, and providers behind a CDN refuse its headers |
+| `accept-encoding` | Enterplace reads every answer for usage, guardrails and translation, so the provider sends plain bytes |
+| Any name starting with `x-amz` | AWS headers are Enterplace's to sign and set |
+| Any header carrying the caller's Enterplace key in its name or value | The caller's key never reaches a provider |
 | `Cookie` | Means nothing to a provider |
 | `Host` | Set for the provider |
 | `Content-Length` | Set from the body actually sent |
@@ -124,9 +124,9 @@ Every other header passes unchanged, including `anthropic-version`, `anthropic-b
 | The provider's key header | Provider | `Authorization: Bearer` for `openai`, `vertex`, `vertex_anthropic`; `x-api-key` for `anthropic`; `api-key` for `azure`; `x-goog-api-key` for `gemini`. A local `openai` provider without `key_env` gets none |
 | AWS Signature Version 4 headers | Provider | `bedrock` only, with `Content-Type: application/json` |
 | `anthropic-version: 2023-06-01` | Provider | A chat request translated for `anthropic` or `vertex_anthropic` that has none |
-| `X-Gantry-Decision` | Caller | The decision ID, on every response |
-| `Server-Timing: gantry;dur=<ms>, gantry-auth;dur=<ms>, ...` | Caller | Gantry's own time on a forwarded request, then its time [by stage](/operations/observability/#time-by-stage), appended beside the provider's |
-| `x-gantry-budget-remaining-usd`, `x-gantry-budget-reset` | Caller | Under a rule with `budget_headers: true`: what its tightest budget has left, and when it resets |
+| `X-Enterplace-Decision` | Caller | The decision ID, on every response |
+| `Server-Timing: enterplace;dur=<ms>, enterplace-auth;dur=<ms>, ...` | Caller | Enterplace's own time on a forwarded request, then its time [by stage](/operations/observability/#time-by-stage), appended beside the provider's |
+| `x-enterplace-budget-remaining-usd`, `x-enterplace-budget-reset` | Caller | Under a rule with `budget_headers: true`: what its tightest budget has left, and when it resets |
 | `x-should-retry`, `Retry-After` | Caller | On refusals. See [Refusal codes](/reference/refusal-codes/#response-shape) |
 
 The provider's answer, streamed or not, comes back as sent, with hop-by-hop headers removed.
@@ -143,5 +143,5 @@ The provider's answer, streamed or not, comes back as sent, with hop-by-hop head
 | Protocol | HTTP/1.1, plain or over TLS |
 
 <Aside type="note">
-`gantry serve --unchecked` forwards `POST /v1/chat/completions` to `GANTRY_UPSTREAM` without identity, policy, audit or credential header stripping. Every other route is refused with `unknown_route`. It listens on loopback only.
+`enterplace serve --unchecked` forwards `POST /v1/chat/completions` to `ENTERPLACE_UPSTREAM` without identity, policy, audit or credential header stripping. Every other route is refused with `unknown_route`. It listens on loopback only.
 </Aside>

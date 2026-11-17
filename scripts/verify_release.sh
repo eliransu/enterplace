@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks a Gantry release before you run it: the image and the Helm chart were signed by this repository's release
+# Checks a Enterplace release before you run it: the image and the Helm chart were signed by this repository's release
 # workflows (keyless, through GitHub's OIDC identity and Sigstore), and the image carries a signed SBOM and signed SLSA
 # provenance.
 #
@@ -9,17 +9,17 @@
 # public: no login.
 #
 # Environment:
-#   IMAGE    the image repository (default ghcr.io/eliransu/gantry)
-#   CHART    the chart repository (default ghcr.io/eliransu/charts/gantry); CHART=none skips the chart
+#   IMAGE    the image repository (default ghcr.io/eliransu/enterplace)
+#   CHART    the chart repository (default ghcr.io/eliransu/charts/enterplace); CHART=none skips the chart
 #   COSIGN_KEY   a public key file to verify with in place of the workflows' identity. Only for testing this script
 #                against an image signed locally (`cosign sign --key`); it skips the transparency log too.
 #   ALLOW_HTTP_REGISTRY=1   with COSIGN_KEY, allows a plain-HTTP local registry.
 set -euo pipefail
 version=${1:?usage: scripts/verify_release.sh X.Y.Z}
 version=${version#v}
-image=${IMAGE:-ghcr.io/eliransu/gantry}
-chart=${CHART:-ghcr.io/eliransu/charts/gantry}
-repo=https://github.com/eliransu/gantry
+image=${IMAGE:-ghcr.io/eliransu/enterplace}
+chart=${CHART:-ghcr.io/eliransu/charts/enterplace}
+repo=https://github.com/eliransu/enterplace
 
 command -v cosign > /dev/null || { echo "error: cosign is not on PATH. Install it: https://docs.sigstore.dev/cosign/system_config/installation/" >&2; exit 1; }
 
@@ -70,4 +70,4 @@ if [ "$chart" != none ]; then
 fi
 
 echo
-echo "Verified Gantry $version. Pin the image by digest: $image@$digest"
+echo "Verified Enterplace $version. Pin the image by digest: $image@$digest"

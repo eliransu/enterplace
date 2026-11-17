@@ -1,0 +1,74 @@
+/* Enterplace brand on Starlight: near-black and white surfaces, lime as the one accent, Familjen Grotesk and Fragment Mono. */
+@font-face { font-family: 'Familjen Grotesk'; src: url('../assets/fonts/FamiljenGrotesk-Variable.woff2') format('woff2'); font-weight: 400 700; font-display: swap; }
+@font-face { font-family: 'Fragment Mono'; src: url('../assets/fonts/FragmentMono-Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+
+:root {
+	--sl-font: 'Familjen Grotesk', ui-sans-serif, system-ui, sans-serif;
+	--sl-font-mono: 'Fragment Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+	--sl-content-width: 50rem;
+	--enterplace-lime: #e3ff45;
+	--enterplace-flame: #ff4800;
+}
+
+/* Dark */
+:root {
+	--sl-color-accent-low: #2a3000;
+	--sl-color-accent: #e3ff45;
+	--sl-color-accent-high: #eeff85;
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: #f2f2f2;
+	--sl-color-gray-2: #d9d9d9;
+	--sl-color-gray-3: #9e9e9e;
+	--sl-color-gray-4: #616161;
+	--sl-color-gray-5: #3a3a3a;
+	--sl-color-gray-6: #1c1c1c;
+	--sl-color-black: #0e0e0e;
+}
+
+/* Light */
+:root[data-theme='light'] {
+	--sl-color-accent-low: #f6ffc2;
+	--sl-color-accent: #121212;
+	--sl-color-accent-high: #121212;
+	--sl-color-white: #121212;
+	--sl-color-gray-1: #1c1c1c;
+	--sl-color-gray-2: #3a3a3a;
+	--sl-color-gray-3: #616161;
+	--sl-color-gray-4: #858585;
+	--sl-color-gray-5: #d9d9d9;
+	--sl-color-gray-6: #f2f2f2;
+	--sl-color-gray-7: #f7f7f7;
+	--sl-color-black: #ffffff;
+}
+
+h1, h2, h3, .site-title { letter-spacing: -0.02em; }
+.site-title { font-weight: 700; font-size: 1.25rem; }
+
+/* Links read as links in both themes, with the lime as the underline in dark. */
+.sl-markdown-content a:not(:where(.not-content *)) { text-decoration-thickness: 1px; text-underline-offset: 3px; }
+:root[data-theme='light'] .sl-markdown-content a:not(:where(.not-content *)) { text-decoration-color: #c23600; }
+
+/* Primary buttons: lime with near-black text in both themes. */
+.sl-link-button.primary, .hero .action.primary { background: var(--enterplace-lime); color: #121212; border-color: var(--enterplace-lime); }
+
+/* Cards: flat, bordered, no gradients. */
+.card { border-radius: 12px; }
+.sl-link-card { border-radius: 12px; }
+
+/* Tables: compact and scannable. */
+.sl-markdown-content table { font-size: 0.875rem; }
+.sl-markdown-content table code { white-space: nowrap; }
+
+/* One accent: card icons use the brand, not Starlight's rotating palette. */
+.card { --sl-card-border: var(--sl-color-gray-5); --sl-card-bg: var(--sl-color-gray-6); border-color: var(--sl-color-gray-5); }
+.card .icon { color: var(--sl-color-text); }
+:root:not([data-theme='light']) .card .icon { color: var(--enterplace-lime); }
+:root[data-theme='light'] .card { background: var(--sl-color-gray-7); }
+
+/* Copy page, Open in Claude, Open in ChatGPT under each title (public/agent-tools.js). */
+.enterplace-agent { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+.enterplace-agent button, .enterplace-agent a {
+	font: inherit; font-size: var(--sl-text-sm); color: var(--sl-color-gray-2); background: transparent;
+	border: 1px solid var(--sl-color-gray-5); border-radius: 0.25rem; padding: 0.15rem 0.6rem; cursor: pointer; text-decoration: none;
+}
+.enterplace-agent button:hover, .enterplace-agent a:hover { color: var(--sl-color-white); border-color: var(--sl-color-gray-3); }

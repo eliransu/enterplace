@@ -1,16 +1,16 @@
 ---
 title: Kilo Code
-description: Add Gantry as a custom provider in Kilo Code for VS Code and the Kilo CLI.
+description: Add Enterplace as a custom provider in Kilo Code for VS Code and the Kilo CLI.
 sidebar:
   order: 16
 ---
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Kilo Code takes Gantry as a custom provider, in the VS Code extension or in `kilo.json` for the Kilo CLI. Its requests then go to Gantry, identified by a Gantry key.
+Kilo Code takes Enterplace as a custom provider, in the VS Code extension or in `kilo.json` for the Kilo CLI. Its requests then go to Enterplace, identified by a Enterplace key.
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -22,11 +22,11 @@ Open Settings (the gear), then the **Providers** tab, then **Custom provider**:
 
 | Field | Value |
 |---|---|
-| Provider ID | `gantry` |
-| Display name | Gantry |
+| Provider ID | `enterplace` |
+| Display name | Enterplace |
 | Provider API | OpenAI Compatible (`POST /v1/chat/completions`), OpenAI Responses (`POST /v1/responses`) or Anthropic Messages (`POST /v1/messages`) |
-| Base URL | Gantry's address with `/v1`, for example `http://127.0.0.1:8080/v1` |
-| API key | The Gantry key |
+| Base URL | Enterplace's address with `/v1`, for example `http://127.0.0.1:8080/v1` |
+| API key | The Enterplace key |
 | Models | **Fetch models** lists the models the key may use from `GET /v1/models` |
 
 </TabItem>
@@ -35,10 +35,10 @@ Open Settings (the gear), then the **Providers** tab, then **Custom provider**:
 ```json title="~/.config/kilo/kilo.json"
 {
   "provider": {
-    "gantry": {
+    "enterplace": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Gantry",
-      "options": { "baseURL": "http://127.0.0.1:8080/v1", "apiKey": "{env:GANTRY_KEY}" },
+      "name": "Enterplace",
+      "options": { "baseURL": "http://127.0.0.1:8080/v1", "apiKey": "{env:ENTERPLACE_KEY}" },
       "models": {
         "gpt-4o-mini": { "name": "gpt-4o-mini", "limit": { "context": 128000, "output": 16000 } }
       }
@@ -48,27 +48,27 @@ Open Settings (the gear), then the **Providers** tab, then **Custom provider**:
 ```
 
 ```bash
-export GANTRY_KEY=gantry_...
-kilo run -m gantry/gpt-4o-mini "explain this repository"
+export ENTERPLACE_KEY=enterplace_...
+kilo run -m enterplace/gpt-4o-mini "explain this repository"
 ```
 
-Set `limit` on each model: without it Kilo assumes a context of 0 and turns off compaction. `{env:GANTRY_KEY}` is read only in a trusted file (the global `~/.config/kilo`, `KILO_CONFIG` or an MDM-managed file), never from a `kilo.json` committed to a project.
+Set `limit` on each model: without it Kilo assumes a context of 0 and turns off compaction. `{env:ENTERPLACE_KEY}` is read only in a trusted file (the global `~/.config/kilo`, `KILO_CONFIG` or an MDM-managed file), never from a `kilo.json` committed to a project.
 
 </TabItem>
 </Tabs>
 
-## What Gantry governs
+## What Enterplace governs
 
 - Every request to the custom provider. Its records carry the user agent `Kilo-Code/<version>`, which [Coverage](/governance/coverage/) counts as `kilo-code`.
 
-## What Gantry does not see
+## What Enterplace does not see
 
 - Autocomplete, which always goes through Kilo's own gateway to Codestral, or to Mistral with a Mistral key. It is on by default.
 - Requests to the built-in Kilo Code provider, if someone picks it.
 - Kilo CLI telemetry, on by default. `experimental.openTelemetry = false` turns it off.
 
 <Aside type="note">
-This follows Kilo Code's documentation (custom models, OpenAI-compatible provider, CLI). The CLI setup above was run (`kilo run`, Kilo CLI 7.8.27) against a local Gantry and a mock provider: one allowed request on `/v1/chat/completions`. The VS Code setup was not run.
+This follows Kilo Code's documentation (custom models, OpenAI-compatible provider, CLI). The CLI setup above was run (`kilo run`, Kilo CLI 7.8.27) against a local Enterplace and a mock provider: one allowed request on `/v1/chat/completions`. The VS Code setup was not run.
 </Aside>
 
 ## Related

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Managed preference for the Enterplace device agent. Replace PASTE_ENROLMENT_TOKEN with a token from
+     Devices in the Enterplace app. macOS writes it to /Library/Managed Preferences/me.enterplace.device.plist (root only).
+     The agent reads a plain file, so the MDM also runs the one-line script in README.md that copies the value
+     to /Library/Application Support/Enterplace/device-token. -->
+<plist version="1.0">
+<dict>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key>
+      <string>me.enterplace.device</string>
+      <key>PayloadIdentifier</key>
+      <string>me.enterplace.device.settings</string>
+      <key>PayloadUUID</key>
+      <string>6F1C2B0E-3D4A-4E5B-9C7D-1A2B3C4D5E6F</string>
+      <key>PayloadVersion</key>
+      <integer>1</integer>
+      <key>PayloadDisplayName</key>
+      <string>Enterplace device agent</string>
+      <key>EnrolmentToken</key>
+      <string>PASTE_ENROLMENT_TOKEN</string>
+    </dict>
+  </array>
+  <key>PayloadDisplayName</key>
+  <string>Enterplace device enrolment</string>
+  <key>PayloadIdentifier</key>
+  <string>me.enterplace.device</string>
+  <key>PayloadScope</key>
+  <string>System</string>
+  <key>PayloadType</key>
+  <string>Configuration</string>
+  <key>PayloadUUID</key>
+  <string>0B7E4F2A-8C1D-4F3E-A5B6-7C8D9E0F1A2B</string>
+  <key>PayloadVersion</key>
+  <integer>1</integer>
+</dict>
+</plist>

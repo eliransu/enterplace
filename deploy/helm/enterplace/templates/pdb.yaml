@@ -1,0 +1,14 @@
+{{- /* One replica cannot spare a pod: a budget would block every node drain, so it renders only with more. */}}
+{{- if and .Values.podDisruptionBudget.enabled (or .Values.autoscaling.enabled (gt (int .Values.replicaCount) 1)) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "enterplace.fullname" . }}
+  labels:
+    {{- include "enterplace.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "enterplace.selector" . | nindent 6 }}
+{{- end }}

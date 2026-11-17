@@ -13,7 +13,7 @@ A rule with `prompt_cache: auto` asks the provider to cache the stable start of 
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -78,17 +78,17 @@ The cache is in memory, 64 MiB across all rules, least recently used out first. 
 
 With `cache.semantic`, a request with no exact hit is compared with earlier ones in other words. "What is the capital of France?" can be served the answer to "Which city is France's capital?".
 
-- Gantry embeds the request's text through its own `/v1/embeddings`, as the person who sent the request. That embedding is a request of its own: it has its own decision, guardrails, rate limits, usage and cost, charged to the same person.
+- Enterplace embeds the request's text through its own `/v1/embeddings`, as the person who sent the request. That embedding is a request of its own: it has its own decision, guardrails, rate limits, usage and cost, charged to the same person.
 - It is compared only with requests that match in everything but their text: the same scope, provider, model, route, headers and body with the text left out. Roles, tools and parameters must be the same.
 - The closest stored answer at or above `threshold` is served. The lower the threshold, the looser the match. Start at 0.95.
 - A request with more than 32 KiB of text gets an exact match only. A request that is already an exact hit is not embedded.
 - Vectors are kept in memory per replica, at most 4096, oldest out first. They point at answers in the cache above and are never written to the store.
 
-`gantry check` refuses a semantic model the rule does not allow, since every embedding would be refused.
+`enterplace check` refuses a semantic model the rule does not allow, since every embedding would be refused.
 
 ## Prompt caching
 
-With `prompt_cache: auto`, Gantry adds `"cache_control": {"type": "ephemeral"}` to the last tool, the end of the system prompt and the last block of the conversation. The provider then caches that prefix, and the next request that starts the same way reads it at the cached input price.
+With `prompt_cache: auto`, Enterplace adds `"cache_control": {"type": "ephemeral"}` to the last tool, the end of the system prompt and the last block of the conversation. The provider then caches that prefix, and the next request that starts the same way reads it at the cached input price.
 
 It applies only to `/v1/messages` requests whose every deployment is `anthropic`, `bedrock` or `vertex_anthropic`. It is skipped when the caller already placed any `cache_control`, or when a key appears twice in the body. OpenAI and Gemini are left alone: OpenAI caches prompts on its own, and Gemini's caching is a stored resource the caller creates.
 
@@ -98,11 +98,11 @@ It applies only to `/v1/messages` requests whose every deployment is `anthropic`
 |---|---|---|
 | Decision record | `"cache": "hit"`, `cache_match` (`exact` or `semantic`), `cache_scope` (`person` or `team`), `cache_origin` (the decision that made the answer), `cache_similarity` (semantic only) | `"cache": "miss"`, and `cache_embedding` (the embeddings decision) when the semantic cache embedded it |
 | Usage record | Cost 0, `cache_saved_usd`: what the original answer cost | The provider's usage |
-| Response header | `x-gantry-cache: hit` | none |
+| Response header | `x-enterplace-cache: hit` | none |
 
 When `prompt_cache: auto` marked a request, its decision record has `prompt_cache` with where: `tools`, `system`, `messages`. Its usage record has `cache_saved_usd`: the price of the input without caching minus what it cost, from the provider's cache read and write counts. It can be negative on a call that wrote the cache.
 
-`gantry_cache_saved_usd{team, kind}` on `/metrics` sums the savings since start by team, with `kind` `answer` (Gantry's cache) or `prompt` (the provider's).
+`enterplace_cache_saved_usd{team, kind}` on `/metrics` sums the savings since start by team, with `kind` `answer` (Enterplace's cache) or `prompt` (the provider's).
 
 A request answered from the cache does not count against the rule's `rpm` limit.
 

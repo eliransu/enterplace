@@ -1,8 +1,8 @@
 //! The audit chain kept in S3-compatible object storage, for a gateway whose disk does
 //! not survive a restart, such as one in Cloudflare Containers.
 //!
-//! The log is sealed often: every `GANTRY_AUDIT_SEAL_SECONDS` (default 60) once it holds a new record, or as soon as
-//! the open file reaches `GANTRY_AUDIT_SEAL_BYTES` (default 1 MiB). Each sealed segment is written to the bucket under
+//! The log is sealed often: every `ENTERPLACE_AUDIT_SEAL_SECONDS` (default 60) once it holds a new record, or as soon as
+//! the open file reaches `ENTERPLACE_AUDIT_SEAL_BYTES` (default 1 MiB). Each sealed segment is written to the bucket under
 //! the name the log gave it (`<prefix>/<first>-<last>.jsonl`, numbers padded to 20 digits) and only then retired on
 //! disk with an `audit_retired` record, so the chain itself names every segment that left the disk. A restart loses
 //! at most the records not yet sealed, and none on a graceful stop, which seals and writes the rest.
@@ -10,7 +10,7 @@
 //! On a start with an empty disk, the newest segments are fetched back into the folder beside the log until the
 //! local chain verifies: it then starts right after records that an `audit_retired` record in it names. The gateway
 //! opens the log as it always does and continues the chain from the last hash. The bucket's segments in name order,
-//! followed by the open file, are one chain that `gantry audit verify` proves from record 1.
+//! followed by the open file, are one chain that `enterplace audit verify` proves from record 1.
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -25,15 +25,15 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use gantry_core::audit::{self, AuditLog};
-use gantry_core::{id::sha256_hex, sigv4};
+use enterplace_core::audit::{self, AuditLog};
+use enterplace_core::{id::sha256_hex, sigv4};
 
 use super::siem::sinks::Env;
 
 /// Where the segments go: `https://<host>/<bucket>[/<prefix>]`, path style.
-pub const URL_ENV: &str = "GANTRY_AUDIT_SEGMENTS_URL";
+pub const URL_ENV: &str = "ENTERPLACE_AUDIT_SEGMENTS_URL";
 /// A token that may read the unsealed tail at `GET /audit/tail`. Unset, that route does not exist.
-pub const READ_TOKEN_ENV: &str = "GANTRY_AUDIT_READ_TOKEN";
+pub const READ_TOKEN_ENV: &str = "ENTERPLACE_AUDIT_READ_TOKEN";
 /// The object beside the segments that keeps the replica name the audit export uses (`<log>.replica`).
 const REPLICA: &str = "replica";
 
@@ -48,7 +48,7 @@ pub struct Store {
 }
 
 impl Store {
-    /// The store `GANTRY_AUDIT_SEGMENTS_URL` names, `None` when it is unset. Requests are signed with
+    /// The store `ENTERPLACE_AUDIT_SEGMENTS_URL` names, `None` when it is unset. Requests are signed with
     /// `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (region `AWS_REGION`, default `auto` as R2 wants) when both are
     /// set, and sent unsigned otherwise, for an endpoint that needs none (the Cloudflare Worker's own handler).
     pub fn from_env(env: &Env) -> Result<Option<Self>, String> {
@@ -344,7 +344,7 @@ pub fn restore(store: &Store, path: &Path) -> Result<String, String> {
             Err(_) if *first > 1 => continue,
             Err(err) => {
                 return Err(format!(
-                    "the audit segments at {} are not one chain: {err} Gantry does not continue a chain that does not hold. Keep the bucket as evidence, and point {URL_ENV} at a new prefix to start a new chain.",
+                    "the audit segments at {} are not one chain: {err} Enterplace does not continue a chain that does not hold. Keep the bucket as evidence, and point {URL_ENV} at a new prefix to start a new chain.",
                     store.describe()
                 ));
             }
@@ -396,8 +396,8 @@ impl Shipper {
             store,
             log,
             path,
-            every: Duration::from_secs(number("GANTRY_AUDIT_SEAL_SECONDS", 60)),
-            bytes: number("GANTRY_AUDIT_SEAL_BYTES", 1024 * 1024),
+            every: Duration::from_secs(number("ENTERPLACE_AUDIT_SEAL_SECONDS", 60)),
+            bytes: number("ENTERPLACE_AUDIT_SEAL_BYTES", 1024 * 1024),
             limit,
             index,
             state: Mutex::new(State {
@@ -514,8 +514,8 @@ impl Shipper {
     }
 }
 
-/// `GET /audit/tail` with `Authorization: Bearer <GANTRY_AUDIT_READ_TOKEN>`: the records not yet sealed, as written.
-/// Appended to the store's segments, they complete the chain for `gantry audit verify`.
+/// `GET /audit/tail` with `Authorization: Bearer <ENTERPLACE_AUDIT_READ_TOKEN>`: the records not yet sealed, as written.
+/// Appended to the store's segments, they complete the chain for `enterplace audit verify`.
 pub fn routes(shipper: Arc<Shipper>, token: String) -> Router {
     let wanted = sha256_hex(token.as_bytes());
     Router::new().route(
@@ -645,10 +645,10 @@ pub(crate) mod tests {
 
     fn disk(test: &str) -> Result<PathBuf, Error> {
         let dir =
-            std::env::temp_dir().join(format!("gantry-segments-{}-{test}", std::process::id()));
+            std::env::temp_dir().join(format!("enterplace-segments-{}-{test}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
-        Ok(dir.join("gantry-audit.jsonl"))
+        Ok(dir.join("enterplace-audit.jsonl"))
     }
 
     fn write(log: &AuditLog, count: usize) -> Result<(), Error> {
@@ -723,7 +723,7 @@ pub(crate) mod tests {
         let note = restore(&store(&url)?, &second)?;
         assert!(note.contains("fetched 1"), "{note}");
         let log = Arc::new(AuditLog::open(&second)?);
-        // The check `gantry serve` runs before serving.
+        // The check `enterplace serve` runs before serving.
         audit::verify_full(&second, None)?;
         write(&log, 2)?;
         let local = audit::verify_full(&second, None)?;
@@ -927,10 +927,10 @@ pub(crate) mod tests {
 
     #[test]
     fn the_url_names_a_bucket_and_a_prefix() -> Result<(), Error> {
-        let s = store("https://acct.r2.cloudflarestorage.com/gantry-audit/prod/gw-0/")?;
+        let s = store("https://acct.r2.cloudflarestorage.com/enterplace-audit/prod/gw-0/")?;
         assert_eq!(
             (s.bucket.as_str(), s.prefix.as_str()),
-            ("gantry-audit", "prod/gw-0")
+            ("enterplace-audit", "prod/gw-0")
         );
         assert!(s.credentials.is_none());
         let s = store("http://audit.internal/b")?;

@@ -1,6 +1,6 @@
 ---
 title: Local models
-description: Serve models from Ollama, vLLM or LM Studio through Gantry with allow_private, with or without a key.
+description: Serve models from Ollama, vLLM or LM Studio through Enterplace with allow_private, with or without a key.
 sidebar:
   order: 8
 ---
@@ -14,7 +14,7 @@ Local model servers speak OpenAI's API, so each one is a `kind: openai` provider
 <Tabs>
 <TabItem label="Ollama">
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: ollama
@@ -28,12 +28,12 @@ rules:
     models: [gpt-oss:20b]
 ```
 
-Ollama ignores the key, so Gantry sends none. It serves chat, Responses (without `previous_response_id`) and embeddings.
+Ollama ignores the key, so Enterplace sends none. It serves chat, Responses (without `previous_response_id`) and embeddings.
 
 </TabItem>
 <TabItem label="vLLM">
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: vllm
@@ -53,7 +53,7 @@ rules:
 </TabItem>
 <TabItem label="LM Studio">
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: lmstudio
@@ -74,7 +74,7 @@ LM Studio serves chat, Responses and embeddings, with no key.
 
 ## Behavior
 
-- Without `key_env`, Gantry sends no `Authorization` header to the server, and never the caller's Gantry key.
+- Without `key_env`, Enterplace sends no `Authorization` header to the server, and never the caller's Enterplace key.
 - Only an `openai` provider with `allow_private: true` may leave out `key_env`. Every other provider needs it.
 - Give local models a zero price, so a rule with a budget can reach them:
 
@@ -89,17 +89,17 @@ prices:
 In the container, `127.0.0.1` is the container itself. Use the host's address, for example `http://host.docker.internal:11434` with `--add-host host.docker.internal:host-gateway`, and keep `allow_private: true` if the address is private.
 </Aside>
 
-## Errors from gantry check
+## Errors from enterplace check
 
 Without `allow_private: true`, a private address is refused:
 
 ```text
-gantry.policy.yaml:5: the provider url points at this machine or a private network. If that is intended, for example a local model server, add `allow_private: true` to the provider.
+enterplace.policy.yaml:5: the provider url points at this machine or a private network. If that is intended, for example a local model server, add `allow_private: true` to the provider.
 ```
 
 ## Related
 
 <CardGrid>
 	<LinkCard title="Providers overview" href="/providers/overview/" description="What counts as a private address." />
-	<LinkCard title="Pricing" href="/routing/pricing/" description="Set prices for models Gantry does not know." />
+	<LinkCard title="Pricing" href="/routing/pricing/" description="Set prices for models Enterplace does not know." />
 </CardGrid>

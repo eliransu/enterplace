@@ -1,13 +1,13 @@
 <!--
-title: How Gantry works: the request path, the controls, the audit log
-description: Gantry is a reverse proxy with a fixed order of checks. Each AI request is identified, decided by your policy and recorded before any byte reaches a provider. See the twelve stages, the controls, the audit log and the console.
+title: How Enterplace works: the request path, the controls, the audit log
+description: Enterplace is a reverse proxy with a fixed order of checks. Each AI request is identified, decided by your policy and recorded before any byte reaches a provider. See the twelve stages, the controls, the audit log and the console.
 nav: product
 -->
 <section class="wrap head">
   <h1>Every request is identified, decided and recorded before it leaves.</h1>
-  <p class="lead">Gantry is a reverse proxy with a fixed order of checks. Your tools send requests to it, and it sends them on to the provider. A request that cannot be recorded is refused.</p>
-  <figure class="code cmd"><pre>curl -fsSL https://gantry.enterplace.dev/install.sh | sh
-gantry start</pre></figure>
+  <p class="lead">Enterplace is a reverse proxy with a fixed order of checks. Your tools send requests to it, and it sends them on to the provider. A request that cannot be recorded is refused.</p>
+  <figure class="code cmd"><pre>curl -fsSL https://enterplace.dev/install.sh | sh
+enterplace start</pre></figure>
 </section>
 
 <section class="wrap sec" id="path">
@@ -24,7 +24,7 @@ gantry start</pre></figure>
     </div>
     <ol class="path-steps">
       <li><b>1 identify</b><span>Look up the key's SHA-256</span></li>
-      <li><b>2 route</b><span>Is this a method and path Gantry serves?</span></li>
+      <li><b>2 route</b><span>Is this a method and path Enterplace serves?</span></li>
       <li><b>3 read body</b><span>Within the size, time and memory limits</span></li>
       <li><b>4 decide</b><span>The first rule that names the person or team, and any kill switch</span></li>
       <li><b>5 provider</b><span>The one provider that lists the model</span></li>
@@ -40,13 +40,13 @@ gantry start</pre></figure>
       <h3>Allowed: forwarded to the provider</h3>
       <p>The record is written first. The provider's key replaces the caller's, and the answer comes back as the provider sent it. A second record follows with tokens and cost.</p>
       <figure class="code"><figcaption>What the caller gets</figcaption><pre>HTTP 200
-X-Gantry-Decision: 01M79...</pre></figure>
+X-Enterplace-Decision: 01M79...</pre></figure>
       <p class="muted">A refusal uses the error shape the client already understands (Anthropic's, OpenAI's or Google's), so Claude Code and the SDKs show the cause to the person. <a href="docs:/reference/refusal-codes/">Every refusal code</a></p>
     </div>
     <script type="application/json">{
-      "allow": {"stop": null, "title": "Allowed: forwarded to the provider", "text": "The record is written first. The provider's key replaces the caller's, and the answer comes back as the provider sent it. A second record follows with tokens and cost.", "out": "HTTP 200\nX-Gantry-Decision: 01M79..."},
+      "allow": {"stop": null, "title": "Allowed: forwarded to the provider", "text": "The record is written first. The provider's key replaces the caller's, and the answer comes back as the provider sent it. A second record follows with tokens and cost.", "out": "HTTP 200\nX-Enterplace-Decision: 01M79..."},
       "model": {"stop": 3, "title": "Refused at stage 4: the rule does not list this model", "text": "The person's rule names the models they may use. Nothing is sent. The refusal is still recorded, with its code.", "out": "HTTP 403\n<span class=\"no\">Refused (model_not_allowed)</span>: ... Decision 01M79...\n\ncode: model_not_allowed"},
-      "secret": {"stop": 6, "title": "Blocked at stage 7: the prompt holds an AWS access key", "text": "The secrets detector runs inside Gantry. Nothing is sent, and the text it matched is never written to a record.", "out": "HTTP 403\n<span class=\"no\">Refused (guardrail_blocked)</span>: ... Decision 01M79...\n\ncode: guardrail_blocked"},
+      "secret": {"stop": 6, "title": "Blocked at stage 7: the prompt holds an AWS access key", "text": "The secrets detector runs inside Enterplace. Nothing is sent, and the text it matched is never written to a record.", "out": "HTTP 403\n<span class=\"no\">Refused (guardrail_blocked)</span>: ... Decision 01M79...\n\ncode: guardrail_blocked"},
       "budget": {"stop": 9, "title": "Refused at stage 10: the team reached its monthly budget", "text": "The message says when the budget starts again. Requests are refused until then, or until someone raises the budget.", "out": "HTTP 429\n<span class=\"no\">Refused (budget_exceeded)</span>: ... Decision 01M79...\n\ncode: budget_exceeded"}
     }</script>
   </div>
@@ -59,7 +59,7 @@ X-Gantry-Decision: 01M79...</pre></figure>
     <p>Each one is a few lines in the policy file or one page in the console, and each can run on trial before it refuses anything.</p>
   </div>
   <dl class="facts">
-    <div><dt>Identity</dt><dd>A Gantry key per person and per workload, shown once and stored as a SHA-256 hash. <code>gantry login</code> gives a developer an expiring key through your identity provider. Services can send JWTs from a trusted issuer. <a href="docs:/governance/keys/">Keys</a></dd></div>
+    <div><dt>Identity</dt><dd>A Enterplace key per person and per workload, shown once and stored as a SHA-256 hash. <code>enterplace login</code> gives a developer an expiring key through your identity provider. Services can send JWTs from a trusted issuer. <a href="docs:/governance/keys/">Keys</a></dd></div>
     <div><dt>Budgets and rate limits</dt><dd>Dollars, requests per minute, tokens per minute and requests in flight, per organization, team, person, key, customer, tag or model. Shared by every replica on one Postgres store. <a href="docs:/governance/budgets-and-rate-limits/">Budgets and rate limits</a></dd></div>
     <div><dt>Guardrails</dt><dd>Built-in detectors for secrets and personal data that block, mask or warn. Your own patterns and word lists. Vendor guardrails and your own service by webhook. On requests, answers and MCP tool calls. <a href="docs:/governance/guardrails/">Guardrails</a></dd></div>
     <div><dt>Kill switches</dt><dd>Stop a person, a team, a key, a model or everyone, with a reason the caller sees. <a href="docs:/governance/kill-switches/">Kill switches</a></dd></div>
@@ -73,13 +73,13 @@ X-Gantry-Decision: 01M79...</pre></figure>
   <div class="split">
     <div class="stack">
       <h2>One policy file</h2>
-      <p class="muted">Providers, rules, budgets and guardrails live in one YAML file you keep in git and review like code. Gantry picks up a saved file within 2 seconds, without a restart.</p>
-      <p class="muted"><code>gantry check</code> validates the file in CI. An unknown field is an error with its line, and the message names the cause and the fix:</p>
-      <figure class="code"><figcaption>gantry check</figcaption><pre style="white-space: pre-wrap"><span class="no">gantry.policy.yaml:5:</span> the provider url points at this machine or a private network. If that is intended, for example a local model server, add `allow_private: true` to the provider.</pre></figure>
-      <p class="muted">A change that fails the check is not applied. Gantry keeps the version it has and records the rejection in the audit log.</p>
+      <p class="muted">Providers, rules, budgets and guardrails live in one YAML file you keep in git and review like code. Enterplace picks up a saved file within 2 seconds, without a restart.</p>
+      <p class="muted"><code>enterplace check</code> validates the file in CI. An unknown field is an error with its line, and the message names the cause and the fix:</p>
+      <figure class="code"><figcaption>enterplace check</figcaption><pre style="white-space: pre-wrap"><span class="no">enterplace.policy.yaml:5:</span> the provider url points at this machine or a private network. If that is intended, for example a local model server, add `allow_private: true` to the provider.</pre></figure>
+      <p class="muted">A change that fails the check is not applied. Enterplace keeps the version it has and records the rejection in the audit log.</p>
       <a class="more" href="docs:/governance/policy/">The policy file in the docs {{> arrow}}</a>
     </div>
-    <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>version: 1
+    <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>version: 1
 providers:
   - name: anthropic
     preset: anthropic
@@ -114,13 +114,13 @@ limits:
       <ul class="ticks">
         <li>A record holds who asked, the model, the decision, the rule behind it and the cost. It holds <strong>no prompt text, no answer text and no keys</strong>.</li>
         <li>If the log cannot be written, every request is refused with <code>audit_unavailable</code>.</li>
-        <li><code>gantry audit verify</code> checks the chain. The console has a Verify button that runs the same check.</li>
+        <li><code>enterplace audit verify</code> checks the chain. The console has a Verify button that runs the same check.</li>
       </ul>
-      <p class="note"><strong>The limit.</strong> Anyone who can write the audit file can rewrite the whole chain consistently. Keep the last hash where the Gantry host cannot write, and check it later with <code>--expect-last</code>.</p>
+      <p class="note"><strong>The limit.</strong> Anyone who can write the audit file can rewrite the whole chain consistently. Keep the last hash where the Enterplace host cannot write, and check it later with <code>--expect-last</code>.</p>
       <a class="more" href="docs:/governance/audit-log/">The audit log in the docs {{> arrow}}</a>
     </div>
     <div class="stack">
-      <figure class="code"><figcaption>Verify the chain</figcaption><pre><span class="c">$</span> gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+      <figure class="code"><figcaption>Verify the chain</figcaption><pre><span class="c">$</span> enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl
 <span class="ok">9 records in an unbroken chain from record 1 to record 9.</span>
 5 requests, 1 configuration record, 0 admin records,
 3 usage records.
@@ -145,7 +145,7 @@ Last hash: 1ae338b73793e850d4a1a345e1648c1addde...</pre></figure>
         <p>Every decision and every change to who may do what, newest first. Filter by blocked, refused, masked or warned, and open a record to see the rule and the findings behind it.</p>
         <a class="more" href="docs:/operations/console/">The console in the docs {{> arrow}}</a>
       </div>
-      <figure class="shot shot-auto"><figcaption>Gantry console: Audit log</figcaption><div class="shot-in"><img class="only-light" src="/img/console-audit-light.webp" width="1440" height="1150" loading="lazy" alt="The Audit log page of the Gantry console: 23 requests checked today, 11 refused by policy, 1 blocked by a guardrail, and a table of decisions with person, verdict, time and model."><img class="only-dark" src="/img/console-audit-dark.webp" width="1440" height="1150" loading="lazy" alt="The Audit log page of the Gantry console: 23 requests checked today, 11 refused by policy, 1 blocked by a guardrail, and a table of decisions with person, verdict, time and model."></div></figure>
+      <figure class="shot shot-auto"><figcaption>Enterplace console: Audit log</figcaption><div class="shot-in"><img class="only-light" src="/img/console-audit-light.webp" width="1440" height="1150" loading="lazy" alt="The Audit log page of the Enterplace console: 23 requests checked today, 11 refused by policy, 1 blocked by a guardrail, and a table of decisions with person, verdict, time and model."><img class="only-dark" src="/img/console-audit-dark.webp" width="1440" height="1150" loading="lazy" alt="The Audit log page of the Enterplace console: 23 requests checked today, 11 refused by policy, 1 blocked by a guardrail, and a table of decisions with person, verdict, time and model."></div></figure>
     </div>
     <div>
       <div class="stack">
@@ -153,15 +153,15 @@ Last hash: 1ae338b73793e850d4a1a345e1648c1addde...</pre></figure>
         <p>Spend per day against the pace that keeps every budget inside its limit, who spent most, and each budget with a sentence that says whether it lasts the period.</p>
         <a class="more" href="docs:/operations/request-log/">Request log and analytics {{> arrow}}</a>
       </div>
-      <figure class="shot"><figcaption>Gantry console: Spend <span>light theme</span></figcaption><div class="shot-in"><img src="/img/console-spend-light.webp" width="1440" height="1090" loading="lazy" alt="The Spend page of the Gantry console: a bar chart of spend per day, the three biggest spenders, budgets for two teams and one key, and spend by model."></div></figure>
+      <figure class="shot"><figcaption>Enterplace console: Spend <span>light theme</span></figcaption><div class="shot-in"><img src="/img/console-spend-light.webp" width="1440" height="1090" loading="lazy" alt="The Spend page of the Enterplace console: a bar chart of spend per day, the three biggest spenders, budgets for two teams and one key, and spend by model."></div></figure>
     </div>
     <div>
       <div class="stack">
         <h3>Policy changes with a dry run</h3>
-        <p>With a Postgres store, the policy is edited in the console. A save is checked as <code>gantry check</code> checks a file, replayed against recent requests to show what would change, and then waits for a second admin's approval.</p>
+        <p>With a Postgres store, the policy is edited in the console. A save is checked as <code>enterplace check</code> checks a file, replayed against recent requests to show what would change, and then waits for a second admin's approval.</p>
         <a class="more" href="docs:/operations/console-editing/">Editing the policy {{> arrow}}</a>
       </div>
-      <figure class="shot"><figcaption>Gantry console: Edit the policy <span>light theme</span></figcaption><div class="shot-in"><img src="/img/console-policy-dry-run-light.webp" width="1440" height="1537" loading="lazy" alt="The Edit the policy page of the Gantry console: a dry run summary, the policy as YAML, a field for what changed, and buttons to run a dry run or save for approval."></div></figure>
+      <figure class="shot"><figcaption>Enterplace console: Edit the policy <span>light theme</span></figcaption><div class="shot-in"><img src="/img/console-policy-dry-run-light.webp" width="1440" height="1537" loading="lazy" alt="The Edit the policy page of the Enterplace console: a dry run summary, the policy as YAML, a field for what changed, and buttons to run a dry run or save for approval."></div></figure>
     </div>
   </div>
 </section>
@@ -169,10 +169,10 @@ Last hash: 1ae338b73793e850d4a1a345e1648c1addde...</pre></figure>
 <section class="wrap sec" id="apis">
   <div class="sec-head">
     <h2>What it speaks</h2>
-    <p>Tools keep the API they already use. Gantry holds the provider credentials.</p>
+    <p>Tools keep the API they already use. Enterplace holds the provider credentials.</p>
   </div>
   <table class="tbl">
-    <thead><tr><th>API your tool calls</th><th>Route on Gantry</th><th>Reaches</th></tr></thead>
+    <thead><tr><th>API your tool calls</th><th>Route on Enterplace</th><th>Reaches</th></tr></thead>
     <tbody>
       <tr><td>OpenAI chat completions</td><td><code>/v1/chat/completions</code></td><td>OpenAI-compatible providers and Azure OpenAI as sent. Translated to Gemini, Vertex AI, Amazon Bedrock, Cohere and others.</td></tr>
       <tr><td>OpenAI Responses</td><td><code>/v1/responses</code></td><td>OpenAI and Azure as sent. Anthropic, Bedrock, Vertex AI and Gemini translated through chat.</td></tr>
@@ -188,7 +188,7 @@ Last hash: 1ae338b73793e850d4a1a345e1648c1addde...</pre></figure>
   <div class="sec-head solo"><h2>Read next</h2></div>
   <nav class="rows tight" aria-label="Read next">
     <a href="/deploy/"><strong>Deploy</strong><span>One image plus Postgres, on Docker, Kubernetes or your cloud account.</span>{{> arrow}}</a>
-    <a href="/security/"><strong>Security</strong><span>What Gantry protects, what it does not, and where your data goes.</span>{{> arrow}}</a>
+    <a href="/security/"><strong>Security</strong><span>What Enterplace protects, what it does not, and where your data goes.</span>{{> arrow}}</a>
     <a href="/use-cases/"><strong>Use cases</strong><span>The same controls, applied to your situation step by step.</span>{{> arrow}}</a>
   </nav>
 </section>

@@ -1,4 +1,4 @@
-# Gantry on AWS: ECS Fargate gateways behind an HTTPS load balancer, Postgres for keys, kill switches and budgets,
+# Enterplace on AWS: ECS Fargate gateways behind an HTTPS load balancer, Postgres for keys, kill switches and budgets,
 # and one EFS access point per gateway for its audit log. See README.md.
 
 data "aws_region" "current" {}
@@ -21,7 +21,7 @@ locals {
   replicas    = { for i in range(var.replicas) : tostring(i) => i }
   gateway_url = "https://${coalesce(var.domain_name, aws_lb.this.dns_name)}"
   command = concat(
-    ["serve", "/etc/gantry/gantry.policy.yaml", "--listen", "0.0.0.0:8080"],
+    ["serve", "/etc/enterplace/enterplace.policy.yaml", "--listen", "0.0.0.0:8080"],
     var.metrics_port == null ? [] : ["--metrics", "0.0.0.0:${var.metrics_port}"],
   )
 }
@@ -31,21 +31,21 @@ locals {
 
 resource "aws_security_group" "alb" {
   name        = "${var.name}-alb"
-  description = "Gantry load balancer"
+  description = "Enterplace load balancer"
   vpc_id      = var.vpc_id
   tags        = var.tags
 }
 
 resource "aws_security_group" "task" {
   name        = "${var.name}-task"
-  description = "Gantry gateways"
+  description = "Enterplace gateways"
   vpc_id      = var.vpc_id
   tags        = var.tags
 }
 
 resource "aws_security_group" "efs" {
   name        = "${var.name}-efs"
-  description = "Gantry audit volumes"
+  description = "Enterplace audit volumes"
   vpc_id      = var.vpc_id
   tags        = var.tags
 }
@@ -103,7 +103,7 @@ resource "aws_vpc_security_group_ingress_rule" "efs_from_task" {
 # init container writes it to a task-local volume the gateway reads.
 # ponytail: an Advanced parameter holds 8 KB of policy; a larger policy needs S3 and an init container that fetches it.
 resource "aws_ssm_parameter" "policy" {
-  name  = "/${var.name}/gantry.policy.yaml"
+  name  = "/${var.name}/enterplace.policy.yaml"
   type  = "String"
   tier  = "Intelligent-Tiering"
   value = var.policy
@@ -111,7 +111,7 @@ resource "aws_ssm_parameter" "policy" {
 }
 
 resource "aws_cloudwatch_log_group" "this" {
-  name              = "/gantry/${var.name}"
+  name              = "/enterplace/${var.name}"
   retention_in_days = var.log_retention_days
   tags              = var.tags
 }
@@ -183,7 +183,7 @@ resource "aws_iam_role_policy_attachment" "execution" {
 }
 
 resource "aws_iam_role_policy" "execution" {
-  name = "read-gantry-config"
+  name = "read-enterplace-config"
   role = aws_iam_role.execution.id
   policy = jsonencode({
     Version = "2012-10-17"
@@ -227,7 +227,7 @@ resource "aws_efs_access_point" "replica" {
     gid = 65532
   }
   root_directory {
-    path = "/gantry-${each.key}"
+    path = "/enterplace-${each.key}"
     creation_info {
       owner_uid   = 65532
       owner_gid   = 65532
@@ -268,9 +268,9 @@ resource "aws_ecs_task_definition" "replica" {
       name        = "policy"
       image       = "public.ecr.aws/docker/library/busybox:1.36"
       essential   = false
-      command     = ["sh", "-c", "printf '%s' \"$GANTRY_POLICY\" > /etc/gantry/gantry.policy.yaml"]
-      secrets     = [{ name = "GANTRY_POLICY", valueFrom = aws_ssm_parameter.policy.arn }]
-      mountPoints = [{ sourceVolume = "policy", containerPath = "/etc/gantry" }]
+      command     = ["sh", "-c", "printf '%s' \"$ENTERPLACE_POLICY\" > /etc/enterplace/enterplace.policy.yaml"]
+      secrets     = [{ name = "ENTERPLACE_POLICY", valueFrom = aws_ssm_parameter.policy.arn }]
+      mountPoints = [{ sourceVolume = "policy", containerPath = "/etc/enterplace" }]
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -282,7 +282,7 @@ resource "aws_ecs_task_definition" "replica" {
     },
     merge(
       {
-        name                   = "gantry"
+        name                   = "enterplace"
         image                  = var.image
         essential              = true
         command                = local.command
@@ -292,18 +292,18 @@ resource "aws_ecs_task_definition" "replica" {
         dependsOn    = [{ containerName = "policy", condition = "SUCCESS" }]
         portMappings = concat([{ containerPort = 8080, protocol = "tcp" }], var.metrics_port == null ? [] : [{ containerPort = var.metrics_port, protocol = "tcp" }])
         mountPoints = [
-          { sourceVolume = "policy", containerPath = "/etc/gantry", readOnly = true },
-          { sourceVolume = "data", containerPath = "/var/lib/gantry" },
+          { sourceVolume = "policy", containerPath = "/etc/enterplace", readOnly = true },
+          { sourceVolume = "data", containerPath = "/var/lib/enterplace" },
         ]
         # The parameter's value is read at task start, so a new hash here is what rolls the tasks onto a new policy.
-        environment = [{ name = "GANTRY_POLICY_SHA256", value = sha256(var.policy) }]
+        environment = [{ name = "ENTERPLACE_POLICY_SHA256", value = sha256(var.policy) }]
         secrets = concat(
           [
             { name = "DATABASE_URL", valueFrom = local.database_url_secret_arn },
-            { name = "GANTRY_MASTER_KEY", valueFrom = local.master_key_secret_arn },
-            { name = "GANTRY_EXPORT_KEY", valueFrom = local.export_key_secret_arn },
+            { name = "ENTERPLACE_MASTER_KEY", valueFrom = local.master_key_secret_arn },
+            { name = "ENTERPLACE_EXPORT_KEY", valueFrom = local.export_key_secret_arn },
           ],
-          var.license_secret_arn == null ? [] : [{ name = "GANTRY_LICENSE", valueFrom = var.license_secret_arn }],
+          var.license_secret_arn == null ? [] : [{ name = "ENTERPLACE_LICENSE", valueFrom = var.license_secret_arn }],
           [for env_name, arn in var.provider_key_secret_arns : { name = env_name, valueFrom = arn }],
         )
         logConfiguration = {
@@ -311,7 +311,7 @@ resource "aws_ecs_task_definition" "replica" {
           options = {
             awslogs-group         = aws_cloudwatch_log_group.this.name
             awslogs-region        = data.aws_region.current.region
-            awslogs-stream-prefix = "gantry-${each.key}"
+            awslogs-stream-prefix = "enterplace-${each.key}"
           }
         }
       },
@@ -344,7 +344,7 @@ resource "aws_ecs_service" "replica" {
   }
   load_balancer {
     target_group_arn = aws_lb_target_group.this.arn
-    container_name   = "gantry"
+    container_name   = "enterplace"
     container_port   = 8080
   }
   propagate_tags = "SERVICE"

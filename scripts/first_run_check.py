@@ -1,7 +1,7 @@
 """First run, timed: the acceptance check of package 5.3.
 
-Usage: python3 scripts/first_run_check.py [gantry binary]   (default: target/release/gantry)
-From an empty folder: `gantry init`, `gantry serve`, open the setup link it prints, make the first admin key, and
+Usage: python3 scripts/first_run_check.py [enterplace binary]   (default: target/release/enterplace)
+From an empty folder: `enterplace init`, `enterplace serve`, open the setup link it prints, make the first admin key, and
 make a governed call with it. Passes when that call succeeds within 60 seconds of starting. The provider is a local
 mock (the policy's URL is pointed at it), so no real provider key is needed. Standard library only.
 """
@@ -40,24 +40,24 @@ def request(url, data=None, headers=None):
 
 
 def main():
-    gantry = str(pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "target/release/gantry").resolve())
+    enterplace = str(pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "target/release/enterplace").resolve())
     provider = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     threading.Thread(target=provider.serve_forever, daemon=True).start()
-    folder = pathlib.Path(tempfile.mkdtemp(prefix="gantry-first-run-"))
+    folder = pathlib.Path(tempfile.mkdtemp(prefix="enterplace-first-run-"))
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
 
     start = time.monotonic()
     step = lambda what: print(f"{time.monotonic() - start:6.2f}s  {what}")
-    policy = folder / "gantry.policy.yaml"
-    subprocess.run([gantry, "init", "--out", str(policy)], check=True, capture_output=True)
-    step("gantry init wrote the policy")
+    policy = folder / "enterplace.policy.yaml"
+    subprocess.run([enterplace, "init", "--out", str(policy)], check=True, capture_output=True)
+    step("enterplace init wrote the policy")
     # Stands in for the real provider: the same policy, pointed at the local mock.
     text = policy.read_text().replace("    preset: openai\n", f"    preset: openai\n    url: http://127.0.0.1:{provider.server_address[1]}\n    allow_private: true\n")
     policy.write_text(text)
 
-    serve = subprocess.Popen([gantry, "serve", str(policy), "--listen", f"127.0.0.1:{port}"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    serve = subprocess.Popen([enterplace, "serve", str(policy), "--listen", f"127.0.0.1:{port}"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                              env={**os.environ, "OPENAI_PROVIDER_KEY": "mock"})
     try:
         link = None
@@ -67,15 +67,15 @@ def main():
                 link = match.group(1)
                 break
         if not link:
-            sys.exit(f"FAIL  gantry serve printed no setup link:\n{serve.stdout.read() if serve.stdout else ''}")
-        step("gantry serve printed the setup link")
+            sys.exit(f"FAIL  enterplace serve printed no setup link:\n{serve.stdout.read() if serve.stdout else ''}")
+        step("enterplace serve printed the setup link")
 
         status, page = request(link)
         assert status == 200, (status, page[:300])
         origin = f"http://127.0.0.1:{port}"
         status, page = request(link, urllib.parse.urlencode({"name": "first.admin", "team": "platform"}).encode(),
                                {"origin": origin, "content-type": "application/x-www-form-urlencoded"})
-        key = re.search(r"gantry_[0-9a-f]{64}", page)
+        key = re.search(r"enterplace_[0-9a-f]{64}", page)
         assert status == 200 and key, (status, page[:300])
         step("the setup link made the first admin key")
 

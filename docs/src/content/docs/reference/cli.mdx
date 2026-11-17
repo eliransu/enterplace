@@ -1,41 +1,41 @@
 ---
 title: CLI
-description: Every gantry subcommand and flag, with its defaults, exit codes and an example.
+description: Every enterplace subcommand and flag, with its defaults, exit codes and an example.
 sidebar:
   order: 1
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-One binary, `gantry`, runs the gateway and every command around it. Every argument is matched exactly: an unknown command, flag or extra argument is an error, never ignored.
+One binary, `enterplace`, runs the gateway and every command around it. Every argument is matched exactly: an unknown command, flag or extra argument is an error, never ignored.
 
 ```bash
-gantry help
+enterplace help
 ```
 
 ## Install
 
 ```bash
-curl -fsSL https://gantry.enterplace.dev/install.sh | sh
+curl -fsSL https://enterplace.dev/install.sh | sh
 ```
 
 | Variable | Default | Effect |
 |---|---|---|
-| `GANTRY_VERSION` | the latest stable release, else `edge` | `edge` (built from the latest commit on main) or a tag such as `v0.1.0` |
-| `GANTRY_INSTALL_DIR` | `~/.local/bin` | Where `gantry` goes. A folder you cannot write, such as `/usr/local/bin`, is written with sudo |
+| `ENTERPLACE_VERSION` | the latest stable release, else `edge` | `edge` (built from the latest commit on main) or a tag such as `v0.1.0` |
+| `ENTERPLACE_INSTALL_DIR` | `~/.local/bin` | Where `enterplace` goes. A folder you cannot write, such as `/usr/local/bin`, is written with sudo |
 
 The script supports macOS and Linux on x86_64 and arm64. It verifies `SHA256SUMS.sig` with `ssh-keygen` against the release key (the same key as `release/allowed_signers` in the repository), then the tarball's SHA256, and refuses a download that fails either check. Without OpenSSH 8.1 or later it warns and relies on the SHA256 over HTTPS. It prints how to add the folder to `PATH` when it is not there.
 
-Homebrew, stable releases only: `brew install eliransu/tap/gantry`. The tarballs, `SHA256SUMS` and signatures are on each GitHub Release for a manual download (check them with `scripts/release.sh verify`). The binary is the one Gantry build: without a license key it is the open source edition. The container image is `ghcr.io/eliransu/gantry`, and `cargo install --path crates/gantry-cli` builds the open source binary from source.
+Homebrew, stable releases only: `brew install eliransu/tap/enterplace`. The tarballs, `SHA256SUMS` and signatures are on each GitHub Release for a manual download (check them with `scripts/release.sh verify`). The binary is the one Enterplace build: without a license key it is the open source edition. The container image is `ghcr.io/eliransu/enterplace`, and `cargo install --path crates/enterplace-cli` builds the open source binary from source.
 
 ## Conventions
 
 | Item | Behavior |
 |---|---|
 | Flags | `--name value`, separated by a space. A flag given twice is an error |
-| Keys file | `gantry.keys.yaml` beside the policy file for `serve` and `check`, unless `--keys` names another. `key new`, `key list` and `key prune` use `gantry.keys.yaml` in the current folder unless `--keys` names another |
-| Audit log | `gantry-audit.jsonl` in the current folder for `audit verify`, `audit repair` and `audit coverage` unless a file is named |
-| Help | `gantry help`, `gantry --help` or `gantry -h` prints every command. `--help` after a command prints that command's usage line |
+| Keys file | `enterplace.keys.yaml` beside the policy file for `serve` and `check`, unless `--keys` names another. `key new`, `key list` and `key prune` use `enterplace.keys.yaml` in the current folder unless `--keys` names another |
+| Audit log | `enterplace-audit.jsonl` in the current folder for `audit verify`, `audit repair` and `audit coverage` unless a file is named |
+| Help | `enterplace help`, `enterplace --help` or `enterplace -h` prints every command. `--help` after a command prints that command's usage line |
 | Exit codes | `0` on success. `1` when a check fails (`check`, `audit verify`, `audit repair`). `2` for a usage error or a command that could not run |
 
 ## start
@@ -43,35 +43,35 @@ Homebrew, stable releases only: `brew install eliransu/tap/gantry`. The tarballs
 Step 1 in one command, with no provider key needed: writes a policy in observe mode with the demo model and any provider whose key is in the environment, makes an admin key and a master key, runs the gateway and prints the dashboard link that signs in once.
 
 ```text
-gantry start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--no-open] [--force] [--no-serve] [--container]
+enterplace start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--no-open] [--force] [--no-serve] [--container]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--dir <path>` | the current folder | Where `gantry.policy.yaml`, `gantry.keys.yaml`, `gantry-master.key` and the audit log go. Made if missing |
-| `--providers <a,b>` | every provider with a key in the environment | `openai`, `anthropic` or `gemini`. Each needs its key set. Others: connect them in the dashboard, or use `gantry init` |
+| `--dir <path>` | the current folder | Where `enterplace.policy.yaml`, `enterplace.keys.yaml`, `enterplace-master.key` and the audit log go. Made if missing |
+| `--providers <a,b>` | every provider with a key in the environment | `openai`, `anthropic` or `gemini`. Each needs its key set. Others: connect them in the dashboard, or use `enterplace init` |
 | `--listen <host:port>` | `127.0.0.1:8080` | Where the gateway listens. The dashboard link uses it |
 | `--no-open` | off | Prints the dashboard link without opening the browser. It is not opened anyway without a terminal or a display |
 | `--force` | off | Writes a new policy and admin key over the ones there. The master key is kept. Without it, `start` serves the policy it finds, with a new link and no new admin key |
 | `--no-serve` | off | Stops after writing the files and printing the admin key |
-| `--container` | off | The image's default command. Serves `/etc/gantry/gantry.policy.yaml` when one is mounted, else the policy an earlier start wrote in `--dir` (default `/var/lib/gantry`); only with neither does it write one, listening on `0.0.0.0:8080` and opening no browser. Its link works from any address: the browser comes through the container's network |
+| `--container` | off | The image's default command. Serves `/etc/enterplace/enterplace.policy.yaml` when one is mounted, else the policy an earlier start wrote in `--dir` (default `/var/lib/enterplace`); only with neither does it write one, listening on `0.0.0.0:8080` and opening no browser. Its link works from any address: the browser comes through the container's network |
 
-Provider keys are read from `OPENAI_PROVIDER_KEY` or `OPENAI_API_KEY`, and the same for `ANTHROPIC` and `GEMINI` (the `_PROVIDER_KEY` form wins when both are set). The policy always reads `<PROVIDER>_PROVIDER_KEY`, so the tool lines can set `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to the Gantry key in the same shell; a key found under `<PROVIDER>_API_KEY` is passed to the gateway `start` runs. The key itself is never written. `GANTRY_OPENAI_BASE_URL` (and the same for `ANTHROPIC` and `GEMINI`) writes that provider's `url:`, for a proxy in front of it.
+Provider keys are read from `OPENAI_PROVIDER_KEY` or `OPENAI_API_KEY`, and the same for `ANTHROPIC` and `GEMINI` (the `_PROVIDER_KEY` form wins when both are set). The policy always reads `<PROVIDER>_PROVIDER_KEY`, so the tool lines can set `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to the Enterplace key in the same shell; a key found under `<PROVIDER>_API_KEY` is passed to the gateway `start` runs. The key itself is never written. `ENTERPLACE_OPENAI_BASE_URL` (and the same for `ANTHROPIC` and `GEMINI`) writes that provider's `url:`, for a proxy in front of it.
 
-`gantry-master.key` (64 hex characters, mode 0600) is made once, unless `GANTRY_MASTER_KEY` or `GANTRY_MASTER_KEY_FILE` is set, and passed to the gateway as `GANTRY_MASTER_KEY_FILE`. It seals the provider keys pasted in the dashboard (Start here, Connect a model, or Credentials), kept in `gantry-credentials.json` beside the policy when there is no store.
+`enterplace-master.key` (64 hex characters, mode 0600) is made once, unless `ENTERPLACE_MASTER_KEY` or `ENTERPLACE_MASTER_KEY_FILE` is set, and passed to the gateway as `ENTERPLACE_MASTER_KEY_FILE`. It seals the provider keys pasted in the dashboard (Start here, Connect a model, or Credentials), kept in `enterplace-credentials.json` beside the policy when there is no store.
 
 The first lines the gateway prints:
 
 ```text
-Gantry is running. Open the dashboard:
+Enterplace is running. Open the dashboard:
 
   http://127.0.0.1:8080/console/sign-in/4be1...
 
 The link signs you in once, from this machine, within 10 minutes. Opening it in your browser now.
 
-Admin key, shown once (Gantry keeps only its hash). Use it for the command line and the API:
+Admin key, shown once (Enterplace keeps only its hash). Use it for the command line and the API:
 
-  export GANTRY_KEY=gantry_3f9c...
+  export ENTERPLACE_KEY=enterplace_3f9c...
 ```
 
 The link's code is random, kept only as its hash, works once, for 10 minutes, and only from a loopback address (any address with `--container`); its sign-in is recorded as `console_sign_in` with `via: start_link`. The settings for each coding tool are on Start here in the dashboard, built from this gateway's address.
@@ -81,36 +81,36 @@ Exit `2` when a provider in `--providers` has no key or is not one `start` knows
 ## stop
 
 ```bash
-gantry stop [--dir <path>]
+enterplace stop [--dir <path>]
 ```
 
-Stops the gateway that serves from this folder (or `--dir`), the one `gantry start` or `gantry serve` runs there. It finishes the requests in flight and ends, as Ctrl-C in its terminal does. Gantry finds the process through the lock beside the audit log (`gantry-audit.jsonl.lock`).
+Stops the gateway that serves from this folder (or `--dir`), the one `enterplace start` or `enterplace serve` runs there. It finishes the requests in flight and ends, as Ctrl-C in its terminal does. Enterplace finds the process through the lock beside the audit log (`enterplace-audit.jsonl.lock`).
 
 ```text
-Stopped Gantry (process 97672) serving from /Users/maya/gantry.
+Stopped Enterplace (process 97672) serving from /Users/maya/enterplace.
 ```
 
-With no gateway running from the folder it says so and exits 0. In Docker, use `docker stop gantry`.
+With no gateway running from the folder it says so and exits 0. In Docker, use `docker stop enterplace`.
 
 ## serve
 
 Runs the gateway: every request is identified, checked against the policy and recorded.
 
 ```text
-gantry serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>]
+enterplace serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `<policy>` | required | The policy file |
-| `--keys <file>` | `gantry.keys.yaml` beside the policy | The keys file. It must exist |
+| `--keys <file>` | `enterplace.keys.yaml` beside the policy | The keys file. It must exist |
 | `--listen <host:port>` | `127.0.0.1:8080` | The gateway's address. An IP address and port; host names are refused. Port `0` lets the system pick |
 | `--metrics <host:port>` | off | Serves `GET /metrics` on this address only. Must differ from `--listen` |
 | `--tls-cert <pem>` | off | Certificate chain, PEM, server certificate first. Needs `--tls-key` |
 | `--tls-key <pem>` | off | The certificate's unencrypted private key, PEM (PKCS#8, PKCS#1 or SEC1). Needs `--tls-cert` |
 
 ```bash
-OPENAI_PROVIDER_KEY=sk-... gantry serve gantry.policy.yaml --listen 0.0.0.0:8443 \
+OPENAI_PROVIDER_KEY=sk-... enterplace serve enterplace.policy.yaml --listen 0.0.0.0:8443 \
   --tls-cert tls.crt --tls-key tls.key --metrics 127.0.0.1:9464
 ```
 
@@ -121,49 +121,49 @@ The start fails on any problem in the files, an unset provider key, an audit log
 Forwards every request without identity, policy or audit, on a loopback address only. For benchmarks.
 
 ```text
-gantry serve --unchecked
+enterplace serve --unchecked
 ```
 
 | Variable | Default | Description |
 |---|---|---|
-| `GANTRY_ADDR` | `127.0.0.1:8080` | Address to listen on. Must be loopback |
-| `GANTRY_UPSTREAM` | none | The server to forward to. Without it, requests are refused with `no_upstream` |
+| `ENTERPLACE_ADDR` | `127.0.0.1:8080` | Address to listen on. Must be loopback |
+| `ENTERPLACE_UPSTREAM` | none | The server to forward to. Without it, requests are refused with `no_upstream` |
 
 ```bash
-GANTRY_UPSTREAM=http://127.0.0.1:9000 gantry serve --unchecked
+ENTERPLACE_UPSTREAM=http://127.0.0.1:9000 enterplace serve --unchecked
 ```
 
-`gantry serve` with no policy file is an error that names both forms.
+`enterplace serve` with no policy file is an error that names both forms.
 
 ## check
 
 Checks a policy file and its keys file. Prints every problem with its file, line and fix.
 
 ```text
-gantry check <policy> [--keys <file>]
+enterplace check <policy> [--keys <file>]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `<policy>` | required | The policy file |
-| `--keys <file>` | `gantry.keys.yaml` beside the policy | The keys file |
+| `--keys <file>` | `enterplace.keys.yaml` beside the policy | The keys file |
 
 ```bash
-gantry check gantry.policy.yaml
+enterplace check enterplace.policy.yaml
 ```
 
 ```text
-gantry.policy.yaml is valid: 2 rules, 1 key, 1 provider: openai (openai) at https://api.openai.com.
+enterplace.policy.yaml is valid: 2 rules, 1 key, 1 provider: openai (openai) at https://api.openai.com.
 ```
 
 Exit `0` when valid, `1` with every problem otherwise. Warnings that do not fail the check: a rule that names a model no provider serves, and a key whose expiry has passed.
 
 ## key new
 
-Makes a key for a person or a workload. The key is printed once, with the lines that point Claude Code and the OpenAI SDKs at Gantry. Only its SHA-256 is saved.
+Makes a key for a person or a workload. The key is printed once, with the lines that point Claude Code and the OpenAI SDKs at Enterplace. Only its SHA-256 is saved.
 
 ```text
-gantry key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>[@<tz>]]
+enterplace key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>[@<tz>]]
   [--models <a,b>] [--tpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>]
   [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]
 ```
@@ -173,7 +173,7 @@ gantry key new <name> --team <team> [--admin | --identity-only] [--expires <date
 | `<name>` | required | The person or workload. Letters, digits, dots, dashes, underscores and `@`, at most 100 characters |
 | `--team <team>` | required | The team, same characters |
 | `--admin` | off | The key may sign in to the console and call the admin API. The first admin starts here |
-| `--identity-only` | off | Make a person token (`gantry_u_...`) in place of a key: it names the person for [Claude subscription passthrough](/governance/subscriptions/) in `x-gantry-user` and reaches no model on its own. Prints the two Claude Code lines. Takes no `--admin`, `--budget`, `--models` or `--tpm` |
+| `--identity-only` | off | Make a person token (`enterplace_u_...`) in place of a key: it names the person for [Claude subscription passthrough](/governance/subscriptions/) in `x-enterplace-user` and reaches no model on its own. Prints the two Claude Code lines. Takes no `--admin`, `--budget`, `--models` or `--tpm` |
 | `--expires <date>` | none | Refused from that UTC day on (`2026-12-31`) or that time (`2026-12-31T18:00:00Z`), with `key_expired` |
 | `--budget <usd>/<period>[@<tz>]` | none | Caps this key's spend. Use `day`, `week`, `month`, `year`, `hour`, `minute`, or an interval such as `6h`. A period can include a time zone, as in `100/month@America/New_York`. Refused with `key_budget_exceeded` |
 | `--models <a,b>` | none | Narrows the rule's models for this key, comma separated |
@@ -185,20 +185,20 @@ gantry key new <name> --team <team> [--admin | --identity-only] [--expires <date
 | `--role <role>` | none | Console role defined by the policy |
 | `--url <gateway url>` | `http://127.0.0.1:8080` | The address printed in the setup lines |
 | `--quiet` | off | Print the key alone |
-| `--keys <file>` | `gantry.keys.yaml` | The keys file to append to |
-| `--policy <file>` | `gantry.policy.yaml` if present | Policy to read for store settings |
+| `--keys <file>` | `enterplace.keys.yaml` | The keys file to append to |
+| `--policy <file>` | `enterplace.policy.yaml` if present | Policy to read for store settings |
 
 ```bash
-gantry key new maya.cohen --team payments --budget 20/month --expires 2026-12-31 \
-  --url https://gantry.example.com
+enterplace key new maya.cohen --team payments --budget 20/month --expires 2026-12-31 \
+  --url https://enterplace.example.com
 ```
 
-The entry is appended to the end of the file; nothing already there is rewritten. A running `gantry serve` accepts the key within 2 seconds. If the name already has a key, both work until you remove the old entry.
+The entry is appended to the end of the file; nothing already there is rewritten. A running `enterplace serve` accepts the key within 2 seconds. If the name already has a key, both work until you remove the old entry.
 
 ## key info
 
 ```text
-gantry key info <hash prefix> [--url <gantry url>]
+enterplace key info <hash prefix> [--url <enterplace url>]
 ```
 
 A key's settings and its spend for the current day and month, from the running gateway's admin API. See [Key info and spend](/governance/keys/#key-info-and-spend).
@@ -206,9 +206,9 @@ A key's settings and its spend for the current day and month, from the running g
 ## key update
 
 ```text
-gantry key update <hash prefix> [--expires <date>] [--budget <usd>/<day|month>] [--models <a,b>] [--tpm <n>]
+enterplace key update <hash prefix> [--expires <date>] [--budget <usd>/<day|month>] [--models <a,b>] [--tpm <n>]
   [--rpm <n>] [--parallel <n>] [--tags <a,b>] [--routes <a,b>] [--from <cidr,cidr>] [--metadata <k=v,k=v>]
-  [--url <gantry url>]
+  [--url <enterplace url>]
 ```
 
 Changes the settings given, at least one, through the admin API. `none` removes a setting (`--rpm none`). Every change is recorded with what the field was and became. See [Change a key](/governance/keys/#change-a-key).
@@ -216,35 +216,35 @@ Changes the settings given, at least one, through the admin API. `none` removes 
 ## key rotate
 
 ```text
-gantry key rotate <hash prefix> [--grace <48h|30m|7d|0>] [--url <gantry url>]
+enterplace key rotate <hash prefix> [--grace <48h|30m|7d|0>] [--url <enterplace url>]
 ```
 
 Makes a new key with the same settings and prints it once. The old key works until the grace ends (default `24h`), and each use of it is recorded with `key_rotated`. See [Rotate a key](/governance/keys/#rotate-a-key).
 
-`key info`, `key update` and `key rotate` need an admin key in `GANTRY_ADMIN_KEY` (or the saved `gantry login` key, if it is an admin's) and the gateway in `--url`, `GANTRY_URL` or the saved login, as `gantry kill` does.
+`key info`, `key update` and `key rotate` need an admin key in `ENTERPLACE_ADMIN_KEY` (or the saved `enterplace login` key, if it is an admin's) and the gateway in `--url`, `ENTERPLACE_URL` or the saved login, as `enterplace kill` does.
 
 ## budget raise
 
 ```text
-gantry budget raise request --usd <n> --until <date> --reason <text> [--scope team|person|key] [--url <gantry url>]
-gantry budget raise list [--url <gantry url>]
-gantry budget raise approve <id> [--usd <n>] [--until <date>] [--url <gantry url>]
-gantry budget raise reject <id> [--url <gantry url>]
-gantry budget raise add --scope <team:payments> --usd <n> --until <date> --reason <text> [--url <gantry url>]
+enterplace budget raise request --usd <n> --until <date> --reason <text> [--scope team|person|key] [--url <enterplace url>]
+enterplace budget raise list [--url <enterplace url>]
+enterplace budget raise approve <id> [--usd <n>] [--until <date>] [--url <enterplace url>]
+enterplace budget raise reject <id> [--url <enterplace url>]
+enterplace budget raise add --scope <team:payments> --usd <n> --until <date> --reason <text> [--url <enterplace url>]
 ```
 
-`request` asks for more room on the caller's budget until a UTC date or time; it waits for an admin. `list`, `approve`, `reject` and `add` are an admin's, with `issue_keys` (`list`: `see_spend`). Each calls a running gateway with the key in `GANTRY_ADMIN_KEY` or the saved `gantry login` key. See [Budget raises](/governance/budgets-and-rate-limits/#budget-raises).
+`request` asks for more room on the caller's budget until a UTC date or time; it waits for an admin. `list`, `approve`, `reject` and `add` are an admin's, with `issue_keys` (`list`: `see_spend`). Each calls a running gateway with the key in `ENTERPLACE_ADMIN_KEY` or the saved `enterplace login` key. See [Budget raises](/governance/budgets-and-rate-limits/#budget-raises).
 
 ## usage
 
 ```text
-gantry usage [--since <7d|24h|2026-11-01>] [--group-by <team|person|model|provider|key|tag|org|customer|day|hour>] [--csv] [--url <gantry url>]
+enterplace usage [--since <7d|24h|2026-11-01>] [--group-by <team|person|model|provider|key|tag|org|customer|day|hour>] [--csv] [--url <enterplace url>]
 ```
 
-Spend, tokens and requests of a running gateway, from [`GET /admin/usage`](/reference/admin-api/#get-adminusage): across every gateway with a store, this gateway's own audit log without one. With no `--group-by` it prints three tables, by team, by person and by model. `--since` is how far back (`30d` unless given; `m`, `h` or `d`) or a UTC date. `--csv` prints one CSV in place of the tables. It needs a key whose role may see spend, in `GANTRY_ADMIN_KEY`, as `key info` does.
+Spend, tokens and requests of a running gateway, from [`GET /admin/usage`](/reference/admin-api/#get-adminusage): across every gateway with a store, this gateway's own audit log without one. With no `--group-by` it prints three tables, by team, by person and by model. `--since` is how far back (`30d` unless given; `m`, `h` or `d`) or a UTC date. `--csv` prints one CSV in place of the tables. It needs a key whose role may see spend, in `ENTERPLACE_ADMIN_KEY`, as `key info` does.
 
 ```bash
-gantry usage --since 7d
+enterplace usage --since 7d
 ```
 
 ```text
@@ -258,7 +258,7 @@ total         1840       12       3    5120400      822100  5942500    41.2700  
 ```
 
 ```bash
-gantry usage --since 2026-11-01 --group-by model --csv
+enterplace usage --since 2026-11-01 --group-by model --csv
 ```
 
 ```text
@@ -269,13 +269,13 @@ model,"gpt-4o-mini",1203,4,1,3900100,610300,4510400,30.11,790,3900
 ## budget status
 
 ```text
-gantry budget status [--model <model>] [--short] [--url <gantry url>]
+enterplace budget status [--model <model>] [--short] [--url <enterplace url>]
 ```
 
-What each budget your own key counts against has left and when it resets, from `GET /v1/gantry/me`. It uses your key, not an admin's: `GANTRY_KEY` or the key `gantry login` saved, and the gateway in `--url`, `GANTRY_URL` or the saved login. `--model` adds the budgets of that model. `--short` prints one line, for a [status line](/integrations/claude-code/#budget-in-the-status-line).
+What each budget your own key counts against has left and when it resets, from `GET /v1/enterplace/me`. It uses your key, not an admin's: `ENTERPLACE_KEY` or the key `enterplace login` saved, and the gateway in `--url`, `ENTERPLACE_URL` or the saved login. `--model` adds the budgets of that model. `--short` prints one line, for a [status line](/integrations/claude-code/#budget-in-the-status-line).
 
 ```bash
-gantry budget status
+enterplace budget status
 ```
 
 ```text
@@ -284,7 +284,7 @@ maya.cohen (team payments), rule payments
 ```
 
 ```bash
-gantry budget status --short
+enterplace budget status --short
 ```
 
 ```text
@@ -298,15 +298,15 @@ A key no budget applies to prints `no budget`.
 Lists the keys in the keys file. Never a key.
 
 ```text
-gantry key list [--keys <file>]
+enterplace key list [--keys <file>]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--keys <file>` | `gantry.keys.yaml` | The keys file |
+| `--keys <file>` | `enterplace.keys.yaml` | The keys file |
 
 ```bash
-gantry key list
+enterplace key list
 ```
 
 ```text
@@ -319,18 +319,18 @@ Columns are tab separated: name, team, the first 8 hex characters of the key's h
 
 ## key prune
 
-Removes the entries whose expiry has passed, such as old `gantry login` keys. Each is removed as `DELETE /admin/keys` removes one, safe while Gantry runs. Every other line is kept.
+Removes the entries whose expiry has passed, such as old `enterplace login` keys. Each is removed as `DELETE /admin/keys` removes one, safe while Enterplace runs. Every other line is kept.
 
 ```text
-gantry key prune [--keys <file>]
+enterplace key prune [--keys <file>]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--keys <file>` | `gantry.keys.yaml` | The keys file |
+| `--keys <file>` | `enterplace.keys.yaml` | The keys file |
 
 ```bash
-gantry key prune --keys /var/lib/gantry/gantry.keys.yaml
+enterplace key prune --keys /var/lib/enterplace/enterplace.keys.yaml
 ```
 
 ## audit verify
@@ -338,59 +338,59 @@ gantry key prune --keys /var/lib/gantry/gantry.keys.yaml
 Checks that the audit log is one unbroken chain: no record changed, inserted, removed or reordered. Prints the count and the last hash, to keep elsewhere.
 
 ```text
-gantry audit verify [<file>] [--expect-last <hash>]
+enterplace audit verify [<file>] [--expect-last <hash>]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `<file>` | `gantry-audit.jsonl` | The audit log |
+| `<file>` | `enterplace-audit.jsonl` | The audit log |
 | `--expect-last <hash>` | none | Also checks that a hash kept earlier is still in the chain, with nothing before it changed, and prints its record number |
 
 ```bash
-gantry audit verify gantry-audit.jsonl --expect-last 1ae338b73793e850d4a1a345e1648c1addde566b34dc70b1688fe50a887f7fb1
+enterplace audit verify enterplace-audit.jsonl --expect-last 1ae338b73793e850d4a1a345e1648c1addde566b34dc70b1688fe50a887f7fb1
 ```
 
 ```text
-gantry-audit.jsonl: 9 records in an unbroken chain from record 1 to record 9.
+enterplace-audit.jsonl: 9 records in an unbroken chain from record 1 to record 9.
 5 requests, 1 configuration record, 0 admin records, 3 usage records.
 Last hash: 1ae338b73793e850d4a1a345e1648c1addde566b34dc70b1688fe50a887f7fb1
 The kept hash is record 9, and nothing up to it was changed or removed.
 ```
 
-Exit `0` when the chain holds, `1` when it does not, naming the record where it breaks. `audit_repaired` records count with the admin records, and attempts records are counted when there are any. When only the last line is cut short, the error points at `gantry audit repair`.
+Exit `0` when the chain holds, `1` when it does not, naming the record where it breaks. `audit_repaired` records count with the admin records, and attempts records are counted when there are any. When only the last line is cut short, the error points at `enterplace audit repair`.
 
 ## audit repair
 
-For a log whose last line was cut short by a write that failed, such as on a full disk. Shows that line and checks the chain before it. Run it while Gantry is stopped.
+For a log whose last line was cut short by a write that failed, such as on a full disk. Shows that line and checks the chain before it. Run it while Enterplace is stopped.
 
 ```text
-gantry audit repair [<file>] [--yes]
+enterplace audit repair [<file>] [--yes]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `<file>` | `gantry-audit.jsonl` | The audit log |
+| `<file>` | `enterplace-audit.jsonl` | The audit log |
 | `--yes` | off | Removes only the cut line and appends an `audit_repaired` record holding what was removed |
 
 ```bash
-gantry audit repair /var/lib/gantry/gantry-audit.jsonl --yes
+enterplace audit repair /var/lib/enterplace/enterplace-audit.jsonl --yes
 ```
 
 Exit `0` when there is nothing to repair or the repair is done. Exit `1` when it only showed the cut line, or refused: a broken chain, a whole last line, a lock file present, or a file that grew meanwhile. See [Running in production](/operations/operations/#disk-full-and-audit-repair).
 
 ## audit coverage
 
-Counts the request records in the audit log per person and coding tool, read from each record's `user_agent`. A Claude Code watched through its own telemetry (Gantry Enterprise, [watch mode](/integrations/claude-team/)) is the tool `claude-code (watch)`. With `--keys`, every key holder who sent nothing is listed too. With `--devices`, the device agent's reports add each tool's enrolled devices and how many of them call a provider directly.
+Counts the request records in the audit log per person and coding tool, read from each record's `user_agent`. A Claude Code watched through its own telemetry (Enterplace Enterprise, [watch mode](/integrations/claude-team/)) is the tool `claude-code (watch)`. With `--keys`, every key holder who sent nothing is listed too. With `--devices`, the device agent's reports add each tool's enrolled devices and how many of them call a provider directly.
 
 ```text
-gantry audit coverage [<file>] [--keys <file>] [--devices <file>]
+enterplace audit coverage [<file>] [--keys <file>] [--devices <file>]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `<file>` | `gantry-audit.jsonl` | The audit log, sealed segments included |
+| `<file>` | `enterplace-audit.jsonl` | The audit log, sealed segments included |
 | `--keys` | none | The keys file the gateway serves with. Each name in it with no requests gets a row with tool `-` and last seen `never` |
-| `--devices` | none | `devices.json` from the console's Devices page (Gantry Enterprise). Adds the columns `devices` and `direct`, rows for tools installed on devices that never reached Gantry, and a second table of each device's MCP servers (`via_gantry`, `decision`) |
+| `--devices` | none | `devices.json` from the console's Devices page (Enterplace Enterprise). Adds the columns `devices` and `direct`, rows for tools installed on devices that never reached Enterplace, and a second table of each device's MCP servers (`via_enterplace`, `decision`) |
 
 ```text
 person	team	tool	requests	refused	last_seen
@@ -403,10 +403,10 @@ The output is tab-separated. See [Coverage](/governance/coverage/) for how the t
 
 ## prices
 
-Prints the price Gantry charges for a model and where it came from.
+Prints the price Enterplace charges for a model and where it came from.
 
 ```text
-gantry prices <model> [--policy <file>]
+enterplace prices <model> [--policy <file>]
 ```
 
 | Flag | Default | Description |
@@ -415,17 +415,17 @@ gantry prices <model> [--policy <file>]
 | `--policy <file>` | none | Includes the policy's `prices:` and aliases |
 
 ```bash
-gantry prices gpt-4o-mini
+enterplace prices gpt-4o-mini
 ```
 
-It prints the source (the policy's `prices:`, Gantry's own table, or the table generated from LiteLLM's price map, with its date), US dollars per million tokens for input, output, cache read, cache write and one-hour cache write, a long-context price and a per-image price when set, and the most output tokens and context window. For an alias it prints the price of each deployment. A model with no price exits `2` with the `prices:` lines to add.
+It prints the source (the policy's `prices:`, Enterplace's own table, or the table generated from LiteLLM's price map, with its date), US dollars per million tokens for input, output, cache read, cache write and one-hour cache write, a long-context price and a per-image price when set, and the most output tokens and context window. For an alias it prints the price of each deployment. A model with no price exits `2` with the `prices:` lines to add.
 
 ## providers
 
 Lists the provider catalog: every id a policy provider can name with `preset:`, with its name, kind and URL.
 
 ```text
-gantry providers [--markdown]
+enterplace providers [--markdown]
 ```
 
 | Flag | Default | Description |
@@ -436,28 +436,28 @@ Local entries, model servers you run yourself, are marked: they need `allow_priv
 
 ## import litellm
 
-Writes a Gantry policy from a LiteLLM proxy config, checks it, and lists what could not be mapped.
+Writes a Enterplace policy from a LiteLLM proxy config, checks it, and lists what could not be mapped.
 
 ```text
-gantry import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>]
+enterplace import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `<config.yaml>` | required | The LiteLLM proxy config |
-| `--keys-from <file>` | none | A CSV or JSON export of LiteLLM virtual keys. They become team rules and the `gantry key new` lines to reissue them; keys cannot move |
-| `--out <file>` | `gantry.policy.yaml` | The policy to write. An existing file is never replaced |
+| `--keys-from <file>` | none | A CSV or JSON export of LiteLLM virtual keys. They become team rules and the `enterplace key new` lines to reissue them; keys cannot move |
+| `--out <file>` | `enterplace.policy.yaml` | The policy to write. An existing file is never replaced |
 
 ```bash
-gantry import litellm litellm_config.yaml --keys-from keys.csv --out gantry.policy.yaml
+enterplace import litellm litellm_config.yaml --keys-from keys.csv --out enterplace.policy.yaml
 ```
 
-The exit code is that of the `gantry check` it runs on the result.
+The exit code is that of the `enterplace check` it runs on the result.
 
 ### From a running proxy
 
 ```text
-gantry import litellm --url <proxy> --master-key-env <VAR> [<config.yaml>] [--out <policy file>] [--keys-out <keys file>]
+enterplace import litellm --url <proxy> --master-key-env <VAR> [<config.yaml>] [--out <policy file>] [--keys-out <keys file>]
 ```
 
 | Flag | Default | Description |
@@ -465,8 +465,8 @@ gantry import litellm --url <proxy> --master-key-env <VAR> [<config.yaml>] [--ou
 | `--url <proxy>` | required | The LiteLLM proxy. https, or plain http only for `127.0.0.1` or `localhost` (use a port forward) |
 | `--master-key-env <VAR>` | required | The environment variable that holds the proxy's master key, sent as `Authorization: Bearer`. Never printed |
 | `<config.yaml>` | none | The proxy's config, read for its models and settings in place of `GET /model/info` |
-| `--out <file>` | `gantry.policy.yaml` | The policy to write. An existing file is never replaced |
-| `--keys-out <file>` | `gantry.keys.yaml` | The keys file to write, one new Gantry key per LiteLLM key. An existing file is never changed |
+| `--out <file>` | `enterplace.policy.yaml` | The policy to write. An existing file is never replaced |
+| `--keys-out <file>` | `enterplace.keys.yaml` | The keys file to write, one new Enterplace key per LiteLLM key. An existing file is never changed |
 
 It reads `GET /model/info`, `GET /key/list?return_full_object=true` page by page (a key listed by its token alone is read with `GET /key/info`), and `GET /team/list`. Team budgets per day or month become `limits:` entries. Each LiteLLM key is issued again with its alias as name, its team's alias as team, and its models, budget, expiry and tokens-per-minute limit; the new key is printed once beside the LiteLLM key it replaces. See [Migrate from LiteLLM](/migrate/from-litellm/#import-a-running-proxy).
 
@@ -475,42 +475,42 @@ It reads `GET /model/info`, `GET /key/list?return_full_object=true` page by page
 Signs in through the console's single sign-on and gets a personal key, named by your email, that expires (30 days unless the policy says otherwise).
 
 ```text
-gantry login <gantry url> [--no-browser]
+enterplace login <enterplace url> [--no-browser]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `<gantry url>` | required | The gateway. https, or plain http only for `127.0.0.1` or `localhost` |
+| `<enterplace url>` | required | The gateway. https, or plain http only for `127.0.0.1` or `localhost` |
 | `--no-browser` | off | Print the sign-in address instead of opening it |
 
 ```bash
-gantry login https://gantry.example.com
-. ~/.config/gantry/env
+enterplace login https://enterplace.example.com
+. ~/.config/enterplace/env
 ```
 
-The key is saved in `$XDG_CONFIG_HOME/gantry/credentials`, else `~/.config/gantry/credentials`, readable by you only. The setup lines (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `GANTRY_KEY`) are written to `env` in the same folder: source it from your shell profile. A new login revokes the key of the one before. See [Single sign-on](/governance/single-sign-on/).
+The key is saved in `$XDG_CONFIG_HOME/enterplace/credentials`, else `~/.config/enterplace/credentials`, readable by you only. The setup lines (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `ENTERPLACE_KEY`) are written to `env` in the same folder: source it from your shell profile. A new login revokes the key of the one before. See [Single sign-on](/governance/single-sign-on/).
 
 ## logout
 
-Revokes the key `gantry login` saved, and deletes the credentials file and the `env` file.
+Revokes the key `enterplace login` saved, and deletes the credentials file and the `env` file.
 
 ```text
-gantry logout
+enterplace logout
 ```
 
 ```bash
-gantry logout
+enterplace logout
 ```
 
-If Gantry does not revoke the key, the files are kept and the reason is printed. A key Gantry no longer knows counts as revoked.
+If Enterplace does not revoke the key, the files are kept and the reason is printed. A key Enterplace no longer knows counts as revoked.
 
 ## kill
 
-Turns a kill switch on. Gantry refuses that traffic with `killed` within 1 second on every node serving the same files, and the people stopped see the reason.
+Turns a kill switch on. Enterplace refuses that traffic with `killed` within 1 second on every node serving the same files, and the people stopped see the reason.
 
 ```text
-gantry kill (--person <name> | --team <team> | --key-prefix <hash> | --model <model> | --all)
-  --reason <text> [--force] [--url <gantry url>]
+enterplace kill (--person <name> | --team <team> | --key-prefix <hash> | --model <model> | --all)
+  --reason <text> [--force] [--url <enterplace url>]
 ```
 
 | Flag | Default | Description |
@@ -522,13 +522,13 @@ gantry kill (--person <name> | --team <team> | --key-prefix <hash> | --model <mo
 | `--all` | | Everyone |
 | `--reason <text>` | required | 1 to 500 characters, shown to the people stopped and kept in the audit log |
 | `--force` | off | Set the switch even when it matches no key, team or served model |
-| `--url <gantry url>` | `GANTRY_URL`, then the saved login | The gateway |
+| `--url <enterplace url>` | `ENTERPLACE_URL`, then the saved login | The gateway |
 
-Name exactly one of `--person`, `--team`, `--key-prefix`, `--model` or `--all`. The command needs an admin key in `GANTRY_ADMIN_KEY`, or a saved login key that is an admin's.
+Name exactly one of `--person`, `--team`, `--key-prefix`, `--model` or `--all`. The command needs an admin key in `ENTERPLACE_ADMIN_KEY`, or a saved login key that is an admin's.
 
 ```bash
-GANTRY_ADMIN_KEY=gantry_... gantry kill --team payments --reason "runaway agent, investigating" \
-  --url https://gantry.example.com
+ENTERPLACE_ADMIN_KEY=enterplace_... enterplace kill --team payments --reason "runaway agent, investigating" \
+  --url https://enterplace.example.com
 ```
 
 A switch that matches nothing is refused with the names it may have meant. See [Kill switches](/governance/kill-switches/).
@@ -538,13 +538,13 @@ A switch that matches nothing is refused with the names it may have meant. See [
 Turns that kill switch off.
 
 ```text
-gantry unkill (--person <name> | --team <team> | --key-prefix <hash> | --model <model> | --all) [--url <gantry url>]
+enterplace unkill (--person <name> | --team <team> | --key-prefix <hash> | --model <model> | --all) [--url <enterplace url>]
 ```
 
 The flags are those of `kill`, without `--reason` and `--force`.
 
 ```bash
-gantry unkill --team payments
+enterplace unkill --team payments
 ```
 
 ## version
@@ -552,13 +552,13 @@ gantry unkill --team payments
 Prints the version, the hash of the sources it was built from and the build day. `--version` and `-V` do the same.
 
 ```bash
-gantry version
+enterplace version
 ```
 
 ```text
-gantry 0.0.1 (src d88a5ce58bfa, built 2026-11-13)
+enterplace 0.0.1 (src d88a5ce58bfa, built 2026-11-13)
 ```
 
 <Aside type="note">
-`gantry-bench`, the overhead benchmark, is a separate binary: `cargo run --release -p gantry-bench`. Its flags are in [Running in production](/operations/operations/#bench).
+`enterplace-bench`, the overhead benchmark, is a separate binary: `cargo run --release -p enterplace-bench`. Its flags are in [Running in production](/operations/operations/#bench).
 </Aside>

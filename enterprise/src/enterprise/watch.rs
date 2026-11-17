@@ -1,7 +1,7 @@
 //! Watch mode (license feature `watch`): what Claude Code reports about itself, for people on Claude Team and
 //! Enterprise seats, whose requests cannot go through a gateway. Claude Code's own OpenTelemetry export is received
 //! at `/otlp/v1/metrics` and `/otlp/v1/logs`, authenticated by a watch token, and becomes `watch` records in the
-//! audit chain plus daily sums in Postgres. Gantry sees; it does not block or budget, because nothing passes it.
+//! audit chain plus daily sums in Postgres. Enterplace sees; it does not block or budget, because nothing passes it.
 //!
 //! Ported from the Cloudflare app's claude.ts. What the port adds: protobuf, tokens that expire and belong to a
 //! team or a person, exports counted once, cumulative metrics, audit records, and retention. It never reads prompt,
@@ -24,8 +24,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use gantry_console::{Admin, Console, foreign, same_origin};
-use gantry_core::{audit, config, id::sha256_hex};
+use enterplace_console::{Admin, Console, foreign, same_origin};
+use enterplace_core::{audit, config, id::sha256_hex};
 use serde_json::{Map, Value, json};
 
 use self::otlp::{Attrs, Event, Point};
@@ -33,7 +33,7 @@ use super::Db;
 use super::devices::{Json, api_admin, bearer, fail, not_admin, outside, token_org};
 use super::siem::{Role, db_error, random_hex, role_of};
 use crate::license::Status;
-use gantry_server::store::tokio_postgres::Client;
+use enterplace_server::store::tokio_postgres::Client;
 
 pub const FEATURE: &str = "watch";
 
@@ -82,7 +82,7 @@ pub const MIGRATION_3: &str = "
 ALTER TABLE enterprise_watch_daily ADD COLUMN org text NOT NULL DEFAULT '';
 ";
 
-pub const PREFIX: &str = "gantry_watch_";
+pub const PREFIX: &str = "enterplace_watch_";
 const DEFAULT_DAYS: i32 = 90;
 const MAX_DAYS: i32 = 365;
 /// The largest export taken. Claude Code batches at most a few hundred records an export.
@@ -111,24 +111,24 @@ const CONTENT: [&str; 6] = [
     "tool_parameters",
     "body",
 ];
-pub const NEEDS_TRAFFIC: &str = "needs API traffic through Gantry";
+pub const NEEDS_TRAFFIC: &str = "needs API traffic through Enterplace";
 
 #[derive(Clone)]
 struct Watch {
     db: Arc<Db>,
     keys: PathBuf,
     log: Arc<audit::AuditLog>,
-    policy: gantry_server::PolicyNow,
+    policy: enterplace_server::PolicyNow,
     pruned: Arc<Mutex<Option<Instant>>>,
 }
 
 /// Adds the OTLP receiver and the console's watch API.
 pub fn register(
-    extension: &mut gantry_server::Extension,
+    extension: &mut enterplace_server::Extension,
     db: Arc<Db>,
     keys: PathBuf,
     log: Arc<audit::AuditLog>,
-    policy: gantry_server::PolicyNow,
+    policy: enterplace_server::PolicyNow,
 ) {
     let watch = Watch {
         db,
@@ -148,7 +148,7 @@ pub fn register(
     console.nav.push(("/console/watch".into(), NAV.into()));
     // Start here makes and counts watch tokens through the same checks and records as the API.
     let (made, counted) = (watch.clone(), watch.clone());
-    console.watch = Some(gantry_console::Watch {
+    console.watch = Some(enterplace_console::Watch {
         token: Arc::new(move |console: Console, admin: Admin, team: String| {
             let w = made.clone();
             Box::pin(async move {
@@ -185,9 +185,9 @@ async fn page(
     uri: Uri,
 ) -> Response {
     let Some(admin) = console.signed_in(&headers).await else {
-        return gantry_console::redirect("/console/sign-in");
+        return enterplace_console::redirect("/console/sign-in");
     };
-    let head = gantry_console::html::head(
+    let head = enterplace_console::html::head(
         NAV,
         "Claude Code on Claude Team and Enterprise seats, from its own telemetry. Nothing is routed: costs are Claude Code's estimates at list price.",
         "",
@@ -195,10 +195,10 @@ async fn page(
     let main = match w.summary(&admin, 30).await {
         Err(err) => format!(
             "{head}{}",
-            gantry_console::html::empty(
+            enterplace_console::html::empty(
                 "",
                 "Watch did not load",
-                &gantry_console::html::esc(&format!(
+                &enterplace_console::html::esc(&format!(
                     "{err}. Check the store, then open the page again."
                 )),
                 "",
@@ -209,14 +209,14 @@ async fn page(
             if people.is_empty() {
                 format!(
                     "{head}{}",
-                    gantry_console::empty_page(
+                    enterplace_console::empty_page(
                         NAV,
-                        &gantry_console::request_base(),
+                        &enterplace_console::request_base(),
                         role_of(&admin) != Role::Viewer
                     )
                 )
             } else {
-                let esc = gantry_console::html::esc;
+                let esc = enterplace_console::html::esc;
                 let rows: String = people
                     .iter()
                     .map(|p| {
@@ -243,7 +243,7 @@ async fn page(
 }
 
 /// Without the feature the receiver and the API say why.
-pub fn locked(extension: &mut gantry_server::Extension, status: &Status) {
+pub fn locked(extension: &mut enterplace_server::Extension, status: &Status) {
     let Err(refused) = status.require(FEATURE) else {
         return;
     };
@@ -439,7 +439,7 @@ fn record(
         .unwrap_or_else(|| "anthropic".into());
     let mut r = Map::new();
     r.insert("event".into(), "watch".into());
-    r.insert("id".into(), gantry_core::id::decision_id().into());
+    r.insert("id".into(), enterplace_core::id::decision_id().into());
     r.insert("time".into(), audit::timestamp().into());
     r.insert("source".into(), "watch".into());
     r.insert("kind".into(), kind.into());
@@ -549,7 +549,7 @@ impl Watch {
             (
                 StatusCode::UNAUTHORIZED,
                 "invalid_token",
-                "Send a watch token as OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer gantry_watch_... in Claude Code's managed settings. An owner or admin creates one with `gantry watch setup`; a revoked token stops working.".to_string(),
+                "Send a watch token as OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer enterplace_watch_... in Claude Code's managed settings. An owner or admin creates one with `enterplace watch setup`; a revoked token stops working.".to_string(),
             )
         };
         if !token.starts_with(PREFIX) {
@@ -574,7 +574,7 @@ impl Watch {
                 StatusCode::UNAUTHORIZED,
                 "token_expired",
                 format!(
-                    "This watch token expired at {}. Create a new one with `gantry watch setup` and put its settings in place of the old.",
+                    "This watch token expired at {}. Create a new one with `enterplace watch setup` and put its settings in place of the old.",
                     get(4)
                 ),
             ));
@@ -884,7 +884,7 @@ impl Watch {
             Ok::<(), String>(())
         };
         if let Err(err) = done.await {
-            eprintln!("gantry: watch retention: {err}");
+            eprintln!("enterplace: watch retention: {err}");
         }
     }
 }
@@ -934,7 +934,7 @@ async fn receive(w: Watch, headers: HeaderMap, body: Bytes, signal: Signal) -> R
         return fail(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "unsupported_protocol",
-            "Gantry receives OTLP over HTTP as protobuf or JSON. OTLP over gRPC is not supported. Set OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf in Claude Code's managed settings.",
+            "Enterplace receives OTLP over HTTP as protobuf or JSON. OTLP over gRPC is not supported. Set OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf in Claude Code's managed settings.",
         );
     }
     if body.len() > MAX_BODY {
@@ -964,7 +964,7 @@ async fn receive(w: Watch, headers: HeaderMap, body: Bytes, signal: Signal) -> R
             return fail(
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "unsupported_encoding",
-                "Gantry receives OTLP exports uncompressed or as gzip. Set OTEL_EXPORTER_OTLP_COMPRESSION=gzip in Claude Code's settings, or remove it.",
+                "Enterplace receives OTLP exports uncompressed or as gzip. Set OTEL_EXPORTER_OTLP_COMPRESSION=gzip in Claude Code's settings, or remove it.",
             );
         }
     };
@@ -1076,7 +1076,7 @@ impl Watch {
                 ),
             ))
         } else if person.chars().count() > 200 || person.contains(char::is_whitespace) {
-            Some((StatusCode::BAD_REQUEST, "invalid_request", "A person is a name or an email address of at most 200 characters without spaces, as their Gantry key names them.".to_string()))
+            Some((StatusCode::BAD_REQUEST, "invalid_request", "A person is a name or an email address of at most 200 characters without spaces, as their Enterplace key names them.".to_string()))
         } else if let Some(refusal) = other {
             Some(refusal)
         } else if let Some(message) = outside(admin, &org, &team, "watch token") {
@@ -1270,7 +1270,7 @@ async fn create_token(
     match w.create(&console, &admin, &body).await {
         Ok((id, token, expires)) => (
             StatusCode::CREATED,
-            Json(json!({ "id": id, "token": token, "expires_at": expires, "note": "Gantry keeps only the token's hash and cannot show it again." })),
+            Json(json!({ "id": id, "token": token, "expires_at": expires, "note": "Enterplace keeps only the token's hash and cannot show it again." })),
         )
             .into_response(),
         Err(refused) => refuse(refused),
@@ -1325,7 +1325,7 @@ async fn summary(
     }
 }
 
-// ---------------------------------------------------------------- gantry watch setup
+// ---------------------------------------------------------------- enterplace watch setup
 
 /// The `env` block that points Claude Code's telemetry at this gateway, as Anthropic's monitoring page names the
 /// variables. Protobuf over HTTP is said outright: before Claude Code 2.1.323 the default was gRPC.
@@ -1342,14 +1342,14 @@ pub fn settings(gateway: &str, token: &str) -> Value {
     })
 }
 
-pub const SETUP_USAGE: &str = "usage: gantry watch setup --gateway <url> (--team <team> | --person <name>) [--org <org>] [--label <text>] [--days <n>] [--token <watch token>]
+pub const SETUP_USAGE: &str = "usage: enterplace watch setup --gateway <url> (--team <team> | --person <name>) [--org <org>] [--label <text>] [--days <n>] [--token <watch token>]
       Print the Claude Code managed settings that send its telemetry to the gateway's watch receiver (license feature
       watch), for a team on Claude Team or Enterprise seats or for one developer. Creates a watch token through the
-      gateway's admin API with the admin key in GANTRY_ADMIN_KEY (90 days unless --days, 1 to 365), or uses --token.";
+      gateway's admin API with the admin key in ENTERPLACE_ADMIN_KEY (90 days unless --days, 1 to 365), or uses --token.";
 
-/// `gantry watch setup`: what it prints.
+/// `enterplace watch setup`: what it prints.
 pub fn setup(args: &[String]) -> Result<String, String> {
-    setup_with(args, std::env::var("GANTRY_ADMIN_KEY").ok())
+    setup_with(args, std::env::var("ENTERPLACE_ADMIN_KEY").ok())
 }
 
 /// `setup`, with the admin key the environment gave.
@@ -1367,7 +1367,7 @@ fn setup_with(args: &[String], admin_key: Option<String>) -> Result<String, Stri
     let gateway = flag("--gateway")
         .map(|g| g.trim_end_matches('/').to_string())
         .filter(|g| (g.starts_with("https://") || g.starts_with("http://")) && !g.contains(['?', '#', ' ']))
-        .ok_or_else(|| format!("`watch setup` needs --gateway <url>, the address Claude Code reaches the gateway at, such as https://gantry.example.com.\n{SETUP_USAGE}"))?;
+        .ok_or_else(|| format!("`watch setup` needs --gateway <url>, the address Claude Code reaches the gateway at, such as https://enterplace.example.com.\n{SETUP_USAGE}"))?;
     let (team, person) = (flag("--team"), flag("--person"));
     let who = match (&team, &person) {
         (Some(team), None) => format!("team {team}"),
@@ -1387,7 +1387,7 @@ fn setup_with(args: &[String], admin_key: Option<String>) -> Result<String, Stri
         }
         None => {
             let key = admin_key.filter(|k| !k.trim().is_empty()).ok_or(
-                "no admin key: set GANTRY_ADMIN_KEY to an admin key of the gateway so a watch token can be created, or pass one you have with --token.",
+                "no admin key: set ENTERPLACE_ADMIN_KEY to an admin key of the gateway so a watch token can be created, or pass one you have with --token.",
             )?;
             let mut body = json!({ "label": flag("--label").unwrap_or_else(|| format!("watch-{}", team.as_deref().or(person.as_deref()).unwrap_or_default())), "team": team, "person": person, "org": flag("--org") });
             if let Some(days) = flag("--days") {
@@ -1409,7 +1409,7 @@ fn setup_with(args: &[String], admin_key: Option<String>) -> Result<String, Stri
                     let said: Value = response.into_json().unwrap_or(Value::Null);
                     return Err(format!(
                         "{url} answered {status}: {}",
-                        said["error"]["message"].as_str().unwrap_or("no message. Check that --gateway is the gateway's address and GANTRY_ADMIN_KEY one of its admin keys.")
+                        said["error"]["message"].as_str().unwrap_or("no message. Check that --gateway is the gateway's address and ENTERPLACE_ADMIN_KEY one of its admin keys.")
                     ));
                 }
                 Err(err) => {
@@ -1433,7 +1433,7 @@ fn setup_with(args: &[String], admin_key: Option<String>) -> Result<String, Stri
         .map(|(name, value)| format!("export {name}=\"{}\"\n", value.as_str().unwrap_or_default()))
         .collect();
     Ok(format!(
-        "Watch setup for {who}. The token is in the settings below and is not shown again: Gantry keeps only its hash.
+        "Watch setup for {who}. The token is in the settings below and is not shown again: Enterplace keeps only its hash.
 
 Managed settings (Claude Team and Enterprise: claude.ai, Organization settings, Claude Code, Managed settings;
 or with your device management tool, as the file
@@ -1447,7 +1447,7 @@ One developer, in the shell that starts Claude Code:
 
 {exports}
 Claude Code sends from its next start, about once a minute while it runs. Check with:
-  curl -H \"Authorization: Bearer $GANTRY_ADMIN_KEY\" {gateway}/console/watch/summary.json
-Watch mode sees and records. Limits and guardrails need API traffic through Gantry."
+  curl -H \"Authorization: Bearer $ENTERPLACE_ADMIN_KEY\" {gateway}/console/watch/summary.json
+Watch mode sees and records. Limits and guardrails need API traffic through Enterplace."
     ))
 }

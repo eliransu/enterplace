@@ -1,6 +1,6 @@
-//! A gateway node managed by the Gantry control plane.
+//! A gateway node managed by the Enterplace control plane.
 //!
-//! The node pulls its policy and keys from the control plane, writes them where `gantry serve` reads them (Gantry
+//! The node pulls its policy and keys from the control plane, writes them where `enterplace serve` reads them (Enterplace
 //! reloads a saved file within 2 seconds), runs the gateway as a child process, and ships audit metadata back.
 //! Prompts, answers and provider keys never leave the node: the audit shipper sends only the fields in `SHIPPED`.
 //! When the control plane cannot be reached the node keeps serving with the files it last wrote.
@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// The only audit fields that leave a node. Request records hold no prompt text, but the list is the contract:
-/// a field Gantry adds later stays on the node until it is named here.
+/// a field Enterplace adds later stays on the node until it is named here.
 const SHIPPED: &[&str] = &[
     "n",
     "event",
@@ -47,9 +47,9 @@ const SHIPPED: &[&str] = &[
     "prev",
     "hash",
 ];
-const POLICY: &str = "gantry.policy.yaml";
-const KEYS: &str = "gantry.keys.yaml";
-const AUDIT: &str = "gantry-audit.jsonl";
+const POLICY: &str = "enterplace.policy.yaml";
+const KEYS: &str = "enterplace.keys.yaml";
+const AUDIT: &str = "enterplace-audit.jsonl";
 const SHIPPED_OFFSET: &str = "shipped.offset";
 const BATCH: usize = 200;
 
@@ -96,9 +96,9 @@ fn gateway_env(
                 || k.starts_with("OTEL_")
                 || opts.pass_env.iter().any(|p| p == k)
         })
-        .filter(|(k, _)| !k.starts_with("GANTRY_NODE") && !k.starts_with("GANTRY_DEVICE"))
+        .filter(|(k, _)| !k.starts_with("ENTERPLACE_NODE") && !k.starts_with("ENTERPLACE_DEVICE"))
         .collect();
-    if std::env::var("GANTRY_ORG").is_ok() {
+    if std::env::var("ENTERPLACE_ORG").is_ok() {
         env.extend(
             from_control_plane
                 .iter()
@@ -156,7 +156,7 @@ impl Client {
     fn with_auth(&self, req: ureq::Request) -> ureq::Request {
         let req = req.set("authorization", &format!("Bearer {}", self.token));
         match &self.org {
-            Some(org) => req.set("x-gantry-org", org),
+            Some(org) => req.set("x-enterplace-org", org),
             None => req,
         }
     }
@@ -206,7 +206,7 @@ impl Client {
     }
 }
 
-/// Writes through a temporary file in the same folder, so Gantry never reads half a file.
+/// Writes through a temporary file in the same folder, so Enterplace never reads half a file.
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, text).map_err(|err| format!("could not write {}: {err}", tmp.display()))?;
@@ -316,7 +316,7 @@ fn ship(client: &Client, dir: &Path) -> Result<usize, String> {
 
 fn heartbeat(client: &Client, version: &str, shipped_total: u64, gateway_running: bool) {
     let _ = client.post("/node/heartbeat").send_json(serde_json::json!({
-        "gantry_version": gantry_core::VERSION,
+        "enterplace_version": enterplace_core::VERSION,
         "config_version": version,
         "shipped": shipped_total,
         "gateway_running": gateway_running,
@@ -358,15 +358,15 @@ pub fn agent() -> Result<ureq::Agent, String> {
 }
 
 pub fn run(opts: Options) -> Result<(), String> {
-    let token = std::env::var("GANTRY_NODE_TOKEN").map_err(|_| {
-        "GANTRY_NODE_TOKEN is not set. Put the node token the control plane issued in it."
+    let token = std::env::var("ENTERPLACE_NODE_TOKEN").map_err(|_| {
+        "ENTERPLACE_NODE_TOKEN is not set. Put the node token the control plane issued in it."
             .to_owned()
     })?;
     let client = Client {
         agent: agent()?,
         base: opts.control_plane.trim_end_matches('/').to_owned(),
         token,
-        org: std::env::var("GANTRY_ORG").ok(),
+        org: std::env::var("ENTERPLACE_ORG").ok(),
     };
     fs::create_dir_all(&opts.dir)
         .map_err(|err| format!("could not create {}: {err}", opts.dir.display()))?;
@@ -376,14 +376,14 @@ pub fn run(opts: Options) -> Result<(), String> {
         Ok(Some(config)) => {
             apply(&opts, &config)?;
             eprintln!(
-                "gantry node: config {} from {}",
+                "enterplace node: config {} from {}",
                 config.version, client.base
             );
             config
         }
         Ok(None) => return Err("the control plane sent no config".into()),
         Err(err) if opts.dir.join(POLICY).exists() => {
-            eprintln!("gantry node: {err}. Serving the policy and keys written last time.");
+            eprintln!("enterplace node: {err}. Serving the policy and keys written last time.");
             let version = fs::read_to_string(opts.dir.join("config.version")).unwrap_or_default();
             Config {
                 version,
@@ -421,14 +421,14 @@ pub fn run(opts: Options) -> Result<(), String> {
                 let _ = c.wait();
             }
             heartbeat(&client, &config.version, shipped_total, false);
-            eprintln!("gantry node: stopped");
+            eprintln!("enterplace node: stopped");
             return Ok(());
         }
         let fetched = client.config(Some(&config.version));
         if fetched.is_ok() {
             last_contact = std::time::Instant::now();
             if closed {
-                eprintln!("gantry node: the control plane answers again; serving resumes");
+                eprintln!("enterplace node: the control plane answers again; serving resumes");
                 closed = false;
             }
         } else if let Some(limit) = opts.max_offline
@@ -436,7 +436,7 @@ pub fn run(opts: Options) -> Result<(), String> {
             && last_contact.elapsed() > limit
         {
             eprintln!(
-                "gantry node: no answer from the control plane for {} s (--max-offline); the gateway stops serving until it answers",
+                "enterplace node: no answer from the control plane for {} s (--max-offline); the gateway stops serving until it answers",
                 limit.as_secs()
             );
             if let Ok(mut c) = child.lock() {
@@ -448,10 +448,10 @@ pub fn run(opts: Options) -> Result<(), String> {
         match fetched {
             Ok(Some(next)) => {
                 if let Err(err) = apply(&opts, &next) {
-                    eprintln!("gantry node: {err}");
+                    eprintln!("enterplace node: {err}");
                 } else {
                     eprintln!(
-                        "gantry node: config {} applied; the gateway reloads it within 2 seconds",
+                        "enterplace node: config {} applied; the gateway reloads it within 2 seconds",
                         next.version
                     );
                     if next.env != config.env {
@@ -461,7 +461,7 @@ pub fn run(opts: Options) -> Result<(), String> {
                             let _ = running.wait();
                             match spawn_gateway(&opts, &next.env) {
                                 Ok(fresh) => *running = fresh,
-                                Err(err) => eprintln!("gantry node: {err}"),
+                                Err(err) => eprintln!("enterplace node: {err}"),
                             }
                         }
                     }
@@ -470,27 +470,27 @@ pub fn run(opts: Options) -> Result<(), String> {
             }
             Ok(None) => {}
             Err(err) => eprintln!(
-                "gantry node: {err}. Still serving the last config ({}).",
+                "enterplace node: {err}. Still serving the last config ({}).",
                 config.version
             ),
         }
         match ship(&client, &opts.dir) {
             Ok(n) => shipped_total += n as u64,
-            Err(err) => eprintln!("gantry node: {err}. Will retry."),
+            Err(err) => eprintln!("enterplace node: {err}. Will retry."),
         }
         let running = match child.lock() {
             Ok(_) if closed => false,
             Ok(mut c) => match c.try_wait() {
                 Ok(None) => true,
                 _ => {
-                    eprintln!("gantry node: the gateway stopped; starting it again");
+                    eprintln!("enterplace node: the gateway stopped; starting it again");
                     match spawn_gateway(&opts, &config.env) {
                         Ok(fresh) => {
                             *c = fresh;
                             true
                         }
                         Err(err) => {
-                            eprintln!("gantry node: {err}");
+                            eprintln!("enterplace node: {err}");
                             false
                         }
                     }

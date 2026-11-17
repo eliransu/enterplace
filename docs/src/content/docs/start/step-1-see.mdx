@@ -1,6 +1,6 @@
 ---
 title: "Step 1: See"
-description: Run Gantry in observe mode, point your AI tools at it, and see which tools and models are in use and what they cost. Nothing is blocked.
+description: Run Enterplace in observe mode, point your AI tools at it, and see which tools and models are in use and what they cost. Nothing is blocked.
 sidebar:
   order: 2
 ---
@@ -15,14 +15,14 @@ A list of the AI tools and models in use and what each one costs, per key, from 
 
 <Steps>
 
-1. On the machine that will run Gantry, install it and start it (no provider key needed):
+1. On the machine that will run Enterplace, install it and start it (no provider key needed):
 
     ```bash
-    curl -fsSL https://gantry.enterplace.dev/install.sh | sh
-    gantry start
+    curl -fsSL https://enterplace.dev/install.sh | sh
+    enterplace start
     ```
 
-    It writes `gantry.policy.yaml` in observe mode with one rule that allows everyone, makes an admin key, starts the gateway, and opens the dashboard with a link that signs you in once. In the dashboard, **Connect a model** takes a provider key (kept sealed) or the free demo model, and **Send your first request** shows the first request arrive. Provider keys already in the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) are picked up.
+    It writes `enterplace.policy.yaml` in observe mode with one rule that allows everyone, makes an admin key, starts the gateway, and opens the dashboard with a link that signs you in once. In the dashboard, **Connect a model** takes a provider key (kept sealed) or the free demo model, and **Send your first request** shows the first request arrive. Provider keys already in the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) are picked up.
 
 2. Point the first tools at it. In the dashboard, **Start here** makes a key and shows the exact lines for each tool; the [coding tool guides](/integrations/coding-tools/) cover Claude Code, Codex, Cursor and the rest. Claude Code on a Claude subscription needs one line and no key: `export ANTHROPIC_BASE_URL=http://127.0.0.1:8080`.
 
@@ -30,15 +30,15 @@ A list of the AI tools and models in use and what each one costs, per key, from 
 
 ## Check it worked
 
-In observe mode Gantry forwards every request from a key it knows. A request with a missing, wrong, expired or revoked key, or for a model your providers do not list, is still refused.
+In observe mode Enterplace forwards every request from a key it knows. A request with a missing, wrong, expired or revoked key, or for a model your providers do not list, is still refused.
 
-The dashboard link `gantry start` printed opens the console (or sign in at `http://127.0.0.1:8080/console` with the admin key). The banner says nothing is blocked yet. On an empty install the console asks what you want to start with; pick **Coding agents** (or **Our own apps and agents**) and **Start here** gives you the checklist for this step: connect a model, send a first request, make a key for a person, paste the lines it shows, send one prompt. The step turns done by itself when the request arrives, and the first rows show on Start here.
+The dashboard link `enterplace start` printed opens the console (or sign in at `http://127.0.0.1:8080/console` with the admin key). The banner says nothing is blocked yet. On an empty install the console asks what you want to start with; pick **Coding agents** (or **Our own apps and agents**) and **Start here** gives you the checklist for this step: connect a model, send a first request, make a key for a person, paste the lines it shows, send one prompt. The step turns done by itself when the request arrives, and the first rows show on Start here.
 
 - **Analytics** (`/console/analytics`): rank by coding agent, model or key to see requests, tokens and cost for each.
 - **Requests** (`/console/requests`): one row per request, with its model and cost. Filter by coding agent to see one tool.
 
 <Aside type="note">
-Claude Code on Claude Pro, Max, Team or Enterprise seats goes through Gantry on its own login, with no API key: `gantry start` already wrote the `claude-subscriptions` provider for it. See [Claude Code](/integrations/claude-code/#claude-subscriptions). Where nothing may be routed, Gantry Enterprise's [watch mode](/integrations/claude-team/) receives Claude Code's own telemetry instead, and those requests appear on the same pages with **Source** `watch`.
+Claude Code on Claude Pro, Max, Team or Enterprise seats goes through Enterplace on its own login, with no API key: `enterplace start` already wrote the `claude-subscriptions` provider for it. See [Claude Code](/integrations/claude-code/#claude-subscriptions). Where nothing may be routed, Enterplace Enterprise's [watch mode](/integrations/claude-team/) receives Claude Code's own telemetry instead, and those requests appear on the same pages with **Source** `watch`.
 </Aside>
 
 ## When you're ready
@@ -47,20 +47,20 @@ You can see tools, models and cost, with one line per key. To see people and tea
 
 ## More
 
-### The policy `gantry start` writes
+### The policy `enterplace start` writes
 
-With both provider keys set, `gantry start --no-serve` writes exactly this:
+With both provider keys set, `enterplace start --no-serve` writes exactly this:
 
-```yaml title="gantry.policy.yaml"
-# Written by gantry start. Every key may use every model. Observe mode: nothing is blocked, and what a
-# rule would refuse is recorded as would_refuse. Reference: https://gantry-docs.enterplace.dev/governance/policy/
+```yaml title="enterplace.policy.yaml"
+# Written by enterplace start. Every key may use every model. Observe mode: nothing is blocked, and what a
+# rule would refuse is recorded as would_refuse. Reference: https://docs.enterplace.dev/governance/policy/
 version: 1
 mode: observe
 providers:
-  # Answered inside Gantry with a sample text, free: a first request works before any provider key is set.
+  # Answered inside Enterplace with a sample text, free: a first request works before any provider key is set.
   - name: demo
     preset: demo
-    models: [gantry-demo]
+    models: [enterplace-demo]
   - name: openai
     preset: openai
     key_env: OPENAI_PROVIDER_KEY
@@ -70,7 +70,7 @@ providers:
     key_env: ANTHROPIC_PROVIDER_KEY
     models: [claude-sonnet-5-5, claude-haiku-5-5]
   # Claude Code on your developers' own Claude subscriptions (Pro, Max, Team, Enterprise): each request carries
-  # the person's own Claude login, sent on unchanged and never kept. Gantry holds no Anthropic key for it.
+  # the person's own Claude login, sent on unchanged and never kept. Enterplace holds no Anthropic key for it.
   - name: claude-subscriptions
     kind: anthropic
     auth: passthrough
@@ -83,7 +83,7 @@ rules:
     models: ["*"]
 ```
 
-Add a model to a provider's `models` list to serve it. The provider keys stay in the environment and never appear in the file. The policy reads them from `OPENAI_PROVIDER_KEY` and `ANTHROPIC_PROVIDER_KEY`, so the tool settings can set `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to your Gantry key in the same shell; `gantry start` passes a key it found under `OPENAI_API_KEY` to the gateway it runs. A provider connected in the dashboard reads its key from a sealed credential instead (`credential: openai`), and the `demo` provider is answered inside Gantry.
+Add a model to a provider's `models` list to serve it. The provider keys stay in the environment and never appear in the file. The policy reads them from `OPENAI_PROVIDER_KEY` and `ANTHROPIC_PROVIDER_KEY`, so the tool settings can set `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to your Enterplace key in the same shell; `enterplace start` passes a key it found under `OPENAI_API_KEY` to the gateway it runs. A provider connected in the dashboard reads its key from a sealed credential instead (`credential: openai`), and the `demo` provider is answered inside Enterplace.
 
 ### What observe mode does
 
@@ -96,7 +96,7 @@ Add a model to a provider's `models` list to serve it. The provider keys stay in
 | A model no provider lists | Refused |
 | A [kill switch](/governance/kill-switches/) matches | Refused with `killed` |
 
-`gantry check` warns while `mode: observe` is in the policy. Delete the line to enforce the policy from the next request.
+`enterplace check` warns while `mode: observe` is in the policy. Delete the line to enforce the policy from the next request.
 
 ### Flags
 
@@ -106,12 +106,12 @@ Add a model to a provider's `models` list to serve it. The provider keys stay in
 | `--dir <path>` | Writes the files in that folder |
 | `--listen <host:port>` | Where the gateway listens, `127.0.0.1:8080` by default |
 | `--no-open` | Prints the dashboard link without opening the browser |
-| `--force` | Writes a new policy and admin key over the ones there. Without it, `gantry start` serves the policy it finds |
+| `--force` | Writes a new policy and admin key over the ones there. Without it, `enterplace start` serves the policy it finds |
 | `--no-serve` | Writes the files and does not start the gateway |
 
 ### Related
 
-- [Quickstart](/getting-started/quickstart/): install, start and the dashboard, with every file `gantry start` writes.
-- [Deploy](/deploy/overview/): run Gantry as a container for the whole company.
-- [Coverage](/governance/coverage/): `gantry audit coverage` counts requests per person and tool from the terminal.
+- [Quickstart](/getting-started/quickstart/): install, start and the dashboard, with every file `enterplace start` writes.
+- [Deploy](/deploy/overview/): run Enterplace as a container for the whole company.
+- [Coverage](/governance/coverage/): `enterplace audit coverage` counts requests per person and tool from the terminal.
 - [Request log and analytics](/operations/request-log/): every filter on the two console pages.

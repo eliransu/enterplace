@@ -1,16 +1,16 @@
 ---
 title: GitHub Copilot
-description: Send Copilot Chat in VS Code, Copilot CLI and the GitHub Copilot app through Gantry with bring your own key.
+description: Send Copilot Chat in VS Code, Copilot CLI and the GitHub Copilot app through Enterplace with bring your own key.
 sidebar:
   order: 10
 ---
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Copilot's bring your own key (BYOK) sends chat and agent requests from the developer's machine straight to the endpoint you configure. Point that endpoint at Gantry with a Gantry key, and each request is identified, decided and recorded. Gantry can be on `127.0.0.1` or a private network: GitHub's servers are not in the path.
+Copilot's bring your own key (BYOK) sends chat and agent requests from the developer's machine straight to the endpoint you configure. Point that endpoint at Enterplace with a Enterplace key, and each request is identified, decided and recorded. Enterplace can be on `127.0.0.1` or a private network: GitHub's servers are not in the path.
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -20,20 +20,20 @@ You need a running Gantry and a Gantry key. `gantry start` gives both in one com
 
 1. Open the model picker in the Chat view and choose **Manage Language Models**, or run **Chat: Manage Language Models**.
 2. Choose **Add Models**, then **Custom Endpoint**.
-3. VS Code opens `chatLanguageModels.json`. Describe Gantry there:
+3. VS Code opens `chatLanguageModels.json`. Describe Enterplace there:
 
 ```json title="chatLanguageModels.json"
 [
   {
     "vendor": "customendpoint",
-    "name": "Gantry",
-    "apiKey": "${input:gantry-key}",
+    "name": "Enterplace",
+    "apiKey": "${input:enterplace-key}",
     "apiType": "chat-completions",
     "url": "http://127.0.0.1:8080/v1",
     "models": [
       {
         "id": "gpt-4o-mini",
-        "name": "gpt-4o-mini via Gantry",
+        "name": "gpt-4o-mini via Enterplace",
         "toolCalling": true,
         "vision": false,
         "maxInputTokens": 120000,
@@ -54,12 +54,12 @@ On Copilot Business and Enterprise, an admin must enable the policy **Bring Your
 ```json title="~/.copilot/providers.json"
 {
   "providers": [
-    { "name": "gantry", "type": "openai", "baseUrl": "http://127.0.0.1:8080/v1", "apiKey": "gantry_..." }
+    { "name": "enterplace", "type": "openai", "baseUrl": "http://127.0.0.1:8080/v1", "apiKey": "enterplace_..." }
   ],
   "models": [
     {
       "id": "gpt-4o-mini",
-      "provider": "gantry",
+      "provider": "enterplace",
       "capabilities": { "supports": { "toolCalls": true, "streaming": true } }
     }
   ]
@@ -67,33 +67,33 @@ On Copilot Business and Enterprise, an admin must enable the policy **Bring Your
 ```
 
 ```bash
-COPILOT_OFFLINE=true copilot --model gantry/gpt-4o-mini
+COPILOT_OFFLINE=true copilot --model enterplace/gpt-4o-mini
 ```
 
-`type: openai` sends to `POST /v1/chat/completions`; add `"wireApi": "responses"` for `POST /v1/responses`. `type: anthropic` with `baseUrl` at Gantry's address without `/v1` uses `POST /v1/messages`. `COPILOT_PROVIDERS_CONFIG` names another file. The file holds the key itself, so keep it readable by its owner only. With BYOK the CLI needs no GitHub sign-in.
+`type: openai` sends to `POST /v1/chat/completions`; add `"wireApi": "responses"` for `POST /v1/responses`. `type: anthropic` with `baseUrl` at Enterplace's address without `/v1` uses `POST /v1/messages`. `COPILOT_PROVIDERS_CONFIG` names another file. The file holds the key itself, so keep it readable by its owner only. With BYOK the CLI needs no GitHub sign-in.
 
 </TabItem>
 <TabItem label="Copilot app">
 
-In the GitHub Copilot app, open **Settings**, then **Model providers**, then **Add provider**. Choose the OpenAI-compatible endpoint, give it a display name, Gantry's address with `/v1` and the Gantry key, then **Add provider**. The app keeps the key in the system credential store. It needs a GitHub sign-in, and no Copilot plan when every model is your own.
+In the GitHub Copilot app, open **Settings**, then **Model providers**, then **Add provider**. Choose the OpenAI-compatible endpoint, give it a display name, Enterplace's address with `/v1` and the Enterplace key, then **Add provider**. The app keeps the key in the system credential store. It needs a GitHub sign-in, and no Copilot plan when every model is your own.
 
 </TabItem>
 </Tabs>
 
-## What Gantry governs
+## What Enterplace governs
 
 - Every chat and agent request sent to the custom endpoint: identity, the rule's model list, budgets, guardrails and one audit record each.
 - Copilot CLI's records carry the user agent of its OpenAI SDK (`OpenAI/JS <version>`), so [Coverage](/governance/coverage/) shows them as `OpenAI/JS`, not as Copilot.
 
-## What Gantry does not see
+## What Enterplace does not see
 
 - Inline suggestions (code completions), semantic search and other embedding features. They stay on GitHub and are not available through BYOK.
-- Utility tasks in VS Code (titles, commit messages, intent detection), which use GitHub's models while a Copilot token exists. Set `chat.utilityModel` and `chat.utilitySmallModel` to a Gantry model to send them through Gantry.
+- Utility tasks in VS Code (titles, commit messages, intent detection), which use GitHub's models while a Copilot token exists. Set `chat.utilityModel` and `chat.utilitySmallModel` to a Enterplace model to send them through Enterplace.
 - Copilot CLI telemetry, unless `COPILOT_OFFLINE=true`, which also limits the CLI to the BYOK provider.
-- Organization or enterprise custom models set up on github.com. GitHub holds that key and calls the provider from its own servers, so a client never reaches Gantry. Use per-user BYOK instead.
+- Organization or enterprise custom models set up on github.com. GitHub holds that key and calls the provider from its own servers, so a client never reaches Enterplace. Use per-user BYOK instead.
 
 <Aside type="note">
-This follows GitHub's and VS Code's documentation. Copilot CLI was run headless (`copilot -p` with `COPILOT_OFFLINE=true`) against a local Gantry and a mock provider: one allowed request on `/v1/chat/completions`. The CLI did not expand a `${VAR}` written in `apiKey`, so the key goes in the file. The VS Code and app setups were not run.
+This follows GitHub's and VS Code's documentation. Copilot CLI was run headless (`copilot -p` with `COPILOT_OFFLINE=true`) against a local Enterplace and a mock provider: one allowed request on `/v1/chat/completions`. The CLI did not expand a `${VAR}` written in `apiKey`, so the key goes in the file. The VS Code and app setups were not run.
 </Aside>
 
 ## Related

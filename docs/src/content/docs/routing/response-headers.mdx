@@ -7,27 +7,27 @@ sidebar:
 
 import { LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Every answer Gantry forwards names where it came from and what it cost, so a client can log it without reading the audit log.
+Every answer Enterplace forwards names where it came from and what it cost, so a client can log it without reading the audit log.
 
 ## Headers
 
 | Header | On | Value |
 |---|---|---|
-| `x-gantry-request-id` | every answer, refusals included | The decision ID, the `id` of the request's audit records. Same value as `x-gantry-decision`. |
-| `x-gantry-provider` | forwarded answers | The provider that answered, a fallback included. |
-| `x-gantry-model` | forwarded answers | The model it was sent to there. |
-| `x-gantry-deployment` | forwarded answers | `provider/model`, as the attempts record names deployments. |
-| `x-gantry-attempts` | forwarded answers | How many attempts the answer took, retries, key switches and fallbacks included. |
-| `x-gantry-cost-usd` | forwarded answers for a priced model | The cost in US dollars. See below. |
-| `x-gantry-budget-remaining-usd` | answers under a rule with `budget_headers: true` | What the tightest budget the request counts against has left, in US dollars, after this request's own reservation. See [Budget headers](/governance/budgets-and-rate-limits/#budget-headers). |
-| `x-gantry-budget-reset` | the same | When that budget's period ends, such as `2026-12-01 00:00 UTC`. Absent for a sliding window. |
-| `Server-Timing` | forwarded answers | Gantry's own time (`gantry;dur=`), then one entry per stage: `gantry-auth`, `gantry-read`, `gantry-policy`, `gantry-guardrails`, `gantry-cache`, `gantry-audit`, `gantry-connect`, `gantry-first-byte`, in milliseconds. See [Time by stage](/operations/observability/#time-by-stage). |
+| `x-enterplace-request-id` | every answer, refusals included | The decision ID, the `id` of the request's audit records. Same value as `x-enterplace-decision`. |
+| `x-enterplace-provider` | forwarded answers | The provider that answered, a fallback included. |
+| `x-enterplace-model` | forwarded answers | The model it was sent to there. |
+| `x-enterplace-deployment` | forwarded answers | `provider/model`, as the attempts record names deployments. |
+| `x-enterplace-attempts` | forwarded answers | How many attempts the answer took, retries, key switches and fallbacks included. |
+| `x-enterplace-cost-usd` | forwarded answers for a priced model | The cost in US dollars. See below. |
+| `x-enterplace-budget-remaining-usd` | answers under a rule with `budget_headers: true` | What the tightest budget the request counts against has left, in US dollars, after this request's own reservation. See [Budget headers](/governance/budgets-and-rate-limits/#budget-headers). |
+| `x-enterplace-budget-reset` | the same | When that budget's period ends, such as `2026-12-01 00:00 UTC`. Absent for a sliding window. |
+| `Server-Timing` | forwarded answers | Enterplace's own time (`enterplace;dur=`), then one entry per stage: `enterplace-auth`, `enterplace-read`, `enterplace-policy`, `enterplace-guardrails`, `enterplace-cache`, `enterplace-audit`, `enterplace-connect`, `enterplace-first-byte`, in milliseconds. See [Time by stage](/operations/observability/#time-by-stage). |
 
 ## Cost
 
-- **A whole answer** (not a stream) up to 1 MiB is read before its headers are sent, and `x-gantry-cost-usd` is its cost by the usage the provider reported, as the usage record charges it.
-- **A stream**, or a larger answer, is not held back. Its headers leave before its usage is known, so `x-gantry-cost-usd` is the prompt's cost alone, estimated as the request body's bytes over four in tokens at the model's input price. The exact cost is in the request's [usage record](/reference/audit-records/). Gantry sends no HTTP trailer: most clients drop them.
-- A model with no price gets no `x-gantry-cost-usd`.
+- **A whole answer** (not a stream) up to 1 MiB is read before its headers are sent, and `x-enterplace-cost-usd` is its cost by the usage the provider reported, as the usage record charges it.
+- **A stream**, or a larger answer, is not held back. Its headers leave before its usage is known, so `x-enterplace-cost-usd` is the prompt's cost alone, estimated as the request body's bytes over four in tokens at the model's input price. The exact cost is in the request's [usage record](/reference/audit-records/). Enterplace sends no HTTP trailer: most clients drop them.
+- A model with no price gets no `x-enterplace-cost-usd`.
 
 ## Related
 

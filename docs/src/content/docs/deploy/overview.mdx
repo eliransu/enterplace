@@ -1,6 +1,6 @@
 ---
-title: Deploy Gantry Enterprise
-description: What a self-hosted Gantry Enterprise deployment is made of, what stays in your network, how to choose between Docker, Kubernetes, AWS, GCP, Azure and Cloudflare, and how to size it.
+title: Deploy Enterplace Enterprise
+description: What a self-hosted Enterplace Enterprise deployment is made of, what stays in your network, how to choose between Docker, Kubernetes, AWS, GCP, Azure and Cloudflare, and how to size it.
 sidebar:
   label: Overview
   order: 1
@@ -8,24 +8,24 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gantry Enterprise runs in your own network or cloud account. To try it first, a [one-click deploy](/deploy/one-click/) puts the gateway and a Postgres database on Render, Fly.io, DigitalOcean, Cloud Run, AWS, Azure or one machine in a few clicks, with nothing to write. These guides take you from nothing to a gateway that answers governed requests, with the console signed in and the audit log verified, and then through what production needs. You need Docker: the image is public and carries everything else, and the Compose file is on the [Docker Compose](/deploy/docker/) page.
+Enterplace Enterprise runs in your own network or cloud account. To try it first, a [one-click deploy](/deploy/one-click/) puts the gateway and a Postgres database on Render, Fly.io, DigitalOcean, Cloud Run, AWS, Azure or one machine in a few clicks, with nothing to write. These guides take you from nothing to a gateway that answers governed requests, with the console signed in and the audit log verified, and then through what production needs. You need Docker: the image is public and carries everything else, and the Compose file is on the [Docker Compose](/deploy/docker/) page.
 
 ## What you deploy
 
 | Part | What it is | Where it lives |
 |---|---|---|
-| The image | `ghcr.io/eliransu/gantry`: one static binary, `/gantry`, built `FROM scratch`, running as user `65532`. It serves the gateway, the console, the admin API and the enterprise features | ghcr.io, public, or your own registry mirroring it |
+| The image | `ghcr.io/eliransu/enterplace`: one static binary, `/enterplace`, built `FROM scratch`, running as user `65532`. It serves the gateway, the console, the admin API and the enterprise features | ghcr.io, public, or your own registry mirroring it |
 | Postgres | The store: keys, kill switches and spend, shared by every replica. The Compose stack and the Terraform modules run Postgres 16 | A managed database (RDS, Cloud SQL, Azure Database for PostgreSQL) or the Compose container |
-| A volume per replica | `/var/lib/gantry`, holding that replica's hash-chained audit log. Two replicas never share one, because each writes its own chain | A Docker volume, a PersistentVolumeClaim, EFS, Filestore or Azure Files. On Cloudflare, the container's own disk, sealed into R2 every minute |
-| The policy | One YAML file at `/etc/gantry/gantry.policy.yaml`: providers, rules, guardrails. It holds no secrets | Version control, then a ConfigMap, a parameter or a secret mount |
-| The license key | One line of text in `GANTRY_LICENSE`. It unlocks the enterprise features and is checked offline. Without one the same image runs the open source edition | Your secret store |
+| A volume per replica | `/var/lib/enterplace`, holding that replica's hash-chained audit log. Two replicas never share one, because each writes its own chain | A Docker volume, a PersistentVolumeClaim, EFS, Filestore or Azure Files. On Cloudflare, the container's own disk, sealed into R2 every minute |
+| The policy | One YAML file at `/etc/enterplace/enterplace.policy.yaml`: providers, rules, guardrails. It holds no secrets | Version control, then a ConfigMap, a parameter or a secret mount |
+| The license key | One line of text in `ENTERPLACE_LICENSE`. It unlocks the enterprise features and is checked offline. Without one the same image runs the open source edition | Your secret store |
 | Provider keys | One environment variable per provider, named by the policy's `key_env`. Bedrock and Vertex AI need none on AWS and Google Cloud: they sign in as the gateway's role or service account | Your secret store |
-| The master key, optional | `GANTRY_MASTER_KEY` (or the file `GANTRY_MASTER_KEY_FILE` names): 64 hex characters that seal [provider credentials](/governance/provider-credentials/) kept in the store. The same on every replica; a lost one cannot be recovered | Your secret store. The Terraform modules make one when you do not pass it |
-| The export key, optional | `GANTRY_EXPORT_KEY`: 64 hex characters that encrypt [SIEM export](/operations/siem-export/) destination secrets. The same on every replica | Your secret store. The Terraform modules make one when you do not pass it |
+| The master key, optional | `ENTERPLACE_MASTER_KEY` (or the file `ENTERPLACE_MASTER_KEY_FILE` names): 64 hex characters that seal [provider credentials](/governance/provider-credentials/) kept in the store. The same on every replica; a lost one cannot be recovered | Your secret store. The Terraform modules make one when you do not pass it |
+| The export key, optional | `ENTERPLACE_EXPORT_KEY`: 64 hex characters that encrypt [SIEM export](/operations/siem-export/) destination secrets. The same on every replica | Your secret store. The Terraform modules make one when you do not pass it |
 
 Every guide uses a policy of this shape. The last two lines are the ones the deploy files need: the audit log on the volume, and the store.
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -37,7 +37,7 @@ rules:
   - name: everyone
     principals: { any: true }
     models: [gpt-4o-mini]
-audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
 store: { postgres_url_env: DATABASE_URL }
 ```
 
@@ -49,23 +49,23 @@ Each build of `main` is pushed tagged with its full commit SHA and as `latest`, 
 
 ### The command line
 
-The image holds one binary, `/gantry`, and it runs every `gantry` command with the same arguments and output: `key new`, `check`, `audit verify`, `kill` and the rest, beside its own `serve` and `license show`. Run them with the image you deploy:
+The image holds one binary, `/enterplace`, and it runs every `enterplace` command with the same arguments and output: `key new`, `check`, `audit verify`, `kill` and the rest, beside its own `serve` and `license show`. Run them with the image you deploy:
 
 | Where | How |
 |---|---|
-| Docker Compose | `docker compose run --rm gantry audit verify /var/lib/gantry/gantry-audit.jsonl` |
-| Kubernetes | `kubectl exec gantry-0 -c gantry -- /gantry audit verify /var/lib/gantry/gantry-audit.jsonl` |
-| Any machine with Docker | `docker run --rm -v "$PWD":/w:ro ghcr.io/eliransu/gantry:<version> audit verify /w/gantry-audit.jsonl` |
+| Docker Compose | `docker compose run --rm enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl` |
+| Kubernetes | `kubectl exec enterplace-0 -c enterplace -- /enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl` |
+| Any machine with Docker | `docker run --rm -v "$PWD":/w:ro ghcr.io/eliransu/enterplace:<version> audit verify /w/enterplace-audit.jsonl` |
 
-The image also carries the Helm chart, the Terraform modules and the Cloudflare template for its version, under `/deploy`. Copy them out with `docker create --name gantry-files <image> && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files`. They are the `deploy/` folder of the Gantry repository at that version.
+The image also carries the Helm chart, the Terraform modules and the Cloudflare template for its version, under `/deploy`. Copy them out with `docker create --name enterplace-files <image> && docker cp enterplace-files:/deploy ./enterplace-deploy && docker rm enterplace-files`. They are the `deploy/` folder of the Enterplace repository at that version.
 
 ## What stays in your network
 
 | Data | Where it goes |
 |---|---|
-| Prompts and answers | To the model provider your policy names, and back to the caller. Gantry never stores them: not in the audit log, not in Postgres |
+| Prompts and answers | To the model provider your policy names, and back to the caller. Enterplace never stores them: not in the audit log, not in Postgres |
 | Provider keys | Read from environment variables, sent only to their provider |
-| Gantry keys | Shown once when issued. Only their SHA-256 is stored |
+| Enterplace keys | Shown once when issued. Only their SHA-256 is stored |
 | The audit log | Your volume. You ship it where you choose |
 | Keys, kill switches, spend | Your Postgres |
 | The license | Checked against a public key in the binary. No network call |
@@ -76,7 +76,7 @@ Nothing calls home. The gateway connects only to what your policy and environmen
 
 | Target | Guide | Replicas | Postgres | Audit volume | Fits |
 |---|---|---|---|---|---|
-| A first try, any cloud | [One-click deploys](/deploy/one-click/) | 1 | The platform's own | None: the container's disk, kept until the next deploy | Seeing Gantry with your team in minutes |
+| A first try, any cloud | [One-click deploys](/deploy/one-click/) | 1 | The platform's own | None: the container's disk, kept until the next deploy | Seeing Enterplace with your team in minutes |
 | One machine | [Docker Compose](/deploy/docker/) | 1 | A container beside it | A Docker volume | A trial, a team on one VM |
 | Any Kubernetes | [Kubernetes](/deploy/kubernetes/) | 1 or more | Managed, or your own | A claim per pod | EKS, GKE, AKS, OpenShift, on premises |
 | AWS | [ECS on Fargate](/deploy/aws/) | 1 or more | RDS with RDS Proxy | EFS, an access point per replica | AWS without a cluster |
@@ -90,13 +90,13 @@ Cloud Run and Container Apps run one replica: neither can give each replica a vo
 
 | Resource | What drives it | Defaults in the deploy files |
 |---|---|---|
-| Memory | Request bodies in flight, at most 256 MiB in all. Idle, Gantry uses a few MiB | 384 MiB limit (Helm), 1 GiB (ECS, Cloud Run), 2 GiB (Container Apps) |
+| Memory | Request bodies in flight, at most 256 MiB in all. Idle, Enterplace uses a few MiB | 384 MiB limit (Helm), 1 GiB (ECS, Cloud Run), 2 GiB (Container Apps) |
 | CPU | Requests per second, guardrails, streamed answers | 0.1 core requested (Helm), 0.5 vCPU (ECS), 1 core (Cloud Run, Container Apps) |
 | Audit volume | About 1.35 GB per million requests, per replica | 10 GiB per pod (Helm). EFS grows on its own; Filestore starts at 1 TiB; Azure Files 100 GiB |
 | Postgres | Small: one row per key and kill switch, and spend rows per team, person and key for each day and month | `db.t4g.small` (AWS), `db-custom-1-3840` (GCP), `GP_Standard_D2ds_v5` (Azure) |
 | Replicas | Availability first. Each replica serves the same keys and budgets through the store | 2 on ECS, 1 elsewhere |
 
-- Gantry reads and verifies the whole audit log at every start, so a start takes longer as the log grows. Start a new chain when it gets large: see [Running in production](/operations/operations/#start-a-new-chain).
+- Enterplace reads and verifies the whole audit log at every start, so a start takes longer as the log grows. Start a new chain when it gets large: see [Running in production](/operations/operations/#start-a-new-chain).
 - A request under a budget makes one database round trip to reserve its cost and one to settle it. A request with no budget makes none. Put Postgres in the same region as the gateways.
 - Rate limits (`rpm`, `tpm`), cooldowns and console sessions are shared through the store. The answer cache is per replica. A single sign-on callback must reach the replica that started the sign-in, so the load balancer needs session affinity for single sign-on when there is more than one replica. See [the store](/operations/store/).
 

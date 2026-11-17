@@ -1,16 +1,16 @@
 ---
 title: OpenAI and Anthropic SDKs
-description: Point the OpenAI and Anthropic SDKs at Gantry by base URL, and read Gantry's refusal code and decision ID from their errors.
+description: Point the OpenAI and Anthropic SDKs at Enterplace by base URL, and read Enterplace's refusal code and decision ID from their errors.
 sidebar:
   order: 8
 ---
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-OpenAI's and Anthropic's SDKs reach Gantry through their base URL. Give the client Gantry's address and a Gantry key in place of a provider key; nothing else in your code changes.
+OpenAI's and Anthropic's SDKs reach Enterplace through their base URL. Give the client Enterplace's address and a Enterplace key in place of a provider key; nothing else in your code changes.
 
 <Aside type="tip" title="Before you start">
-You need a running Gantry and a Gantry key. `gantry start` gives both in one command and prints the key as `export GANTRY_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `gantry-demo` in place of the model in the examples below: Gantry answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Send a request
@@ -20,7 +20,7 @@ You need a running Gantry and a Gantry key. `gantry start` gives both in one com
 
 ```bash
 export OPENAI_BASE_URL=http://127.0.0.1:8080/v1
-export OPENAI_API_KEY=gantry_...
+export OPENAI_API_KEY=enterplace_...
 ```
 
 ```python
@@ -44,7 +44,7 @@ except openai.APIStatusError as e:
 
 ```bash
 export OPENAI_BASE_URL=http://127.0.0.1:8080/v1
-export OPENAI_API_KEY=gantry_...
+export OPENAI_API_KEY=enterplace_...
 ```
 
 ```ts
@@ -70,7 +70,7 @@ try {
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-export ANTHROPIC_API_KEY=gantry_...
+export ANTHROPIC_API_KEY=enterplace_...
 ```
 
 ```python
@@ -85,7 +85,7 @@ try:
     )
     print(message.content[0].text)
 except anthropic.APIStatusError as e:
-    print(e.status_code, e.body["gantry_code"], e.body["decision"])
+    print(e.status_code, e.body["enterplace_code"], e.body["decision"])
 ```
 
 `anthropic.Anthropic(base_url=..., api_key=...)` sets both in code. `e.type` holds Anthropic's error type for the code, for example `permission_error`.
@@ -95,7 +95,7 @@ except anthropic.APIStatusError as e:
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-export ANTHROPIC_API_KEY=gantry_...
+export ANTHROPIC_API_KEY=enterplace_...
 ```
 
 ```ts
@@ -111,7 +111,7 @@ try {
   console.log(message.content[0].text);
 } catch (err) {
   if (!(err instanceof Anthropic.APIError)) throw err;
-  console.log(err.status, err.error?.gantry_code, err.error?.decision);
+  console.log(err.status, err.error?.enterplace_code, err.error?.decision);
 }
 ```
 
@@ -133,30 +133,30 @@ The OpenAI SDKs take the address with `/v1`. The Anthropic SDKs take it without,
 
 ## What every client needs
 
-- **Key.** Gantry reads the key from `Authorization: Bearer gantry_...`, from `x-api-key: gantry_...`, or from `api-key: gantry_...` (what Azure OpenAI's SDKs send). If more than one is sent they must hold the same value, or the request is refused with `ambiguous_key`. A provider key (one that starts with `sk-`) is refused with `unknown_key` and a hint.
-- **Route.** The model must be on a provider the route fits. Chat and Responses requests reach every provider that speaks chat, translated where its own API differs (Gemini, Bedrock Converse, Cohere and others), and the free `gantry-demo` model. Messages requests reach `anthropic`, `bedrock` and `vertex_anthropic`. Chat to a messages provider, or messages to a chat provider, is refused with `wrong_route`, which names the right route, unless the provider opts in to [translation](/routing/translation/).
-- **Anthropic headers.** The Anthropic SDKs send `api_key` (`ANTHROPIC_API_KEY`) as `x-api-key` and `auth_token` (`ANTHROPIC_AUTH_TOKEN`) as `Authorization: Bearer`. Set only one of them, to the Gantry key.
+- **Key.** Enterplace reads the key from `Authorization: Bearer enterplace_...`, from `x-api-key: enterplace_...`, or from `api-key: enterplace_...` (what Azure OpenAI's SDKs send). If more than one is sent they must hold the same value, or the request is refused with `ambiguous_key`. A provider key (one that starts with `sk-`) is refused with `unknown_key` and a hint.
+- **Route.** The model must be on a provider the route fits. Chat and Responses requests reach every provider that speaks chat, translated where its own API differs (Gemini, Bedrock Converse, Cohere and others), and the free `enterplace-demo` model. Messages requests reach `anthropic`, `bedrock` and `vertex_anthropic`. Chat to a messages provider, or messages to a chat provider, is refused with `wrong_route`, which names the right route, unless the provider opts in to [translation](/routing/translation/).
+- **Anthropic headers.** The Anthropic SDKs send `api_key` (`ANTHROPIC_API_KEY`) as `x-api-key` and `auth_token` (`ANTHROPIC_AUTH_TOKEN`) as `Authorization: Bearer`. Set only one of them, to the Enterplace key.
 
 ## Handle refusals
 
 A refusal is an HTTP error, so each SDK raises its status error. The status picks the class: 400 `BadRequestError`, 401 `AuthenticationError`, 403 `PermissionDeniedError`, 404 `NotFoundError`, 429 `RateLimitError`, 500 and above `InternalServerError`. All are subclasses of `APIStatusError` (Python) or `APIError` (TypeScript).
 
-The message ends with `Decision <id>.`. The Gantry code and the decision ID sit in a different place per SDK:
+The message ends with `Decision <id>.`. The Enterplace code and the decision ID sit in a different place per SDK:
 
-| SDK | Gantry code | Decision ID |
+| SDK | Enterplace code | Decision ID |
 |---|---|---|
 | OpenAI, Python | `e.code` | `e.body["decision"]` |
 | OpenAI, TypeScript | `err.code` | `err.error.decision` |
-| Anthropic, Python | `e.body["gantry_code"]` | `e.body["decision"]` |
-| Anthropic, TypeScript | `err.error.gantry_code` | `err.error.decision` |
+| Anthropic, Python | `e.body["enterplace_code"]` | `e.body["decision"]` |
+| Anthropic, TypeScript | `err.error.enterplace_code` | `err.error.decision` |
 
-The OpenAI SDKs keep the inner `error` object of OpenAI's shape. The Anthropic SDKs keep the whole body of Anthropic's shape, where Gantry puts `gantry_code` and `decision` at the top level.
+The OpenAI SDKs keep the inner `error` object of OpenAI's shape. The Anthropic SDKs keep the whole body of Anthropic's shape, where Enterplace puts `enterplace_code` and `decision` at the top level.
 
-Every response also carries the decision ID in the `X-Gantry-Decision` header: `e.response.headers["x-gantry-decision"]` in Python, `err.headers.get("x-gantry-decision")` in TypeScript.
+Every response also carries the decision ID in the `X-Enterplace-Decision` header: `e.response.headers["x-enterplace-decision"]` in Python, `err.headers.get("x-enterplace-decision")` in TypeScript.
 
 ### Retries
 
-All four SDKs retry 408, 409, 429 and 5xx answers twice by default, but obey the `x-should-retry` header when present. Gantry sets it on every refusal:
+All four SDKs retry 408, 409, 429 and 5xx answers twice by default, but obey the `x-should-retry` header when present. Enterplace sets it on every refusal:
 
 - `false` on most codes, so the refusal is raised at once and recorded once.
 - `true` on `busy`, `rate_limited` and the `upstream_*` codes, which the SDK resends on its own.
@@ -164,7 +164,7 @@ All four SDKs retry 408, 409, 429 and 5xx answers twice by default, but obey the
 `max_retries` (Python) or `maxRetries` (TypeScript) changes the count.
 
 <Aside type="note">
-The SDK names on this page come from each SDK's documentation and published source. The refusal bodies they parse were checked against a running Gantry on both routes.
+The SDK names on this page come from each SDK's documentation and published source. The refusal bodies they parse were checked against a running Enterplace on both routes.
 </Aside>
 
 ## Related

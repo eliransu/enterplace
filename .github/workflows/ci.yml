@@ -32,7 +32,7 @@ jobs:
           --health-timeout 5s
           --health-retries 15
     env:
-      GANTRY_TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres
+      ENTERPLACE_TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
         # With tags and history: scripts/version.py compares the store migrations with the previous tag's.
@@ -59,7 +59,7 @@ jobs:
           if-no-files-found: ignore
       - name: The binary answers
         run: |
-          ./target/release/gantry serve --unchecked &
+          ./target/release/enterplace serve --unchecked &
           for i in 1 2 3 4 5; do curl -sf http://127.0.0.1:8080/healthz && exit 0; sleep 1; done
           exit 1
       - name: The release tarball builds
@@ -84,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup show
-      - run: cargo build --locked -p gantry-cli
+      - run: cargo build --locked -p enterplace-cli
       - run: >-
           python3 scripts/console_edit_check.py --fresh --chrome "$(command -v google-chrome)"
           --database "postgres://postgres:test@127.0.0.1:5432/postgres?sslmode=disable"
@@ -103,10 +103,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # The open source crates, without enterprise/: they must build and pass on their own.
-      - run: cargo test --locked --workspace --exclude gantry-enterprise
+      - run: cargo test --locked --workspace --exclude enterplace-enterprise
 
   device-agent:
-    # The device agent (gantry device) runs on employee machines, so the enterprise binary builds and the agent's
+    # The device agent (enterplace device) runs on employee machines, so the enterprise binary builds and the agent's
     # unit tests pass on Linux and on Windows, where its paths and installer are checked too.
     strategy:
       fail-fast: false
@@ -117,7 +117,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup show
       - name: The agent's unit tests
-        run: cargo test --locked -p gantry-enterprise device::tests
+        run: cargo test --locked -p enterplace-enterprise device::tests
       - name: The Linux installer parses
         if: runner.os == 'Linux'
         run: sh -n deploy/mdm/install-linux.sh
@@ -132,16 +132,16 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           rustup target add aarch64-pc-windows-msvc
-          cargo check --locked -p gantry-enterprise --target aarch64-pc-windows-msvc
+          cargo check --locked -p enterplace-enterprise --target aarch64-pc-windows-msvc
       # The binary deploy/mdm/windows/install.ps1 installs, kept from runs on main and runs by hand.
       - name: The Windows binary
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
-        run: cargo build --release --locked -p gantry-enterprise
+        run: cargo build --release --locked -p enterplace-enterprise
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
         with:
-          name: gantry-enterprise-windows-x86_64
-          path: target/release/gantry-enterprise.exe
+          name: enterplace-enterprise-windows-x86_64
+          path: target/release/enterplace-enterprise.exe
 
   # install.sh (curl ... | sh) against a fake signed release on localhost, under sh and dash, and shellcheck clean.
   install-script:

@@ -35,7 +35,7 @@ def section(root, version):
     return (match.group(1), match.group(2).strip()) if match else None
 
 
-# The fingerprint files: release/migrations.txt (gantry-server) and enterprise/migrations.txt (gantry-enterprise).
+# The fingerprint files: release/migrations.txt (enterplace-server) and enterprise/migrations.txt (enterplace-enterprise).
 MANIFESTS = ("release/migrations.txt", "enterprise/migrations.txt")
 
 
@@ -99,7 +99,7 @@ def check(root, tag=None):
     problems = []
     if tag is not None and tag != f"v{version}":
         problems.append(f"tag {tag} does not match version {version} in {root / 'Cargo.toml'}. Bump with scripts/release.sh bump {tag.lstrip('v')}, or tag v{version}.")
-    chart = root / "deploy/helm/gantry/Chart.yaml"
+    chart = root / "deploy/helm/enterplace/Chart.yaml"
     if chart.exists() and f'appVersion: "{version}"' not in chart.read_text():
         problems.append(f"{chart}: appVersion is not \"{version}\". Run scripts/release.sh bump {version}.")
     found = section(root, version)
@@ -131,7 +131,7 @@ def bump(root, version, today=None):
     old = cargo_version(root)
     cargo.write_text(cargo.read_text().replace(f'version = "{old}"', f'version = "{version}"'))
     log.write_text(text)
-    chart = root / "deploy/helm/gantry/Chart.yaml"
+    chart = root / "deploy/helm/enterplace/Chart.yaml"
     if chart.exists():
         chart.write_text(re.sub(r'^version: .+$', f"version: {version}", re.sub(r'^appVersion: .+$', f'appVersion: "{version}"', chart.read_text(), flags=re.M), flags=re.M))
 
@@ -154,11 +154,11 @@ def selftest():
         assert '"a", version = "0.1.1"' in (root / "Cargo.toml").read_text()
         assert cargo_version(root) == "0.1.1" and check(root, "v0.1.1") == [], check(root, "v0.1.1")
         assert section(root, "0.1.1") == ("2026-12-01", "- New.") and section(root, "0.1.0") == ("2026-11-20", "- A thing.")
-        (root / "deploy/helm/gantry").mkdir(parents=True)
-        (root / "deploy/helm/gantry/Chart.yaml").write_text('name: gantry\nversion: 0.0.1\nappVersion: "0.0.1"\n')
+        (root / "deploy/helm/enterplace").mkdir(parents=True)
+        (root / "deploy/helm/enterplace/Chart.yaml").write_text('name: enterplace\nversion: 0.0.1\nappVersion: "0.0.1"\n')
         assert any("appVersion" in p for p in check(root))
         bump(root, "0.1.1")
-        assert (root / "deploy/helm/gantry/Chart.yaml").read_text() == 'name: gantry\nversion: 0.1.1\nappVersion: "0.1.1"\n'
+        assert (root / "deploy/helm/enterplace/Chart.yaml").read_text() == 'name: enterplace\nversion: 0.1.1\nappVersion: "0.1.1"\n'
         (root / "Cargo.toml").write_text('version = "0.2.0"\n')
         assert any("no section" in p for p in check(root))
     migrations_selftest()

@@ -4,18 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MCP tools behind one endpoint: allow lists, approvals and tool pins</title>
-<meta name="description" content="Put your MCP servers behind Gantry. Each person sees only the tools their rule allows, named tools wait for an admin&#x27;s approval, a changed tool is held until approved, and every tool call is recorded.">
+<meta name="description" content="Put your MCP servers behind Enterplace. Each person sees only the tools their rule allows, named tools wait for an admin&#x27;s approval, a changed tool is held until approved, and every tool call is recorded.">
 <meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<link rel="canonical" href="https://gantry.enterplace.dev/use-cases/mcp-tools/">
+<link rel="canonical" href="https://enterplace.dev/use-cases/mcp-tools/">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Gantry">
-<meta property="og:url" content="https://gantry.enterplace.dev/use-cases/mcp-tools/">
+<meta property="og:site_name" content="Enterplace">
+<meta property="og:url" content="https://enterplace.dev/use-cases/mcp-tools/">
 <meta property="og:title" content="MCP tools behind one endpoint: allow lists, approvals and tool pins">
-<meta property="og:description" content="Put your MCP servers behind Gantry. Each person sees only the tools their rule allows, named tools wait for an admin&#x27;s approval, a changed tool is held until approved, and every tool call is recorded.">
-<meta property="og:image" content="https://gantry.enterplace.dev/og.png">
+<meta property="og:description" content="Put your MCP servers behind Enterplace. Each person sees only the tools their rule allows, named tools wait for an admin&#x27;s approval, a changed tool is held until approved, and every tool call is recorded.">
+<meta property="og:image" content="https://enterplace.dev/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
@@ -30,10 +30,10 @@
 
 <header class="hdr" id="hdr">
   <div class="wrap hdr-in">
-    <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
-gantry</a>
+    <a class="brand" href="/" aria-label="Enterplace, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+enterplace</a>
 
-    <a class="theme gh-phone" href="https://github.com/eliransu/gantry" aria-label="Gantry on GitHub, open source"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
+    <a class="theme gh-phone" href="https://github.com/eliransu/enterplace" aria-label="Enterplace on GitHub, open source"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
 
     <button class="burger" type="button" aria-expanded="false" aria-controls="nav" aria-label="Menu"><span></span></button>
 
@@ -44,8 +44,8 @@ gantry</a>
         <div class="menu" id="menu-product">
           <a href="/product/"><strong>How it works</strong><span>The request path, the controls, the audit log and the console</span></a>
           <a href="/deploy/"><strong>Deploy</strong><span>Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare</span></a>
-          <a href="/security/"><strong>Security</strong><span>What Gantry protects, and where it stops</span></a>
-          <a href="/compare/"><strong>Compare</strong><span>Gantry next to LiteLLM and Bifrost, with sources</span></a>
+          <a href="/security/"><strong>Security</strong><span>What Enterplace protects, and where it stops</span></a>
+          <a href="/compare/"><strong>Compare</strong><span>Enterplace next to LiteLLM and Bifrost, with sources</span></a>
         </div>
       </div>
 
@@ -86,11 +86,11 @@ gantry</a>
       </div>
 
       <a class="nav-link" data-group="enterprise" href="/enterprise/">Enterprise</a>
-      <a class="nav-link" href="https://gantry-docs.enterplace.dev/">Docs</a>
+      <a class="nav-link" href="https://docs.enterplace.dev/">Docs</a>
 
       <div class="nav-actions">
-        <a class="btn btn-main btn-sm" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Get started</a>
-        <a class="theme gh-wide" href="https://github.com/eliransu/gantry" aria-label="Gantry on GitHub, open source">
+        <a class="btn btn-main btn-sm" href="https://docs.enterplace.dev/getting-started/quickstart/">Get started</a>
+        <a class="theme gh-wide" href="https://github.com/eliransu/enterplace" aria-label="Enterplace on GitHub, open source">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
         </a>
         <button class="theme" type="button" aria-label="Switch between light and dark">
@@ -105,11 +105,11 @@ gantry</a>
 <section class="wrap head">
   <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>MCP tools</span></nav>
   <h1>Know which agent may call which tool, and who approved the dangerous ones.</h1>
-  <p class="lead">Agents reach GitHub, the data warehouse and the deploy system through MCP servers. Each server has its own token, and the list of who may call what lives in nobody's system. Gantry serves all of them at one endpoint and checks every call.</p>
+  <p class="lead">Agents reach GitHub, the data warehouse and the deploy system through MCP servers. Each server has its own token, and the list of who may call what lives in nobody's system. Enterplace serves all of them at one endpoint and checks every call.</p>
 </section>
 
 <section class="wrap sec" style="padding-top: 40px">
-<figure class="gate" data-gate aria-label="Four tool calls go through Gantry&#x27;s MCP endpoint. Three are allowed. A call to a tool the rule does not list is refused.">
+<figure class="gate" data-gate aria-label="Four tool calls go through Enterplace&#x27;s MCP endpoint. Three are allowed. A call to a tool the rule does not list is refused.">
 <div class="gate-lanes" aria-hidden="true">
 <div class="lane"><span class="lane-from">sarah.miller<i>github.create_issue</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">github</span></div>
 <div class="lane"><span class="lane-from">svc-triage-agent<i>docs.search</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">docs</span></div>
@@ -146,11 +146,11 @@ gantry</a>
     <li>
       <div class="guide-text">
         <h3>List your MCP servers</h3>
-        <p>Gantry serves their tools, prompts and resources at one endpoint, <code>/mcp</code>. Callers see each tool as <code>server.tool</code>. The server's own credential is read from an environment variable and never reaches a caller.</p>
-        <a class="more" href="https://gantry-docs.enterplace.dev/governance/mcp-gateway/">MCP gateway in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+        <p>Enterplace serves their tools, prompts and resources at one endpoint, <code>/mcp</code>. Callers see each tool as <code>server.tool</code>. The server's own credential is read from an environment variable and never reaches a caller.</p>
+        <a class="more" href="https://docs.enterplace.dev/governance/mcp-gateway/">MCP gateway in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>mcp:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>mcp:
   - name: github
     url: https://api.githubcopilot.com/mcp
     headers_env: { Authorization: GITHUB_MCP_AUTHORIZATION }
@@ -163,7 +163,7 @@ gantry</a>
         <h3>Give each rule its tools</h3>
         <p>A rule's <code>tools</code> list is what its people can see and call. A rule with no list gets no tools.</p>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>rules:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>rules:
   - name: payments-team
     principals: { team: payments }
     models: [claude-sonnet-5-5]
@@ -177,7 +177,7 @@ gantry</a>
         <h3>Make dangerous tools wait for a person</h3>
         <p>A call to a tool under <code>approve_tools</code> is held until an admin approves or denies it on the console's MCP approvals page, which shows who asked, the rule and the arguments. The decision record says who approved.</p>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>rules:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>rules:
   - name: platform
     principals: { team: platform }
     models: [claude-sonnet-5-5]
@@ -188,9 +188,9 @@ gantry</a>
     <li>
       <div class="guide-text">
         <h3>Hold tools that changed</h3>
-        <p>Gantry pins each tool the first time it lists a server: a hash of its title, description, schemas and annotations. With <code>tool_changes: block</code>, a tool whose hash changed is left out and its calls are refused until an admin approves the new version.</p>
+        <p>Enterplace pins each tool the first time it lists a server: a hash of its title, description, schemas and annotations. With <code>tool_changes: block</code>, a tool whose hash changed is left out and its calls are refused until an admin approves the new version.</p>
       </div>
-      <figure class="code"><figcaption>gantry.policy.yaml</figcaption><pre>mcp:
+      <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>mcp:
   - name: github
     url: https://api.githubcopilot.com/mcp
     tool_changes: block</pre></figure>
@@ -198,9 +198,9 @@ gantry</a>
     <li>
       <div class="guide-text">
         <h3>Connect the clients</h3>
-        <p>A client points at <code>https://your-gantry/mcp</code> and sends a Gantry key, or signs in with OAuth from the client. A server can also run each call with the caller's own credential, so the call happens as that person at the server too.</p>
+        <p>A client points at <code>https://your-enterplace/mcp</code> and sends a Enterplace key, or signs in with OAuth from the client. A server can also run each call with the caller's own credential, so the call happens as that person at the server too.</p>
       </div>
-      <figure class="code"><figcaption>Stop one tool for everyone</figcaption><pre>gantry kill --model github.delete_repo \
+      <figure class="code"><figcaption>Stop one tool for everyone</figcaption><pre>enterplace kill --model github.delete_repo \
   --reason "deleting repositories is paused"</pre></figure>
     </li>
   </ol>
@@ -229,7 +229,7 @@ gantry</a>
 <section class="wrap sec doc">
   <h2>Limits to know before you start</h2>
   <ul class="ticks out">
-    <li><strong>Gantry speaks Streamable HTTP to upstream servers.</strong> A server that only runs as a local process on a laptop is outside it.</li>
+    <li><strong>Enterplace speaks Streamable HTTP to upstream servers.</strong> A server that only runs as a local process on a laptop is outside it.</li>
     <li><strong>An approval is a person looking at the arguments.</strong> It is as good as the attention the admin gives it. Keep the list of approved tools short.</li>
     <li><strong>A pin covers the tool's description and schema.</strong> It does not inspect what the server does when the tool runs.</li>
   </ul>
@@ -251,7 +251,7 @@ gantry</a>
   <div class="cta-box">
     <h2>Start with step one. Block nothing, and find out what is in use.</h2>
     <div class="actions">
-      <a class="btn btn-ink" href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink" href="https://docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
       <a class="btn btn-ink-line" href="/learn/five-steps/">See the five steps</a>
       <a class="btn btn-ink-line" href="/deploy/">Deploy in your cloud</a>
     </div>
@@ -264,8 +264,8 @@ gantry</a>
 <footer class="ftr">
   <div class="wrap ftr-top">
     <div class="ftr-about">
-      <a class="brand" href="/" aria-label="Gantry, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
-gantry</a>
+      <a class="brand" href="/" aria-label="Enterplace, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+enterplace</a>
       <p>A self-hosted AI gateway, governance first. One Docker image plus Postgres, in your cloud.</p>
     </div>
     <nav class="ftr-cols" aria-label="Site map">
@@ -303,15 +303,15 @@ gantry</a>
       </div>
       <div>
         <h2>Project</h2>
-        <a href="https://gantry-docs.enterplace.dev/">Docs</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/status/">Project status</a>
-        <a href="https://gantry-docs.enterplace.dev/getting-started/changelog/">Changelog</a>
-        <a href="https://github.com/eliransu/gantry">GitHub</a>
+        <a href="https://docs.enterplace.dev/">Docs</a>
+        <a href="https://docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
+        <a href="https://docs.enterplace.dev/getting-started/status/">Project status</a>
+        <a href="https://docs.enterplace.dev/getting-started/changelog/">Changelog</a>
+        <a href="https://github.com/eliransu/enterplace">GitHub</a>
       </div>
     </nav>
   </div>
-  <p class="wrap ftr-legal">Open source core under MIT, <a href="https://github.com/eliransu/gantry">on GitHub</a>. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
+  <p class="wrap ftr-legal">Open source core under MIT, <a href="https://github.com/eliransu/enterplace">on GitHub</a>. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
 </footer>
 </body>
 </html>

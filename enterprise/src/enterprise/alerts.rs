@@ -28,13 +28,13 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use gantry_console::{
+use enterplace_console::{
     Admin, Console, Form, bare_page, foreign,
     html::{self, esc},
     redirect, same_origin,
 };
-use gantry_core::audit::{self, AuditLog};
-use gantry_core::policy::{Budget, Limit, Period, Principal};
+use enterplace_core::audit::{self, AuditLog};
+use enterplace_core::policy::{Budget, Limit, Period, Principal};
 use serde_json::{Value, json};
 
 use super::Db;
@@ -471,7 +471,7 @@ impl Rule {
             }
             RuleKind::RegionOutage
                 if !get("region").is_empty()
-                    && !gantry_core::config::valid_name(&get("region")) =>
+                    && !enterplace_core::config::valid_name(&get("region")) =>
             {
                 return Err("Region is a label an alias deployment's region: gives, such as eu or eu-west-1. Empty: every region.".into());
             }
@@ -755,7 +755,7 @@ pub struct Engine {
     sinks: Arc<Sinks>,
     console: String,
     /// The policy in force, for the budgets a percent rule is a share of.
-    policy: gantry_server::PolicyNow,
+    policy: enterplace_server::PolicyNow,
     recent: Mutex<(HashMap<String, Seen>, std::collections::VecDeque<String>)>,
     /// The last rules and channels read, for alerts about the store itself when it cannot be read.
     cache: Mutex<(Vec<Rule>, Vec<Channel>)>,
@@ -777,10 +777,10 @@ struct Alerts {
 
 /// Adds the alerts page and the engine, which runs on the exporter's tick after each read of the chain.
 pub fn register(
-    extension: &mut gantry_server::Extension,
+    extension: &mut enterplace_server::Extension,
     exporter: &Arc<super::siem::Exporter>,
     env: &Env,
-    policy: gantry_server::PolicyNow,
+    policy: enterplace_server::PolicyNow,
     keys: std::path::PathBuf,
     policy_file: std::path::PathBuf,
 ) -> Arc<Engine> {
@@ -801,7 +801,7 @@ pub fn register(
 pub fn engine(
     exporter: &Arc<super::siem::Exporter>,
     env: &Env,
-    policy: gantry_server::PolicyNow,
+    policy: enterplace_server::PolicyNow,
     keys: std::path::PathBuf,
     policy_file: std::path::PathBuf,
     org: bool,
@@ -814,7 +814,7 @@ pub fn engine(
         key: exporter.key,
         sinks: exporter.sinks.clone(),
         policy,
-        console: env("GANTRY_CONSOLE_URL")
+        console: env("ENTERPLACE_CONSOLE_URL")
             .map(|u| {
                 u.trim()
                     .trim_end_matches('/')
@@ -835,7 +835,7 @@ pub fn engine(
 }
 
 /// Without the feature the page says why, and there is no nav entry.
-pub fn locked(extension: &mut gantry_server::Extension, status: &Status) {
+pub fn locked(extension: &mut enterplace_server::Extension, status: &Status) {
     let Err(refused) = status.require(FEATURE) else {
         return;
     };
@@ -936,7 +936,7 @@ impl Engine {
     fn say(&self, line: &str) {
         let mut said = lock(&self.said);
         if *said != line {
-            eprintln!("gantry: {line}");
+            eprintln!("enterplace: {line}");
             *said = line.to_string();
         }
     }
@@ -1094,14 +1094,14 @@ impl Engine {
     }
 
     /// Each alias deployment with a `region:` label, as `provider/model` (as attempts records name it), and its region.
-    /// Empty when the policy does not load: `gantry check` says why.
+    /// Empty when the policy does not load: `enterplace check` says why.
     // ponytail: the policy is read on each tick that has a region rule; keep it from the reload if that shows up.
     async fn regions(&self) -> HashMap<String, String> {
         let path = self.policy_file.clone();
         tokio::task::spawn_blocking(move || {
-            gantry_core::config::policy_text(&path)
+            enterplace_core::config::policy_text(&path)
                 .ok()
-                .and_then(|text| gantry_core::config::load_texts(&path, &text, &path, "").ok())
+                .and_then(|text| enterplace_core::config::load_texts(&path, &text, &path, "").ok())
                 .map(|loaded| {
                     loaded
                         .aliases
@@ -1690,7 +1690,7 @@ impl Engine {
                             rule,
                             format!("provider:{provider}"),
                             format!(
-                                "{provider} refused Gantry's credential with {}",
+                                "{provider} refused Enterplace's credential with {}",
                                 record["status"]
                             ),
                             1,
@@ -1709,7 +1709,7 @@ impl Engine {
                                     rule,
                                     format!("provider:{provider}"),
                                     format!(
-                                        "{provider} refused Gantry's credential with {outcome}"
+                                        "{provider} refused Enterplace's credential with {outcome}"
                                     ),
                                     1,
                                 );
@@ -1763,7 +1763,7 @@ impl Engine {
                                 short(&record["keys_sha256"])
                             ),
                             format!(
-                                "a {} reload refused a change to the policy or keys ({} problems) and keeps deciding with policy {}; the first problem: {}. Fix it and save again, `gantry check` says what passes",
+                                "a {} reload refused a change to the policy or keys ({} problems) and keeps deciding with policy {}; the first problem: {}. Fix it and save again, `enterplace check` says what passes",
                                 record["trigger"].as_str().unwrap_or("config"),
                                 problems.map_or(0, Vec::len),
                                 short(&record["policy_sha256_before"]),
@@ -1782,7 +1782,7 @@ impl Engine {
                             rule,
                             record["id"].as_str().unwrap_or_default().to_string(),
                             format!(
-                                "{} sent a policy version that does not pass `gantry check` ({}), refused as invalid_policy; the live version is unchanged",
+                                "{} sent a policy version that does not pass `enterplace check` ({}), refused as invalid_policy; the live version is unchanged",
                                 record["person"].as_str().unwrap_or("someone"),
                                 record["action"].as_str().unwrap_or("a policy change")
                             ),
@@ -2105,7 +2105,7 @@ impl Engine {
                     .applied(
                         &identified,
                         rule,
-                        gantry_core::policy::Context {
+                        enterplace_core::policy::Context {
                             sent,
                             model: text("model"),
                             customer: record["customer"].as_str(),
@@ -2130,14 +2130,14 @@ impl Engine {
             let from = per.window_start_label(label);
             client
                 .query_one(
-                    "SELECT coalesce(sum(spent), 0) FROM gantry_spend WHERE scope = $1 AND per = $2 AND period >= $3 AND period <= $4",
+                    "SELECT coalesce(sum(spent), 0) FROM enterplace_spend WHERE scope = $1 AND per = $2 AND period >= $3 AND period <= $4",
                     &[&scope, &per.word(), &from, &label],
                 )
                 .await
         } else {
             client
                 .query_one(
-                    "SELECT coalesce(sum(spent), 0) FROM gantry_spend WHERE scope = $1 AND per = $2 AND period = $3",
+                    "SELECT coalesce(sum(spent), 0) FROM enterplace_spend WHERE scope = $1 AND per = $2 AND period = $3",
                     &[&scope, &per.word(), &label],
                 )
                 .await
@@ -2306,7 +2306,7 @@ impl Engine {
             )
             .await
             .map_err(db_error)?;
-        let list = |rows: &[gantry_server::store::tokio_postgres::Row],
+        let list = |rows: &[enterplace_server::store::tokio_postgres::Row],
                     money: bool|
          -> Result<String, String> {
             let mut out = Vec::new();
@@ -2326,7 +2326,7 @@ impl Engine {
         };
         let watched_line = if watched_requests > 0 {
             format!(
-                "\nWatched: ${watched:.2} of the spend is what Claude Code reported for {watched_requests} requests on Claude seats, an estimate at list price that did not pass through Gantry."
+                "\nWatched: ${watched:.2} of the spend is what Claude Code reported for {watched_requests} requests on Claude seats, an estimate at list price that did not pass through Enterplace."
             )
         } else {
             String::new()
@@ -2345,10 +2345,11 @@ impl Engine {
     async fn unusual(&self, rule: &Rule, key: &str) -> Result<Option<String>, String> {
         let (scope, day) = key.rsplit_once(':').unwrap_or_default();
         let client = self.db.client().await?;
-        let sum =
-            |row: &gantry_server::store::tokio_postgres::Row, i: usize| -> Result<f64, String> {
-                Ok(row.try_get::<_, i64>(i).map_err(db_error)? as f64)
-            };
+        let sum = |row: &enterplace_server::store::tokio_postgres::Row,
+                   i: usize|
+         -> Result<f64, String> {
+            Ok(row.try_get::<_, i64>(i).map_err(db_error)? as f64)
+        };
         let today = client
             .query_one(
                 "SELECT coalesce(sum(requests), 0)::bigint, coalesce(sum(errors), 0)::bigint, coalesce(sum(latency_ms), 0)::bigint, \
@@ -2421,9 +2422,9 @@ impl Engine {
                     );
                     let path = self.keys.clone();
                     let entries = tokio::task::spawn_blocking(move || {
-                        gantry_core::config::read_keys(&path).map(|text| {
+                        enterplace_core::config::read_keys(&path).map(|text| {
                             text.map(|t| {
-                                gantry_core::config::key_entries(&path, &t).unwrap_or_default()
+                                enterplace_core::config::key_entries(&path, &t).unwrap_or_default()
                             })
                             .unwrap_or_default()
                         })
@@ -2432,8 +2433,8 @@ impl Engine {
                     .map_err(|err| format!("the keys could not be read: {err}"))??;
                     for entry in entries {
                         let Some(at) = &entry.expires else { continue };
-                        if gantry_core::policy::expiry_passed(at, &now)
-                            || !gantry_core::policy::expiry_passed(at, &horizon)
+                        if enterplace_core::policy::expiry_passed(at, &now)
+                            || !enterplace_core::policy::expiry_passed(at, &horizon)
                         {
                             continue;
                         }
@@ -2442,7 +2443,7 @@ impl Engine {
                             rule,
                             &format!("{prefix}:{at}"),
                             &format!(
-                                "key {prefix} of {} (team {}) expires at {at}. Rotate it with POST /admin/keys/{prefix}/rotate or gantry key rotate before then.",
+                                "key {prefix} of {} (team {}) expires at {at}. Rotate it with POST /admin/keys/{prefix}/rotate or enterplace key rotate before then.",
                                 entry.name, entry.team
                             ),
                             Vec::new(),
@@ -2606,7 +2607,7 @@ impl Engine {
     async fn chain(&self, rule: &Rule, alert: &Alert) -> String {
         let mut record = serde_json::Map::new();
         record.insert("event".into(), "alert".into());
-        record.insert("id".into(), gantry_core::id::decision_id().into());
+        record.insert("id".into(), enterplace_core::id::decision_id().into());
         record.insert("time".into(), audit::timestamp().into());
         record.insert("alert".into(), alert.id.into());
         record.insert("rule".into(), rule.name.clone().into());
@@ -2796,7 +2797,11 @@ async fn main(
     }
     out += once;
     if rules.is_empty() && channels.is_empty() {
-        out += &gantry_console::empty_page("Alerts", &gantry_console::request_base(), can_edit);
+        out += &enterplace_console::empty_page(
+            "Alerts",
+            &enterplace_console::request_base(),
+            can_edit,
+        );
     }
 
     // Channels.
@@ -2923,7 +2928,7 @@ async fn main(
                         "Secret",
                         "",
                         r#" type="password" autocomplete="off""#,
-                        "PagerDuty: the integration's routing key. Email: the SMTP password. Leave empty for a webhook: Gantry makes its signing secret."
+                        "PagerDuty: the integration's routing key. Email: the SMTP password. Leave empty for a webhook: Enterplace makes its signing secret."
                     ),
                     input(
                         "username",
@@ -3382,7 +3387,7 @@ async fn change(
                 }
             };
             let Some(key) = engine.key.as_ref() else {
-                return Err("Channel credentials are kept encrypted in the database, and GANTRY_EXPORT_KEY is not set. Set it on every replica to the same 64 hex characters (openssl rand -hex 32) and restart.".into());
+                return Err("Channel credentials are kept encrypted in the database, and ENTERPLACE_EXPORT_KEY is not set. Set it on every replica to the same 64 hex characters (openssl rand -hex 32) and restart.".into());
             };
             let sealed = if secret.is_empty() {
                 String::new()
@@ -3430,7 +3435,7 @@ async fn change(
                 severity: Severity::Warning,
                 key: "test".into(),
                 summary: format!(
-                    "A test alert from Gantry to {}, sent by {}.",
+                    "A test alert from Enterplace to {}, sent by {}.",
                     channel.name, admin.name
                 ),
                 time: audit::timestamp(),

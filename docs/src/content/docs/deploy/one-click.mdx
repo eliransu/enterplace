@@ -1,6 +1,6 @@
 ---
 title: One-click deploys
-description: Deploy Gantry with Postgres to Render, Fly.io, DigitalOcean, Google Cloud Run, AWS, Azure or one machine with Docker Compose, in a few clicks or one command, then sign in to the console with the admin key from the logs.
+description: Deploy Enterplace with Postgres to Render, Fly.io, DigitalOcean, Google Cloud Run, AWS, Azure or one machine with Docker Compose, in a few clicks or one command, then sign in to the console with the admin key from the logs.
 sidebar:
   label: One-click deploys
   order: 2
@@ -19,13 +19,13 @@ import { Aside } from '@astrojs/starlight/components';
 | Azure | [the Azure button](#azure) |
 | Kubernetes | [Helm](/deploy/kubernetes/) |
 
-Each of these starts the public image, `ghcr.io/eliransu/gantry:latest`, with a Postgres database. Nothing to write first, and no provider key needed: the first start writes an observe-mode policy (every request is let through and recorded) and prints, in the logs, a sign-in link and an admin key (once). The link names `http://127.0.0.1:8080`: on a hosted platform put your URL in its place (`<your URL>/console/sign-in/<code>`, once, within 10 minutes), or open `<your URL>/console` and sign in with the admin key. Then Start here connects a model, or tries the free demo model. A provider key set in the platform's environment (`OPENAI_API_KEY` and the like) is picked up. To paste provider keys in the console instead, set `GANTRY_MASTER_KEY` in the platform's environment to 64 hex characters (`openssl rand -hex 32`, kept in your password manager): it seals them in Postgres, and must stay the same across redeploys.
+Each of these starts the public image, `ghcr.io/eliransu/enterplace:latest`, with a Postgres database. Nothing to write first, and no provider key needed: the first start writes an observe-mode policy (every request is let through and recorded) and prints, in the logs, a sign-in link and an admin key (once). The link names `http://127.0.0.1:8080`: on a hosted platform put your URL in its place (`<your URL>/console/sign-in/<code>`, once, within 10 minutes), or open `<your URL>/console` and sign in with the admin key. Then Start here connects a model, or tries the free demo model. A provider key set in the platform's environment (`OPENAI_API_KEY` and the like) is picked up. To paste provider keys in the console instead, set `ENTERPLACE_MASTER_KEY` in the platform's environment to 64 hex characters (`openssl rand -hex 32`, kept in your password manager): it seals them in Postgres, and must stay the same across redeploys.
 
 ## What every deploy does
 
-- **The store.** The platform's `DATABASE_URL` points Gantry at its Postgres. In the image's default command (`gantry start --container`) a `DATABASE_URL` makes the written policy say `store: { postgres_url_env: DATABASE_URL, policy_from: store }`: keys, kill switches, spend and the policy itself live in Postgres, and the console edits the policy. A redeploy on a fresh disk keeps all of it, and makes no second admin key.
-- **The admin key.** Printed once, in the first start's logs, as `export GANTRY_KEY=gantry_...`. Only its hash is kept. Lost it? From any machine that reaches the database, with `DATABASE_URL` set: `gantry key new <name> --team admin --admin --policy gantry.policy.yaml`, where the policy file holds the same `store:` line.
-- **TLS to Postgres.** Gantry checks the database certificate by default (`sslmode=verify-full`). Where the platform's own Postgres has a certificate no client can check, the template sets `PGSSLMODE` (libpq's variable, read when `DATABASE_URL` names no `sslmode`) to `require` (encrypted, not checked) or, on a private encrypted network, `disable`. See [the store's TLS settings](/operations/store/#tls).
+- **The store.** The platform's `DATABASE_URL` points Enterplace at its Postgres. In the image's default command (`enterplace start --container`) a `DATABASE_URL` makes the written policy say `store: { postgres_url_env: DATABASE_URL, policy_from: store }`: keys, kill switches, spend and the policy itself live in Postgres, and the console edits the policy. A redeploy on a fresh disk keeps all of it, and makes no second admin key.
+- **The admin key.** Printed once, in the first start's logs, as `export ENTERPLACE_KEY=enterplace_...`. Only its hash is kept. Lost it? From any machine that reaches the database, with `DATABASE_URL` set: `enterplace key new <name> --team admin --admin --policy enterplace.policy.yaml`, where the policy file holds the same `store:` line.
+- **TLS to Postgres.** Enterplace checks the database certificate by default (`sslmode=verify-full`). Where the platform's own Postgres has a certificate no client can check, the template sets `PGSSLMODE` (libpq's variable, read when `DATABASE_URL` names no `sslmode`) to `require` (encrypted, not checked) or, on a private encrypted network, `disable`. See [the store's TLS settings](/operations/store/#tls).
 - **The audit log.** Written on the container's own disk. Except with Docker Compose, that disk does not survive a redeploy, so each deploy starts a new hash chain and the old one is gone. These platforms either have no volumes or give volumes to root, and the image runs as an unprivileged user. For an audit log you keep, ship it to your SIEM ([SIEM export](/operations/siem-export/)) or use the [Terraform and Helm guides](/deploy/overview/#choose-a-target), which give it a volume.
 - **One replica.** One container keeps one audit chain. For more, use the production guides.
 
@@ -35,14 +35,14 @@ These deploys are for a first try or a small team. `latest` moves: pin a version
 
 ## Render
 
-<a href="https://render.com/deploy?repo=https://github.com/eliransu/gantry"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" /></a>
+<a href="https://render.com/deploy?repo=https://github.com/eliransu/enterplace"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" /></a>
 
-The button reads [`render.yaml`](https://github.com/eliransu/gantry/blob/main/render.yaml) at the repository root. Render asks for `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`: fill at least one.
+The button reads [`render.yaml`](https://github.com/eliransu/enterplace/blob/main/render.yaml) at the repository root. Render asks for `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`: fill at least one.
 
 | Creates | Notes |
 |---|---|
-| Web service `gantry`, plan `starter`, from the image | HTTPS on `https://gantry-<id>.onrender.com`, health check on `/healthz` |
-| Render Postgres `gantry-db`, plan `basic-256mb`, PostgreSQL 16 | `DATABASE_URL` is its internal connection string; `PGSSLMODE=require`, because the internal connection's certificate is self-signed |
+| Web service `enterplace`, plan `starter`, from the image | HTTPS on `https://enterplace-<id>.onrender.com`, health check on `/healthz` |
+| Render Postgres `enterplace-db`, plan `basic-256mb`, PostgreSQL 16 | `DATABASE_URL` is its internal connection string; `PGSSLMODE=require`, because the internal connection's certificate is self-signed |
 
 **Admin key:** the service's Logs tab. **Console:** `https://<service URL>/console`.
 **Cost:** the Starter instance and the Basic 256 MB database, on [render.com/pricing](https://render.com/pricing). Render's free Postgres expires 30 days after it is made ([render.com/docs/free](https://render.com/docs/free)).
@@ -52,28 +52,28 @@ The button reads [`render.yaml`](https://github.com/eliransu/gantry/blob/main/re
 Fly has no deploy button. A few commands with [`flyctl`](https://fly.io/docs/flyctl/install/), from an empty folder:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/eliransu/gantry/main/deploy/fly/fly.toml
-fly launch --copy-config --no-deploy --name my-gantry
-fly postgres create --name my-gantry-db
-fly postgres attach my-gantry-db --app my-gantry
-fly secrets set OPENAI_API_KEY=sk-... --app my-gantry
-fly deploy --app my-gantry
+curl -fsSLO https://raw.githubusercontent.com/eliransu/enterplace/main/deploy/fly/fly.toml
+fly launch --copy-config --no-deploy --name my-enterplace
+fly postgres create --name my-enterplace-db
+fly postgres attach my-enterplace-db --app my-enterplace
+fly secrets set OPENAI_API_KEY=sk-... --app my-enterplace
+fly deploy --app my-enterplace
 ```
 
-`fly postgres attach` sets `DATABASE_URL` as a secret. [`fly.toml`](https://github.com/eliransu/gantry/blob/main/deploy/fly/fly.toml) runs one `shared-cpu-1x` Machine with 512 MB that never stops, HTTPS forced, a check on `/healthz` and `PGSSLMODE=disable` for a `DATABASE_URL` that names no `sslmode` (traffic between Fly Machines crosses Fly's WireGuard network). Fly marks its unmanaged Postgres as no longer maintained; [Fly Managed Postgres](https://docs.fly.io/postgres) works the same way: give its connection string as the `DATABASE_URL` secret.
+`fly postgres attach` sets `DATABASE_URL` as a secret. [`fly.toml`](https://github.com/eliransu/enterplace/blob/main/deploy/fly/fly.toml) runs one `shared-cpu-1x` Machine with 512 MB that never stops, HTTPS forced, a check on `/healthz` and `PGSSLMODE=disable` for a `DATABASE_URL` that names no `sslmode` (traffic between Fly Machines crosses Fly's WireGuard network). Fly marks its unmanaged Postgres as no longer maintained; [Fly Managed Postgres](https://docs.fly.io/postgres) works the same way: give its connection string as the `DATABASE_URL` secret.
 
-**Admin key:** `fly logs --app my-gantry`. **Console:** `https://my-gantry.fly.dev/console`.
+**Admin key:** `fly logs --app my-enterplace`. **Console:** `https://my-enterplace.fly.dev/console`.
 **Cost:** the Machine is $3.69 a month; an unmanaged Postgres runs on a Machine and volume of its own at the same rates (volumes $0.15 per GB a month); Managed Postgres starts at $38 a month ([docs.fly.io/about/pricing](https://docs.fly.io/about/pricing), [docs.fly.io/postgres](https://docs.fly.io/postgres)).
 
 ## DigitalOcean
 
-<a href="https://cloud.digitalocean.com/apps/new?repo=https://github.com/eliransu/gantry/tree/main"><img src="https://www.deploytodo.com/do-btn-blue.svg" alt="Deploy to DigitalOcean" /></a>
+<a href="https://cloud.digitalocean.com/apps/new?repo=https://github.com/eliransu/enterplace/tree/main"><img src="https://www.deploytodo.com/do-btn-blue.svg" alt="Deploy to DigitalOcean" /></a>
 
-The button reads [`.do/deploy.template.yaml`](https://github.com/eliransu/gantry/blob/main/.do/deploy.template.yaml). Without the button: `doctl apps create --spec .do/app.yaml`, then set the provider key in the app's settings.
+The button reads [`.do/deploy.template.yaml`](https://github.com/eliransu/enterplace/blob/main/.do/deploy.template.yaml). Without the button: `doctl apps create --spec .do/app.yaml`, then set the provider key in the app's settings.
 
 | Creates | Notes |
 |---|---|
-| App Platform service `gantry`, `apps-s-1vcpu-0.5gb`, from the image | HTTPS on `https://gantry-<id>.ondigitalocean.app` |
+| App Platform service `enterplace`, `apps-s-1vcpu-0.5gb`, from the image | HTTPS on `https://enterplace-<id>.ondigitalocean.app` |
 | Dev database `db`, PostgreSQL | `DATABASE_URL=${db.DATABASE_URL}`; `PGSSLMODE=require` if the string names no `sslmode` |
 
 App Platform has no volumes, so this is the Postgres-only mode described above: keys and the policy in the database, the audit log on the container's disk until the next deploy. For a database that lasts, attach a managed PostgreSQL cluster in place of the dev database.
@@ -83,39 +83,39 @@ App Platform has no volumes, so this is the Postgres-only mode described above: 
 
 ## Google Cloud Run
 
-<a href="https://deploy.cloud.run/?git_repo=https://github.com/eliransu/gantry&dir=deploy/gcp-cloud-run&revision=main"><img src="https://deploy.cloud.run/button.svg" alt="Run on Google Cloud" /></a>
+<a href="https://deploy.cloud.run/?git_repo=https://github.com/eliransu/enterplace&dir=deploy/gcp-cloud-run&revision=main"><img src="https://deploy.cloud.run/button.svg" alt="Run on Google Cloud" /></a>
 
-The button opens Cloud Shell, asks for a project, a region and the provider keys, copies the image into the project's registry and deploys it, then runs [`deploy.sh`](https://github.com/eliransu/gantry/blob/main/deploy/gcp-cloud-run/deploy.sh), which adds Cloud SQL. The same script is the one-command deploy, in Cloud Shell or anywhere `gcloud` is signed in:
+The button opens Cloud Shell, asks for a project, a region and the provider keys, copies the image into the project's registry and deploys it, then runs [`deploy.sh`](https://github.com/eliransu/enterplace/blob/main/deploy/gcp-cloud-run/deploy.sh), which adds Cloud SQL. The same script is the one-command deploy, in Cloud Shell or anywhere `gcloud` is signed in:
 
 ```bash
-OPENAI_API_KEY=sk-... bash <(curl -fsSL https://raw.githubusercontent.com/eliransu/gantry/main/deploy/gcp-cloud-run/deploy.sh)
+OPENAI_API_KEY=sk-... bash <(curl -fsSL https://raw.githubusercontent.com/eliransu/enterplace/main/deploy/gcp-cloud-run/deploy.sh)
 ```
 
 | Creates | Notes |
 |---|---|
-| Cloud SQL for PostgreSQL 16 `gantry-db`, Enterprise edition, `db-f1-micro`, database and user `gantry` | Reached through the Cloud SQL connector's Unix socket, so no TLS settings are needed |
-| Secret Manager secrets `gantry-database-url` and one per provider key | Given to the service as `DATABASE_URL` and `OPENAI_API_KEY` |
-| Cloud Run service `gantry`: one instance, 1 CPU always on, 512 MiB, public | Runs as the Compute Engine default service account, granted `cloudsql.client` and access to the secrets |
+| Cloud SQL for PostgreSQL 16 `enterplace-db`, Enterprise edition, `db-f1-micro`, database and user `enterplace` | Reached through the Cloud SQL connector's Unix socket, so no TLS settings are needed |
+| Secret Manager secrets `enterplace-database-url` and one per provider key | Given to the service as `DATABASE_URL` and `OPENAI_API_KEY` |
+| Cloud Run service `enterplace`: one instance, 1 CPU always on, 512 MiB, public | Runs as the Compute Engine default service account, granted `cloudsql.client` and access to the secrets |
 
-Settings: `GOOGLE_CLOUD_REGION` (default `us-central1`), `GANTRY_SERVICE`, `GANTRY_DB_TIER`, `GANTRY_IMAGE`. Running it again keeps what exists.
+Settings: `GOOGLE_CLOUD_REGION` (default `us-central1`), `ENTERPLACE_SERVICE`, `ENTERPLACE_DB_TIER`, `ENTERPLACE_IMAGE`. Running it again keeps what exists.
 
 **Admin key:** the script prints the `gcloud logging read` line that finds it. **Console:** `<service URL>/console`.
 **Cost:** Cloud Run with CPU always allocated is billed per vCPU-second and GiB-second, and Cloud SQL by instance tier and storage: see [Cloud Run pricing](https://cloud.google.com/run/pricing) and [Cloud SQL pricing](https://cloud.google.com/sql/pricing).
 
 ## AWS
 
-The CloudFormation template [`deploy/aws-cloudformation/gantry.yaml`](https://github.com/eliransu/gantry/blob/main/deploy/aws-cloudformation/gantry.yaml) launches ECS on Fargate behind an Application Load Balancer, with RDS for PostgreSQL. CloudFormation reads templates from S3 only, so download it and upload it in the console:
+The CloudFormation template [`deploy/aws-cloudformation/enterplace.yaml`](https://github.com/eliransu/enterplace/blob/main/deploy/aws-cloudformation/enterplace.yaml) launches ECS on Fargate behind an Application Load Balancer, with RDS for PostgreSQL. CloudFormation reads templates from S3 only, so download it and upload it in the console:
 
-1. Download [the raw template](https://raw.githubusercontent.com/eliransu/gantry/main/deploy/aws-cloudformation/gantry.yaml).
+1. Download [the raw template](https://raw.githubusercontent.com/eliransu/enterplace/main/deploy/aws-cloudformation/enterplace.yaml).
 2. Open [CloudFormation, Create stack](https://console.aws.amazon.com/cloudformation/home#/stacks/create), choose **Upload a template file**, pick the file.
 3. Choose the provider, paste its key, and create the stack (tick the IAM acknowledgement). RDS takes about ten minutes.
 
 | Creates | Notes |
 |---|---|
 | A VPC with two public and two private subnets, no NAT gateway | The task has a public IP to reach the providers; its security group admits only the load balancer |
-| RDS for PostgreSQL 16, `db.t4g.micro`, 20 GB gp3, encrypted, 7 days of backups | In the private subnets. `sslmode=require`: encrypted, since RDS's CA is not among the roots built into Gantry |
+| RDS for PostgreSQL 16, `db.t4g.micro`, 20 GB gp3, encrypted, 7 days of backups | In the private subnets. `sslmode=require`: encrypted, since RDS's CA is not among the roots built into Enterplace |
 | Secrets Manager: the database password, `DATABASE_URL`, the provider key | Given to the task as secrets, never as plain environment |
-| ECS cluster and a Fargate service: one task, 0.25 vCPU, 512 MB | Logs in CloudWatch, `/gantry/<stack name>` |
+| ECS cluster and a Fargate service: one task, 0.25 vCPU, 512 MB | Logs in CloudWatch, `/enterplace/<stack name>` |
 | Application Load Balancer | HTTP on its DNS name; with `CertificateArn` (an ACM certificate for your domain) HTTPS, and HTTP redirects to it |
 
 Without a certificate the load balancer serves plain HTTP: keys cross the internet unencrypted. Use it for a first look only, then update the stack with a certificate.
@@ -125,15 +125,15 @@ Without a certificate the load balancer serves plain HTTP: keys cross the intern
 
 ## Azure
 
-<a href="https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Feliransu%2Fgantry%2Fmain%2Fdeploy%2Fazure-arm%2Fazuredeploy.json"><img src="https://aka.ms/deploytoazurebutton" alt="Deploy to Azure" /></a>
+<a href="https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Feliransu%2Fenterplace%2Fmain%2Fdeploy%2Fazure-arm%2Fazuredeploy.json"><img src="https://aka.ms/deploytoazurebutton" alt="Deploy to Azure" /></a>
 
-The button deploys [`azuredeploy.json`](https://github.com/eliransu/gantry/blob/main/deploy/azure-arm/azuredeploy.json), built from [`main.bicep`](https://github.com/eliransu/gantry/blob/main/deploy/azure-arm/main.bicep). Pick a resource group, the provider and its key.
+The button deploys [`azuredeploy.json`](https://github.com/eliransu/enterplace/blob/main/deploy/azure-arm/azuredeploy.json), built from [`main.bicep`](https://github.com/eliransu/enterplace/blob/main/deploy/azure-arm/main.bicep). Pick a resource group, the provider and its key.
 
 | Creates | Notes |
 |---|---|
-| Azure Database for PostgreSQL flexible server 16, Burstable `Standard_B1ms`, 32 GB, database `gantry` | Public access limited to Azure services. Its certificate chains to DigiCert Global Root G2, so the default `verify-full` holds |
+| Azure Database for PostgreSQL flexible server 16, Burstable `Standard_B1ms`, 32 GB, database `enterplace` | Public access limited to Azure services. Its certificate chains to DigiCert Global Root G2, so the default `verify-full` holds |
 | Container Apps environment with a Log Analytics workspace | |
-| Container app `gantry`: one replica, 0.5 vCPU, 1 GiB, external HTTPS ingress on port 8080 | `DATABASE_URL` and the provider key as Container Apps secrets |
+| Container app `enterplace`: one replica, 0.5 vCPU, 1 GiB, external HTTPS ingress on port 8080 | `DATABASE_URL` and the provider key as Container Apps secrets |
 
 The database password is a random value made at deploy and kept only inside `DATABASE_URL`.
 
@@ -145,10 +145,10 @@ The database password is a random value made at deploy and kept only inside `DAT
 One machine with Docker, one command:
 
 ```bash
-mkdir gantry && cd gantry && curl -fsSLO https://raw.githubusercontent.com/eliransu/gantry/main/deploy/compose/compose.yaml && docker compose up -d
-docker compose logs gantry | grep GANTRY_KEY
+mkdir enterplace && cd enterplace && curl -fsSLO https://raw.githubusercontent.com/eliransu/enterplace/main/deploy/compose/compose.yaml && docker compose up -d
+docker compose logs enterplace | grep ENTERPLACE_KEY
 ```
 
-[`compose.yaml`](https://github.com/eliransu/gantry/blob/main/deploy/compose/compose.yaml) runs Postgres 16 and Gantry with a volume each, so here the audit log survives restarts too. Gantry shares Postgres's network, so the database has no port of its own and the connection is plain. The gateway listens on `127.0.0.1:8080`; the console is at `http://127.0.0.1:8080/console`. No provider key is needed to start: the free demo model answers, and a key pasted in the console is sealed. A key in the environment is picked up too (`OPENAI_API_KEY=sk-... docker compose up -d`); put it in a `.env` file beside `compose.yaml` to keep it out of your shell history. The [Docker Compose guide](/deploy/docker/) goes further, with your own policy file.
+[`compose.yaml`](https://github.com/eliransu/enterplace/blob/main/deploy/compose/compose.yaml) runs Postgres 16 and Enterplace with a volume each, so here the audit log survives restarts too. Enterplace shares Postgres's network, so the database has no port of its own and the connection is plain. The gateway listens on `127.0.0.1:8080`; the console is at `http://127.0.0.1:8080/console`. No provider key is needed to start: the free demo model answers, and a key pasted in the console is sealed. A key in the environment is picked up too (`OPENAI_API_KEY=sk-... docker compose up -d`); put it in a `.env` file beside `compose.yaml` to keep it out of your shell history. The [Docker Compose guide](/deploy/docker/) goes further, with your own policy file.
 
 **Cost:** your machine.

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "mode": "live",
-  "gantry": "gantry 0.1.0 (src b55f5d7bcdc4, built 2026-11-13)",
+  "enterplace": "enterplace 0.1.0 (src b55f5d7bcdc4, built 2026-11-13)",
   "commit": "bae3148e9108b29afe2b7cc705b6bb34bfcf4623",
   "run": null,
   "started": "2026-11-13T20:37:09Z",
@@ -28,118 +28,118 @@
       "label": "OpenAI",
       "model": "gpt-4.1-nano",
       "ran": false,
-      "skipped": "not set: GANTRY_LIVE_OPENAI_KEY"
+      "skipped": "not set: ENTERPLACE_LIVE_OPENAI_KEY"
     },
     {
       "id": "anthropic",
       "label": "Anthropic",
       "model": "claude-haiku-4-5",
       "ran": false,
-      "skipped": "not set: GANTRY_LIVE_ANTHROPIC_KEY"
+      "skipped": "not set: ENTERPLACE_LIVE_ANTHROPIC_KEY"
     },
     {
       "id": "azure",
       "label": "Azure OpenAI",
       "model": "gpt-4.1-nano",
       "ran": false,
-      "skipped": "not set: GANTRY_LIVE_AZURE_KEY, GANTRY_LIVE_AZURE_URL, GANTRY_LIVE_AZURE_DEPLOYMENT"
+      "skipped": "not set: ENTERPLACE_LIVE_AZURE_KEY, ENTERPLACE_LIVE_AZURE_URL, ENTERPLACE_LIVE_AZURE_DEPLOYMENT"
     },
     {
       "id": "bedrock",
       "label": "Amazon Bedrock",
       "model": "claude-haiku-bedrock",
       "ran": false,
-      "skipped": "not set: GANTRY_LIVE_AWS_ACCESS_KEY_ID, GANTRY_LIVE_AWS_SECRET_ACCESS_KEY"
+      "skipped": "not set: ENTERPLACE_LIVE_AWS_ACCESS_KEY_ID, ENTERPLACE_LIVE_AWS_SECRET_ACCESS_KEY"
     },
     {
       "id": "gemini",
       "label": "Gemini",
       "model": "gemini-2.5-flash-lite",
       "ran": false,
-      "skipped": "not set: GANTRY_LIVE_GEMINI_KEY"
+      "skipped": "not set: ENTERPLACE_LIVE_GEMINI_KEY"
     },
     {
       "id": "vertex",
       "label": "Vertex AI (Gemini)",
       "model": "gemini-2.5-flash-lite",
       "ran": false,
-      "skipped": "not set: GANTRY_LIVE_VERTEX_TOKEN, GANTRY_LIVE_VERTEX_PROJECT (GANTRY_LIVE_VERTEX_SA_JSON sets both)"
+      "skipped": "not set: ENTERPLACE_LIVE_VERTEX_TOKEN, ENTERPLACE_LIVE_VERTEX_PROJECT (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)"
     },
     {
       "id": "vertex_anthropic",
       "label": "Vertex AI (Claude)",
       "model": "claude-haiku-4-5@20251001",
       "ran": false,
-      "skipped": "not set: GANTRY_LIVE_VERTEX_TOKEN, GANTRY_LIVE_VERTEX_PROJECT (GANTRY_LIVE_VERTEX_SA_JSON sets both)"
+      "skipped": "not set: ENTERPLACE_LIVE_VERTEX_TOKEN, ENTERPLACE_LIVE_VERTEX_PROJECT (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)"
     },
     {
       "id": "groq",
       "label": "Groq (preset)",
       "model": "llama-3.1-8b-instant",
       "ran": false,
-      "skipped": "not set: GANTRY_LIVE_GROQ_KEY"
+      "skipped": "not set: ENTERPLACE_LIVE_GROQ_KEY"
     },
     {
       "id": "mistral",
       "label": "Mistral (preset)",
       "model": "mistral-small-latest",
       "ran": false,
-      "skipped": "not set: GANTRY_LIVE_MISTRAL_KEY"
+      "skipped": "not set: ENTERPLACE_LIVE_MISTRAL_KEY"
     }
   ],
   "results": {
     "chat": {
       "openai": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_OPENAI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_OPENAI_KEY",
         "translated": false,
         "model": "gpt-4.1-nano"
       },
       "anthropic": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_ANTHROPIC_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_ANTHROPIC_KEY",
         "translated": true,
         "model": "claude-haiku-4-5"
       },
       "azure": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_AZURE_KEY, GANTRY_LIVE_AZURE_URL, GANTRY_LIVE_AZURE_DEPLOYMENT",
+        "detail": "not set: ENTERPLACE_LIVE_AZURE_KEY, ENTERPLACE_LIVE_AZURE_URL, ENTERPLACE_LIVE_AZURE_DEPLOYMENT",
         "translated": false,
         "model": "gpt-4.1-nano"
       },
       "bedrock": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_AWS_ACCESS_KEY_ID, GANTRY_LIVE_AWS_SECRET_ACCESS_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_AWS_ACCESS_KEY_ID, ENTERPLACE_LIVE_AWS_SECRET_ACCESS_KEY",
         "translated": true,
         "model": "claude-haiku-bedrock"
       },
       "gemini": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GEMINI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GEMINI_KEY",
         "translated": false,
         "model": "gemini-2.5-flash-lite"
       },
       "vertex": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_VERTEX_TOKEN, GANTRY_LIVE_VERTEX_PROJECT (GANTRY_LIVE_VERTEX_SA_JSON sets both)",
+        "detail": "not set: ENTERPLACE_LIVE_VERTEX_TOKEN, ENTERPLACE_LIVE_VERTEX_PROJECT (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)",
         "translated": false,
         "model": "gemini-2.5-flash-lite"
       },
       "vertex_anthropic": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_VERTEX_TOKEN, GANTRY_LIVE_VERTEX_PROJECT (GANTRY_LIVE_VERTEX_SA_JSON sets both)",
+        "detail": "not set: ENTERPLACE_LIVE_VERTEX_TOKEN, ENTERPLACE_LIVE_VERTEX_PROJECT (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)",
         "translated": true,
         "model": "claude-haiku-4-5@20251001"
       },
       "groq": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GROQ_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GROQ_KEY",
         "translated": false,
         "model": "llama-3.1-8b-instant"
       },
       "mistral": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_MISTRAL_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_MISTRAL_KEY",
         "translated": false,
         "model": "mistral-small-latest"
       }
@@ -147,55 +147,55 @@
     "chat_stream": {
       "openai": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_OPENAI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_OPENAI_KEY",
         "translated": false,
         "model": "gpt-4.1-nano"
       },
       "anthropic": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_ANTHROPIC_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_ANTHROPIC_KEY",
         "translated": true,
         "model": "claude-haiku-4-5"
       },
       "azure": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_AZURE_KEY, GANTRY_LIVE_AZURE_URL, GANTRY_LIVE_AZURE_DEPLOYMENT",
+        "detail": "not set: ENTERPLACE_LIVE_AZURE_KEY, ENTERPLACE_LIVE_AZURE_URL, ENTERPLACE_LIVE_AZURE_DEPLOYMENT",
         "translated": false,
         "model": "gpt-4.1-nano"
       },
       "bedrock": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_AWS_ACCESS_KEY_ID, GANTRY_LIVE_AWS_SECRET_ACCESS_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_AWS_ACCESS_KEY_ID, ENTERPLACE_LIVE_AWS_SECRET_ACCESS_KEY",
         "translated": true,
         "model": "claude-haiku-bedrock"
       },
       "gemini": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GEMINI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GEMINI_KEY",
         "translated": false,
         "model": "gemini-2.5-flash-lite"
       },
       "vertex": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_VERTEX_TOKEN, GANTRY_LIVE_VERTEX_PROJECT (GANTRY_LIVE_VERTEX_SA_JSON sets both)",
+        "detail": "not set: ENTERPLACE_LIVE_VERTEX_TOKEN, ENTERPLACE_LIVE_VERTEX_PROJECT (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)",
         "translated": false,
         "model": "gemini-2.5-flash-lite"
       },
       "vertex_anthropic": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_VERTEX_TOKEN, GANTRY_LIVE_VERTEX_PROJECT (GANTRY_LIVE_VERTEX_SA_JSON sets both)",
+        "detail": "not set: ENTERPLACE_LIVE_VERTEX_TOKEN, ENTERPLACE_LIVE_VERTEX_PROJECT (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)",
         "translated": true,
         "model": "claude-haiku-4-5@20251001"
       },
       "groq": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GROQ_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GROQ_KEY",
         "translated": false,
         "model": "llama-3.1-8b-instant"
       },
       "mistral": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_MISTRAL_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_MISTRAL_KEY",
         "translated": false,
         "model": "mistral-small-latest"
       }
@@ -203,55 +203,55 @@
     "messages": {
       "openai": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_OPENAI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_OPENAI_KEY",
         "translated": true,
         "model": "gpt-4.1-nano"
       },
       "anthropic": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_ANTHROPIC_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_ANTHROPIC_KEY",
         "translated": false,
         "model": "claude-haiku-4-5"
       },
       "azure": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_AZURE_KEY, GANTRY_LIVE_AZURE_URL, GANTRY_LIVE_AZURE_DEPLOYMENT",
+        "detail": "not set: ENTERPLACE_LIVE_AZURE_KEY, ENTERPLACE_LIVE_AZURE_URL, ENTERPLACE_LIVE_AZURE_DEPLOYMENT",
         "translated": true,
         "model": "gpt-4.1-nano"
       },
       "bedrock": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_AWS_ACCESS_KEY_ID, GANTRY_LIVE_AWS_SECRET_ACCESS_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_AWS_ACCESS_KEY_ID, ENTERPLACE_LIVE_AWS_SECRET_ACCESS_KEY",
         "translated": false,
         "model": "claude-haiku-bedrock"
       },
       "gemini": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GEMINI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GEMINI_KEY",
         "translated": true,
         "model": "gemini-2.5-flash-lite"
       },
       "vertex": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_VERTEX_TOKEN, GANTRY_LIVE_VERTEX_PROJECT (GANTRY_LIVE_VERTEX_SA_JSON sets both)",
+        "detail": "not set: ENTERPLACE_LIVE_VERTEX_TOKEN, ENTERPLACE_LIVE_VERTEX_PROJECT (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)",
         "translated": true,
         "model": "gemini-2.5-flash-lite"
       },
       "vertex_anthropic": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_VERTEX_TOKEN, GANTRY_LIVE_VERTEX_PROJECT (GANTRY_LIVE_VERTEX_SA_JSON sets both)",
+        "detail": "not set: ENTERPLACE_LIVE_VERTEX_TOKEN, ENTERPLACE_LIVE_VERTEX_PROJECT (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)",
         "translated": false,
         "model": "claude-haiku-4-5@20251001"
       },
       "groq": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GROQ_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GROQ_KEY",
         "translated": true,
         "model": "llama-3.1-8b-instant"
       },
       "mistral": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_MISTRAL_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_MISTRAL_KEY",
         "translated": true,
         "model": "mistral-small-latest"
       }
@@ -259,55 +259,55 @@
     "messages_stream": {
       "openai": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_OPENAI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_OPENAI_KEY",
         "translated": true,
         "model": "gpt-4.1-nano"
       },
       "anthropic": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_ANTHROPIC_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_ANTHROPIC_KEY",
         "translated": false,
         "model": "claude-haiku-4-5"
       },
       "azure": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_AZURE_KEY, GANTRY_LIVE_AZURE_URL, GANTRY_LIVE_AZURE_DEPLOYMENT",
+        "detail": "not set: ENTERPLACE_LIVE_AZURE_KEY, ENTERPLACE_LIVE_AZURE_URL, ENTERPLACE_LIVE_AZURE_DEPLOYMENT",
         "translated": true,
         "model": "gpt-4.1-nano"
       },
       "bedrock": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_AWS_ACCESS_KEY_ID, GANTRY_LIVE_AWS_SECRET_ACCESS_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_AWS_ACCESS_KEY_ID, ENTERPLACE_LIVE_AWS_SECRET_ACCESS_KEY",
         "translated": false,
         "model": "claude-haiku-bedrock"
       },
       "gemini": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GEMINI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GEMINI_KEY",
         "translated": true,
         "model": "gemini-2.5-flash-lite"
       },
       "vertex": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_VERTEX_TOKEN, GANTRY_LIVE_VERTEX_PROJECT (GANTRY_LIVE_VERTEX_SA_JSON sets both)",
+        "detail": "not set: ENTERPLACE_LIVE_VERTEX_TOKEN, ENTERPLACE_LIVE_VERTEX_PROJECT (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)",
         "translated": true,
         "model": "gemini-2.5-flash-lite"
       },
       "vertex_anthropic": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_VERTEX_TOKEN, GANTRY_LIVE_VERTEX_PROJECT (GANTRY_LIVE_VERTEX_SA_JSON sets both)",
+        "detail": "not set: ENTERPLACE_LIVE_VERTEX_TOKEN, ENTERPLACE_LIVE_VERTEX_PROJECT (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)",
         "translated": false,
         "model": "claude-haiku-4-5@20251001"
       },
       "groq": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GROQ_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GROQ_KEY",
         "translated": true,
         "model": "llama-3.1-8b-instant"
       },
       "mistral": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_MISTRAL_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_MISTRAL_KEY",
         "translated": true,
         "model": "mistral-small-latest"
       }
@@ -315,55 +315,55 @@
     "tool_calls": {
       "openai": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_OPENAI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_OPENAI_KEY",
         "translated": false,
         "model": "gpt-4.1-nano"
       },
       "anthropic": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_ANTHROPIC_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_ANTHROPIC_KEY",
         "translated": false,
         "model": "claude-haiku-4-5"
       },
       "azure": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_AZURE_KEY, GANTRY_LIVE_AZURE_URL, GANTRY_LIVE_AZURE_DEPLOYMENT",
+        "detail": "not set: ENTERPLACE_LIVE_AZURE_KEY, ENTERPLACE_LIVE_AZURE_URL, ENTERPLACE_LIVE_AZURE_DEPLOYMENT",
         "translated": false,
         "model": "gpt-4.1-nano"
       },
       "bedrock": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_AWS_ACCESS_KEY_ID, GANTRY_LIVE_AWS_SECRET_ACCESS_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_AWS_ACCESS_KEY_ID, ENTERPLACE_LIVE_AWS_SECRET_ACCESS_KEY",
         "translated": false,
         "model": "claude-haiku-bedrock"
       },
       "gemini": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GEMINI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GEMINI_KEY",
         "translated": false,
         "model": "gemini-2.5-flash-lite"
       },
       "vertex": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_VERTEX_TOKEN, GANTRY_LIVE_VERTEX_PROJECT (GANTRY_LIVE_VERTEX_SA_JSON sets both)",
+        "detail": "not set: ENTERPLACE_LIVE_VERTEX_TOKEN, ENTERPLACE_LIVE_VERTEX_PROJECT (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)",
         "translated": false,
         "model": "gemini-2.5-flash-lite"
       },
       "vertex_anthropic": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_VERTEX_TOKEN, GANTRY_LIVE_VERTEX_PROJECT (GANTRY_LIVE_VERTEX_SA_JSON sets both)",
+        "detail": "not set: ENTERPLACE_LIVE_VERTEX_TOKEN, ENTERPLACE_LIVE_VERTEX_PROJECT (ENTERPLACE_LIVE_VERTEX_SA_JSON sets both)",
         "translated": false,
         "model": "claude-haiku-4-5@20251001"
       },
       "groq": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GROQ_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GROQ_KEY",
         "translated": false,
         "model": "llama-3.1-8b-instant"
       },
       "mistral": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_MISTRAL_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_MISTRAL_KEY",
         "translated": false,
         "model": "mistral-small-latest"
       }
@@ -371,7 +371,7 @@
     "responses": {
       "openai": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_OPENAI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_OPENAI_KEY",
         "translated": false,
         "model": "gpt-4.1-nano"
       }
@@ -379,13 +379,13 @@
     "embeddings": {
       "openai": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_OPENAI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_OPENAI_KEY",
         "translated": false,
         "model": "text-embedding-3-small"
       },
       "mistral": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_MISTRAL_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_MISTRAL_KEY",
         "translated": false,
         "model": "mistral-embed"
       }
@@ -393,7 +393,7 @@
     "images": {
       "openai": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_OPENAI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_OPENAI_KEY",
         "translated": false,
         "model": "gpt-image-1-mini"
       }
@@ -401,7 +401,7 @@
     "audio_speech": {
       "openai": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_OPENAI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_OPENAI_KEY",
         "translated": false,
         "model": "gpt-4o-mini-tts"
       }
@@ -409,13 +409,13 @@
     "audio_transcription": {
       "openai": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_OPENAI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_OPENAI_KEY",
         "translated": false,
         "model": "gpt-4o-mini-transcribe"
       },
       "groq": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GROQ_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GROQ_KEY",
         "translated": false,
         "model": "whisper-large-v3-turbo"
       }
@@ -423,7 +423,7 @@
     "moderations": {
       "openai": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_OPENAI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_OPENAI_KEY",
         "translated": false,
         "model": "omni-moderation-latest"
       }
@@ -431,7 +431,7 @@
     "count_tokens": {
       "anthropic": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_ANTHROPIC_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_ANTHROPIC_KEY",
         "translated": false,
         "model": "claude-haiku-4-5"
       }
@@ -439,31 +439,31 @@
     "passthrough": {
       "openai": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_OPENAI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_OPENAI_KEY",
         "translated": false,
         "model": "gpt-4.1-nano"
       },
       "anthropic": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_ANTHROPIC_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_ANTHROPIC_KEY",
         "translated": false,
         "model": "claude-haiku-4-5"
       },
       "gemini": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GEMINI_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GEMINI_KEY",
         "translated": false,
         "model": "gemini-2.5-flash-lite"
       },
       "groq": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_GROQ_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_GROQ_KEY",
         "translated": false,
         "model": "llama-3.1-8b-instant"
       },
       "mistral": {
         "status": "skipped",
-        "detail": "not set: GANTRY_LIVE_MISTRAL_KEY",
+        "detail": "not set: ENTERPLACE_LIVE_MISTRAL_KEY",
         "translated": false,
         "model": "mistral-small-latest"
       }

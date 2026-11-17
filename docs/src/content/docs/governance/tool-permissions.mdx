@@ -11,7 +11,7 @@ A rule's `tools:` list decides which tools its callers may use: MCP tools served
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -40,7 +40,7 @@ A request from team `agents` that declares `run_shell`, or any tool besides `get
 
 A rule whose `tools:` has no `function.` entry leaves function tools alone, so a policy written for MCP tools changes nothing for model requests. With only deny entries, every function tool but those is allowed.
 
-Gantry reads the tools a request declares in every format it serves:
+Enterplace reads the tools a request declares in every format it serves:
 
 | Format | Where the name is |
 |---|---|
@@ -69,9 +69,9 @@ A rule's `tools:` is the most a caller gets. Two lists narrow it for MCP tools; 
 | Where | How | Example |
 |---|---|---|
 | The key | `mcp_tools:` on the key in the keys file, or through the admin API | `mcp_tools: ["docs.*", "!docs.delete"]` |
-| One request | The `x-gantry-mcp-tools` header: a comma separated list | `x-gantry-mcp-tools: github.list_issues, docs.*` |
+| One request | The `x-enterplace-mcp-tools` header: a comma separated list | `x-enterplace-mcp-tools: github.list_issues, docs.*` |
 
-```yaml title="gantry.keys.yaml"
+```yaml title="enterplace.keys.yaml"
 keys:
   - name: ci-bot
     team: platform
@@ -79,14 +79,14 @@ keys:
     mcp_tools: ["github.list_issues", "github.create_issue"]
 ```
 
-`tools/list` shows only what all of them allow. A call to a tool the rule allows and a narrowing list leaves out is refused with `tool_not_allowed`, and the message says the key or the header left it out. A header that is not a list of tool entries is refused with `invalid_request`. Neither can name a tool the rule does not allow: `x-gantry-mcp-tools: *` changes nothing.
+`tools/list` shows only what all of them allow. A call to a tool the rule allows and a narrowing list leaves out is refused with `tool_not_allowed`, and the message says the key or the header left it out. A header that is not a list of tool entries is refused with `invalid_request`. Neither can name a tool the rule does not allow: `x-enterplace-mcp-tools: *` changes nothing.
 
 ## Refusal codes
 
 | Code | Status | Cause |
 |---|---|---|
 | `tool_not_allowed` | 403 | A declared function tool, a tool call in an answer, or an MCP tool the rule or a narrowing list does not allow |
-| `invalid_request` | 400 | An `x-gantry-mcp-tools` header that is not a list of tool entries |
+| `invalid_request` | 400 | An `x-enterplace-mcp-tools` header that is not a list of tool entries |
 
 ## Related
 

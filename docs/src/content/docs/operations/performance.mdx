@@ -1,13 +1,13 @@
 ---
 title: Performance
-description: How Gantry's added latency is measured, two ways, one of them Bifrost's published setup, and the commands to reproduce both.
+description: How Enterplace's added latency is measured, two ways, one of them Bifrost's published setup, and the commands to reproduce both.
 sidebar:
   order: 6
 ---
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-`gantry-bench` measures what Gantry adds to a request. This page states two methods: Bifrost's published setup, so the figures can be compared, and Gantry's own, which counts everything Gantry does on a request.
+`enterplace-bench` measures what Enterplace adds to a request. This page states two methods: Bifrost's published setup, so the figures can be compared, and Enterplace's own, which counts everything Enterplace does on a request.
 
 <Aside type="caution">
 The figures below are from one Mac laptop, with the load generator, the mock provider and the gateway in one process on that machine. They are not from a cloud instance and not from the instance types Bifrost used, so they do not compare hardware for hardware. The cloud run is still to do.
@@ -25,28 +25,28 @@ Three runs of each command, at commit `58f6917`. Each cell is the median of the 
 
 Every run sent every request and got every answer (10,000, 50,000 and 600,000 a run), and the audit chain held one decision record and one usage record per request and verified. The 1,000 a second run passed the CI gate (under 1,000 us added at p99) three times in three.
 
-One slow-provider run was thrown out and run again. It started right after the one before it, and its leg against the mock alone, without Gantry, got 35,852 answers for 600,000 requests: the machine had no free ports left for the load generator. `gantry-bench` marked the run as not a valid measurement. The leg through Gantry in that run answered all 600,000 with the same figures as the others. The three runs in the table are the valid ones.
+One slow-provider run was thrown out and run again. It started right after the one before it, and its leg against the mock alone, without Enterplace, got 35,852 answers for 600,000 requests: the machine had no free ports left for the load generator. `enterplace-bench` marked the run as not a valid measurement. The leg through Enterplace in that run answered all 600,000 with the same figures as the others. The three runs in the table are the valid ones.
 
 **The machine.** A MacBook Pro (Mac17,9), Apple M5 Pro, 15 cores (5 and 10 of macOS's two core types), 48 GB of memory, macOS 26.6.2. Nothing else was building or under test. Before each run the 1-minute load average was under 3; across all of them `uptime` gave 1.9 to 3.4, which is the idle desktop (Spotlight, the window server, a container runtime) plus the run itself.
 
-**The commands**, each three times, from a release build (`cargo build --release -p gantry-bench`):
+**The commands**, each three times, from a release build (`cargo build --release -p enterplace-bench`):
 
 ```bash
-gantry-bench --rps 1000 --secs 10 --max-p99-overhead-us 1000
-gantry-bench --rps 5000 --secs 10
-gantry-bench --rps 5000 --secs 120 --upstream-ms 1500
+enterplace-bench --rps 1000 --secs 10 --max-p99-overhead-us 1000
+enterplace-bench --rps 5000 --secs 10
+enterplace-bench --rps 5000 --secs 120 --upstream-ms 1500
 ```
 
-**Against Bifrost's published figures.** Bifrost's [benchmark pages](https://docs.getbifrost.ai/benchmarking/getting-started) and its [README](https://github.com/maximhq/bifrost), read on 2026-11-15, state an overhead of 59 us on an AWS t3.medium and 11 us on a t3.xlarge at 5,000 requests a second with a 100% success rate, on mocked OpenAI calls, in its words excluding "JSON marshalling and HTTP calls, which are required in any implementation". Gantry's closest figure in the same setup is its self-time: 298 us at p50, on different hardware, with the load generator and mock on the same machine, and counting a guardrail scan and a synced audit write that Bifrost's figure does not have. That is a larger number, not a smaller one, and the two do not measure the same work. Nothing here shows Gantry faster than Bifrost. Bifrost's pages give one figure per instance and do not say whether it is a mean or a percentile; `gantry-bench` prints percentiles, so the two are not the same statistic either.
+**Against Bifrost's published figures.** Bifrost's [benchmark pages](https://docs.getbifrost.ai/benchmarking/getting-started) and its [README](https://github.com/maximhq/bifrost), read on 2026-11-15, state an overhead of 59 us on an AWS t3.medium and 11 us on a t3.xlarge at 5,000 requests a second with a 100% success rate, on mocked OpenAI calls, in its words excluding "JSON marshalling and HTTP calls, which are required in any implementation". Enterplace's closest figure in the same setup is its self-time: 298 us at p50, on different hardware, with the load generator and mock on the same machine, and counting a guardrail scan and a synced audit write that Bifrost's figure does not have. That is a larger number, not a smaller one, and the two do not measure the same work. Nothing here shows Enterplace faster than Bifrost. Bifrost's pages give one figure per instance and do not say whether it is a mean or a percentile; `enterplace-bench` prints percentiles, so the two are not the same statistic either.
 
 ## The two methods
 
-| | Bifrost's published setup | Gantry's own |
+| | Bifrost's published setup | Enterplace's own |
 |---|---|---|
 | Rate | 5,000 requests a second | 1,000 requests a second (the CI gate) and 5,000 |
 | Mock upstream | Answers after about 1.5 s | Answers at once |
 | Payload | A request of about 0.13 KB; an answer of about 1.4 KB (t3.medium, 1.37 KB) or 10 KB (t3.xlarge, 10.32 KB) | A short chat request; an answer of about 250 bytes |
-| Figure | Time inside the gateway, excluding JSON marshalling and the HTTP calls; mean or percentile is not stated | Added latency at p50 and p99 as the client sees it, plus Gantry's self-time |
+| Figure | Time inside the gateway, excluding JSON marshalling and the HTTP calls; mean or percentile is not stated | Added latency at p50 and p99 as the client sees it, plus Enterplace's self-time |
 | Hardware | AWS t3.medium (2 vCPU, 4 GB) and t3.xlarge (4 vCPU, 16 GB) | The machine the run is on, stated with the numbers |
 
 Bifrost's per-instance pages ([t3.medium](https://docs.getbifrost.ai/benchmarking/t3.medium), [t3.xlarge](https://docs.getbifrost.ai/benchmarking/t3.xl), read on 2026-11-15) do not state the mock's latency or the run's length. Their measured HTTP request time was 1.56 s on t3.medium and 1.50 s on t3.xlarge, so 1.5 s reproduces it. They publish no percentiles, label only the total latency and the payload sizes as averages, and do not name the load generator behind the published figures. Bifrost's page on running your own benchmarks names its tools (a `benchmark` program, the `hitter` load generator and the `mocker` mock provider) without saying they produced these numbers.
@@ -56,10 +56,10 @@ Bifrost's per-instance pages ([t3.medium](https://docs.getbifrost.ai/benchmarkin
 | Figure | Includes | Excludes |
 |---|---|---|
 | Bifrost overhead | Not listed by Bifrost. The timings its pages print from queue wait to error handling (queue wait, key selection, message formatting, parameter and body preparation, request setup, error handling) add up to about 59 us on t3.medium, so the figure is read here as their sum | JSON marshalling and the HTTP calls, as its footnote says; response parsing (11.30 ms on t3.medium, 2.11 ms on t3.xlarge) is also outside that sum |
-| Gantry self-time (`Server-Timing: gantry;dur=`) | Identifying the key, deciding against a policy of 1,000 keys, the secrets guardrail on the request, and the synced audit write | The wait for the provider, streaming the answer back |
-| Gantry added latency | Everything between the client and the mock: parsing, the decision, the guardrail, the audit write, both HTTP hops, forwarding the answer | Nothing: it is latency through Gantry minus latency to the mock alone |
+| Enterplace self-time (`Server-Timing: enterplace;dur=`) | Identifying the key, deciding against a policy of 1,000 keys, the secrets guardrail on the request, and the synced audit write | The wait for the provider, streaming the answer back |
+| Enterplace added latency | Everything between the client and the mock: parsing, the decision, the guardrail, the audit write, both HTTP hops, forwarding the answer | Nothing: it is latency through Enterplace minus latency to the mock alone |
 
-Gantry's self-time is the closest to Bifrost's figure, and it still includes work Bifrost's figure leaves out: a guardrail scan and an audit record written before the request is forwarded.
+Enterplace's self-time is the closest to Bifrost's figure, and it still includes work Bifrost's figure leaves out: a guardrail scan and an audit record written before the request is forwarded.
 
 ## Reproduce
 
@@ -68,37 +68,37 @@ Gantry's self-time is the closest to Bifrost's figure, and it still includes wor
 
 ```bash
 uptime   # run when the load average is well under the number of cores
-cargo run --release -p gantry-bench -- --rps 5000 --secs 120 --upstream-ms 1500
+cargo run --release -p enterplace-bench -- --rps 5000 --secs 120 --upstream-ms 1500
 ```
 
-At 1.5 s and 5,000 a second, 7,500 requests are in flight, each on its own connection. Each target is warmed by raising the rate in five one-second steps on the client that then measures it, and the run against the mock alone and the run through Gantry are 35 seconds apart, so the closed connections of the first leave the machine's ephemeral ports (about 16,000 on macOS) before the second.
+At 1.5 s and 5,000 a second, 7,500 requests are in flight, each on its own connection. Each target is warmed by raising the rate in five one-second steps on the client that then measures it, and the run against the mock alone and the run through Enterplace are 35 seconds apart, so the closed connections of the first leave the machine's ephemeral ports (about 16,000 on macOS) before the second.
 
 </TabItem>
-<TabItem label="Gantry's own">
+<TabItem label="Enterplace's own">
 
 ```bash
 uptime
-cargo run --release -p gantry-bench -- --rps 1000 --secs 10 --max-p99-overhead-us 1000
-cargo run --release -p gantry-bench -- --rps 5000 --secs 10
+cargo run --release -p enterplace-bench -- --rps 1000 --secs 10 --max-p99-overhead-us 1000
+cargo run --release -p enterplace-bench -- --rps 5000 --secs 10
 ```
 
 </TabItem>
 </Tabs>
 
-The mock, Gantry and the load generator share one process and its CPU, so a busy machine inflates every figure. With the policy on, each run also checks that the audit log holds one decision record and one usage record per request, and that the chain verifies.
+The mock, Enterplace and the load generator share one process and its CPU, so a busy machine inflates every figure. With the policy on, each run also checks that the audit log holds one decision record and one usage record per request, and that the chain verifies.
 
 ## A cloud run on t3.medium and t3.xlarge
 
 To publish figures on the instance types Bifrost used, the owner provides:
 
-- An AWS access key pair for an account where Gantry may start two on-demand EC2 instances (t3.medium and t3.xlarge) in one region, with unlimited CPU credits turned on so a t3 does not throttle mid-run.
+- An AWS access key pair for an account where Enterplace may start two on-demand EC2 instances (t3.medium and t3.xlarge) in one region, with unlimited CPU credits turned on so a t3 does not throttle mid-run.
 - The region, and approval for about an hour of instance time.
 
-Each instance builds Gantry from the tagged release and runs both methods three times. The numbers, `uptime` before each run, the instance type and the commit are published here, beside the laptop figures above. Until then no figure on this page is from a cloud instance.
+Each instance builds Enterplace from the tagged release and runs both methods three times. The numbers, `uptime` before each run, the instance type and the commit are published here, beside the laptop figures above. Until then no figure on this page is from a cloud instance.
 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Running in production" href="/operations/operations/#bench" description="Every gantry-bench flag and the CI gate." />
+	<LinkCard title="Running in production" href="/operations/operations/#bench" description="Every enterplace-bench flag and the CI gate." />
 	<LinkCard title="Audit log" href="/governance/audit-log/" description="The record written before each request is forwarded." />
 </CardGrid>

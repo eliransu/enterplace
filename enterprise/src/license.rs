@@ -13,7 +13,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 
-/// Gantry's license signing key, public half (Ed25519, base64url). The private half stays with Gantry staff.
+/// Enterplace's license signing key, public half (Ed25519, base64url). The private half stays with Enterplace staff.
 const PUBLIC_KEY: &str = "_S1S_JtovtLjEsm4Je9fzJtAWmmXRn8tjQPDFQkSp1Y";
 
 /// Days an expired license keeps its features, so a renewal that lands late does not switch anything off.
@@ -83,8 +83,8 @@ pub fn unlocked(feature: &str) -> bool {
 pub fn start() -> Result<&'static Status, String> {
     let status = from_env()?;
     let line = status.describe();
-    // `gantry start` prints the dashboard link first; the open source edition needs no word on a first run.
-    let first_run = std::env::var_os(gantry_server::START_ENV).is_some();
+    // `enterplace start` prints the dashboard link first; the open source edition needs no word on a first run.
+    let first_run = std::env::var_os(enterplace_server::START_ENV).is_some();
     if line.starts_with("warning:") {
         eprintln!("{line}");
     } else if !(first_run && line.starts_with("No license")) {
@@ -93,7 +93,7 @@ pub fn start() -> Result<&'static Status, String> {
     Ok(CURRENT.get_or_init(|| status))
 }
 
-/// The license in GANTRY_LICENSE or GANTRY_LICENSE_FILE, checked with Gantry's public key.
+/// The license in ENTERPLACE_LICENSE or ENTERPLACE_LICENSE_FILE, checked with Enterplace's public key.
 pub fn from_env() -> Result<Status, String> {
     let key = B64
         .decode(PUBLIC_KEY)
@@ -107,18 +107,18 @@ fn load(
     now: SystemTime,
 ) -> Result<Status, String> {
     let set = |name| var(name).filter(|v: &String| !v.trim().is_empty());
-    let (token, source) = match (set("GANTRY_LICENSE"), set("GANTRY_LICENSE_FILE")) {
+    let (token, source) = match (set("ENTERPLACE_LICENSE"), set("ENTERPLACE_LICENSE_FILE")) {
         (Some(_), Some(_)) => {
-            return Err("both GANTRY_LICENSE and GANTRY_LICENSE_FILE are set. Keep one: unset GANTRY_LICENSE or GANTRY_LICENSE_FILE.".into());
+            return Err("both ENTERPLACE_LICENSE and ENTERPLACE_LICENSE_FILE are set. Keep one: unset ENTERPLACE_LICENSE or ENTERPLACE_LICENSE_FILE.".into());
         }
-        (Some(token), None) => (token, "GANTRY_LICENSE".to_owned()),
+        (Some(token), None) => (token, "ENTERPLACE_LICENSE".to_owned()),
         (None, Some(path)) => {
             let token = std::fs::read_to_string(&path).map_err(|e| {
-                format!("GANTRY_LICENSE_FILE is {path}, which cannot be read: {e}. Fix the path or its permissions, or unset GANTRY_LICENSE_FILE to run the open source features only.")
+                format!("ENTERPLACE_LICENSE_FILE is {path}, which cannot be read: {e}. Fix the path or its permissions, or unset ENTERPLACE_LICENSE_FILE to run the open source features only.")
             })?;
             (
                 token,
-                format!("the file GANTRY_LICENSE_FILE names ({path})"),
+                format!("the file ENTERPLACE_LICENSE_FILE names ({path})"),
             )
         }
         (None, None) => {
@@ -139,7 +139,7 @@ fn load(
 fn verify(token: &str, public_key: &[u8], source: &str) -> Result<License, String> {
     let malformed = |why: &str| {
         format!(
-            "{source} is not a Gantry license: {why}. Paste the whole token from your license, on one line, or unset GANTRY_LICENSE and GANTRY_LICENSE_FILE to run the open source features only."
+            "{source} is not a Enterplace license: {why}. Paste the whole token from your license, on one line, or unset ENTERPLACE_LICENSE and ENTERPLACE_LICENSE_FILE to run the open source features only."
         )
     };
     let (payload, signature) = token
@@ -155,7 +155,7 @@ fn verify(token: &str, public_key: &[u8], source: &str) -> Result<License, Strin
     UnparsedPublicKey::new(&ED25519, public_key)
         .verify(&payload, &signature)
         .map_err(|_| {
-            format!("{source} is not signed by Gantry: it was changed after it was issued, or cut short. Paste the token exactly as you received it, or ask Gantry support for a new one; unset GANTRY_LICENSE and GANTRY_LICENSE_FILE to run the open source features only.")
+            format!("{source} is not signed by Enterplace: it was changed after it was issued, or cut short. Paste the token exactly as you received it, or ask Enterplace support for a new one; unset ENTERPLACE_LICENSE and ENTERPLACE_LICENSE_FILE to run the open source features only.")
         })?;
     let license: License = serde_json::from_slice(&payload)
         .map_err(|e| malformed(&format!("its contents do not read ({e})")))?;
@@ -166,13 +166,16 @@ fn verify(token: &str, public_key: &[u8], source: &str) -> Result<License, Strin
 }
 
 fn dates_ok(license: &License) -> bool {
-    let shape = |d: &str| d.len() == 10 && gantry_core::config::valid_expiry(d);
+    let shape = |d: &str| d.len() == 10 && enterplace_core::config::valid_expiry(d);
     shape(&license.issued) && shape(&license.expires)
 }
 
 /// UTC date of `t`, as licenses write it. Dates in this shape compare as text, so no date arithmetic is needed.
 fn date(t: SystemTime) -> String {
-    gantry_core::audit::rfc3339(t).chars().take(10).collect()
+    enterplace_core::audit::rfc3339(t)
+        .chars()
+        .take(10)
+        .collect()
 }
 
 fn state_at(license: &License, now: SystemTime) -> State {
@@ -190,7 +193,7 @@ fn state_at(license: &License, now: SystemTime) -> State {
 
 /// Distinct people (key names) in a keys file: what a seat counts.
 pub fn seats_used(keys_text: &str) -> Result<usize, String> {
-    let entries = gantry_core::config::key_entries(std::path::Path::new("keys"), keys_text)
+    let entries = enterplace_core::config::key_entries(std::path::Path::new("keys"), keys_text)
         .map_err(|errors| errors.join("; "))?;
     let people: std::collections::BTreeSet<_> = entries.into_iter().map(|k| k.name).collect();
     Ok(people.len())
@@ -212,14 +215,14 @@ impl Status {
         }
         let message = match (&self.license, self.state) {
             (None, _) => format!(
-                "{feature} is an enterprise feature and this install has no license. Set GANTRY_LICENSE (or GANTRY_LICENSE_FILE) to your license and restart."
+                "{feature} is an enterprise feature and this install has no license. Set ENTERPLACE_LICENSE (or ENTERPLACE_LICENSE_FILE) to your license and restart."
             ),
             (Some(l), State::Lapsed) => format!(
-                "{feature} is off: license {} for {} expired on {} and its {GRACE_DAYS}-day grace period is over. Set the renewed license in GANTRY_LICENSE and restart.",
+                "{feature} is off: license {} for {} expired on {} and its {GRACE_DAYS}-day grace period is over. Set the renewed license in ENTERPLACE_LICENSE and restart.",
                 l.id, l.customer, l.expires
             ),
             (Some(l), _) => format!(
-                "license {} for {} does not include {feature}. Ask Gantry to add it, then set the new license in GANTRY_LICENSE and restart.",
+                "license {} for {} does not include {feature}. Ask Enterplace to add it, then set the new license in ENTERPLACE_LICENSE and restart.",
                 l.id, l.customer
             ),
         };
@@ -232,7 +235,7 @@ impl Status {
     /// The line said once at start. Warnings start with `warning:`.
     pub fn describe(&self) -> String {
         let Some(l) = &self.license else {
-            return "No license: running the open source features only. Set GANTRY_LICENSE to unlock the enterprise features.".into();
+            return "No license: running the open source features only. Set ENTERPLACE_LICENSE to unlock the enterprise features.".into();
         };
         let features = l.features.join(", ");
         match self.state {
@@ -241,11 +244,11 @@ impl Status {
                 l.id, l.customer, l.seats, l.expires
             ),
             State::Grace => format!(
-                "warning: license {} for {} expired on {}. Enterprise features ({features}) stay on for {GRACE_DAYS} days after that, then turn off. Set the renewed license in GANTRY_LICENSE and restart.",
+                "warning: license {} for {} expired on {}. Enterprise features ({features}) stay on for {GRACE_DAYS} days after that, then turn off. Set the renewed license in ENTERPLACE_LICENSE and restart.",
                 l.id, l.customer, l.expires
             ),
             State::Lapsed => format!(
-                "warning: license {} for {} expired on {} and its {GRACE_DAYS}-day grace period is over: enterprise features are off, model traffic is still served. Set the renewed license in GANTRY_LICENSE and restart.",
+                "warning: license {} for {} expired on {} and its {GRACE_DAYS}-day grace period is over: enterprise features are off, model traffic is still served. Set the renewed license in ENTERPLACE_LICENSE and restart.",
                 l.id, l.customer, l.expires
             ),
         }
@@ -256,7 +259,7 @@ impl Status {
         let l = self.license.as_ref()?;
         (used > usize::try_from(l.seats).unwrap_or(usize::MAX)).then(|| {
             format!(
-                "warning: {used} people hold keys and license {} has {} seats. Traffic is not blocked; ask Gantry for more seats, or revoke keys no longer used.",
+                "warning: {used} people hold keys and license {} has {} seats. Traffic is not blocked; ask Enterplace for more seats, or revoke keys no longer used.",
                 l.id, l.seats
             )
         })
@@ -359,7 +362,7 @@ mod tests {
     }
 
     fn status(token: &str, public: &[u8], now: SystemTime) -> Result<Status, String> {
-        load(env(&[("GANTRY_LICENSE", token)]), public, now)
+        load(env(&[("ENTERPLACE_LICENSE", token)]), public, now)
     }
 
     #[test]
@@ -444,7 +447,7 @@ mod tests {
         let err = status(&forged, &public, now)
             .err()
             .ok_or("forged accepted")?;
-        assert!(err.contains("not signed by Gantry"), "{err}");
+        assert!(err.contains("not signed by Enterplace"), "{err}");
         Ok(())
     }
 
@@ -455,7 +458,7 @@ mod tests {
         let now = SystemTime::now();
         let token = sign(&license(&["scim"], now + DAY), &other)?;
         let err = status(&token, &public, now).err().ok_or("accepted")?;
-        assert!(err.contains("not signed by Gantry"), "{err}");
+        assert!(err.contains("not signed by Enterplace"), "{err}");
         Ok(())
     }
 
@@ -466,8 +469,8 @@ mod tests {
             let err = status(token, &public, SystemTime::now())
                 .err()
                 .ok_or(format!("{token} accepted"))?;
-            assert!(err.contains("GANTRY_LICENSE"), "{err}");
-            assert!(err.contains("unset GANTRY_LICENSE"), "{err}");
+            assert!(err.contains("ENTERPLACE_LICENSE"), "{err}");
+            assert!(err.contains("unset ENTERPLACE_LICENSE"), "{err}");
         }
         Ok(())
     }
@@ -475,13 +478,13 @@ mod tests {
     #[test]
     fn missing_license_runs_open_source_only() -> Result<(), String> {
         let (_, public) = pair()?;
-        for vars in [&[][..], &[("GANTRY_LICENSE", "  ")][..]] {
+        for vars in [&[][..], &[("ENTERPLACE_LICENSE", "  ")][..]] {
             let s = load(env(vars), &public, SystemTime::now())?;
             assert_eq!(s.state, State::Missing);
             assert!(!s.unlocked("scim"));
             let refused = s.require("scim").err().ok_or("scim should be refused")?;
             assert!(
-                refused.message.contains("GANTRY_LICENSE"),
+                refused.message.contains("ENTERPLACE_LICENSE"),
                 "{}",
                 refused.message
             );
@@ -497,19 +500,22 @@ mod tests {
         let (private, public) = pair()?;
         let now = SystemTime::now();
         let token = sign(&license(&["scim"], now + DAY), &private)?;
-        let path = std::env::temp_dir().join(format!("gantry-license-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("enterplace-license-{}", std::process::id()));
         std::fs::write(&path, format!("{token}\n")).map_err(|e| e.to_string())?;
         let file = path.to_string_lossy().into_owned();
-        let s = load(env(&[("GANTRY_LICENSE_FILE", &file)]), &public, now)?;
+        let s = load(env(&[("ENTERPLACE_LICENSE_FILE", &file)]), &public, now)?;
         assert_eq!(s.state, State::Valid);
         let both = load(
-            env(&[("GANTRY_LICENSE_FILE", &file), ("GANTRY_LICENSE", &token)]),
+            env(&[
+                ("ENTERPLACE_LICENSE_FILE", &file),
+                ("ENTERPLACE_LICENSE", &token),
+            ]),
             &public,
             now,
         );
         assert!(both.is_err_and(|e| e.contains("both")));
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-        let gone = load(env(&[("GANTRY_LICENSE_FILE", &file)]), &public, now);
+        let gone = load(env(&[("ENTERPLACE_LICENSE_FILE", &file)]), &public, now);
         assert!(gone.is_err_and(|e| e.contains("cannot be read")));
         Ok(())
     }
@@ -536,7 +542,7 @@ mod tests {
 
     #[test]
     fn issuer_round_trip() -> Result<(), String> {
-        let dir = std::env::temp_dir().join(format!("gantry-keygen-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("enterplace-keygen-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let key = dir.join("signing-key");

@@ -11,7 +11,7 @@ A provider with `keys:` sends each request with one key of the pool. A key the p
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -39,7 +39,7 @@ rules:
 | `key_balance` | string | `round_robin` | `round_robin` takes the keys in turn, each as often as its weight. `least_used` takes the key with the fewest requests sent through this gateway for its weight. |
 | `key_quarantine_seconds` | integer | `3600` | 1 to 86400. How long a key answered 401 or 403 is set aside. |
 
-`gantry check` refuses a pool beside `key_env`, `key_file` or `credential`, an entry with both or neither source, a key listed twice, a credential without a store, and a pool on a `bedrock` provider. `gantry serve` refuses to start when a key's variable is not set.
+`enterplace check` refuses a pool beside `key_env`, `key_file` or `credential`, an entry with both or neither source, a key listed twice, a credential without a store, and a pool on a `bedrock` provider. `enterplace serve` refuses to start when a key's variable is not set.
 
 ## Behavior
 
@@ -50,7 +50,7 @@ rules:
 | anything else | Stays in turn | Handled as usual (retries, cooldowns, fallbacks) |
 
 - A switch to the next key does not use up one of the provider's `retries`.
-- When every key is set aside, the one back soonest is used: the caller gets the provider's own answer, never a refusal of Gantry's for lack of a key.
+- When every key is set aside, the one back soonest is used: the caller gets the provider's own answer, never a refusal of Enterplace's for lack of a key.
 - A key is named by the first 8 hex characters of its SHA-256 everywhere: the attempts record, the server log, metrics. No part of a key is ever written.
 - A new key (another hash) is used at once after a reload, even if the key it replaced was set aside.
 - Batches and realtime sessions use the pool's first key.
@@ -61,7 +61,7 @@ Every switch is recorded:
 {"event":"attempts","id":"01M7...","attempts":[{"provider":"openai","outcome":"401","key":"9f2c41aa"},{"provider":"openai","outcome":"200","key":"03be7d11"}]}
 ```
 
-and counted in `gantry_provider_key_switches_total{provider="openai",status="401"}`.
+and counted in `enterplace_provider_key_switches_total{provider="openai",status="401"}`.
 
 ## Related
 

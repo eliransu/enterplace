@@ -1,7 +1,7 @@
 name: deploy
-# Deploys the docs (gantry-docs.enterplace.dev) and the landing page (gantry.enterplace.dev) to Cloudflare Workers.
+# Deploys the docs (docs.enterplace.dev) and the landing page (enterplace.dev) to Cloudflare Workers.
 # Needs the repository secret CLOUDFLARE_API_TOKEN: a token with "Workers Scripts: Edit" and
-# "Workers Routes: Edit" on the account, and "DNS: Edit" on the enterplace.dev and eliran.me zones for the custom domains.
+# "Workers Routes: Edit" on the account, and "DNS: Edit" on the enterplace.dev zone for the custom domains.
 on:
   push:
     branches: [main]

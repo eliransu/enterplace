@@ -1,34 +1,34 @@
 ---
 title: Migrate from LiteLLM
-description: Turn a LiteLLM proxy config.yaml and its virtual key export into a Gantry policy that passes gantry check, plus the commands to reissue each key.
+description: Turn a LiteLLM proxy config.yaml and its virtual key export into a Enterplace policy that passes enterplace check, plus the commands to reissue each key.
 sidebar:
   order: 1
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-`gantry import litellm` reads a LiteLLM proxy `config.yaml` and writes a Gantry policy that passes `gantry check`. Everything it cannot carry across is listed with what to do instead. Given an export of LiteLLM virtual keys, it also writes team rules and one `gantry key new` command per key.
+`enterplace import litellm` reads a LiteLLM proxy `config.yaml` and writes a Enterplace policy that passes `enterplace check`. Everything it cannot carry across is listed with what to do instead. Given an export of LiteLLM virtual keys, it also writes team rules and one `enterplace key new` command per key.
 
 ## Import a config
 
 <Steps>
 
-1. Run the import. `--out` names the policy to write (default `gantry.policy.yaml`); `--keys-from` is optional.
+1. Run the import. `--out` names the policy to write (default `enterplace.policy.yaml`); `--keys-from` is optional.
 
    ```bash
-   gantry import litellm config.yaml --out gantry.policy.yaml
-   gantry import litellm config.yaml --keys-from keys.json --out gantry.policy.yaml
+   enterplace import litellm config.yaml --out enterplace.policy.yaml
+   enterplace import litellm config.yaml --keys-from keys.json --out enterplace.policy.yaml
    ```
 
 2. Read the report. Each line is an item that was not mapped, or that needs a hand, with the fix.
 
-3. Read the policy. The last rule, `everyone`, allows every imported model to anyone with a Gantry key, as a LiteLLM proxy allows any valid key every model by default. Narrow it before you serve.
+3. Read the policy. The last rule, `everyone`, allows every imported model to anyone with a Enterplace key, as a LiteLLM proxy allows any valid key every model by default. Narrow it before you serve.
 
-4. Reissue the keys with the commands from the report, then start the gateway with `gantry serve gantry.policy.yaml`.
+4. Reissue the keys with the commands from the report, then start the gateway with `enterplace serve enterplace.policy.yaml`.
 
 </Steps>
 
-The import never replaces an existing file. If `--out` exists, it stops with an error and writes nothing. After writing, it runs `gantry check` on the result.
+The import never replaces an existing file. If `--out` exists, it stops with an error and writes nothing. After writing, it runs `enterplace check` on the result.
 
 ## Import a running proxy
 
@@ -36,22 +36,22 @@ With the proxy's address and its master key in an environment variable, the impo
 
 ```bash
 export LITELLM_MASTER_KEY=sk-...
-gantry import litellm --url https://litellm.internal.example.com --master-key-env LITELLM_MASTER_KEY \
-  --out gantry.policy.yaml --keys-out gantry.keys.yaml
+enterplace import litellm --url https://litellm.internal.example.com --master-key-env LITELLM_MASTER_KEY \
+  --out enterplace.policy.yaml --keys-out enterplace.keys.yaml
 ```
 
 ```text
 Read 2 models from the proxy, 2 keys and 2 teams.
-Wrote gantry.policy.yaml.
-Issued 2 keys in gantry.keys.yaml for the LiteLLM keys. Each is shown once: hand it to its owner.
-  maya (token 88dc28d0f030...) -> maya (team payments): gantry_3f9a...
-  dana (token a1b2c3d4e5f6...) -> dana (team search): gantry_8a41...
+Wrote enterplace.policy.yaml.
+Issued 2 keys in enterplace.keys.yaml for the LiteLLM keys. Each is shown once: hand it to its owner.
+  maya (token 88dc28d0f030...) -> maya (team payments): enterplace_3f9a...
+  dana (token a1b2c3d4e5f6...) -> dana (team search): enterplace_8a41...
 Not mapped, or needs a hand (1 item):
-  - team search: max_budget 10 per 7d has no Gantry period (day or month); not mapped.
+  - team search: max_budget 10 per 7d has no Enterplace period (day or month); not mapped.
 ```
 
 - Models come from `GET /model/info`; give the `config.yaml` as well to carry its router and general settings across.
-- Keys come from `GET /key/list` page by page, or `GET /key/info` for a key listed by its token. LiteLLM keeps only key hashes, so every key is issued again: the mapping prints each LiteLLM key's alias and token prefix beside the Gantry key that replaces it, shown once. The new keys file holds only their hashes.
+- Keys come from `GET /key/list` page by page, or `GET /key/info` for a key listed by its token. LiteLLM keeps only key hashes, so every key is issued again: the mapping prints each LiteLLM key's alias and token prefix beside the Enterplace key that replaces it, shown once. The new keys file holds only their hashes.
 - Team budgets per day or month become `limits: [{ team: payments, budget: { usd: 500, per: month } }]`. A team's `rpm_limit` is reported for a rule's `rate:`.
 - A route the proxy does not serve is reported and skipped; a wrong master key stops the import with the proxy's answer.
 - The master key is read from the variable, sent only to `--url`, and never printed. Plain http is refused except to `127.0.0.1` or `localhost`.
@@ -82,24 +82,24 @@ And this key export holds one key:
 ```
 
 ```bash
-gantry import litellm config.yaml --keys-from keys.json --out gantry.policy.yaml
+enterplace import litellm config.yaml --keys-from keys.json --out enterplace.policy.yaml
 ```
 
 ```text
-Wrote gantry.policy.yaml.
+Wrote enterplace.policy.yaml.
 Not mapped, or needs a hand (4 items):
-  - key maya: reissue with `gantry key new maya --team payments --budget 20/month --models gpt-4o --tpm 50000` (LiteLLM keeps only key hashes, so keys cannot move).
+  - key maya: reissue with `enterplace key new maya --team payments --budget 20/month --models gpt-4o --tpm 50000` (LiteLLM keeps only key hashes, so keys cannot move).
   - key maya: rpm_limit 10 has no per-key equivalent; a rule's rate: { rpm: 10 } limits each person.
-  - general_settings.master_key: Gantry has no master key. Make an admin key: gantry key new <name> --team <team> --admin.
-  - general_settings.database_url: not needed. Gantry keeps keys in gantry.keys.yaml and records in its audit log.
+  - general_settings.master_key: Enterplace has no master key. Make an admin key: enterplace key new <name> --team <team> --admin.
+  - general_settings.database_url: not needed. Enterplace keeps keys in enterplace.keys.yaml and records in its audit log.
 See docs/migrate-litellm.md. Checking it now:
-gantry.policy.yaml is valid: 2 rules, 0 keys, 2 providers: openai (openai) at https://api.openai.com, anthropic (anthropic) at https://api.anthropic.com.
+enterplace.policy.yaml is valid: 2 rules, 0 keys, 2 providers: openai (openai) at https://api.openai.com, anthropic (anthropic) at https://api.anthropic.com.
 ```
 
 The policy it writes:
 
-```yaml title="gantry.policy.yaml"
-# Imported from a LiteLLM config by `gantry import litellm`. Check it with `gantry check`.
+```yaml title="enterplace.policy.yaml"
+# Imported from a LiteLLM config by `enterplace import litellm`. Check it with `enterplace check`.
 version: 1
 providers:
 - name: openai
@@ -136,56 +136,56 @@ rules:
 `claude-sonnet` became an alias, because callers send a name that differs from the deployment's model. `gpt-4o` is listed directly under its provider.
 
 <Aside type="tip">
-The import keeps LiteLLM's variable names in `key_env`. If Claude Code will run through Gantry, rename `ANTHROPIC_API_KEY` to a variable of its own, such as `ANTHROPIC_PROVIDER_KEY`: Claude Code reads `ANTHROPIC_API_KEY` for its own key, which is a Gantry key.
+The import keeps LiteLLM's variable names in `key_env`. If Claude Code will run through Enterplace, rename `ANTHROPIC_API_KEY` to a variable of its own, such as `ANTHROPIC_PROVIDER_KEY`: Claude Code reads `ANTHROPIC_API_KEY` for its own key, which is a Enterplace key.
 </Aside>
 
 ## What maps
 
-| LiteLLM | Gantry |
+| LiteLLM | Enterplace |
 |---|---|
 | `model_list[].model_name` | The model name callers send. One deployment whose model has the same name is listed under its provider's `models`. Several deployments, or one under another name, become an [alias](/routing/aliases/) with that name. |
 | `litellm_params.model` with `openai/`, or a bare `gpt-*` | `kind: openai`, `url: https://api.openai.com` |
 | `anthropic/`, or a bare `claude-*` | `kind: anthropic` |
 | `azure/<deployment>` with `api_base`, `api_version` | `kind: azure` with `deployments` and `api_version` |
-| `bedrock/<model id>` with `aws_region_name` | `kind: bedrock` with `region` and `model_ids`. Gantry signs with its own `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. |
+| `bedrock/<model id>` with `aws_region_name` | `kind: bedrock` with `region` and `model_ids`. Enterplace signs with its own `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. |
 | `gemini/` | `kind: gemini` |
 | `vertex_ai/gemini-*` with `vertex_project`, `vertex_location` | `kind: vertex` with the `/publishers/google` URL |
 | `vertex_ai/claude-*` with `vertex_project`, `vertex_location` | `kind: vertex_anthropic` with the `/publishers/anthropic` URL, and an alias from the `model_name` to the Vertex model name (`claude-sonnet-4-5@20250929`) |
 | `groq/`, `mistral/`, `together_ai/`, `fireworks_ai/`, `deepseek/`, `openrouter/`, `ollama/`, `ollama_chat/`, `lm_studio/`, `hosted_vllm/` | `kind: openai` with the vendor's base URL from [Providers](/providers/overview/), or `api_base`. A local server gets `allow_private: true` and no key. |
 | `api_key: os.environ/NAME` | `key_env: NAME`. A key written in the config is not copied: the report names the variable to set. |
-| Credentials added in the LiteLLM UI, encrypted with `LITELLM_SALT_KEY` | Add each again in the console's Provider credentials page or with `POST /admin/credentials`, with `GANTRY_MASTER_KEY` set, and name it with `credential:` on the provider. See [Provider credentials](/governance/provider-credentials/). Not imported: Gantry never reads another product's encrypted values. |
-| A client sending its own `api_key` in the request body | The rule's `caller_provider_key: allowed`, with the key in the `x-gantry-provider-key` header. The body is forwarded as sent, so an `api_key` field there is not a credential to Gantry. See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key). |
+| Credentials added in the LiteLLM UI, encrypted with `LITELLM_SALT_KEY` | Add each again in the console's Provider credentials page or with `POST /admin/credentials`, with `ENTERPLACE_MASTER_KEY` set, and name it with `credential:` on the provider. See [Provider credentials](/governance/provider-credentials/). Not imported: Enterplace never reads another product's encrypted values. |
+| A client sending its own `api_key` in the request body | The rule's `caller_provider_key: allowed`, with the key in the `x-enterplace-provider-key` header. The body is forwarded as sent, so an `api_key` field there is not a credential to Enterplace. See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key). |
 | `litellm_params.weight` | The deployment's `weight` |
-| `model_info.input_cost_per_token`, `output_cost_per_token` | `prices:` in dollars per million tokens, under the name Gantry sends |
+| `model_info.input_cost_per_token`, `output_cost_per_token` | `prices:` in dollars per million tokens, under the name Enterplace sends |
 | A deployment named by its owner (`azure/gpt-4o-eastus`) | Priced as the model it runs: `model_info.base_model` when set, else the LiteLLM model string, else the `model_name`, written under `prices:` for the deployment's name. A team budget or a key `tpm` then works on the imported alias. |
 | `router_settings.routing_strategy` `simple-shuffle`, `least-busy` | Alias `balance: round_robin`, `least_busy` |
 | `router_settings.cooldown_time` | Alias `cooldown_seconds` (up to 3600) |
 | `num_retries` (router or litellm settings) | Each provider's `retries` (up to 5) |
-| `context_window_fallbacks`, `content_policy_fallbacks` | The alias's `context_window_fallback`, `content_policy_fallback`. Gantry follows one target, so the first is used. |
+| `context_window_fallbacks`, `content_policy_fallbacks` | The alias's `context_window_fallback`, `content_policy_fallback`. Enterplace follows one target, so the first is used. |
 
-Check the price of an imported alias with `gantry prices <alias> --policy gantry.policy.yaml`. A deployment that none of the price sources above covers is reported, with the `prices:` line to add.
+Check the price of an imported alias with `enterplace prices <alias> --policy enterplace.policy.yaml`. A deployment that none of the price sources above covers is reported, with the `prices:` line to add.
 
 ## What is reported instead
 
-These are not mapped. Each appears in the report with what to do in Gantry.
+These are not mapped. Each appears in the report with what to do in Enterplace.
 
-| LiteLLM | What to do in Gantry |
+| LiteLLM | What to do in Enterplace |
 |---|---|
 | Other `routing_strategy` values | The alias uses `round_robin`. |
-| `fallbacks` | Gantry fails over between an alias's deployments, or from a provider to its `fallback` provider for the same model, only between deployments that speak the same API. Add the fallback as a deployment of the alias if it may also take a share of traffic. A fallback from an OpenAI model to an Anthropic one, or the reverse, has no equivalent: the client retries with the other model. |
-| `rpm`, `tpm` per deployment | Gantry limits people, teams and keys: `rate:` on a rule, `tpm` on a key. See [Budgets and rate limits](/governance/budgets-and-rate-limits/). |
-| `general_settings.master_key` | Make an admin key with `gantry key new <name> --team <team> --admin`. |
+| `fallbacks` | Enterplace fails over between an alias's deployments, or from a provider to its `fallback` provider for the same model, only between deployments that speak the same API. Add the fallback as a deployment of the alias if it may also take a share of traffic. A fallback from an OpenAI model to an Anthropic one, or the reverse, has no equivalent: the client retries with the other model. |
+| `rpm`, `tpm` per deployment | Enterplace limits people, teams and keys: `rate:` on a rule, `tpm` on a key. See [Budgets and rate limits](/governance/budgets-and-rate-limits/). |
+| `general_settings.master_key` | Make an admin key with `enterplace key new <name> --team <team> --admin`. |
 | `general_settings.database_url`, `redis_*` | Not needed. Keys are a file, records are the audit log, cooldowns are in memory on one node. |
-| `litellm_settings.drop_params` | Gantry never drops a parameter silently. |
+| `litellm_settings.drop_params` | Enterplace never drops a parameter silently. |
 | `cache`, `cache_params` | Add `cache: { ttl_seconds: N }` to a rule. |
 | `success_callback`, `callbacks` | Every request is in the [audit log](/governance/audit-log/), and `/metrics` serves Prometheus. |
-| Vertex AI models other than Gemini and Claude | Not served by Gantry. Left out. |
-| A provider with no Gantry kind and no OpenAI-compatible URL | Not served by Gantry. Left out. If it speaks the OpenAI API, add it as `kind: openai` with its `url`. |
+| Vertex AI models other than Gemini and Claude | Not served by Enterplace. Left out. |
+| A provider with no Enterplace kind and no OpenAI-compatible URL | Not served by Enterplace. Left out. If it speaks the OpenAI API, add it as `kind: openai` with its `url`. |
 | Anything else | Reported as not mapped. |
 
 ## Keys
 
-LiteLLM stores only the hashes of its virtual keys, as Gantry does, so keys cannot move. Every key is reissued.
+LiteLLM stores only the hashes of its virtual keys, as Enterplace does, so keys cannot move. Every key is reissued.
 
 `--keys-from` reads an export of LiteLLM virtual keys: a JSON list, an object with the list under `keys` or `data`, or CSV with a header row.
 
@@ -205,10 +205,10 @@ From the export the import writes:
 - One command per key, in the report:
 
 ```bash
-gantry key new maya --team payments --budget 20/month --expires 2027-01-01 --models gpt-4o,gpt-4o-mini --tpm 50000
+enterplace key new maya --team payments --budget 20/month --expires 2027-01-01 --models gpt-4o,gpt-4o-mini --tpm 50000
 ```
 
-Run each command and send the printed key to its owner through your secret manager. Developers can instead get their own key with `gantry login`. See [Keys and identity](/governance/keys/).
+Run each command and send the printed key to its owner through your secret manager. Developers can instead get their own key with `enterplace login`. See [Keys and identity](/governance/keys/).
 
 ## Two regions of one model
 
@@ -223,8 +223,8 @@ The config format was read from LiteLLM's public docs on 2026-11-13 ([configs](h
 ## Related
 
 <CardGrid>
-	<LinkCard title="Gantry, LiteLLM and Bifrost" href="/migrate/comparison/" description="What each gateway does and does better." />
+	<LinkCard title="Enterplace, LiteLLM and Bifrost" href="/migrate/comparison/" description="What each gateway does and does better." />
 	<LinkCard title="Policy file" href="/governance/policy/" description="Every key the imported policy uses." />
 	<LinkCard title="Model aliases" href="/routing/aliases/" description="Weights, cooldown and fallbacks over several deployments." />
-	<LinkCard title="CLI reference" href="/reference/cli/" description="gantry import, key new, prices and check." />
+	<LinkCard title="CLI reference" href="/reference/cli/" description="enterplace import, key new, prices and check." />
 </CardGrid>

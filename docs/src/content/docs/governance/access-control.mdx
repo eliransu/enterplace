@@ -1,17 +1,17 @@
 ---
 title: Source addresses and JWT sign-in
-description: Allow requests only from the networks you list, per key and per rule, and accept JWTs from your identity provider in place of Gantry keys.
+description: Allow requests only from the networks you list, per key and per rule, and accept JWTs from your identity provider in place of Enterplace keys.
 sidebar:
   order: 3
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Two controls on who reaches the model routes and from where: address ranges on keys and rules, and JWTs from your own identity provider accepted in place of a Gantry key. Both are refusals with a code and a record, decided before the request body is read.
+Two controls on who reaches the model routes and from where: address ranges on keys and rules, and JWTs from your own identity provider accepted in place of a Enterplace key. Both are refusals with a code and a record, decided before the request body is read.
 
 ## Source address ranges
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -30,7 +30,7 @@ rules:
     models: [gpt-4o-mini]
 ```
 
-A key takes its own list with `from:` in its entry, `gantry key update <prefix> --from 203.0.113.0/24`, or `PATCH /admin/keys/<prefix>` with `{"from": ["203.0.113.0/24"]}`.
+A key takes its own list with `from:` in its entry, `enterplace key update <prefix> --from 203.0.113.0/24`, or `PATCH /admin/keys/<prefix>` with `{"from": ["203.0.113.0/24"]}`.
 
 | Where | Field | Effect |
 |---|---|---|
@@ -42,17 +42,17 @@ A range is written as `10.0.0.0/8`, `2001:db8::/32`, or a single address. A key 
 
 ### Behind a load balancer
 
-The client's address is the connection's. When the connection comes from an address in `trusted_proxies`, Gantry reads `X-Forwarded-For` from the right and takes the first address that is not a trusted proxy. From any other address the header is ignored, so a caller cannot claim another address by writing it. The decision record's `client` is the address the check used.
+The client's address is the connection's. When the connection comes from an address in `trusted_proxies`, Enterplace reads `X-Forwarded-For` from the right and takes the first address that is not a trusted proxy. From any other address the header is ignored, so a caller cannot claim another address by writing it. The decision record's `client` is the address the check used.
 
 <Aside type="caution">
 List only your own load balancers in `trusted_proxies`. An address listed there can name any client it likes.
 </Aside>
 
-A request whose address cannot be known (Gantry embedded without a listener) is refused under a `from` list: it fails closed.
+A request whose address cannot be known (Enterplace embedded without a listener) is refused under a `from` list: it fails closed.
 
 ## Browser pages (CORS)
 
-A page that calls Gantry from the browser, such as the Claude add-in for Office or an Open WebUI direct connection, needs Gantry to answer cross-origin requests. `cors:` lists the origins allowed to. It is off by default: without it Gantry sends no CORS headers and a browser refuses every cross-origin call.
+A page that calls Enterplace from the browser, such as the Claude add-in for Office or an Open WebUI direct connection, needs Enterplace to answer cross-origin requests. `cors:` lists the origins allowed to. It is off by default: without it Enterplace sends no CORS headers and a browser refuses every cross-origin call.
 
 ```yaml
 cors:
@@ -60,17 +60,17 @@ cors:
 ```
 
 - An origin is the scheme and host (and port) the page is served from, as the browser sends it in `Origin`: `https://pivot.claude.ai`, `http://localhost:3000`. No path, no trailing slash. `"*"` allows any origin.
-- Gantry answers the `OPTIONS` preflight of a listed origin itself, with the methods it serves and the headers the page asked for, and records nothing for it: a preflight carries no key.
-- The call itself is decided, governed and recorded as any other, with the caller's own Gantry key in `Authorization` or `x-api-key`. Its answer names the origin and lets the page read `x-gantry-decision`.
+- Enterplace answers the `OPTIONS` preflight of a listed origin itself, with the methods it serves and the headers the page asked for, and records nothing for it: a preflight carries no key.
+- The call itself is decided, governed and recorded as any other, with the caller's own Enterplace key in `Authorization` or `x-api-key`. Its answer names the origin and lets the page read `x-enterplace-decision`.
 - Credentials are never allowed (`Access-Control-Allow-Credentials` is never sent, with `"*"` or without): callers authenticate with a key in a header, never a cookie.
 - The console and the admin API answer no other origin, whatever `cors:` lists.
 - A change applies on the next reload, with no restart.
 
 ## JWTs from your identity provider
 
-A workload or a person can call the model routes with an access token from your identity provider, sent as `Authorization: Bearer <jwt>`, in place of a Gantry key. Gantry checks it and decides and records the request as the person the token names.
+A workload or a person can call the model routes with an access token from your identity provider, sent as `Authorization: Bearer <jwt>`, in place of a Enterplace key. Enterplace checks it and decides and records the request as the person the token names.
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -80,7 +80,7 @@ providers:
     models: [gpt-4o-mini]
 jwt:
   - issuer: https://login.example.com
-    audience: gantry
+    audience: enterplace
     jwks_url: https://login.example.com/.well-known/jwks.json
     person_claim: email
     team_claim: team
@@ -106,7 +106,7 @@ What is checked, each failing closed:
 - `aud` holds the audience, `exp` is set and not passed (60 seconds of clock difference allowed), and `nbf` has come.
 - The person and team claims are each one name: letters, digits, dots, dashes, underscores and `@`.
 
-The decision record names the person and team from the token, with `"auth": "jwt"`, `jwt_issuer` and `jwt_subject`. The token itself is never recorded. Its `key` is the first 8 hex characters of the SHA-256 of issuer and subject, so a [kill switch](/governance/kill-switches/) by key prefix, `gantry kill --person`, budgets, rate limits and rules all work for JWT callers as for keys.
+The decision record names the person and team from the token, with `"auth": "jwt"`, `jwt_issuer` and `jwt_subject`. The token itself is never recorded. Its `key` is the first 8 hex characters of the SHA-256 of issuer and subject, so a [kill switch](/governance/kill-switches/) by key prefix, `enterplace kill --person`, budgets, rate limits and rules all work for JWT callers as for keys.
 
 Keys keep working beside JWTs.
 
@@ -114,10 +114,10 @@ Keys keep working beside JWTs.
 
 The same tokens sign in to the admin API (`/admin/keys`, `/admin/kills`, `/admin/credentials`, `/admin/policy` and the rest) when the issuer has `role_claim`. The token gets the first role under [`roles:`](/governance/policy/#console-roles) whose `sso_values` holds one of the claim's values, and may do what that role permits, as a key with that role may:
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 jwt:
   - issuer: https://login.example.com
-    audience: gantry
+    audience: enterplace
     jwks_url: https://login.example.com/.well-known/jwks.json
     person_claim: email
     team: platform
@@ -125,17 +125,17 @@ jwt:
 roles:
   - name: key-admins
     permissions: [see_keys, issue_keys, revoke_keys]
-    sso_values: [gantry-key-admins]
+    sso_values: [enterplace-key-admins]
   - name: policy-editors
     permissions: [edit_policy]
-    sso_values: [gantry-policy]
+    sso_values: [enterplace-policy]
 ```
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" https://gantry.example.com/admin/keys
+curl -H "Authorization: Bearer $TOKEN" https://enterplace.example.com/admin/keys
 ```
 
-A token whose claim holds no role's value is refused with `not_admin` (403), naming the claim. A token that fails a check above is refused with its `jwt_*` code, as on the model routes. Each call's `admin` record names the person, with `"auth": "jwt"`, `jwt_issuer` and `jwt_subject`; the token is never recorded. `DELETE /admin/keys/self` gives up the Gantry key it is sent with, so it is refused for a token.
+A token whose claim holds no role's value is refused with `not_admin` (403), naming the claim. A token that fails a check above is refused with its `jwt_*` code, as on the model routes. Each call's `admin` record names the person, with `"auth": "jwt"`, `jwt_issuer` and `jwt_subject`; the token is never recorded. `DELETE /admin/keys/self` gives up the Enterplace key it is sent with, so it is refused for a token.
 
 ## Errors
 
@@ -153,5 +153,5 @@ A token whose claim holds no role's value is refused with `not_admin` (403), nam
 <CardGrid>
 	<LinkCard title="Keys" href="/governance/keys/" description="Key fields, update, rotation and revocation." />
 	<LinkCard title="Policy" href="/governance/policy/" description="Every policy field." />
-	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Console sign-in and gantry login keys." />
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Console sign-in and enterplace login keys." />
 </CardGrid>

@@ -1,14 +1,14 @@
-# Deploy to Render: https://render.com/deploy?repo=https://github.com/eliransu/gantry
+# Deploy to Render: https://render.com/deploy?repo=https://github.com/eliransu/enterplace
 # One web service from the published image and one Render Postgres. Render asks for the provider keys (fill at least
 # one). The first start prints the admin key once in the service's logs; the console is at <service URL>/console.
 # Keys and the policy live in Postgres, so a redeploy keeps them. The audit log is on the container's own disk and
-# starts a new chain at each deploy: see https://gantry-docs.enterplace.dev/deploy/one-click/
+# starts a new chain at each deploy: see https://docs.enterplace.dev/deploy/one-click/
 services:
   - type: web
-    name: gantry
+    name: enterplace
     runtime: image
     image:
-      url: ghcr.io/eliransu/gantry:latest
+      url: ghcr.io/eliransu/enterplace:latest
     plan: starter
     healthCheckPath: /healthz
     envVars:
@@ -16,7 +16,7 @@ services:
         value: "8080"
       - key: DATABASE_URL
         fromDatabase:
-          name: gantry-db
+          name: enterplace-db
           property: connectionString
       # Render's internal Postgres connection offers TLS with a self-signed certificate: encrypted, not verified.
       - key: PGSSLMODE
@@ -29,8 +29,8 @@ services:
         sync: false
 
 databases:
-  - name: gantry-db
+  - name: enterplace-db
     plan: basic-256mb
-    databaseName: gantry
-    user: gantry
+    databaseName: enterplace
+    user: enterplace
     postgresMajorVersion: "16"

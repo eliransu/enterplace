@@ -4,7 +4,7 @@
 //! the value to `secrets/NAME` in its folder and points the provider at it with `key_file`, which the gateway reads
 //! again within 2 seconds of a change. A request already sent keeps the key it was sent with.
 
-use gantry_core::sigv4;
+use enterplace_core::sigv4;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -35,7 +35,7 @@ pub struct Secret {
 pub fn parse(spec: &str) -> Result<Secret, String> {
     let fail = |why: &str| {
         Err(format!(
-            "--secrets {spec}: {why}. Write NAME=file:/path, NAME=env:OTHER, NAME=vault:https://vault.example/v1/secret/data/gantry#field or NAME=aws-sm:arn:aws:secretsmanager:region:account:secret:name."
+            "--secrets {spec}: {why}. Write NAME=file:/path, NAME=env:OTHER, NAME=vault:https://vault.example/v1/secret/data/enterplace#field or NAME=aws-sm:arn:aws:secretsmanager:region:account:secret:name."
         ))
     };
     let Some((name, source)) = spec.split_once('=') else {
@@ -313,15 +313,17 @@ pub fn watch(
                 Ok(value) if value != *last => {
                     match crate::node::write_private(&key_path(&dir, &secret.name), &value) {
                         Ok(()) => {
-                            eprintln!("gantry node: provider key {} rotated", secret.name);
+                            eprintln!("enterplace node: provider key {} rotated", secret.name);
                             *last = value;
                         }
-                        Err(err) => eprintln!("gantry node: provider key {}: {err}", secret.name),
+                        Err(err) => {
+                            eprintln!("enterplace node: provider key {}: {err}", secret.name)
+                        }
                     }
                 }
                 Ok(_) => {}
                 Err(err) => eprintln!(
-                    "gantry node: provider key {}: {err}. Keeping the key it has.",
+                    "enterplace node: provider key {}: {err}. Keeping the key it has.",
                     secret.name
                 ),
             }
@@ -346,13 +348,13 @@ mod tests {
         );
         assert_eq!(parse("A=env:B")?.source, Source::Env("B".into()));
         assert_eq!(
-            parse("A=vault:https://vault.example/v1/secret/data/gantry#openai")?.source,
+            parse("A=vault:https://vault.example/v1/secret/data/enterplace#openai")?.source,
             Source::Vault {
-                url: "https://vault.example/v1/secret/data/gantry".into(),
+                url: "https://vault.example/v1/secret/data/enterplace".into(),
                 field: "openai".into()
             }
         );
-        let arn = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:gantry-AbCd";
+        let arn = "arn:aws:secretsmanager:eu-west-1:123456789012:secret:enterplace-AbCd";
         assert_eq!(
             parse(&format!("A=aws-sm:{arn}"))?.source,
             Source::AwsSm {
@@ -372,7 +374,7 @@ mod tests {
             "BAD-NAME=env:B",
             "A=env:",
             "A=s3:bucket",
-            "A=vault:https://vault.example/v1/secret/data/gantry",
+            "A=vault:https://vault.example/v1/secret/data/enterplace",
             "A=vault:ftp://x#f",
             "A=aws-sm:arn:aws:s3:::bucket",
         ] {

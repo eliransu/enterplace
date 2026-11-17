@@ -11,7 +11,7 @@ A deployment with `when:` is kept for requests that meet its conditions. Send lo
 
 ## Example
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 version: 1
 providers:
   - name: openai
@@ -54,7 +54,7 @@ Every condition written must hold.
 | `images` | boolean | A message holds an image (`image_url`, `image` or `input_image` content), or none. |
 | `header` | map | One request header and the exact value it must have, for example `{ x-tier: gold }`. |
 
-`gantry check` refuses an empty `when`, a `header` with more than one entry, a `min_prompt_tokens` above `max_prompt_tokens`, and `when` beside `for` on one deployment.
+`enterplace check` refuses an empty `when`, a `header` with more than one entry, a `min_prompt_tokens` above `max_prompt_tokens`, and `when` beside `for` on one deployment.
 
 ## Behavior
 

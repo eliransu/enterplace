@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::sync::{Arc, Mutex};
 
 use axum::http::StatusCode;
-use gantry_core::audit;
+use enterplace_core::audit;
 use serde_json::{Map, Value, json};
 
 use super::channels::{self, Alert, Channel, Kind as ChannelKind, Severity};
@@ -24,7 +24,7 @@ fn alert() -> Alert {
         summary: "team:payments has spent $81.00 in 2026-11, reaching $80.00.".into(),
         time: "2026-11-14T10:00:00.000Z".into(),
         evidence: vec![json!({ "replica": "pod-0-abc", "n": 12, "hash": "h12", "id": "01DEC" })],
-        console: "https://gantry.example.com".into(),
+        console: "https://enterplace.example.com".into(),
     }
 }
 
@@ -67,10 +67,10 @@ fn each_channel_gets_its_documented_message_with_the_records_behind_the_alert() 
         .to_string();
     assert!(text.contains("Payments budget") && text.contains("$81.00"));
     assert!(
-        text.contains("https://gantry.example.com/console/audit?q=01DEC"),
+        text.contains("https://enterplace.example.com/console/audit?q=01DEC"),
         "{text}"
     );
-    assert!(text.contains("https://gantry.example.com/console/alerts#alert-7"));
+    assert!(text.contains("https://enterplace.example.com/console/alerts#alert-7"));
 
     let teams = channels::request(
         &channel(
@@ -92,7 +92,7 @@ fn each_channel_gets_its_documented_message_with_the_records_behind_the_alert() 
     assert_eq!(content["type"], "AdaptiveCard");
     assert_eq!(
         content["actions"][0]["url"],
-        "https://gantry.example.com/console/alerts#alert-7"
+        "https://enterplace.example.com/console/alerts#alert-7"
     );
     assert!(content.to_string().contains("01DEC"));
 
@@ -106,10 +106,10 @@ fn each_channel_gets_its_documented_message_with_the_records_behind_the_alert() 
     assert_eq!(event["routing_key"], "R0UTINGKEY");
     assert_eq!(event["event_action"], "trigger");
     assert_eq!(event["payload"]["severity"], "warning");
-    assert_eq!(event["payload"]["source"], "gantry");
+    assert_eq!(event["payload"]["source"], "enterplace");
     assert_eq!(
         event["dedup_key"],
-        "gantry-Payments budget-team:payments:2026-11"
+        "enterplace-Payments budget-team:payments:2026-11"
     );
     assert_eq!(event["payload"]["custom_details"]["records"][0]["n"], 12);
 
@@ -142,7 +142,7 @@ fn each_channel_gets_its_documented_message_with_the_records_behind_the_alert() 
     Ok(())
 }
 
-/// An SMTP server on this machine that offers no STARTTLS (Gantry sends in the clear only to this machine) and keeps
+/// An SMTP server on this machine that offers no STARTTLS (Enterplace sends in the clear only to this machine) and keeps
 /// what it was told.
 /// What the SMTP server was told, line by line.
 type Said = Arc<Mutex<Vec<String>>>;
@@ -210,19 +210,19 @@ fn email_goes_over_smtp_with_auth_and_the_records_and_never_in_the_clear_to_anot
         ChannelKind::Email,
         &format!("smtp://127.0.0.1:{port}"),
         "smtp-password",
-        json!({ "username": "gantry", "from": "gantry@example.com", "to": "ops@example.com, sec@example.com" }),
+        json!({ "username": "enterplace", "from": "enterplace@example.com", "to": "ops@example.com, sec@example.com" }),
     );
     channels::smtp(&ch, &a)?;
     let lines = said.lock().map(|s| s.clone()).unwrap_or_default();
     use base64::Engine;
-    let plain = base64::engine::general_purpose::STANDARD.encode("\0gantry\0smtp-password");
+    let plain = base64::engine::general_purpose::STANDARD.encode("\0enterplace\0smtp-password");
     assert!(lines.contains(&format!("AUTH PLAIN {plain}")), "{lines:?}");
-    assert!(lines.contains(&"MAIL FROM:<gantry@example.com>".to_string()));
+    assert!(lines.contains(&"MAIL FROM:<enterplace@example.com>".to_string()));
     assert!(lines.contains(&"RCPT TO:<sec@example.com>".to_string()));
     assert!(
         lines
             .iter()
-            .any(|l| l.starts_with("Subject: [warning] Gantry alert: Payments budget"))
+            .any(|l| l.starts_with("Subject: [warning] Enterplace alert: Payments budget"))
     );
     assert!(
         lines.contains(&"..a line that starts with a dot".to_string()),
@@ -338,8 +338,8 @@ fn request(
 pub(crate) async fn rows(
     url: &str,
     sql: &str,
-) -> Result<Vec<gantry_server::store::tokio_postgres::Row>, Error> {
-    use gantry_server::store::tokio_postgres;
+) -> Result<Vec<enterplace_server::store::tokio_postgres::Row>, Error> {
+    use enterplace_server::store::tokio_postgres;
     let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls).await?;
     tokio::spawn(connection);
     Ok(client.query(sql, &[]).await?)
@@ -736,7 +736,7 @@ async fn trouble_with_the_audit_log_or_store_alerts_the_system_rules() -> Result
     // So does a secret a refresh could not read from its manager.
     write(
         &gw,
-        json!({ "event": "secret_refresh_failed", "variable": "OPENAI_KEY", "reference": "vault://secret/data/gantry#openai", "source": "vault", "code": "secret_refresh_failed", "reason": "Vault answered 403" }),
+        json!({ "event": "secret_refresh_failed", "variable": "OPENAI_KEY", "reference": "vault://secret/data/enterplace#openai", "source": "vault", "code": "secret_refresh_failed", "reason": "Vault answered 403" }),
     )?;
     run(&ex).await?;
     let hits = sink.deliveries();
@@ -804,7 +804,7 @@ async fn webhook(owner: &mut Browser, gw: &Gateway, sink: &Sink) -> Result<(), E
 }
 
 async fn execute(url: &str, sql: &str, params: &[&str]) -> Result<(), Error> {
-    use gantry_server::store::tokio_postgres;
+    use enterplace_server::store::tokio_postgres;
     let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls).await?;
     tokio::spawn(connection);
     let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
@@ -821,7 +821,7 @@ async fn set_spent(url: &str, scope: &str, per: Period, usd: f64) -> Result<(), 
     execute(
         url,
         &format!(
-            "INSERT INTO gantry_spend (scope, per, period, spent) VALUES ($1, $2, $3, {usd}) \
+            "INSERT INTO enterplace_spend (scope, per, period, spent) VALUES ($1, $2, $3, {usd}) \
              ON CONFLICT (scope, per, period) DO UPDATE SET spent = {usd}"
         ),
         &[scope, &per.word(), &label],
@@ -1183,7 +1183,7 @@ async fn provider_errors_count_failures_that_were_not_retried() -> Result<(), Er
         &gw,
         json!({ "event": "upstream_error", "id": "f1", "status": 502, "code": "upstream_unreachable", "provider": "gone", "tries": 1 }),
     )?;
-    // A refusal Gantry made itself, not the provider's failure: not counted.
+    // A refusal Enterplace made itself, not the provider's failure: not counted.
     write(
         &gw,
         json!({ "event": "upstream_error", "id": "f0", "status": 403, "code": "unknown_model", "provider": "gone", "tries": 0 }),
@@ -1230,7 +1230,7 @@ async fn admin_call(
     let status = response.status();
     let decision = response
         .headers()
-        .get("x-gantry-decision")
+        .get("x-enterplace-decision")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_string();
@@ -1318,10 +1318,10 @@ async fn the_new_kinds_fire_on_anomalies_failures_expiring_keys_and_a_lagging_ex
     // A key that expires in three days.
     let soon =
         audit::rfc3339(std::time::SystemTime::now() + std::time::Duration::from_secs(3 * 86_400));
-    gantry_core::keyfile::issue_with(
+    enterplace_core::keyfile::issue_with(
         "soon",
         "ops",
-        &gantry_core::keyfile::Attributes {
+        &enterplace_core::keyfile::Attributes {
             expires: Some(soon[..10].to_string()),
             ..Default::default()
         },
@@ -1351,7 +1351,7 @@ async fn the_new_kinds_fire_on_anomalies_failures_expiring_keys_and_a_lagging_ex
     let fired: Vec<(String, String, String)> = fired
         .iter()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?)))
-        .collect::<Result<_, gantry_server::store::tokio_postgres::Error>>()?;
+        .collect::<Result<_, enterplace_server::store::tokio_postgres::Error>>()?;
     let of = |kind: &str| {
         fired
             .iter()
@@ -1502,8 +1502,8 @@ async fn digests_regions_rejected_changes_cleared_kills_and_open_circuits_alert(
     let (gw, ex) = quiet("alerts_ops", &url, &["alerts"])?;
     // Two eu deployments and one in us behind one alias.
     std::fs::write(
-        gw.dir.join("gantry.policy.yaml"),
-        "version: 1\nstore: { postgres_url_env: GANTRY_STORE_URL }\nproviders:\n  - name: mock\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m]\n  - name: mock-b\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m2]\n  - name: mock-us\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m3]\naliases:\n  - name: smart\n    deployments:\n      - { provider: mock, model: m, region: eu }\n      - { provider: mock-b, model: m2, region: eu }\n      - { provider: mock-us, model: m3, region: us }\nrules:\n  - name: all\n    principals: { any: true }\n    models: [m, m2, m3, smart]\n",
+        gw.dir.join("enterplace.policy.yaml"),
+        "version: 1\nstore: { postgres_url_env: ENTERPLACE_STORE_URL }\nproviders:\n  - name: mock\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m]\n  - name: mock-b\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m2]\n  - name: mock-us\n    kind: openai\n    url: http://127.0.0.1:9\n    allow_private: true\n    key_env: MOCK_KEY\n    models: [m3]\naliases:\n  - name: smart\n    deployments:\n      - { provider: mock, model: m, region: eu }\n      - { provider: mock-b, model: m2, region: eu }\n      - { provider: mock-us, model: m3, region: us }\nrules:\n  - name: all\n    principals: { any: true }\n    models: [m, m2, m3, smart]\n",
     )?;
     let rules = [
         json!({"name": "Digest", "kind": "daily_digest", "params": {"at": "00:00"}}),
@@ -1559,7 +1559,7 @@ async fn digests_regions_rejected_changes_cleared_kills_and_open_circuits_alert(
         &gw,
         json!({"event": "config_rejected", "trigger": "file_change", "policy_sha256_before": "aaaaaaaaaaaaaaaa",
             "keys_sha256_before": "bbbbbbbbbbbbbbbb", "policy_sha256": "cccccccccccccccc", "keys_sha256": "bbbbbbbbbbbbbbbb",
-            "problem_count": 1, "problems": ["gantry.policy.yaml line 3: unknown field colour"]}),
+            "problem_count": 1, "problems": ["enterplace.policy.yaml line 3: unknown field colour"]}),
     )?;
     for (id, action, verdict, code) in [
         ("p1", "approve_policy", "refused", Some("invalid_policy")),
@@ -1587,7 +1587,7 @@ async fn digests_regions_rejected_changes_cleared_kills_and_open_circuits_alert(
     let fired: Vec<(String, String, String)> = fired
         .iter()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?)))
-        .collect::<Result<_, gantry_server::store::tokio_postgres::Error>>()?;
+        .collect::<Result<_, enterplace_server::store::tokio_postgres::Error>>()?;
     let of = |kind: &str| {
         fired
             .iter()

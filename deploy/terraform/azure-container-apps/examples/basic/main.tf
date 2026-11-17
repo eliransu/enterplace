@@ -6,17 +6,17 @@ provider "azurerm" {
   subscription_id = "00000000-0000-0000-0000-000000000000"
 }
 
-module "gantry" {
+module "enterplace" {
   source = "../.."
 
-  name                = "gantry"
+  name                = "enterplace"
   location            = "westeurope"
-  resource_group_name = "gantry"
-  image               = "ghcr.io/eliransu/gantry:0.1.0"
-  policy              = file("${path.module}/../../../gantry.policy.yaml")
+  resource_group_name = "enterplace"
+  image               = "ghcr.io/eliransu/enterplace:0.1.0"
+  policy              = file("${path.module}/../../../enterplace.policy.yaml")
 
   key_vault_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/security/providers/Microsoft.KeyVault/vaults/acme-secrets"
-  license_secret       = "gantry-license"
+  license_secret       = "enterplace-license"
   provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key" }
   registry = {
     server          = "ghcr.io"
@@ -26,5 +26,5 @@ module "gantry" {
 }
 
 output "gateway_url" {
-  value = module.gantry.gateway_url
+  value = module.enterplace.gateway_url
 }

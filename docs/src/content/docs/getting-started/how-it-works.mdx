@@ -1,23 +1,23 @@
 ---
 title: How it works
-description: The path every request takes through Gantry, from identity to audit record to provider, and the refusal code each step can return.
+description: The path every request takes through Enterplace, from identity to audit record to provider, and the refusal code each step can return.
 sidebar:
   order: 2
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Gantry is a reverse proxy with a fixed order of checks. Each request is identified, decided and recorded before any byte reaches a provider. A request that cannot be recorded is refused.
+Enterplace is a reverse proxy with a fixed order of checks. Each request is identified, decided and recorded before any byte reaches a provider. A request that cannot be recorded is refused.
 
 ## The request path
 
 ```text
 client (Claude Code, Codex, an SDK, an agent)
-   |  Authorization: Bearer gantry_...   or   x-api-key: gantry_...
+   |  Authorization: Bearer enterplace_...   or   x-api-key: enterplace_...
    v
-Gantry
-   1. identify    look up the key's SHA-256 in gantry.keys.yaml
-   2. route       is this a method and path Gantry serves?
+Enterplace
+   1. identify    look up the key's SHA-256 in enterplace.keys.yaml
+   2. route       is this a method and path Enterplace serves?
    3. read body   within 32 MiB, 30 seconds and the memory budget
    4. decide      the first rule that names the person or team
       kill        a kill switch on the person, team, key or model
@@ -51,29 +51,29 @@ Step 11 runs for every request, including those refused earlier: a refusal is re
 | 11. record | `audit_unavailable` |
 | 12. forward | `upstream_unreachable`, `upstream_failed`, `upstream_timeout` |
 
-Every response carries `X-Gantry-Decision` with the decision ID. Every refusal repeats that ID in its message and uses the error shape the client already understands, so Claude Code and the SDKs show the cause and the fix to the person. See [Refusal codes](/reference/refusal-codes/).
+Every response carries `X-Enterplace-Decision` with the decision ID. Every refusal repeats that ID in its message and uses the error shape the client already understands, so Claude Code and the SDKs show the cause and the fix to the person. See [Refusal codes](/reference/refusal-codes/).
 
 ## What reaches the provider
 
-The request body is forwarded byte for byte, except where the policy changes it: a guardrail that masks, a request translated for a provider that opts in, and the body Amazon Bedrock expects. Gantry never drops or rewrites an unknown field silently. An unknown query parameter is refused by name.
+The request body is forwarded byte for byte, except where the policy changes it: a guardrail that masks, a request translated for a provider that opts in, and the body Amazon Bedrock expects. Enterplace never drops or rewrites an unknown field silently. An unknown query parameter is refused by name.
 
-Credentials are swapped, not passed through. Gantry removes every request header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), every `x-amz*` header, proxy and CDN headers that carry the caller's address, and any header carrying the caller's Gantry key, then adds the provider's key.
+Credentials are swapped, not passed through. Enterplace removes every request header whose name contains `authorization`, `key`, `token`, `secret`, `organization` or `project` (except `idempotency-key`), every `x-amz*` header, proxy and CDN headers that carry the caller's address, and any header carrying the caller's Enterplace key, then adds the provider's key.
 
-The provider's answer, streamed or not, including the provider's own errors, comes back as sent, with `X-Gantry-Decision` added.
+The provider's answer, streamed or not, including the provider's own errors, comes back as sent, with `X-Enterplace-Decision` added.
 
 ## State is files
 
 | File | Holds | Written by |
 |---|---|---|
-| `gantry.policy.yaml` | Providers, rules, guardrails, prices, console settings | You, reviewed like code |
-| `gantry.keys.yaml` | The SHA-256, name, team and limits of each key | `gantry key new`, the console, the admin API |
-| `gantry-audit.jsonl` | One hash-chained JSON record per request, usage and admin action | Gantry only |
-| `gantry.kills.json` | Active kill switches | `gantry kill`, the console, the admin API |
+| `enterplace.policy.yaml` | Providers, rules, guardrails, prices, console settings | You, reviewed like code |
+| `enterplace.keys.yaml` | The SHA-256, name, team and limits of each key | `enterplace key new`, the console, the admin API |
+| `enterplace-audit.jsonl` | One hash-chained JSON record per request, usage and admin action | Enterplace only |
+| `enterplace.kills.json` | Active kill switches | `enterplace kill`, the console, the admin API |
 
-Gantry reloads the policy and keys within 2 seconds of a save, without a restart. A change that fails `gantry check` is not applied: Gantry keeps the version it has and records the rejection in the audit log.
+Enterplace reloads the policy and keys within 2 seconds of a save, without a restart. A change that fails `enterplace check` is not applied: Enterplace keeps the version it has and records the rejection in the audit log.
 
 <Aside type="note">
-Gantry is pre-1.0. It runs as one node on plain files, or as several replicas sharing a Postgres store. See [Project status](/getting-started/status/) for what is built and what is planned.
+Enterplace is pre-1.0. It runs as one node on plain files, or as several replicas sharing a Postgres store. See [Project status](/getting-started/status/) for what is built and what is planned.
 </Aside>
 
 ## Next

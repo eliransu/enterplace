@@ -21,11 +21,11 @@ It is contract v2 of the [guardrail webhook](/governance/guardrail-webhooks/). C
 | Without waiting | No | `mode: observe`: queued, batched, retried, never on the request path |
 | Signed | No | Standard Webhooks |
 
-The same events reach every API Gantry serves, in one shape: OpenAI chat completions, the Responses API, Anthropic messages, Gemini's `generateContent`, and Bedrock Converse bodies.
+The same events reach every API Enterplace serves, in one shape: OpenAI chat completions, the Responses API, Anthropic messages, Gemini's `generateContent`, and Bedrock Converse bodies.
 
 ## Policy
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 guardrails:
   - name: watcher
     type: events
@@ -76,7 +76,7 @@ The first of these that the request has names the session:
 
 | Order | Source | Recorded as |
 |---|---|---|
-| 1 | The `x-gantry-session` header | `x-gantry-session` |
+| 1 | The `x-enterplace-session` header | `x-enterplace-session` |
 | 2 | The `x-session-id` header | `x-session-id` |
 | 3 | Claude Code: the `x-claude-code-session-id` header, or the session inside `metadata.user_id` (`..._session_<id>`, or JSON with `session_id`) | `claude_code` |
 | 4 | Codex: the `session_id` header, or `conversation_id` | `codex` |
@@ -88,24 +88,24 @@ The first of these that the request has names the session:
 The value is hashed together with the person, and the id is `ses_` and 24 hex characters. A session id a client treats as a secret is never passed on, and two people who send the same value are two sessions. Sources 6 and 7 name an end user, not a conversation, so the first user message is hashed in: each conversation of that user is its own session.
 
 <Aside type="tip">
-An agent you write should send `x-gantry-session` with an id of its own for the run. Source 8 works with no change to the client, and gives one session to two conversations of the same key that open with the same words.
+An agent you write should send `x-enterplace-session` with an id of its own for the run. Source 8 works with no change to the client, and gives one session to two conversations of the same key that open with the same words.
 </Aside>
 
-A Responses API request that names a `previous_response_id` holds only what is new, so nothing in it says which conversation it is. Gantry records each response it creates as its caller's, with the session and turn it was answered in, and a request that goes on from one takes them from there before it looks at any header: a tool's result alone stays in the turn of the call it answers, indexed after that answer, and a new user message starts the session's next turn. No header is needed. A `previous_response_id` Gantry does not know as the caller's (created before the guardrail, or not through Gantry) falls back to the table above.
+A Responses API request that names a `previous_response_id` holds only what is new, so nothing in it says which conversation it is. Enterplace records each response it creates as its caller's, with the session and turn it was answered in, and a request that goes on from one takes them from there before it looks at any header: a tool's result alone stays in the turn of the call it answers, indexed after that answer, and a new user message starts the session's next turn. No header is needed. A `previous_response_id` Enterplace does not know as the caller's (created before the guardrail, or not through Enterplace) falls back to the table above.
 
-`x-gantry-session`, `x-gantry-turn`, `x-gantry-application` and `x-gantry-application-intent` are Gantry's own and are not sent to the provider.
+`x-enterplace-session`, `x-enterplace-turn`, `x-enterplace-application` and `x-enterplace-application-intent` are Enterplace's own and are not sent to the provider.
 
 ### turn_id
 
 A turn starts at each user message that carries no tool result, and holds everything up to the next one: the model's answers, its tool calls, the tool results the client sends back. An agent loop of five model calls after one question is one turn.
 
-`turn_id` is `turn_` and 16 hex characters, from the session, the number of the turn in the request's history (`turn_index`, from 1) and the text of the user message that opened it. Every call of the turn computes the same id. Send `x-gantry-turn: <your id>` to name the turn yourself: needed with `previous_response_id`, and to put an MCP tool call in the turn of the model call that asked for it.
+`turn_id` is `turn_` and 16 hex characters, from the session, the number of the turn in the request's history (`turn_index`, from 1) and the text of the user message that opened it. Every call of the turn computes the same id. Send `x-enterplace-turn: <your id>` to name the turn yourself: needed with `previous_response_id`, and to put an MCP tool call in the turn of the model call that asked for it.
 
 ### event_index and event_id
 
 `event_index` is the event's place in its turn, from 0. The system prompt and the tool definitions lead every turn (indexes 0 and 1 when both exist), then the user message, then each answer event and tool result in order. An answer's events continue where its request's stopped.
 
-`event_id` is `evt_` and 24 hex characters, from the turn, the index, the kind and the content. The same event sent twice has the same id, so a service can drop repeats. An index is as Gantry saw the turn in that call: a client that leaves reasoning out of the history it sends back shifts later indexes by one, so join on `event_id` or `call_id`, and order by arrival.
+`event_id` is `evt_` and 24 hex characters, from the turn, the index, the kind and the content. The same event sent twice has the same id, so a service can drop repeats. An index is as Enterplace saw the turn in that call: a client that leaves reasoning out of the history it sends back shifts later indexes by one, so join on `event_id` or `call_id`, and order by arrival.
 
 ### Only what is new
 
@@ -121,7 +121,7 @@ With `history: true`, each call also carries every event before the new ones, ol
 
 ## The envelope
 
-Gantry sends `POST <url>` with `Content-Type: application/json`. It sends only the headers `headers_env` names, the signature headers, and none of the caller's.
+Enterplace sends `POST <url>` with `Content-Type: application/json`. It sends only the headers `headers_env` names, the signature headers, and none of the caller's.
 
 ```json
 {
@@ -155,7 +155,7 @@ Gantry sends `POST <url>` with `Content-Type: application/json`. It sends only t
 | `mode` | string | `enforce` or `observe`. In `observe` the answer's body is not read. |
 | `phase` | string | `request`, `answer`, `stream` (a window of a streamed answer), `mcp`, `realtime`, `batch` (a line of a batch, or a job's request) or `batch_result` (a line of a batch's results). |
 | `session_id`, `turn_id`, `turn_index` | | See above. `turn_index` is 0 for MCP calls and requests with no user message. |
-| `decision_id` | string | The request's id in Gantry's audit log. A request and its answer share it. |
+| `decision_id` | string | The request's id in Enterplace's audit log. A request and its answer share it. |
 | `person`, `team` | string | Who sent the request. |
 | `org`, `customer`, `tags` | | Present when the caller has them. |
 | `model`, `provider`, `route` | string | The model the caller asked for, the provider it goes to, and the route it came in on. |
@@ -279,7 +279,7 @@ Answer with status 200 and this JSON, within `timeout_ms`:
 
 Unknown fields are refused, so a misspelled field fails loudly.
 
-### What Gantry does
+### What Enterplace does
 
 | Verdict | On a request | On an answer | Recorded action |
 |---|---|---|---|
@@ -299,7 +299,7 @@ A rule's events guardrails are asked one after another, in the order of the rule
 
 ### Failures
 
-These count as a failure of the service, and `on_failure` applies: a status other than 2xx, no whole answer within `timeout_ms`, a service that cannot be reached, a verdict that does not fit the contract. `fail_closed` refuses with `guardrail_blocked` and a message saying the guardrail could not check it. `fail_open` goes on, recorded with kind `unavailable` and action `skipped`. Gantry logs the cause for the operator, for example:
+These count as a failure of the service, and `on_failure` applies: a status other than 2xx, no whole answer within `timeout_ms`, a service that cannot be reached, a verdict that does not fit the contract. `fail_closed` refuses with `guardrail_blocked` and a message saying the guardrail could not check it. `fail_open` goes on, recorded with kind `unavailable` and action `skipped`. Enterplace logs the cause for the operator, for example:
 
 ```text
 unknown variant 'deny', expected one of 'allow', 'block', 'mask'
@@ -313,7 +313,7 @@ masked for event 1 (tool_definitions): tool definitions cannot be masked; block 
 
 ### enforce
 
-Gantry waits for the verdict at each point: before the request is sent, before a whole answer is returned, at each window of a streamed answer and at its end, before an MCP tool call is made and before its result is returned, and at each realtime text.
+Enterplace waits for the verdict at each point: before the request is sent, before a whole answer is returned, at each window of a streamed answer and at its end, before an MCP tool call is made and before its result is returned, and at each realtime text.
 
 ### observe
 
@@ -329,10 +329,10 @@ Any 2xx answer is a delivery; its body is not read. Order within a session is th
 
 | Metric | Labels | Meaning |
 |---|---|---|
-| `gantry_events_dropped_total` | `guardrail` | Envelopes dropped because the queue was full. Alert on any increase. |
-| `gantry_events_delivered_total` | `guardrail`, `outcome` | Envelopes `sent`, or `failed` after the last retry. |
+| `enterplace_events_dropped_total` | `guardrail` | Envelopes dropped because the queue was full. Alert on any increase. |
+| `enterplace_events_delivered_total` | `guardrail`, `outcome` | Envelopes `sent`, or `failed` after the last retry. |
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 guardrails:
   - name: recorder
     type: events
@@ -368,7 +368,7 @@ A block ends the stream with an error event in the caller's API, and the provide
 
 | API | The event that ends the stream |
 |---|---|
-| Chat completions | `data: {"error": {"type": "gantry_error", "code": "guardrail_blocked", "message": "..."}}` |
+| Chat completions | `data: {"error": {"type": "enterplace_error", "code": "guardrail_blocked", "message": "..."}}` |
 | Anthropic messages | `event: error` with `{"type": "error", "error": {"type": "permission_error", "message": "..."}}` |
 | Responses API | `event: error` with `{"type": "error", "code": "guardrail_blocked", "message": "..."}` |
 | Gemini | `data: {"error": {"code": 403, "status": "PERMISSION_DENIED", "details": [{"reason": "guardrail_blocked"}]}}` |
@@ -391,7 +391,7 @@ Without hold nothing waits, so a verdict can only stop what comes after it:
 
 ## Every route that carries content
 
-On the model APIs (chat completions, messages, the Responses API, `generateContent`) the body is a conversation, and an enforcing plugin must be able to read it. Every other governed route sends events for the text Gantry finds in its JSON body, in the same envelope, with the route in `route`:
+On the model APIs (chat completions, messages, the Responses API, `generateContent`) the body is a conversation, and an enforcing plugin must be able to read it. Every other governed route sends events for the text Enterplace finds in its JSON body, in the same envelope, with the route in `route`:
 
 | Route | What is an event |
 |---|---|
@@ -413,7 +413,7 @@ A batch is one session, and each line is a turn of it, named by the line's `cust
 
 A rule with no events guardrail pays nothing. An observing guardrail parses the request and the answer into events and puts two envelopes on its queue; delivery is in the background. An enforcing one adds its service's answer time at each point it is asked, and nothing else: ended sessions are read from memory, with or without a [store](/operations/store/#sessions-an-events-plugin-ended).
 
-`gantry-bench --events` measures the observing case: the [bench](/operations/operations/#bench) policy (1,000 keys, a `secrets` guardrail on every rule) with an events guardrail in observe mode added to every rule, delivering batches to a plugin service in the same process. 1,000 chat requests a second for 5 seconds, three runs of each, median with the lowest and highest in brackets, in microseconds (2026-11-14, commit `58f6917`):
+`enterplace-bench --events` measures the observing case: the [bench](/operations/operations/#bench) policy (1,000 keys, a `secrets` guardrail on every rule) with an events guardrail in observe mode added to every rule, delivering batches to a plugin service in the same process. 1,000 chat requests a second for 5 seconds, three runs of each, median with the lowest and highest in brackets, in microseconds (2026-11-14, commit `58f6917`):
 
 | Policy | Added at p50 | Added at p99 | Gateway self-time, p50 | Gateway self-time, p99 |
 |---|---|---|---|---|
@@ -422,17 +422,17 @@ A rule with no events guardrail pays nothing. An observing guardrail parses the 
 
 An observing events guardrail added 65 us at p50 as the client saw it and 31 us of gateway self-time at p50; at p99 the medians are 86 us and 57 us apart, with ranges that overlap. Every envelope was delivered in each run (12,000 for 6,000 requests, the warm-up included) and none was dropped. All six runs stayed under the CI gate's 1,000 us at p99.
 
-This is one Mac laptop, not a cloud instance: a MacBook Pro (Mac17,9), Apple M5 Pro, 15 cores, 48 GB of memory, macOS 26.6.2, with the load generator, the mock provider, the plugin service and the gateway in one process on that machine. Nothing else was building; the 1-minute load average was 2.0 to 2.7 across the runs. The plugin service and the batch sender share the bench's CPU, so read the difference as an upper bound. The commands were `gantry-bench --rps 1000 --secs 5` and `gantry-bench --rps 1000 --secs 5 --events` from a release build ([Performance](/operations/performance/) has the other runs of that day). Measure your own with:
+This is one Mac laptop, not a cloud instance: a MacBook Pro (Mac17,9), Apple M5 Pro, 15 cores, 48 GB of memory, macOS 26.6.2, with the load generator, the mock provider, the plugin service and the gateway in one process on that machine. Nothing else was building; the 1-minute load average was 2.0 to 2.7 across the runs. The plugin service and the batch sender share the bench's CPU, so read the difference as an upper bound. The commands were `enterplace-bench --rps 1000 --secs 5` and `enterplace-bench --rps 1000 --secs 5 --events` from a release build ([Performance](/operations/performance/) has the other runs of that day). Measure your own with:
 
 ```sh
-cargo run --release -p gantry-bench -- --rps 1000 --secs 5 --events --max-p99-overhead-us 1000
+cargo run --release -p enterplace-bench -- --rps 1000 --secs 5 --events --max-p99-overhead-us 1000
 ```
 
 ## Applications
 
 An application is a name and what it is for, in its owner's words. A plugin judges what a conversation does against that purpose.
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 applications:
   - name: support-bot
     intent: Answers billing questions for customers. Never moves money.
@@ -449,12 +449,12 @@ rules:
     applications: [support-bot]
 ```
 
-| A rule's `applications` | A request with no header | A request with `x-gantry-application: <name>` |
+| A rule's `applications` | A request with no header | A request with `x-enterplace-application: <name>` |
 |---|---|---|
 | absent | No `application`. | Refused with `application_not_allowed` (403). |
 | one name | That application, with the policy's `intent`. | That name: the same. Another: refused. |
 | several names | No `application`. | A listed name, with the policy's `intent`. Another: refused. |
-| includes `"*"` | No `application`. | Any name. A listed one has the policy's `intent`; another has the caller's `x-gantry-application-intent`. |
+| includes `"*"` | No `application`. | Any name. A listed one has the policy's `intent`; another has the caller's `x-enterplace-application-intent`. |
 
 The policy's `intent` always wins over the caller's for a listed application, so a caller cannot restate what a governed application is for. An `intent` is one line of at most 500 characters. Applications are read on rules with an events guardrail (or in a binary with its own plugin); on other rules the two headers are dropped unread.
 
@@ -468,7 +468,7 @@ With `secret_env`, each POST is signed the [Standard Webhooks](https://www.stand
 | `webhook-timestamp` | Seconds since 1970. |
 | `webhook-signature` | `v1,` and the base64 HMAC-SHA256 of `<webhook-id>.<webhook-timestamp>.<raw body>` under the secret: the base64-decoded part after `whsec_`, or the secret's own bytes when it has no such prefix. |
 
-Any Standard Webhooks library verifies it. Reject a timestamp more than five minutes old, and answer a bad signature with a non-2xx status so `on_failure` applies. `gantry serve` does not start while a variable `secret_env` or `headers_env` names is unset.
+Any Standard Webhooks library verifies it. Reject a timestamp more than five minutes old, and answer a bad signature with a non-2xx status so `on_failure` applies. `enterplace serve` does not start while a variable `secret_env` or `headers_env` names is unset.
 
 ## What is recorded
 
@@ -476,7 +476,7 @@ Findings are recorded by kind, per event, and never with content.
 
 - The request record and its `usage` record gain `session` and `turn`.
 - The request record gains `events`, one entry per events guardrail: `guardrail`, `mode`, `events` (how many were sent), `action` (`allow`, `block`, `mask`; `queued` or `dropped` in observe mode; `session_ended` for a refused session), `findings` (each with `kind`, `event_index`, `event_kind`, `event_id`, `severity`), `session_action`, `obeyed: false` in a shadow period, `unavailable: true` when the service failed.
-- Its `guardrails` list gains one entry per kind found, with detector `events`, as every guardrail writes them, so the request log, `gantry_guardrail_findings_total` and alert rules count them.
+- Its `guardrails` list gains one entry per kind found, with detector `events`, as every guardrail writes them, so the request log, `enterplace_guardrail_findings_total` and alert rules count them.
 - An answer's verdict is an `answer_guardrails` record with the same `events`, `session` and `turn`.
 - MCP calls carry `session`, `turn` and `events` on their decision record and their `mcp_result` record.
 - With `audit: { per_org: true }`, each record goes to its organization's chain.
@@ -484,7 +484,7 @@ Findings are recorded by kind, per event, and never with content.
 The request log filters and groups by both ids. The requests of one session, and its turns with their cost and count:
 
 ```sh
-curl -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+curl -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" \
   "http://127.0.0.1:8080/admin/usage?session=ses_5c1f0e9a7b3d4f6a8c2e1b0d&group_by=turn"
 ```
 
@@ -502,7 +502,7 @@ The reference plugin in `examples/plugins/event-printer` is one Python file with
 
 2. Point an events guardrail at it:
 
-   ```yaml title="gantry.policy.yaml"
+   ```yaml title="enterplace.policy.yaml"
    version: 1
    providers:
      - name: openai
@@ -526,7 +526,7 @@ The reference plugin in `examples/plugins/event-printer` is one Python file with
 
    ```sh
    curl http://127.0.0.1:8080/v1/chat/completions \
-     -H "Authorization: Bearer $GANTRY_KEY" -H "x-gantry-session: demo-1" \
+     -H "Authorization: Bearer $ENTERPLACE_KEY" -H "x-enterplace-session: demo-1" \
      -d '{"model": "gpt-4o-mini",
           "messages": [{"role": "user", "content": "Delete notes.txt"}],
           "tools": [{"type": "function", "function": {"name": "delete_file",
@@ -544,7 +544,7 @@ The reference plugin in `examples/plugins/event-printer` is one Python file with
 5. The caller gets a refusal instead of the tool call, and the audit log holds the finding by kind:
 
    ```json
-   { "error": { "message": "Refused (guardrail_blocked): Guardrail \"watcher\" refused the model's answer: the plugin found blocked_tool (1). Ask in another way, or ask a Gantry admin about the guardrail. The answer was produced and is counted in usage. Decision 01JD3X6Q8M2T4V9W0Y1Z3A5B7C.", "type": "gantry_error", "code": "guardrail_blocked", "decision": "01JD3X6Q8M2T4V9W0Y1Z3A5B7C" } }
+   { "error": { "message": "Refused (guardrail_blocked): Guardrail \"watcher\" refused the model's answer: the plugin found blocked_tool (1). Ask in another way, or ask a Enterplace admin about the guardrail. The answer was produced and is counted in usage. Decision 01JD3X6Q8M2T4V9W0Y1Z3A5B7C.", "type": "enterplace_error", "code": "guardrail_blocked", "decision": "01JD3X6Q8M2T4V9W0Y1Z3A5B7C" } }
    ```
 
 6. Set `PLUGIN_SECRET` for the plugin and `secret_env` on the guardrail to the same secret, and the plugin refuses any delivery that is not signed by your gateway.
@@ -553,7 +553,7 @@ The reference plugin in `examples/plugins/event-printer` is one Python file with
 
 ## A plugin inside the binary
 
-A binary that embeds Gantry sets `Extension::events` to an `EventsPlugin`: the same envelope (`gantry_core::events::Envelope`) and the same verdict, in process, with no HTTP between. It is asked for every request a rule allows, with the guardrail name `extension`, after the rule's own events guardrails. Its `mode`, `stream`, `history`, `timeout` and `session_end` are methods with the defaults above; a plugin that does not answer within its `timeout` fails closed. This is how a vendor adapter or a licensed feature is built in.
+A binary that embeds Enterplace sets `Extension::events` to an `EventsPlugin`: the same envelope (`enterplace_core::events::Envelope`) and the same verdict, in process, with no HTTP between. It is asked for every request a rule allows, with the guardrail name `extension`, after the rule's own events guardrails. Its `mode`, `stream`, `history`, `timeout` and `session_end` are methods with the defaults above; a plugin that does not answer within its `timeout` fails closed. This is how a vendor adapter or a licensed feature is built in.
 
 ## Limits
 
@@ -562,7 +562,7 @@ A binary that embeds Gantry sets `Extension::events` to an `EventsPlugin`: the s
 - A Bedrock passthrough's streamed answer is a binary event stream and is passed on unread; its request is read. Streams are read as server-sent events only.
 - Without `stream.hold`, a streamed tool call reaches the caller before the verdict on it, and nothing in a stream can be masked: see [What hold: false cannot promise](#what-hold-false-cannot-promise).
 - In a held stream, `reasoning` and a message whose windows were already sent cannot be masked at the end. A streamed completion (`/v1/completions`) has no windows.
-- A request that goes on from a `previous_response_id` does not hold the earlier tool call, so its `tool_result` has the `call_id` and no `name`. A Responses `conversation` id does not carry a session: send `x-gantry-session`.
+- A request that goes on from a `previous_response_id` does not hold the earlier tool call, so its `tool_result` has the `call_id` and no `name`. A Responses `conversation` id does not carry a session: send `x-enterplace-session`.
 - A batch result line's events count from 0 in the line's turn, because the line's request is not at hand when the results are read.
 - A Converse tool result given as `json` takes a mask that is JSON of the same type only.
 - A session a plugin ends is refused by the other replicas within a second, not at once.

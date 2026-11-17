@@ -58,7 +58,7 @@ async fn join(
 #[test]
 fn passwords_hash_as_the_cloudflare_app_hashes_them() -> Result<(), String> {
     // PBKDF2-SHA256, 100,000 iterations, the salt as hex bytes, as cloud/control-plane/src/lib/crypto.ts does.
-    let hash = gantry_core::id::hex(&derive(
+    let hash = enterplace_core::id::hex(&derive(
         "owner-password-123",
         &unhex("00112233445566778899aabbccddeeff").ok_or("salt")?,
     ));
@@ -97,10 +97,10 @@ async fn invite_accept_roles_and_the_last_owner() -> Result<(), Error> {
     let mut owner = Browser::admin(&gw.app).await?;
 
     // A key for the second person, by email, before they join.
-    gantry_core::keyfile::add_entry(
+    enterplace_core::keyfile::add_entry(
         second_email,
         "research",
-        "gantry_second_0123456789abcdef01234567",
+        "enterplace_second_0123456789abcdef01234567",
         false,
         &gw.keys,
     )?;
@@ -288,7 +288,7 @@ async fn invite_accept_roles_and_the_last_owner() -> Result<(), Error> {
     );
 
     // Every change is in the audit log, in the gateway's chain.
-    let log = std::fs::read_to_string(gw.dir.join("gantry-audit.jsonl"))?;
+    let log = std::fs::read_to_string(gw.dir.join("enterplace-audit.jsonl"))?;
     for action in ["invite_created", "invite_accepted", "member_changed"] {
         assert!(
             log.contains(&format!(r#""action":"{action}""#)),
@@ -308,24 +308,24 @@ async fn removing_a_person_revokes_their_keys_and_ends_their_session() -> Result
     let email = "leaver@example.com";
     let mut leaver = join(&gw, &mut owner, email, "admin", "ops").await?;
     // Two keys named with their email (one in another case) and one of someone else's.
-    gantry_core::keyfile::add_entry(
+    enterplace_core::keyfile::add_entry(
         email,
         "ops",
-        "gantry_leaver1_0123456789abcdef012345678",
+        "enterplace_leaver1_0123456789abcdef012345678",
         false,
         &gw.keys,
     )?;
-    gantry_core::keyfile::add_entry(
+    enterplace_core::keyfile::add_entry(
         "Leaver@Example.com",
         "ops",
-        "gantry_leaver2_0123456789abcdef012345678",
+        "enterplace_leaver2_0123456789abcdef012345678",
         false,
         &gw.keys,
     )?;
-    gantry_core::keyfile::add_entry(
+    enterplace_core::keyfile::add_entry(
         "stays@example.com",
         "ops",
-        "gantry_stays_0123456789abcdef01234567890",
+        "enterplace_stays_0123456789abcdef01234567890",
         false,
         &gw.keys,
     )?;
@@ -340,7 +340,7 @@ async fn removing_a_person_revokes_their_keys_and_ends_their_session() -> Result
         )
         .await?;
     assert_eq!(removed.status, StatusCode::SEE_OTHER, "{}", removed.text);
-    let keys = gantry_core::config::read_keys(&gw.keys)?.unwrap_or_default();
+    let keys = enterplace_core::config::read_keys(&gw.keys)?.unwrap_or_default();
     assert!(!keys.to_lowercase().contains(email), "{keys}");
     assert!(keys.contains("stays@example.com"));
     // Their session ends at once, and they cannot sign in again.
@@ -355,7 +355,7 @@ async fn removing_a_person_revokes_their_keys_and_ends_their_session() -> Result
         )
         .await?;
     assert_eq!(again.status, StatusCode::UNAUTHORIZED);
-    let log = std::fs::read_to_string(gw.dir.join("gantry-audit.jsonl"))?;
+    let log = std::fs::read_to_string(gw.dir.join("enterplace-audit.jsonl"))?;
     let record = log
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
@@ -563,9 +563,9 @@ async fn without_the_feature_the_console_keeps_admin_keys_only() -> Result<(), E
             "{name}: an invite was made without the feature"
         );
         // None of members' tables were made, and no other feature's when nothing else is unlocked.
-        let config: gantry_server::store::tokio_postgres::Config = url.parse()?;
+        let config: enterplace_server::store::tokio_postgres::Config = url.parse()?;
         let (client, connection) = config
-            .connect(gantry_server::store::tokio_postgres::NoTls)
+            .connect(enterplace_server::store::tokio_postgres::NoTls)
             .await?;
         tokio::spawn(connection);
         let tables: i64 = client

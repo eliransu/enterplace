@@ -75,7 +75,7 @@ async fn new_token(app: &Router, body: Value) -> Result<(String, String), Error>
     let made = admin(app, "POST", "/console/watch/tokens", body).await?;
     assert_eq!(made.status, StatusCode::CREATED, "{}", made.text);
     let field = |name: &str| made.body[name].as_str().unwrap_or_default().to_string();
-    assert!(field("token").starts_with("gantry_watch_") && field("token").len() == 13 + 64);
+    assert!(field("token").starts_with("enterplace_watch_") && field("token").len() == 13 + 64);
     Ok((field("id"), field("token")))
 }
 
@@ -297,11 +297,11 @@ async fn a_real_claude_code_export_gives_the_person_tokens_and_cost_once() -> Re
     assert_eq!(seen.body["steps"]["know"]["status"], "on");
     assert_eq!(
         seen.body["steps"]["limit"]["status"],
-        "needs API traffic through Gantry"
+        "needs API traffic through Enterplace"
     );
     assert_eq!(
         seen.body["steps"]["protect"]["status"],
-        "needs API traffic through Gantry"
+        "needs API traffic through Enterplace"
     );
 
     // The same session's other run, sent as JSON: a second session, counted beside the first.
@@ -389,12 +389,12 @@ async fn a_real_claude_code_export_gives_the_person_tokens_and_cost_once() -> Re
         json!(1200.0),
         "{totals}"
     );
-    assert!(gantry_core::audit::verify(&gw.audit).is_ok());
+    assert!(enterplace_core::audit::verify(&gw.audit).is_ok());
 
     // The text Claude Code was told to send is nowhere: not in the chain, the answers or the tables.
     let chain = std::fs::read_to_string(&gw.audit)?;
     let tables = {
-        use gantry_server::store::tokio_postgres;
+        use enterplace_server::store::tokio_postgres;
         let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
         tokio::spawn(connection);
         let row = client
@@ -771,8 +771,8 @@ async fn a_missing_wrong_revoked_or_expired_token_and_a_bad_export_are_refused()
     .await?;
     let (old_id, old) = new_token(&gw.app, json!({ "label": "old" })).await?;
 
-    let zeros = format!("gantry_watch_{}", "0".repeat(64));
-    for bad in ["", "gantry_dev_abc", zeros.as_str(), ADMIN_KEY] {
+    let zeros = format!("enterplace_watch_{}", "0".repeat(64));
+    for bad in ["", "enterplace_dev_abc", zeros.as_str(), ADMIN_KEY] {
         let refused = post(bad, PROTOBUF, LOGS_PB).await?;
         assert_eq!(refused.status, StatusCode::UNAUTHORIZED, "{bad}");
         assert_eq!(
@@ -854,7 +854,7 @@ async fn a_missing_wrong_revoked_or_expired_token_and_a_bad_export_are_refused()
 
     // Expired: refused, saying when and what to do.
     {
-        use gantry_server::store::tokio_postgres;
+        use enterplace_server::store::tokio_postgres;
         let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
         tokio::spawn(connection);
         client
@@ -897,7 +897,7 @@ async fn a_missing_wrong_revoked_or_expired_token_and_a_bad_export_are_refused()
         &gw.app,
         "GET",
         "/console/watch/tokens",
-        "gantry_not_a_key",
+        "enterplace_not_a_key",
         JSON,
         Vec::new(),
     )
@@ -965,7 +965,7 @@ async fn watched_requests_are_in_usage_the_request_log_analytics_and_coverage() 
     let gw = gateway("watch_shows", &url, &licensed(&["watch"]))?;
     let (_, token) = new_token(&gw.app, json!({ "label": "team", "team": "payments" })).await?;
     // A request through the gateway, beside the watched one.
-    gw.log.append(&gantry_core::audit::Entry {
+    gw.log.append(&enterplace_core::audit::Entry {
         id: "D1",
         person: Some("noa"),
         team: Some("platform"),
@@ -1058,11 +1058,14 @@ async fn watched_requests_are_in_usage_the_request_log_analytics_and_coverage() 
     assert_eq!(analytics.status, StatusCode::OK);
     assert!(analytics.text.contains("watch"), "{}", analytics.text);
 
-    // `gantry audit coverage` reads the chain: the watched person beside the routed one.
+    // `enterplace audit coverage` reads the chain: the watched person beside the routed one.
     gw.log.flush();
-    let coverage = gantry_core::coverage::traffic(&gw.audit)?;
+    let coverage = enterplace_core::coverage::traffic(&gw.audit)?;
     let watched = coverage
-        .get(&(MAYA.to_string(), gantry_core::coverage::WATCHED.to_string()))
+        .get(&(
+            MAYA.to_string(),
+            enterplace_core::coverage::WATCHED.to_string(),
+        ))
         .ok_or("maya is not covered")?;
     assert_eq!(
         (watched.requests, watched.refused, watched.team.as_str()),
@@ -1111,7 +1114,7 @@ async fn without_the_feature_watch_answers_license_required_and_makes_no_tables(
                 answer.text
             );
         }
-        use gantry_server::store::tokio_postgres;
+        use enterplace_server::store::tokio_postgres;
         let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
         tokio::spawn(connection);
         let tables: i64 = client
@@ -1130,7 +1133,7 @@ async fn the_watch_tables_follow_retention_and_legal_hold() -> Result<(), Error>
     };
     let gw = gateway("watch_retention", &url, &licensed(&["watch", "retention"]))?;
     let (_, token) = new_token(&gw.app, json!({ "label": "team" })).await?;
-    use gantry_server::store::tokio_postgres;
+    use enterplace_server::store::tokio_postgres;
     let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
     tokio::spawn(connection);
     let old = "INSERT INTO enterprise_watch_daily (day, person, metric, value) VALUES (current_date - 400, 'old@acme.co', 'sessions', 1)";
@@ -1167,7 +1170,7 @@ async fn the_watch_tables_follow_retention_and_legal_hold() -> Result<(), Error>
     client
         .batch_execute("UPDATE enterprise_export_settings SET legal_hold = false")
         .await?;
-    client.batch_execute("DELETE FROM gantry_keys").await?;
+    client.batch_execute("DELETE FROM enterplace_keys").await?;
     let gw = gateway("watch_retention", &url, &licensed(&["watch", "retention"]))?;
     assert_eq!(
         send(
@@ -1194,11 +1197,11 @@ async fn the_watch_tables_follow_retention_and_legal_hold() -> Result<(), Error>
 #[test]
 fn setup_prints_the_managed_settings_anthropic_documents() -> Result<(), Error> {
     let args = |list: &[&str]| list.iter().map(|a| (*a).to_string()).collect::<Vec<_>>();
-    let token = format!("gantry_watch_{}", "a".repeat(64));
+    let token = format!("enterplace_watch_{}", "a".repeat(64));
     let out = super::setup(&args(&[
         "setup",
         "--gateway",
-        "https://gantry.example.com/",
+        "https://enterplace.example.com/",
         "--team",
         "payments",
         "--token",
@@ -1218,7 +1221,7 @@ fn setup_prints_the_managed_settings_anthropic_documents() -> Result<(), Error> 
             "OTEL_METRICS_EXPORTER": "otlp",
             "OTEL_LOGS_EXPORTER": "otlp",
             "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
-            "OTEL_EXPORTER_OTLP_ENDPOINT": "https://gantry.example.com/otlp",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "https://enterplace.example.com/otlp",
             "OTEL_EXPORTER_OTLP_HEADERS": format!("Authorization=Bearer {token}"),
         } })
     );
@@ -1226,7 +1229,9 @@ fn setup_prints_the_managed_settings_anthropic_documents() -> Result<(), Error> 
         out.contains("team payments")
             && out.contains("/Library/Application Support/ClaudeCode/managed-settings.json")
     );
-    assert!(out.contains("export OTEL_EXPORTER_OTLP_ENDPOINT=\"https://gantry.example.com/otlp\""));
+    assert!(
+        out.contains("export OTEL_EXPORTER_OTLP_ENDPOINT=\"https://enterplace.example.com/otlp\"")
+    );
     // Prompt and tool text stay off: the block never turns them on.
     assert!(!out.contains("OTEL_LOG_USER_PROMPTS") && !out.contains("OTEL_LOG_TOOL_DETAILS"));
 
@@ -1235,15 +1240,15 @@ fn setup_prints_the_managed_settings_anthropic_documents() -> Result<(), Error> 
         args(&[
             "setup",
             "--gateway",
-            "gantry.example.com",
+            "enterplace.example.com",
             "--team",
             "payments",
         ]),
-        args(&["setup", "--gateway", "https://gantry.example.com"]),
+        args(&["setup", "--gateway", "https://enterplace.example.com"]),
         args(&[
             "setup",
             "--gateway",
-            "https://gantry.example.com",
+            "https://enterplace.example.com",
             "--team",
             "a",
             "--person",
@@ -1252,11 +1257,11 @@ fn setup_prints_the_managed_settings_anthropic_documents() -> Result<(), Error> 
         args(&[
             "setup",
             "--gateway",
-            "https://gantry.example.com",
+            "https://enterplace.example.com",
             "--team",
             "a",
             "--token",
-            "gantry_dev_x",
+            "enterplace_dev_x",
         ]),
         args(&["tokens"]),
     ] {
@@ -1396,16 +1401,16 @@ async fn an_email_becomes_the_name_the_install_knows_and_a_stranger_is_listed() 
         &policy,
     )?;
     // maya's key says her email; dana's key is named by hers, as single sign-on names keys.
-    let mut attributes = gantry_core::keyfile::Attributes::default();
+    let mut attributes = enterplace_core::keyfile::Attributes::default();
     attributes
         .options
         .metadata
         .insert("email".into(), "Maya.Cohen@acme.co".into());
-    gantry_core::keyfile::issue_with("maya", "payments", &attributes, &gw.keys)?;
-    gantry_core::keyfile::issue("Dana@acme.co", "payments", &gw.keys)?;
+    enterplace_core::keyfile::issue_with("maya", "payments", &attributes, &gw.keys)?;
+    enterplace_core::keyfile::issue("Dana@acme.co", "payments", &gw.keys)?;
     gw.governed
         .reloader
-        .check(gantry_server::Trigger::FileChange);
+        .check(enterplace_server::Trigger::FileChange);
     // sam is a member (as an invite or SCIM makes one) without a key.
     let mut owner = Browser::admin(&gw.app).await?;
     let invited = owner
@@ -1501,15 +1506,15 @@ async fn an_email_becomes_the_name_the_install_knows_and_a_stranger_is_listed() 
     assert!(stranger.get("email").is_none(), "{stranger}");
 
     // A key given after an export names the person from then on, and does not make a repeat of that export new.
-    let mut attributes = gantry_core::keyfile::Attributes::default();
+    let mut attributes = enterplace_core::keyfile::Attributes::default();
     attributes
         .options
         .metadata
         .insert("email".into(), "stranger@else.co".into());
-    gantry_core::keyfile::issue_with("pat", "payments", &attributes, &gw.keys)?;
+    enterplace_core::keyfile::issue_with("pat", "payments", &attributes, &gw.keys)?;
     gw.governed
         .reloader
-        .check(gantry_server::Trigger::FileChange);
+        .check(enterplace_server::Trigger::FileChange);
     send(&gw.app, "POST", "/otlp/v1/logs", &token, JSON, last).await?;
     let again = summary(&gw.app).await?;
     assert_eq!(again.body["totals"]["api_requests"], json!(6.0));
@@ -1583,7 +1588,7 @@ async fn with_a_chain_per_organization_watch_records_go_to_the_tokens_organizati
             .collect())
     };
     gw.log.flush();
-    let chain = gantry_core::audit::org_path(&gw.audit, "acme");
+    let chain = enterplace_core::audit::org_path(&gw.audit, "acme");
     let of_acme = read(&chain)?;
     assert_eq!(of_acme.len(), 2, "the request and the metrics: {of_acme:?}");
     for record in &of_acme {
@@ -1599,8 +1604,8 @@ async fn with_a_chain_per_organization_watch_records_go_to_the_tokens_organizati
         assert_eq!(record["person"], "omer@ops.co", "{record}");
         assert!(record.get("org").is_none(), "{record}");
     }
-    assert!(gantry_core::audit::verify(&chain).is_ok());
-    assert!(gantry_core::audit::verify(&gw.audit).is_ok());
+    assert!(enterplace_core::audit::verify(&chain).is_ok());
+    assert!(enterplace_core::audit::verify(&gw.audit).is_ok());
     Ok(())
 }
 
@@ -1666,7 +1671,11 @@ async fn a_viewer_lists_watch_tokens_and_only_an_owner_or_admin_issues_and_revok
     let listed = as_person(&viewer, "GET", tokens.clone(), Value::Null).await?;
     assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);
     assert_eq!(listed.body["tokens"][0]["id"], json!(id), "{}", listed.text);
-    assert!(!listed.text.contains("gantry_watch_"), "{}", listed.text);
+    assert!(
+        !listed.text.contains("enterplace_watch_"),
+        "{}",
+        listed.text
+    );
     let looked = as_person(
         &viewer,
         "GET",
@@ -1777,7 +1786,7 @@ async fn a_viewer_lists_watch_tokens_and_only_an_owner_or_admin_issues_and_revok
     Ok(())
 }
 
-/// `gantry watch setup` without `--token`: the token is created over the network, by a gateway that listens.
+/// `enterplace watch setup` without `--token`: the token is created over the network, by a gateway that listens.
 #[tokio::test(flavor = "multi_thread")]
 async fn setup_creates_its_token_through_a_gateway_that_listens() -> Result<(), Error> {
     let Some(url) = database("watch_setup").await? else {
@@ -1809,7 +1818,7 @@ async fn setup_creates_its_token_through_a_gateway_that_listens() -> Result<(), 
         .ok_or("no token in the settings")?
         .to_string();
     assert!(
-        token.starts_with("gantry_watch_") && token.len() == 13 + 64,
+        token.starts_with("enterplace_watch_") && token.len() == 13 + 64,
         "{out}"
     );
     assert!(
@@ -1846,7 +1855,7 @@ async fn setup_creates_its_token_through_a_gateway_that_listens() -> Result<(), 
     // What the gateway refuses, and no gateway at all, are said with the fix.
     let wrong = run(
         &["--gateway", &gateway, "--team", "payments"],
-        Some("gantry_admin_wrong"),
+        Some("enterplace_admin_wrong"),
     )
     .await?;
     assert!(wrong.is_err_and(|e| e.contains("answered 401")));
@@ -1857,7 +1866,7 @@ async fn setup_creates_its_token_through_a_gateway_that_listens() -> Result<(), 
     .await?;
     assert!(long.is_err_and(|e| e.contains("answered 400") && e.contains("1 to 365 days")));
     let none = run(&["--gateway", &gateway, "--team", "payments"], None).await?;
-    assert!(none.is_err_and(|e| e.contains("GANTRY_ADMIN_KEY")));
+    assert!(none.is_err_and(|e| e.contains("ENTERPLACE_ADMIN_KEY")));
     let closed = run(
         &["--gateway", "http://127.0.0.1:9", "--team", "payments"],
         Some(ADMIN_KEY),

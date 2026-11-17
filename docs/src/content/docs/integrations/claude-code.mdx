@@ -1,20 +1,20 @@
 ---
 title: Claude Code
-description: Route Claude Code through Gantry on your developers' own Claude subscriptions, with no API key, or with API keys. Every request identified and recorded.
+description: Route Claude Code through Enterplace on your developers' own Claude subscriptions, with no API key, or with API keys. Every request identified and recorded.
 sidebar:
   order: 1
 ---
 
 import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Most teams pay for Claude Code with Claude subscriptions (Pro, Max, Team or Enterprise seats), not with Anthropic API keys. Gantry routes those sessions as they are: Claude Code keeps its own Claude login, Gantry sends that login to Anthropic unchanged, and a free Gantry person token says who sent each request. Nobody creates an API key.
+Most teams pay for Claude Code with Claude subscriptions (Pro, Max, Team or Enterprise seats), not with Anthropic API keys. Enterplace routes those sessions as they are: Claude Code keeps its own Claude login, Enterplace sends that login to Anthropic unchanged, and a free Enterplace person token says who sent each request. Nobody creates an API key.
 
 ## The shortest path
 
-On a Claude subscription, with a new install, start Gantry and add one setting to Claude Code, with no key:
+On a Claude subscription, with a new install, start Enterplace and add one setting to Claude Code, with no key:
 
 ```bash
-gantry start    # once, on the machine that runs Gantry
+enterplace start    # once, on the machine that runs Enterplace
 ```
 
 ```json title="~/.claude/settings.json"
@@ -27,20 +27,20 @@ gantry start    # once, on the machine that runs Gantry
 
 Then run `claude`. If you prefer a shell, `export ANTHROPIC_BASE_URL=http://127.0.0.1:8080` in the shell that runs Claude Code does the same.
 
-Claude Code keeps your Claude login. Leave `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset. Send a prompt, and **Requests** in the console shows it, with the person `unknown` until you add a person token ([step 2 below](#claude-subscriptions)). No Gantry yet? See the [Quickstart](/getting-started/quickstart/).
+Claude Code keeps your Claude login. Leave `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset. Send a prompt, and **Requests** in the console shows it, with the person `unknown` until you add a person token ([step 2 below](#claude-subscriptions)). No Enterplace yet? See the [Quickstart](/getting-started/quickstart/).
 
 <Aside type="caution" title="Not in the Claude desktop app">
-This works in Claude Code in a terminal and in the VS Code extension (`claudeCode.environmentVariables`). The Code tab of the Claude desktop app sets `ANTHROPIC_BASE_URL` to `https://api.anthropic.com` itself, over your shell profile and `settings.json`, so its sessions never reach Gantry. Run `echo $ANTHROPIC_BASE_URL` inside a session to check. For the desktop app, use its [third-party inference setup](/integrations/claude-desktop/) with a Gantry key.
+This works in Claude Code in a terminal and in the VS Code extension (`claudeCode.environmentVariables`). The Code tab of the Claude desktop app sets `ANTHROPIC_BASE_URL` to `https://api.anthropic.com` itself, over your shell profile and `settings.json`, so its sessions never reach Enterplace. Run `echo $ANTHROPIC_BASE_URL` inside a session to check. For the desktop app, use its [third-party inference setup](/integrations/claude-desktop/) with a Enterplace key.
 </Aside>
 
 ## Three ways
 
-Three ways to bring Claude Code under Gantry, in order of preference:
+Three ways to bring Claude Code under Enterplace, in order of preference:
 
-| | Claude subscriptions through Gantry | Watch mode | Anthropic API keys through Gantry |
+| | Claude subscriptions through Enterplace | Watch mode | Anthropic API keys through Enterplace |
 |---|---|---|---|
 | Who pays Anthropic | Each person's Claude seat | Each person's Claude seat | Per request, on an API key |
-| Requests go through Gantry | Yes | No, telemetry only | Yes |
+| Requests go through Enterplace | Yes | No, telemetry only | Yes |
 | Rules, guardrails, kill switches | Yes | No | Yes |
 | Limits | Tokens and requests per person, team and day | No | Dollars, tokens and requests |
 | Cost shown | API-equivalent estimate | Claude Code's estimate | What was billed |
@@ -50,9 +50,9 @@ Three ways to bring Claude Code under Gantry, in order of preference:
 
 <Steps>
 
-1. **Turn on subscription passthrough.** `gantry start` writes this provider, so a new install has it already. Otherwise use the console's **Start here**, **Coding agents** (one click), or add it to the policy:
+1. **Turn on subscription passthrough.** `enterplace start` writes this provider, so a new install has it already. Otherwise use the console's **Start here**, **Coding agents** (one click), or add it to the policy:
 
-    ```yaml title="gantry.policy.yaml"
+    ```yaml title="enterplace.policy.yaml"
     version: 1
     providers:
       - name: claude-subscriptions
@@ -67,45 +67,45 @@ Three ways to bring Claude Code under Gantry, in order of preference:
         models: ["*"]
     ```
 
-    The provider holds no key. Each request carries the person's own Claude login, which Gantry sends on unchanged and never keeps. See [Subscriptions](/governance/subscriptions/) for what Gantry can and cannot do with that traffic.
+    The provider holds no key. Each request carries the person's own Claude login, which Enterplace sends on unchanged and never keeps. See [Subscriptions](/governance/subscriptions/) for what Enterplace can and cannot do with that traffic.
 
-2. **Get a person token.** It names the person to Gantry and reaches no model on its own, so it costs nothing.
+2. **Get a person token.** It names the person to Enterplace and reaches no model on its own, so it costs nothing.
 
     <Tabs syncKey="keysource">
     <TabItem label="From the console">
 
-    **Start here**, **Coding agents**, **Point Claude Code at Gantry**: enter a name and a team and press **Make person token**. The token is shown once, in the lines below.
+    **Start here**, **Coding agents**, **Point Claude Code at Enterplace**: enter a name and a team and press **Make person token**. The token is shown once, in the lines below.
 
     </TabItem>
     <TabItem label="Single sign-on">
 
     ```bash
-    gantry login https://gantry.example.com
+    enterplace login https://enterplace.example.com
     ```
 
-    It writes `ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS` (with the person's own key) into the `env` block of `~/.claude/settings.json` and keeps every other key in that file, so step 3 is already done. A settings file that is not valid JSON is left as it is, with an error. It also writes `~/.config/gantry/env` for the OpenAI SDKs and Codex, which is the shell fallback for Claude Code. See [Single sign-on](/governance/single-sign-on/).
+    It writes `ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS` (with the person's own key) into the `env` block of `~/.claude/settings.json` and keeps every other key in that file, so step 3 is already done. A settings file that is not valid JSON is left as it is, with an error. It also writes `~/.config/enterplace/env` for the OpenAI SDKs and Codex, which is the shell fallback for Claude Code. See [Single sign-on](/governance/single-sign-on/).
 
     </TabItem>
     <TabItem label="Issued by an admin">
 
     ```bash
-    gantry key new maya.cohen --team payments --identity-only --url https://gantry.example.com
+    enterplace key new maya.cohen --team payments --identity-only --url https://enterplace.example.com
     ```
 
-    Prints a `gantry_u_...` token once, with the settings below.
+    Prints a `enterplace_u_...` token once, with the settings below.
 
     </TabItem>
     </Tabs>
 
-3. **Point Claude Code at Gantry, and keep your normal Claude login.**
+3. **Point Claude Code at Enterplace, and keep your normal Claude login.**
 
-    Add the `env` block to `~/.claude/settings.json` (keep the file's other keys). `gantry login` does this for you.
+    Add the `env` block to `~/.claude/settings.json` (keep the file's other keys). `enterplace login` does this for you.
 
     ```json title="~/.claude/settings.json"
     {
       "env": {
-        "ANTHROPIC_BASE_URL": "https://gantry.example.com",
-        "ANTHROPIC_CUSTOM_HEADERS": "x-gantry-user: gantry_u_..."
+        "ANTHROPIC_BASE_URL": "https://enterplace.example.com",
+        "ANTHROPIC_CUSTOM_HEADERS": "x-enterplace-user: enterplace_u_..."
       }
     }
     ```
@@ -113,8 +113,8 @@ Three ways to bring Claude Code under Gantry, in order of preference:
     Fallback: if you cannot edit that file, export the same two variables in the shell that runs Claude Code.
 
     ```bash
-    export ANTHROPIC_BASE_URL=https://gantry.example.com
-    export ANTHROPIC_CUSTOM_HEADERS="x-gantry-user: gantry_u_..."
+    export ANTHROPIC_BASE_URL=https://enterplace.example.com
+    export ANTHROPIC_CUSTOM_HEADERS="x-enterplace-user: enterplace_u_..."
     claude
     ```
 
@@ -131,8 +131,8 @@ Claude Code reads `env` from its [managed settings file](https://code.claude.com
 ```json title="managed-settings.json"
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "https://gantry.example.com",
-    "ANTHROPIC_CUSTOM_HEADERS": "x-gantry-user: gantry_u_..."
+    "ANTHROPIC_BASE_URL": "https://enterplace.example.com",
+    "ANTHROPIC_CUSTOM_HEADERS": "x-enterplace-user: enterplace_u_..."
   }
 }
 ```
@@ -141,49 +141,49 @@ Claude Code reads `env` from its [managed settings file](https://code.claude.com
 - Linux and WSL: `/etc/claude-code/managed-settings.json`
 - Windows: `C:\Program Files\ClaudeCode\managed-settings.json`
 
-The Gantry [device agent](/operations/devices/) sets the same two keys in each person's `~/.claude/settings.json`, from the key their `gantry login` saved.
+The Enterplace [device agent](/operations/devices/) sets the same two keys in each person's `~/.claude/settings.json`, from the key their `enterplace login` saved.
 
 ### Start with no identity
 
-With `identity: optional`, a request without `x-gantry-user` is recorded as the person `unknown` (team `unknown`), told apart by Claude Code's session ID. A company can point Claude Code at Gantry first and hand out person tokens later. With `identity: required` (the default) such a request is refused with `person_needed` (403). A kill switch on the person `unknown` stops every unnamed request.
+With `identity: optional`, a request without `x-enterplace-user` is recorded as the person `unknown` (team `unknown`), told apart by Claude Code's session ID. A company can point Claude Code at Enterplace first and hand out person tokens later. With `identity: required` (the default) such a request is refused with `person_needed` (403). A kill switch on the person `unknown` stops every unnamed request.
 
 ### What Claude Code sends
 
-| Header | What Gantry does |
+| Header | What Enterplace does |
 |---|---|
 | `Authorization: Bearer sk-ant-oat...` (the subscription login) | Taken off the request before any check, sent to the passthrough provider unchanged, and to nothing else: no guardrail webhook, plugin, trace, log or record sees it. Never stored, hashed into a record or cached |
-| `x-gantry-user` | Names the person and team. Removed before the request is forwarded |
+| `x-enterplace-user` | Names the person and team. Removed before the request is forwarded |
 | `anthropic-beta`, `anthropic-version`, `x-app`, `X-Claude-Code-Session-Id`, user agent | Passed unchanged. The session ID groups the requests into sessions |
 
-A login is never swapped for a key of Gantry's, and a Gantry key never goes to a passthrough provider:
+A login is never swapped for a key of Enterplace's, and a Enterplace key never goes to a passthrough provider:
 
 | Request | Answer |
 |---|---|
 | A login for a model only a keyed provider serves | 403 `login_not_accepted` |
-| A Gantry key (or `ANTHROPIC_API_KEY`) for a model only a passthrough provider serves | 403 `login_needed` |
+| A Enterplace key (or `ANTHROPIC_API_KEY`) for a model only a passthrough provider serves | 403 `login_needed` |
 | A person token as the only credential | 403 `person_token_only` |
-| A login and a different Gantry key at once | 400 `ambiguous_key` |
-| No `x-gantry-user` on a provider with `identity: required` | 403 `person_needed` |
+| A login and a different Enterplace key at once | 400 `ambiguous_key` |
+| No `x-enterplace-user` on a provider with `identity: required` | 403 `person_needed` |
 
-When a passthrough provider and a keyed provider list the same model, a request with a login goes to the passthrough one and a request with a Gantry key to the keyed one.
+When a passthrough provider and a keyed provider list the same model, a request with a login goes to the passthrough one and a request with a Enterplace key to the keyed one.
 
 <Aside type="caution">
-Check that routing your plan's traffic through your own gateway fits Anthropic's terms for your plan (consumer terms for Pro and Max, your commercial agreement for Team and Enterprise). Gantry does not change what Claude Code sends Anthropic; it reads it on the way.
+Check that routing your plan's traffic through your own gateway fits Anthropic's terms for your plan (consumer terms for Pro and Max, your commercial agreement for Team and Enterprise). Enterplace does not change what Claude Code sends Anthropic; it reads it on the way.
 </Aside>
 
 ## Watch mode
 
-To see usage without routing anything, send Claude Code's own telemetry to Gantry instead. It records who used Claude Code, the models, tokens and estimated cost, and enforces nothing. See [Claude Team and Enterprise](/integrations/claude-team/).
+To see usage without routing anything, send Claude Code's own telemetry to Enterplace instead. It records who used Claude Code, the models, tokens and estimated cost, and enforces nothing. See [Claude Team and Enterprise](/integrations/claude-team/).
 
 ## Anthropic API keys
 
-When Claude Code runs on API keys, Gantry holds the provider key and each developer gets a Gantry key in its place.
+When Claude Code runs on API keys, Enterplace holds the provider key and each developer gets a Enterplace key in its place.
 
 <Steps>
 
 1. **Allow both of Claude Code's models.** Claude Code uses a main model and a smaller one for background work. A provider must serve both, and the person's rule must allow both.
 
-    ```yaml title="gantry.policy.yaml"
+    ```yaml title="enterplace.policy.yaml"
     version: 1
     providers:
       - name: anthropic
@@ -197,17 +197,17 @@ When Claude Code runs on API keys, Gantry holds the provider key and each develo
         models: [claude-sonnet-5-5, claude-haiku-5-5]
     ```
 
-    Keep the provider key in a variable of its own. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be the Gantry key.
+    Keep the provider key in a variable of its own. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be the Enterplace key.
 
-2. **Get a Gantry key**: **People and workloads**, **Issue a key** in the console (or **Start here**, **Coding agents**, **Anthropic API keys**), `gantry login` on a gateway without subscription passthrough, or `gantry key new maya.cohen --team payments --url https://gantry.example.com`. See [Keys and identity](/governance/keys/).
+2. **Get a Enterplace key**: **People and workloads**, **Issue a key** in the console (or **Start here**, **Coding agents**, **Anthropic API keys**), `enterplace login` on a gateway without subscription passthrough, or `enterplace key new maya.cohen --team payments --url https://enterplace.example.com`. See [Keys and identity](/governance/keys/).
 
-3. **Point Claude Code at Gantry.**
+3. **Point Claude Code at Enterplace.**
 
     ```json title="~/.claude/settings.json"
     {
       "env": {
         "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080",
-        "ANTHROPIC_API_KEY": "gantry_...",
+        "ANTHROPIC_API_KEY": "enterplace_...",
         "ANTHROPIC_MODEL": "claude-sonnet-5-5",
         "ANTHROPIC_SMALL_FAST_MODEL": "claude-haiku-5-5"
       }
@@ -218,7 +218,7 @@ When Claude Code runs on API keys, Gantry holds the provider key and each develo
 
     ```bash
     export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-    export ANTHROPIC_API_KEY=gantry_...
+    export ANTHROPIC_API_KEY=enterplace_...
     export ANTHROPIC_MODEL=claude-sonnet-5-5
     export ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-5-5
     claude
@@ -230,7 +230,7 @@ Each request now has a record in the audit log, background calls included.
 
 ## Model picker
 
-Set `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` and Claude Code asks Gantry for its model list at startup (`GET /v1/models`). The `/model` picker then shows the models the person's rule allows on providers that take messages requests, each described as `Allowed by Gantry rule "<rule>"`. Each list request is recorded.
+Set `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` and Claude Code asks Enterplace for its model list at startup (`GET /v1/models`). The `/model` picker then shows the models the person's rule allows on providers that take messages requests, each described as `Allowed by Enterplace rule "<rule>"`. Each list request is recorded.
 
 Models on chat providers without `accept_messages` are left out: Claude Code would offer them, and every request would be refused with `wrong_route`.
 
@@ -252,7 +252,7 @@ providers:
       claude-haiku-5-5: us.anthropic.claude-haiku-5-5-v1:0
 ```
 
-Gantry signs with AWS credentials from its own environment. See [Amazon Bedrock](/providers/bedrock/).
+Enterplace signs with AWS credentials from its own environment. See [Amazon Bedrock](/providers/bedrock/).
 
 </TabItem>
 <TabItem label="Vertex AI">
@@ -291,7 +291,7 @@ export ANTHROPIC_SMALL_FAST_MODEL=gpt-5-mini
 </TabItem>
 </Tabs>
 
-## What Gantry does with its requests
+## What Enterplace does with its requests
 
 | Request | Behavior |
 |---|---|
@@ -302,13 +302,13 @@ export ANTHROPIC_SMALL_FAST_MODEL=gpt-5-mini
 
 ## Refusals
 
-On the messages routes a refusal uses Anthropic's error shape, so Claude Code shows Gantry's message:
+On the messages routes a refusal uses Anthropic's error shape, so Claude Code shows Enterplace's message:
 
 ```text
-API Error: 403 Refused (model_not_allowed): team "interns" may not use model "claude-sonnet-5-5" under rule "everyone-else". This rule allows no models. Ask a Gantry admin to change the policy if you need this one. Decision 01M7969SCWCX2P3AR3KSXZJ7VS.
+API Error: 403 Refused (model_not_allowed): team "interns" may not use model "claude-sonnet-5-5" under rule "everyone-else". This rule allows no models. Ask a Enterplace admin to change the policy if you need this one. Decision 01M7969SCWCX2P3AR3KSXZJ7VS.
 ```
 
-Claude Code labels any 403 "Failed to authenticate". The message after that label is Gantry's.
+Claude Code labels any 403 "Failed to authenticate". The message after that label is Enterplace's.
 
 - A model no provider serves is refused with 403 `unknown_model`, not 404. Claude Code replaces the text of a 404 with its own and resends a 400 several times; it shows a 403 as it is and sends it once.
 - Every refusal sets `x-should-retry: false`, except `busy`, `rate_limited` and the `upstream_*` codes, which set `x-should-retry: true`. Claude Code resends those on its own. `rate_limited` also sets `Retry-After`.
@@ -329,37 +329,37 @@ See [Budgets and rate limits](/governance/budgets-and-rate-limits/).
 
 ### Budget in the status line
 
-Claude Code's [status line](https://code.claude.com/docs/en/statusline) runs a command and shows what it prints. `gantry budget status --short` prints what your own key has left, so a small script puts it under the prompt:
+Claude Code's [status line](https://code.claude.com/docs/en/statusline) runs a command and shows what it prints. `enterplace budget status --short` prints what your own key has left, so a small script puts it under the prompt:
 
-```sh title="~/.claude/gantry-statusline.sh"
+```sh title="~/.claude/enterplace-statusline.sh"
 #!/bin/sh
 input=$(cat)
 model=$(printf '%s' "$input" | jq -r '.model.display_name // "Claude"' 2>/dev/null)
-budget=$(gantry budget status --short 2>/dev/null) || budget="budget unknown"
-printf '[%s] Gantry: %s\n' "${model:-Claude}" "$budget"
+budget=$(enterplace budget status --short 2>/dev/null) || budget="budget unknown"
+printf '[%s] Enterplace: %s\n' "${model:-Claude}" "$budget"
 ```
 
 ```json title="~/.claude/settings.json"
 {
   "statusLine": {
     "type": "command",
-    "command": "~/.claude/gantry-statusline.sh",
+    "command": "~/.claude/enterplace-statusline.sh",
     "refreshInterval": 60
   }
 }
 ```
 
 ```text
-[Sonnet] Gantry: $412.37 left (resets 2026-12-01 00:00 UTC)
+[Sonnet] Enterplace: $412.37 left (resets 2026-12-01 00:00 UTC)
 ```
 
-Make the script executable (`chmod +x`). It needs `jq` and the `gantry` binary on your PATH, and your key in `GANTRY_KEY` (or a `gantry login`) with the gateway in `GANTRY_URL`. `statusLine`, `type`, `command` and `refreshInterval` are Claude Code's own settings; `refreshInterval` re-runs the command every that many seconds, so the figure stays current while a session is idle. The script is in the repository at `examples/claude-code/gantry-statusline.sh`. The call it makes (`GET /v1/gantry/me`) costs nothing and writes no audit record.
+Make the script executable (`chmod +x`). It needs `jq` and the `enterplace` binary on your PATH, and your key in `ENTERPLACE_KEY` (or a `enterplace login`) with the gateway in `ENTERPLACE_URL`. `statusLine`, `type`, `command` and `refreshInterval` are Claude Code's own settings; `refreshInterval` re-runs the command every that many seconds, so the figure stays current while a session is idle. The script is in the repository at `examples/claude-code/enterplace-statusline.sh`. The call it makes (`GET /v1/enterplace/me`) costs nothing and writes no audit record.
 
 ## Related
 
 <CardGrid>
 	<LinkCard title="Codex" href="/integrations/codex/" description="OpenAI's coding agent over the Responses API." />
-	<LinkCard title="Anthropic provider" href="/providers/anthropic/" description="The messages routes and the headers Gantry passes." />
+	<LinkCard title="Anthropic provider" href="/providers/anthropic/" description="The messages routes and the headers Enterplace passes." />
 	<LinkCard title="Guardrails" href="/governance/guardrails/" description="Block or mask secrets and personal data in prompts." />
 	<LinkCard title="Translation" href="/routing/translation/" description="Run Claude Code on GPT, Gemini or a local model." />
 </CardGrid>

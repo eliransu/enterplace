@@ -29,12 +29,12 @@ Order inside a feature page: what it is, a minimal working example, configuratio
 - `<Tabs>` when the same thing is done more than one way (Binary / Docker, curl / Python / TypeScript, macOS / Linux). Use `syncKey` for repeated tab sets (`syncKey="install"`, `syncKey="lang"`).
 - `<Aside type="note|tip|caution|danger">` for one point that matters. At most three per page. `caution` for anything that exposes keys or loses audit records.
 - Tables for fields, flags, codes. Columns: Field | Type | Default | Description.
-- Code blocks always carry a language. Use a `title="gantry.policy.yaml"` on file contents. Show command output in a separate `text` block.
+- Code blocks always carry a language. Use a `title="enterplace.policy.yaml"` on file contents. Show command output in a separate `text` block.
 - Links between pages are root-relative with a trailing slash: `/governance/budgets/`. Anchors work: `/reference/refusal-codes/#budget_exceeded`.
 
 ## Voice
 
-- Direct and declarative. Second person, present tense. "Gantry refuses the request with `budget_exceeded`."
+- Direct and declarative. Second person, present tense. "Enterplace refuses the request with `budget_exceeded`."
 - Short paragraphs, 1 to 3 sentences. One idea per sentence.
 - Lead with what the reader gets, then how.
 - No marketing words: blazing, seamless, powerful, robust, effortless, enterprise-grade, game-changing, simply, just.
@@ -44,4 +44,4 @@ Order inside a feature page: what it is, a minimal working example, configuratio
 
 ## Accuracy
 
-Every fact comes from the legacy docs in `docs/_legacy/` or the source in `crates/`. Do not invent flags, fields, routes, codes, numbers or integrations. When unsure, check `target/release/gantry --help` or grep the source. A full policy file in a ```yaml block (one with a top-level `version:`) is checked by `scripts/check_examples.py`, so it must pass `gantry check`.
+Every fact comes from the legacy docs in `docs/_legacy/` or the source in `crates/`. Do not invent flags, fields, routes, codes, numbers or integrations. When unsure, check `target/release/enterplace --help` or grep the source. A full policy file in a ```yaml block (one with a top-level `version:`) is checked by `scripts/check_examples.py`, so it must pass `enterplace check`.

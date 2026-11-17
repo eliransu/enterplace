@@ -1,7 +1,7 @@
 # Postgres for the store: RDS Postgres 16 behind an RDS Proxy, created unless database_url_secret_arn names an
 # existing database.
 #
-# Why the proxy: Gantry checks the database's certificate against the Mozilla roots built into it. RDS instances
+# Why the proxy: Enterplace checks the database's certificate against the Mozilla roots built into it. RDS instances
 # present certificates from the RDS certificate authorities, which are not among them; RDS Proxy presents an
 # ACM certificate that chains to Amazon's public roots, which are. The proxy also pools connections across gateways.
 
@@ -15,7 +15,7 @@ resource "random_password" "db" {
 resource "aws_security_group" "db" {
   count       = local.create_db ? 1 : 0
   name        = "${var.name}-db"
-  description = "Gantry Postgres"
+  description = "Enterplace Postgres"
   vpc_id      = var.vpc_id
   tags        = var.tags
 }
@@ -23,7 +23,7 @@ resource "aws_security_group" "db" {
 resource "aws_security_group" "db_proxy" {
   count       = local.create_db ? 1 : 0
   name        = "${var.name}-db-proxy"
-  description = "Gantry Postgres proxy"
+  description = "Enterplace Postgres proxy"
   vpc_id      = var.vpc_id
   tags        = var.tags
 }
@@ -71,8 +71,8 @@ resource "aws_db_instance" "this" {
   allocated_storage         = var.db_allocated_storage
   max_allocated_storage     = var.db_allocated_storage * 5
   storage_encrypted         = true
-  db_name                   = "gantry"
-  username                  = "gantry"
+  db_name                   = "enterplace"
+  username                  = "enterplace"
   password                  = random_password.db[0].result
   multi_az                  = var.db_multi_az
   db_subnet_group_name      = aws_db_subnet_group.this[0].name
@@ -96,7 +96,7 @@ resource "aws_secretsmanager_secret" "db_credentials" {
 resource "aws_secretsmanager_secret_version" "db_credentials" {
   count         = local.create_db ? 1 : 0
   secret_id     = aws_secretsmanager_secret.db_credentials[0].id
-  secret_string = jsonencode({ username = "gantry", password = random_password.db[0].result })
+  secret_string = jsonencode({ username = "enterplace", password = random_password.db[0].result })
 }
 
 resource "aws_iam_role" "db_proxy" {
@@ -148,7 +148,7 @@ resource "aws_db_proxy_target" "this" {
   db_instance_identifier = aws_db_instance.this[0].identifier
 }
 
-# The whole connection string in one secret, because Gantry reads it from one variable.
+# The whole connection string in one secret, because Enterplace reads it from one variable.
 resource "aws_secretsmanager_secret" "database_url" {
   count = local.create_db ? 1 : 0
   name  = "${var.name}/database-url"
@@ -158,5 +158,5 @@ resource "aws_secretsmanager_secret" "database_url" {
 resource "aws_secretsmanager_secret_version" "database_url" {
   count         = local.create_db ? 1 : 0
   secret_id     = aws_secretsmanager_secret.database_url[0].id
-  secret_string = "postgres://gantry:${random_password.db[0].result}@${aws_db_proxy.this[0].endpoint}:5432/gantry?sslmode=verify-full"
+  secret_string = "postgres://enterplace:${random_password.db[0].result}@${aws_db_proxy.this[0].endpoint}:5432/enterplace?sslmode=verify-full"
 }

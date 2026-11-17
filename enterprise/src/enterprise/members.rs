@@ -19,12 +19,12 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use gantry_console::{
+use enterplace_console::{
     Admin, Console, Form, Tls, Via, bare_page, foreign,
     html::{self, Field, esc},
     redirect, same_origin,
 };
-use gantry_server::store::tokio_postgres::{self, Row};
+use enterplace_server::store::tokio_postgres::{self, Row};
 use serde_json::json;
 
 use super::Db;
@@ -107,7 +107,7 @@ pub(super) struct Members {
 }
 
 /// Adds the members pages, the invite links, password sign-in and the accounts it opens to the console.
-pub fn register(extension: &mut gantry_server::Extension, db: Arc<Db>, keys: PathBuf) {
+pub fn register(extension: &mut enterplace_server::Extension, db: Arc<Db>, keys: PathBuf) {
     let members = Members { db, keys };
     let check = members.clone();
     let console = &mut extension.console;
@@ -133,7 +133,7 @@ pub fn register(extension: &mut gantry_server::Extension, db: Arc<Db>, keys: Pat
 
 /// Without the feature, its addresses say why instead of not existing: a bookmark or an old invite link explains
 /// itself. There is no nav entry and no password sign-in.
-pub fn locked(extension: &mut gantry_server::Extension, status: &Status) {
+pub fn locked(extension: &mut enterplace_server::Extension, status: &Status) {
     let Err(refused) = status.require(FEATURE) else {
         return;
     };
@@ -167,7 +167,7 @@ pub(super) fn random_hex(bytes: usize) -> Result<String, String> {
     ring::rand::SystemRandom::new()
         .fill(&mut out)
         .map_err(|_| "The system gave no randomness. Try again in a moment.".to_string())?;
-    Ok(gantry_core::id::hex(&out))
+    Ok(enterplace_core::id::hex(&out))
 }
 
 fn unhex(text: &str) -> Option<Vec<u8>> {
@@ -196,7 +196,7 @@ fn derive(password: &str, salt: &[u8]) -> [u8; 32] {
 pub(super) fn hash_password(password: &str) -> Result<(String, String), String> {
     let salt = random_hex(16)?;
     let bytes = unhex(&salt).ok_or("the salt did not read back")?;
-    Ok((salt, gantry_core::id::hex(&derive(password, &bytes))))
+    Ok((salt, enterplace_core::id::hex(&derive(password, &bytes))))
 }
 
 /// Whether `password` hashes to `hash` under `salt`, in constant time. A hash that is not hex (`!`: no password
@@ -349,8 +349,8 @@ impl Members {
 
     /// Hashes of the keys named with `email`, in any case: the person's keys.
     pub(super) fn keys_of(&self, email: &str) -> Result<Vec<String>, String> {
-        let text = gantry_core::config::read_keys(&self.keys)?.unwrap_or_default();
-        let entries = gantry_core::config::key_entries(&self.keys, &text)
+        let text = enterplace_core::config::read_keys(&self.keys)?.unwrap_or_default();
+        let entries = enterplace_core::config::key_entries(&self.keys, &text)
             .map_err(|errors| errors.join("; "))?;
         Ok(entries
             .into_iter()
@@ -364,7 +364,7 @@ impl Members {
         let path = self.keys.clone();
         tokio::task::spawn_blocking(move || {
             keys.iter()
-                .try_for_each(|sha| gantry_core::keyfile::revoke(&path, sha).map(|_| ()))
+                .try_for_each(|sha| enterplace_core::keyfile::revoke(&path, sha).map(|_| ()))
         })
         .await
         .unwrap_or_else(|err| Err(err.to_string()))
@@ -602,7 +602,7 @@ async fn members_main(members: &Members, admin: &Admin, notice: &str) -> Result<
     }
     let invite = if edit {
         format!(
-            r#"<section class="g-section g-stack"><h2 class="t-md" style="margin: 0">Invite a member</h2><form method="post" action="/console/members/invite" class="g-stack"><div class="g-toolbar">{}{}{}</div><div class="g-head__actions">{}</div><p class="t-small g-muted" style="margin: 0">Gantry does not send email. You get a link valid for {INVITE_DAYS} days to send them yourself.</p></form></section>"#,
+            r#"<section class="g-section g-stack"><h2 class="t-md" style="margin: 0">Invite a member</h2><form method="post" action="/console/members/invite" class="g-stack"><div class="g-toolbar">{}{}{}</div><div class="g-head__actions">{}</div><p class="t-small g-muted" style="margin: 0">Enterplace does not send email. You get a link valid for {INVITE_DAYS} days to send them yourself.</p></form></section>"#,
             text_field(
                 "invite-email",
                 "email",
@@ -710,7 +710,7 @@ async fn invite(
                 "INSERT INTO enterprise_invites (token_sha256, email, role, team, created_by, expires_at) \
                  VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6))",
                 &[
-                    &gantry_core::id::sha256_hex(token.as_bytes()),
+                    &enterplace_core::id::sha256_hex(token.as_bytes()),
                     &email,
                     &role.word(),
                     &team,
@@ -945,7 +945,7 @@ async fn find_invite(members: &Members, token: &str) -> Result<Invite, Response>
             ),
         )
     };
-    let hash = gantry_core::id::sha256_hex(token.as_bytes());
+    let hash = enterplace_core::id::sha256_hex(token.as_bytes());
     let row = async {
         let client = members.db.client().await?;
         client
@@ -1189,7 +1189,7 @@ fn sign_in_form(status: StatusCode, error: &str, email: &str) -> Response {
 
 async fn sign_in_page(State(console): State<Console>, headers: HeaderMap) -> Response {
     if console.signed_in(&headers).await.is_some() {
-        return redirect(gantry_console::HOME);
+        return redirect(enterplace_console::HOME);
     }
     sign_in_form(StatusCode::OK, "", "")
 }

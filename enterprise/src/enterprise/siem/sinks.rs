@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
-use gantry_core::{id::sha256_hex, sigv4};
+use enterplace_core::{id::sha256_hex, sigv4};
 use serde_json::{Value, json};
 
 /// Reads an environment variable. The process environment in the binary, a map in tests.
@@ -108,7 +108,7 @@ impl Kind {
         )
     }
 
-    /// Whether Gantry makes the secret (an HMAC signing secret) rather than the operator.
+    /// Whether Enterplace makes the secret (an HMAC signing secret) rather than the operator.
     pub fn signs(self) -> bool {
         matches!(self, Self::Webhook | Self::Callback)
     }
@@ -154,7 +154,7 @@ pub struct Joined {
     pub text: Option<Text>,
 }
 
-/// Prompt and answer text, redacted by Gantry's own secrets and PII detectors before it was stored.
+/// Prompt and answer text, redacted by Enterplace's own secrets and PII detectors before it was stored.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Text {
     /// (role, text) for each part of the prompt.
@@ -255,10 +255,10 @@ impl Out {
     }
 }
 
-/// HMAC-SHA256 of `body` under `secret`, as hex: the webhook's `x-gantry-signature: sha256=<hex>`.
+/// HMAC-SHA256 of `body` under `secret`, as hex: the webhook's `x-enterplace-signature: sha256=<hex>`.
 pub fn signature(secret: &str, body: &[u8]) -> String {
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
-    gantry_core::id::hex(ring::hmac::sign(&key, body).as_ref())
+    enterplace_core::id::hex(ring::hmac::sign(&key, body).as_ref())
 }
 
 /// Seconds since 1970 of a record's time, now when it has none that reads.
@@ -316,9 +316,9 @@ pub fn request(dest: &Dest, batch: &Batch) -> Out {
             .into_bytes();
             let signed = format!("sha256={}", signature(&dest.secret, &body));
             Out::post(dest.url.clone(), "application/json", body)
-                .header("x-gantry-signature", signed)
-                .header("x-gantry-first-hash", first)
-                .header("x-gantry-last-hash", last)
+                .header("x-enterplace-signature", signed)
+                .header("x-enterplace-first-hash", first)
+                .header("x-enterplace-last-hash", last)
         }
         Kind::SplunkHec => {
             // HEC takes event objects one after another in one POST.
@@ -330,8 +330,8 @@ pub fn request(dest: &Dest, batch: &Batch) -> Out {
                     let head = json!({
                         "time": epoch_nanos(r) as f64 / 1e9,
                         "host": batch.replica,
-                        "source": "gantry",
-                        "sourcetype": "gantry:audit",
+                        "source": "enterplace",
+                        "sourcetype": "enterplace:audit",
                         "fields": {
                             "replica": batch.replica,
                             "batch_first_hash": first,
@@ -355,8 +355,8 @@ pub fn request(dest: &Dest, batch: &Batch) -> Out {
                 .iter()
                 .map(|line| {
                     json!({
-                        "ddsource": "gantry",
-                        "service": "gantry",
+                        "ddsource": "enterplace",
+                        "service": "enterplace",
                         "hostname": batch.replica,
                         "ddtags": tags,
                         "message": line,
@@ -411,23 +411,23 @@ pub fn request(dest: &Dest, batch: &Batch) -> Out {
                         "severityText": "INFO",
                         "body": { "stringValue": line },
                         "attributes": [
-                            attr("gantry.n", r["n"].clone()),
-                            attr("gantry.hash", r["hash"].clone()),
-                            attr("gantry.prev", r["prev"].clone()),
-                            attr("gantry.event", r.get("event").cloned().unwrap_or(Value::from("request"))),
+                            attr("enterplace.n", r["n"].clone()),
+                            attr("enterplace.hash", r["hash"].clone()),
+                            attr("enterplace.prev", r["prev"].clone()),
+                            attr("enterplace.event", r.get("event").cloned().unwrap_or(Value::from("request"))),
                         ],
                     })
                 })
                 .collect();
             let body = json!({ "resourceLogs": [{
                 "resource": { "attributes": [
-                    attr("service.name", Value::from("gantry")),
-                    attr("gantry.replica", Value::from(batch.replica.clone())),
-                    attr("gantry.batch.first_hash", Value::from(first)),
-                    attr("gantry.batch.last_hash", Value::from(last)),
-                    attr("gantry.batch.prev", range["prev"].clone()),
+                    attr("service.name", Value::from("enterplace")),
+                    attr("enterplace.replica", Value::from(batch.replica.clone())),
+                    attr("enterplace.batch.first_hash", Value::from(first)),
+                    attr("enterplace.batch.last_hash", Value::from(last)),
+                    attr("enterplace.batch.prev", range["prev"].clone()),
                 ]},
-                "scopeLogs": [{ "scope": { "name": "gantry.audit" }, "logRecords": logs }],
+                "scopeLogs": [{ "scope": { "name": "enterplace.audit" }, "logRecords": logs }],
             }]});
             let out = Out::post(
                 dest.url.clone(),
@@ -503,9 +503,9 @@ pub fn request(dest: &Dest, batch: &Batch) -> Out {
             let body = body.to_string().into_bytes();
             let signed = format!("sha256={}", signature(&dest.secret, &body));
             Out::post(dest.url.clone(), "application/json", body)
-                .header("x-gantry-signature", signed)
-                .header("x-gantry-first-hash", first)
-                .header("x-gantry-last-hash", last)
+                .header("x-enterplace-signature", signed)
+                .header("x-enterplace-first-hash", first)
+                .header("x-enterplace-last-hash", last)
         }
         Kind::S3 | Kind::Gcs | Kind::AzureBlob => {
             let body = batch.ndjson().into_bytes();
@@ -653,7 +653,7 @@ pub fn traces(batch: &Batch) -> Value {
                 ("langfuse.user.id", u["person"].clone()),
                 (
                     "langfuse.trace.name",
-                    format!("gantry {operation} {model}").into(),
+                    format!("enterplace {operation} {model}").into(),
                 ),
                 (
                     "langfuse.observation.usage_details",
@@ -663,17 +663,17 @@ pub fn traces(batch: &Batch) -> Value {
                     "langfuse.observation.cost_details",
                     json!({ "total": u["cost_usd"] }).to_string().into(),
                 ),
-                ("gantry.decision", id.into()),
-                ("gantry.team", u["team"].clone()),
-                ("gantry.key", u["key"].clone()),
-                ("gantry.rule", d["rule"].clone()),
-                ("gantry.client", d["client"].clone()),
-                ("gantry.status", u["status"].clone()),
-                ("gantry.ended", u["ended"].clone()),
-                ("gantry.charged_usd", u["charged_usd"].clone()),
-                ("gantry.n", u["n"].clone()),
-                ("gantry.hash", u["hash"].clone()),
-                ("gantry.prev", u["prev"].clone()),
+                ("enterplace.decision", id.into()),
+                ("enterplace.team", u["team"].clone()),
+                ("enterplace.key", u["key"].clone()),
+                ("enterplace.rule", d["rule"].clone()),
+                ("enterplace.client", d["client"].clone()),
+                ("enterplace.status", u["status"].clone()),
+                ("enterplace.ended", u["ended"].clone()),
+                ("enterplace.charged_usd", u["charged_usd"].clone()),
+                ("enterplace.n", u["n"].clone()),
+                ("enterplace.hash", u["hash"].clone()),
+                ("enterplace.prev", u["prev"].clone()),
             ];
             if let Some(text) = &joined.text {
                 let input: Vec<Value> = text
@@ -730,20 +730,20 @@ pub fn traces(batch: &Batch) -> Value {
         })
         .collect();
     let resource: Vec<Value> = [
-        ("service.name", Value::from("gantry")),
-        ("gantry.replica", Value::from(batch.replica.clone())),
-        ("gantry.batch.first_n", range["first_n"].clone()),
-        ("gantry.batch.last_n", range["last_n"].clone()),
-        ("gantry.batch.prev", range["prev"].clone()),
-        ("gantry.batch.first_hash", range["first_hash"].clone()),
-        ("gantry.batch.last_hash", range["last_hash"].clone()),
+        ("service.name", Value::from("enterplace")),
+        ("enterplace.replica", Value::from(batch.replica.clone())),
+        ("enterplace.batch.first_n", range["first_n"].clone()),
+        ("enterplace.batch.last_n", range["last_n"].clone()),
+        ("enterplace.batch.prev", range["prev"].clone()),
+        ("enterplace.batch.first_hash", range["first_hash"].clone()),
+        ("enterplace.batch.last_hash", range["last_hash"].clone()),
     ]
     .iter()
     .filter_map(|(k, v)| attr(k, v))
     .collect();
     json!({ "resourceSpans": [{
         "resource": { "attributes": resource },
-        "scopeSpans": [{ "scope": { "name": "gantry.export" }, "spans": spans }],
+        "scopeSpans": [{ "scope": { "name": "enterplace.export" }, "spans": spans }],
     }]})
 }
 
@@ -1033,7 +1033,7 @@ impl Sinks {
             let query = [
                 ("Action", "AssumeRoleWithWebIdentity"),
                 ("RoleArn", role.as_str()),
-                ("RoleSessionName", "gantry-audit-export"),
+                ("RoleSessionName", "enterplace-audit-export"),
                 ("Version", "2011-06-15"),
                 ("WebIdentityToken", token.trim()),
             ]
@@ -1143,7 +1143,7 @@ impl Sinks {
                 body: Vec::new(),
             };
             self.json(&out, "the Google metadata server").map_err(|err| {
-                format!("{err} Without a service account key on the destination, Gantry asks the metadata server (GKE workload identity, Cloud Run, Compute Engine).")
+                format!("{err} Without a service account key on the destination, Enterplace asks the metadata server (GKE workload identity, Cloud Run, Compute Engine).")
             })?
         } else {
             let account: Value = serde_json::from_str(&dest.secret).map_err(|_| {
@@ -1265,7 +1265,7 @@ impl Sinks {
                 },
             };
             self.json(&out, "Azure managed identity").map_err(|err| {
-                format!("{err} Without a secret on the destination, Gantry signs in as the replica's managed identity; give it the Storage Blob Data Contributor or Monitoring Metrics Publisher role.")
+                format!("{err} Without a secret on the destination, Enterplace signs in as the replica's managed identity; give it the Storage Blob Data Contributor or Monitoring Metrics Publisher role.")
             })?
         };
         let token = answer["access_token"]

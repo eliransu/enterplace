@@ -3,9 +3,9 @@ title: Provider catalog
 description: Every provider a policy can name with preset, with its URL, its kind and the documentation the URL came from.
 ---
 
-{/* Generated from crates/gantry-core/src/catalog.rs by `gantry providers --markdown`. Do not edit by hand. */}
+{/* Generated from crates/enterplace-core/src/catalog.rs by `enterplace providers --markdown`. Do not edit by hand. */}
 
-A provider in the policy file may say `preset: <id>` instead of writing its `url` and `kind`. Gantry takes both from this table; a `url` or `kind` written next to the preset wins. The provider still needs `key_env` (or `key_file`) and `models`.
+A provider in the policy file may say `preset: <id>` instead of writing its `url` and `kind`. Enterplace takes both from this table; a `url` or `kind` written next to the preset wins. The provider still needs `key_env` (or `key_file`) and `models`.
 
 ```yaml
 providers:
@@ -17,7 +17,7 @@ models: [llama-3.3-70b-versatile]
 
 The key goes in the header the kind sends: `Authorization: Bearer` for openai, `x-api-key` for anthropic, `x-goog-api-key` for gemini. A chat request goes to the URL followed by `/chat/completions` (anthropic: `/messages`; gemini: `/models/<model>:generateContent`).
 
-Local entries are model servers you run yourself. Their URL is the server's default on this machine, so the provider also needs `allow_private: true`, and `key_env` only if the server was started with a key. Run `gantry providers` to print this table.
+Local entries are model servers you run yourself. Their URL is the server's default on this machine, so the provider also needs `allow_private: true`, and `key_env` only if the server was started with a key. Run `enterplace providers` to print this table.
 
 | ID | Name | Kind | URL | Source |
 | --- | --- | --- | --- | --- |
@@ -46,7 +46,7 @@ Local entries are model servers you run yourself. Their URL is the server's defa
 | `databricks` | Databricks Model Serving (write your workspace URL) | openai | `https://WORKSPACE.cloud.databricks.com/serving-endpoints` | [docs](https://docs.databricks.com/aws/en/machine-learning/model-serving/score-foundation-models) |
 | `deepinfra` | DeepInfra | openai | `https://api.deepinfra.com/v1/openai` | [docs](https://docs.deepinfra.com/chat/overview) |
 | `deepseek` | DeepSeek | openai | `https://api.deepseek.com/v1` | [docs](https://api-docs.deepseek.com/) |
-| `demo` | Gantry demo model (answered inside Gantry, no key, free) | demo | `https://demo.gantry.invalid/v1` | [docs](https://gantry-docs.enterplace.dev/getting-started/quickstart/) |
+| `demo` | Enterplace demo model (answered inside Enterplace, no key, free) | demo | `https://demo.enterplace.invalid/v1` | [docs](https://docs.enterplace.dev/getting-started/quickstart/) |
 | `digitalocean` | DigitalOcean Gradient | openai | `https://inference.do-ai.run/v1` | [docs](https://docs.digitalocean.com/products/inference/how-to/use-chat-completions-api/) |
 | `docker-model-runner` | Docker Model Runner (local) | openai | `http://localhost:12434/engines/v1` | [docs](https://docs.docker.com/ai/model-runner/api-reference/) |
 | `fastrouter` | FastRouter | openai | `https://api.fastrouter.ai/api/v1` | [docs](https://docs.fastrouter.ai/api-reference/chat-completions) |

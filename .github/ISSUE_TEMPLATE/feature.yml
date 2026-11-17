@@ -1,5 +1,5 @@
 name: Feature or integration
-description: Something Gantry should do, or a tool it should work with
+description: Something Enterplace should do, or a tool it should work with
 labels: [enhancement]
 body:
   - type: textarea

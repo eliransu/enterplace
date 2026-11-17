@@ -1,4 +1,4 @@
-# Gantry on Azure: one Container App with HTTPS ingress, Azure Database for PostgreSQL Flexible Server on a private
+# Enterplace on Azure: one Container App with HTTPS ingress, Azure Database for PostgreSQL Flexible Server on a private
 # network, the audit log on Azure Files, and secrets as Key Vault references. See README.md.
 
 locals {
@@ -35,8 +35,8 @@ locals {
     var.registry == null ? {} : { registry-password = var.registry.password_secret },
   )
   env_secrets = merge(
-    { DATABASE_URL = "database-url", GANTRY_MASTER_KEY = "master-key", GANTRY_EXPORT_KEY = "export-key" },
-    var.license_secret == null ? {} : { GANTRY_LICENSE = "license" },
+    { DATABASE_URL = "database-url", ENTERPLACE_MASTER_KEY = "master-key", ENTERPLACE_EXPORT_KEY = "export-key" },
+    var.license_secret == null ? {} : { ENTERPLACE_LICENSE = "license" },
     { for env_name, _ in var.provider_key_secrets : env_name => "key-${lower(replace(env_name, "_", "-"))}" },
   )
 }
@@ -84,7 +84,7 @@ resource "azurerm_subnet" "db" {
 }
 
 # The database: private access only, reachable from the virtual network. Its certificate chains to DigiCert and
-# Microsoft roots that are among the Mozilla roots Gantry checks against, so Gantry connects with sslmode=verify-full.
+# Microsoft roots that are among the Mozilla roots Enterplace checks against, so Enterplace connects with sslmode=verify-full.
 resource "azurerm_private_dns_zone" "db" {
   name                = "${var.name}.private.postgres.database.azure.com"
   resource_group_name = azurerm_resource_group.this.name
@@ -115,7 +115,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   delegated_subnet_id           = azurerm_subnet.db.id
   private_dns_zone_id           = azurerm_private_dns_zone.db.id
   public_network_access_enabled = false
-  administrator_login           = "gantry"
+  administrator_login           = "enterplace"
   administrator_password        = random_password.db.result
   dynamic "high_availability" {
     for_each = var.db_high_availability ? [1] : []
@@ -131,8 +131,8 @@ resource "azurerm_postgresql_flexible_server" "this" {
   }
 }
 
-resource "azurerm_postgresql_flexible_server_database" "gantry" {
-  name      = "gantry"
+resource "azurerm_postgresql_flexible_server_database" "enterplace" {
+  name      = "enterplace"
   server_id = azurerm_postgresql_flexible_server.this.id
   charset   = "UTF8"
   collation = "en_US.utf8"
@@ -141,7 +141,7 @@ resource "azurerm_postgresql_flexible_server_database" "gantry" {
 resource "azurerm_key_vault_secret" "database_url" {
   name         = "${var.name}-database-url"
   key_vault_id = var.key_vault_id
-  value        = "postgres://gantry:${random_password.db.result}@${azurerm_postgresql_flexible_server.this.fqdn}:5432/gantry?sslmode=verify-full"
+  value        = "postgres://enterplace:${random_password.db.result}@${azurerm_postgresql_flexible_server.this.fqdn}:5432/enterplace?sslmode=verify-full"
 }
 
 # The master key (seals provider credentials kept in the store) and the export key (encrypts SIEM destination
@@ -187,7 +187,7 @@ resource "azurerm_storage_account" "this" {
 }
 
 resource "azurerm_storage_share" "audit" {
-  name               = "gantry-audit"
+  name               = "enterplace-audit"
   storage_account_id = azurerm_storage_account.this.id
   quota              = var.audit_share_quota_gb
 }
@@ -295,23 +295,23 @@ resource "azurerm_container_app" "this" {
       image   = "docker.io/library/busybox:1.36"
       cpu     = 0.25
       memory  = "0.5Gi"
-      command = ["sh", "-c", "printf '%s' \"$GANTRY_POLICY\" > /etc/gantry/gantry.policy.yaml"]
+      command = ["sh", "-c", "printf '%s' \"$ENTERPLACE_POLICY\" > /etc/enterplace/enterplace.policy.yaml"]
       env {
-        name        = "GANTRY_POLICY"
+        name        = "ENTERPLACE_POLICY"
         secret_name = "policy"
       }
       volume_mounts {
         name = "policy"
-        path = "/etc/gantry"
+        path = "/etc/enterplace"
       }
     }
 
     container {
-      name   = "gantry"
+      name   = "enterplace"
       image  = var.image
       cpu    = var.cpu
       memory = var.memory
-      args   = ["serve", "/etc/gantry/gantry.policy.yaml", "--listen", "0.0.0.0:8080"]
+      args   = ["serve", "/etc/enterplace/enterplace.policy.yaml", "--listen", "0.0.0.0:8080"]
       dynamic "env" {
         for_each = local.env_secrets
         content {
@@ -321,11 +321,11 @@ resource "azurerm_container_app" "this" {
       }
       volume_mounts {
         name = "policy"
-        path = "/etc/gantry"
+        path = "/etc/enterplace"
       }
       volume_mounts {
         name     = "audit"
-        path     = "/var/lib/gantry"
+        path     = "/var/lib/enterplace"
         sub_path = local.revision
       }
       startup_probe {

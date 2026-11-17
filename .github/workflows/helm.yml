@@ -17,7 +17,7 @@ jobs:
         with:
           version: v3.16.4
       - name: Lint and render with each option
-        working-directory: deploy/helm/gantry
+        working-directory: deploy/helm/enterplace
         run: |
           helm lint --strict .
           helm template t . > /dev/null
@@ -26,7 +26,7 @@ jobs:
             helm template t . -f "$f" > /dev/null
           done
       - name: More than one replica without a store is refused
-        working-directory: deploy/helm/gantry
+        working-directory: deploy/helm/enterplace
         run: |
           if out=$(helm template t . --set replicaCount=2 2>&1); then echo "rendered: $out"; exit 1; fi
           grep -q "needs the policy's \`store:\` section" <<<"$out"
@@ -44,9 +44,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build the image
         run: |
-          docker build -t gantry:ci .
-          size=$(docker image inspect gantry:ci --format '{{.Size}}')
-          user=$(docker image inspect gantry:ci --format '{{.Config.User}}')
+          docker build -t enterplace:ci .
+          size=$(docker image inspect enterplace:ci --format '{{.Size}}')
+          user=$(docker image inspect enterplace:ci --format '{{.Config.User}}')
           echo "image: $size bytes, user $user"
           [ "$size" -lt $((50 * 1024 * 1024)) ] || { echo "the image is over 50 MB"; exit 1; }
           case "$user" in ""|0|0:*|root|root:*) echo "the image runs as root"; exit 1;; esac
@@ -55,54 +55,54 @@ jobs:
           version: v3.16.4
       - uses: helm/kind-action@v1
         with:
-          cluster_name: gantry
+          cluster_name: enterplace
       - name: Load the image, start the mock provider, make a key
         run: |
-          kind load docker-image gantry:ci --name gantry
-          kubectl apply -f deploy/helm/gantry/ci/mock-provider.yaml
-          key="gantry_$(openssl rand -hex 32)"
+          kind load docker-image enterplace:ci --name enterplace
+          kubectl apply -f deploy/helm/enterplace/ci/mock-provider.yaml
+          key="enterplace_$(openssl rand -hex 32)"
           echo "::add-mask::$key"
-          echo "GANTRY_KEY=$key" >> "$GITHUB_ENV"
+          echo "ENTERPLACE_KEY=$key" >> "$GITHUB_ENV"
           hash=$(printf %s "$key" | sha256sum | cut -d' ' -f1)
           printf 'keys:\n  - name: ci\n    team: platform\n    sha256: %s\n' "$hash" > keys.yaml
-          kubectl create secret generic gantry-keys --from-file=gantry.keys.yaml=keys.yaml
-          kubectl create secret generic gantry-secrets --from-literal=MOCK_PROVIDER_KEY=mock
+          kubectl create secret generic enterplace-keys --from-file=enterplace.keys.yaml=keys.yaml
+          kubectl create secret generic enterplace-secrets --from-literal=MOCK_PROVIDER_KEY=mock
           kubectl rollout status deploy/mock-provider --timeout=180s
       - name: Install the chart
         run: |
-          helm install gantry deploy/helm/gantry \
-            -f deploy/helm/gantry/ci/kind.yaml --wait --timeout 5m \
-            || { kubectl describe pod gantry-0; kubectl logs gantry-0 --all-containers; exit 1; }
+          helm install enterplace deploy/helm/enterplace \
+            -f deploy/helm/enterplace/ci/kind.yaml --wait --timeout 5m \
+            || { kubectl describe pod enterplace-0; kubectl logs enterplace-0 --all-containers; exit 1; }
       - name: A governed chat call returns 200 and leaves a decision record
         run: |
-          kubectl port-forward svc/gantry 8080:8080 9464:9464 & sleep 3
+          kubectl port-forward svc/enterplace 8080:8080 9464:9464 & sleep 3
           status=$(curl -sS -o body.json -D headers.txt -w '%{http_code}' http://127.0.0.1:8080/v1/chat/completions \
-            -H "Authorization: Bearer $GANTRY_KEY" -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $ENTERPLACE_KEY" -H 'Content-Type: application/json' \
             -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}')
           cat headers.txt body.json; echo
           [ "$status" = 200 ]
-          decision=$(grep -i '^x-gantry-decision:' headers.txt | cut -d' ' -f2 | tr -d '\r')
+          decision=$(grep -i '^x-enterplace-decision:' headers.txt | cut -d' ' -f2 | tr -d '\r')
           [ -n "$decision" ]
           # No key, no answer.
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/v1/chat/completions -d '{}')" = 401 ]
-          curl -sf http://127.0.0.1:9464/metrics | grep -q gantry_
+          curl -sf http://127.0.0.1:9464/metrics | grep -q enterplace_
           # The image has no shell, so a second pod reads the audit log from the same volume (kind has one node).
           kubectl run audit-reader --image=busybox:1.36.1 --restart=Never --overrides='{
-            "spec": {"containers": [{"name": "r", "image": "busybox:1.36.1", "command": ["cat", "/data/gantry-audit.jsonl"],
+            "spec": {"containers": [{"name": "r", "image": "busybox:1.36.1", "command": ["cat", "/data/enterplace-audit.jsonl"],
               "volumeMounts": [{"name": "d", "mountPath": "/data", "readOnly": true}]}],
-              "volumes": [{"name": "d", "persistentVolumeClaim": {"claimName": "data-gantry-0", "readOnly": true}}]}}'
+              "volumes": [{"name": "d", "persistentVolumeClaim": {"claimName": "data-enterplace-0", "readOnly": true}}]}}'
           kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/audit-reader --timeout=120s
           kubectl logs audit-reader > audit.jsonl
           grep "\"$decision\"" audit.jsonl
           ! grep -q '"hi"' audit.jsonl
           # Admin commands run in the pod with the image's own binary: exec needs no shell.
-          key=$(kubectl exec gantry-0 -- /gantry key new ci.exec --team platform \
-            --keys /var/lib/gantry/gantry.keys.yaml --policy /etc/gantry/gantry.policy.yaml --quiet)
+          key=$(kubectl exec enterplace-0 -- /enterplace key new ci.exec --team platform \
+            --keys /var/lib/enterplace/enterplace.keys.yaml --policy /etc/enterplace/enterplace.policy.yaml --quiet)
           echo "::add-mask::$key"
           sleep 3
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/v1/chat/completions -H "Authorization: Bearer $key" \
             -H 'Content-Type: application/json' -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}')" = 200 ]
-          kubectl exec gantry-0 -- /gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+          kubectl exec enterplace-0 -- /enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl
       - name: Logs on failure
         if: failure()
-        run: kubectl get pods -o wide; kubectl logs gantry-0 --all-containers --tail=100; kubectl logs deploy/mock-provider --tail=50
+        run: kubectl get pods -o wide; kubectl logs enterplace-0 --all-containers --tail=100; kubectl logs deploy/mock-provider --tail=50

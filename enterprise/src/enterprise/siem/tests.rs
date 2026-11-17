@@ -1,7 +1,7 @@
 //! The audit export and retention behaviour of the Cloudflare app (cloud/tests/test_siem.py and
 //! test_siem_pull.py), against a real Postgres and local mock sinks, plus what the self-hosted port adds: every
 //! destination's format and signature, cloud credentials without static keys, hash ranges, cursors that survive a
-//! restart, retries, retention that `gantry audit verify` still proves, and legal hold.
+//! restart, retries, retention that `enterplace audit verify` still proves, and legal hold.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ use axum::{
     http::{HeaderMap, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
-use gantry_core::audit;
+use enterplace_core::audit;
 use serde_json::{Value, json};
 
 use super::sinks::{Batch, Dest, Env, Kind, Sinks};
@@ -54,7 +54,7 @@ pub(crate) fn quiet_policy(
         &licensed(features),
         &[
             (KEY_ENV, KEY),
-            ("GANTRY_EXPORT_TICK_MS", "3600000"),
+            ("ENTERPLACE_EXPORT_TICK_MS", "3600000"),
             ("HOSTNAME", "pod-0"),
         ],
         policy,
@@ -161,8 +161,8 @@ async fn answer(
         |v: Value| ([("content-type", "application/json")], v.to_string()).into_response();
     match path {
         "/latest/api/token" => "imds-token".into_response(),
-        "/latest/meta-data/iam/security-credentials/" => "gantry-role\n".into_response(),
-        "/latest/meta-data/iam/security-credentials/gantry-role" | "/container-creds" => {
+        "/latest/meta-data/iam/security-credentials/" => "enterplace-role\n".into_response(),
+        "/latest/meta-data/iam/security-credentials/enterplace-role" | "/container-creds" => {
             CREDS.into_response()
         }
         "/sts/" => json_answer(
@@ -215,13 +215,13 @@ fn write_requests(gw: &Gateway, count: usize) -> Result<(), Error> {
     Ok(())
 }
 
-/// Whether a line's hash is the SHA-256 of the line up to its `prev`, as `gantry audit verify` checks.
+/// Whether a line's hash is the SHA-256 of the line up to its `prev`, as `enterplace audit verify` checks.
 fn hash_holds(line: &str) -> bool {
     let Some(at) = line.rfind(",\"hash\":\"") else {
         return false;
     };
     let hash = &line[at + 9..line.len() - 2];
-    gantry_core::id::sha256_hex(format!("{}}}", &line[..at]).as_bytes()) == hash
+    enterplace_core::id::sha256_hex(format!("{}}}", &line[..at]).as_bytes()) == hash
 }
 
 /// The chain's lines as the log holds them.
@@ -259,7 +259,7 @@ fn sample() -> Batch {
         let body = format!(
             r#"{{"n":{n},"id":"r{n}","time":"2026-11-13T09:14:02.120Z","person":"alice","verdict":"allow","prev":"{prev}""#
         );
-        let hash = gantry_core::id::sha256_hex(format!("{body}}}").as_bytes());
+        let hash = enterplace_core::id::sha256_hex(format!("{body}}}").as_bytes());
         lines.push(format!(r#"{body},"hash":"{hash}"}}"#));
         prev = hash;
     }
@@ -277,15 +277,15 @@ fn sts_query(hit: &Hit, name: &str) -> String {
 /// The SigV4 authorization header S3 should have got for `hit`, from the same credentials.
 fn s3_signature(hit: &Hit, sink: &Sink, id: &str, secret: &str, token: Option<&str>) -> String {
     let host = sink.base.trim_start_matches("http://").to_string();
-    let signed = gantry_core::sigv4::sign(
-        &gantry_core::sigv4::Credentials {
+    let signed = enterplace_core::sigv4::sign(
+        &enterplace_core::sigv4::Credentials {
             access_key_id: id.into(),
             secret_access_key: secret.into(),
             session_token: token.map(str::to_string),
         },
         "eu-west-1",
         "s3",
-        &gantry_core::sigv4::Request {
+        &enterplace_core::sigv4::Request {
             method: "PUT",
             path: &hit.uri,
             query: "",
@@ -334,11 +334,11 @@ async fn every_destination_gets_its_documented_format_with_the_batch_hash_range(
     .await?;
     let hit = sink.deliveries().pop().ok_or("no webhook")?;
     assert_eq!(
-        hit.header("x-gantry-signature"),
+        hit.header("x-enterplace-signature"),
         format!("sha256={}", sinks::signature("gsig_test", &hit.body))
     );
     assert_ne!(
-        hit.header("x-gantry-signature"),
+        hit.header("x-enterplace-signature"),
         format!("sha256={}", sinks::signature("gsig_wrong", &hit.body))
     );
     let body = hit.json();
@@ -379,7 +379,7 @@ async fn every_destination_gets_its_documented_format_with_the_batch_hash_range(
         .map(serde_json::from_str)
         .collect::<Result<_, _>>()?;
     assert_eq!(events.len(), 2);
-    assert_eq!(events[0]["sourcetype"], "gantry:audit");
+    assert_eq!(events[0]["sourcetype"], "enterplace:audit");
     assert_eq!(events[0]["event"]["hash"], first);
     assert_eq!(events[1]["fields"]["batch_last_hash"], last);
     assert!((events[0]["time"].as_f64().unwrap_or_default() - 1_794_561_242.12).abs() < 0.01);
@@ -409,13 +409,13 @@ async fn every_destination_gets_its_documented_format_with_the_batch_hash_range(
     // Elasticsearch: bulk `create` with the replica and number as the ID, so a batch sent twice is stored once.
     send(dest(
         Kind::Elastic,
-        format!("{}/in/gantry-audit/", sink.base),
+        format!("{}/in/enterplace-audit/", sink.base),
         "es-key",
         json!({}),
     ))
     .await?;
     let hit = sink.deliveries().pop().ok_or("no elastic")?;
-    assert_eq!(hit.uri, "/in/gantry-audit/_bulk");
+    assert_eq!(hit.uri, "/in/enterplace-audit/_bulk");
     assert_eq!(
         (hit.header("authorization"), hit.header("content-type")),
         ("ApiKey es-key", "application/x-ndjson")
@@ -443,7 +443,8 @@ async fn every_destination_gets_its_documented_format_with_the_batch_hash_range(
     let resource = &body["resourceLogs"][0];
     let attrs = resource["resource"]["attributes"].to_string();
     assert!(
-        attrs.contains("gantry.batch.first_hash") && attrs.contains(first.as_str().unwrap_or("x"))
+        attrs.contains("enterplace.batch.first_hash")
+            && attrs.contains(first.as_str().unwrap_or("x"))
     );
     let record = &resource["scopeLogs"][0]["logRecords"][1];
     assert_eq!(
@@ -519,7 +520,7 @@ async fn object_stores_and_sentinel_sign_in_the_way_each_cloud_expects() -> Resu
     assert_eq!(hit.text(), batch.ndjson());
     assert_eq!(
         hit.header("x-amz-content-sha256"),
-        gantry_core::id::sha256_hex(&hit.body)
+        enterplace_core::id::sha256_hex(&hit.body)
     );
     assert_eq!(
         hit.header("authorization"),
@@ -578,7 +579,7 @@ async fn object_stores_and_sentinel_sign_in_the_way_each_cloud_expects() -> Resu
     // IRSA: the web identity token traded at STS.
     sink.clear();
     let token_file =
-        std::env::temp_dir().join(format!("gantry-web-identity-{}", std::process::id()));
+        std::env::temp_dir().join(format!("enterplace-web-identity-{}", std::process::id()));
     std::fs::write(&token_file, "web-identity-jwt\n")?;
     deliver(
         env_of(&[
@@ -588,7 +589,7 @@ async fn object_stores_and_sentinel_sign_in_the_way_each_cloud_expects() -> Resu
             ),
             (
                 "AWS_ROLE_ARN",
-                "arn:aws:iam::123456789012:role/gantry".into(),
+                "arn:aws:iam::123456789012:role/enterplace".into(),
             ),
             ("AWS_ENDPOINT_URL_STS", format!("{}/sts", sink.base)),
         ]),
@@ -600,7 +601,7 @@ async fn object_stores_and_sentinel_sign_in_the_way_each_cloud_expects() -> Resu
     assert_eq!(sts_query(sts, "WebIdentityToken"), "web-identity-jwt");
     assert_eq!(
         sts_query(sts, "RoleArn"),
-        "arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Fgantry"
+        "arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Fenterplace"
     );
     let hit = sink.deliveries().pop().ok_or("no s3")?;
     assert_eq!(
@@ -627,7 +628,7 @@ async fn object_stores_and_sentinel_sign_in_the_way_each_cloud_expects() -> Resu
         upload.uri,
         format!(
             "/upload/storage/v1/b/bucket/o?uploadType=media&name={}",
-            gantry_core::sigv4::uri_encode(&format!("audit/{}", batch.object_name()), false)
+            enterplace_core::sigv4::uri_encode(&format!("audit/{}", batch.object_name()), false)
         )
     );
     assert_eq!(
@@ -639,7 +640,7 @@ async fn object_stores_and_sentinel_sign_in_the_way_each_cloud_expects() -> Resu
     sink.clear();
     let account = json!({
         "type": "service_account",
-        "client_email": "gantry@project.iam.gserviceaccount.com",
+        "client_email": "enterplace@project.iam.gserviceaccount.com",
         "private_key": TEST_RSA,
         "token_uri": format!("{}/google-token", sink.base),
     });
@@ -654,7 +655,7 @@ async fn object_stores_and_sentinel_sign_in_the_way_each_cloud_expects() -> Resu
     let b64 =
         |s: &str| base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, s);
     let claims: Value = serde_json::from_slice(&b64(parts[1])?)?;
-    assert_eq!(claims["iss"], "gantry@project.iam.gserviceaccount.com");
+    assert_eq!(claims["iss"], "enterplace@project.iam.gserviceaccount.com");
     assert_eq!(
         claims["scope"],
         "https://www.googleapis.com/auth/devstorage.read_write"
@@ -737,7 +738,7 @@ async fn object_stores_and_sentinel_sign_in_the_way_each_cloud_expects() -> Resu
         dest(
             Kind::Sentinel,
             format!(
-                "{}/in/dataCollectionRules/dcr-1/streams/Custom-GantryAudit_CL?api-version=2023-01-01",
+                "{}/in/dataCollectionRules/dcr-1/streams/Custom-EnterplaceAudit_CL?api-version=2023-01-01",
                 sink.base
             ),
             secret,
@@ -763,7 +764,8 @@ async fn object_stores_and_sentinel_sign_in_the_way_each_cloud_expects() -> Resu
 
     // Sentinel on AKS workload identity: the federated token as the client assertion, no secret anywhere.
     sink.clear();
-    let federated = std::env::temp_dir().join(format!("gantry-federated-{}", std::process::id()));
+    let federated =
+        std::env::temp_dir().join(format!("enterplace-federated-{}", std::process::id()));
     std::fs::write(&federated, "federated-jwt")?;
     deliver(
         env_of(&[
@@ -813,7 +815,7 @@ fn secrets_at_rest_open_only_with_the_same_key() -> Result<(), String> {
     assert_eq!(open_secret(Some(&key), &sealed)?, "hec-token");
     let other = parse_key(&"ab".repeat(32)).ok_or("key")?;
     assert!(open_secret(Some(&other), &sealed).is_err_and(|e| e.contains("key changed")));
-    assert!(open_secret(None, &sealed).is_err_and(|e| e.contains("GANTRY_EXPORT_KEY")));
+    assert!(open_secret(None, &sealed).is_err_and(|e| e.contains("ENTERPLACE_EXPORT_KEY")));
     Ok(())
 }
 
@@ -843,9 +845,9 @@ async fn without_the_features_the_page_and_api_say_why_and_nothing_is_made() -> 
         assert!(!audit.text.contains("/console/siem"), "no nav entry");
         // The gateway's own request index names its replica in the same `.replica` file the export uses, so that
         // file says nothing about the export: its tables, below, do.
-        let (client, connection) = gantry_server::store::tokio_postgres::connect(
+        let (client, connection) = enterplace_server::store::tokio_postgres::connect(
             &url,
-            gantry_server::store::tokio_postgres::NoTls,
+            enterplace_server::store::tokio_postgres::NoTls,
         )
         .await?;
         tokio::spawn(connection);
@@ -901,7 +903,7 @@ async fn webhook_export_status_test_record_retention_hold_and_archive() -> Resul
     ex.ship().await?;
     let hit = sink.deliveries().pop().ok_or("nothing delivered")?;
     assert_eq!(
-        hit.header("x-gantry-signature"),
+        hit.header("x-enterplace-signature"),
         format!("sha256={}", sinks::signature(&secret, &hit.body))
     );
     let body = hit.json();
@@ -1426,7 +1428,7 @@ async fn retention_retires_old_segments_verify_still_holds_and_legal_hold_stops_
     );
     assert!(!old.exists() && !newer.exists());
 
-    // `gantry audit verify` still proves the rest, and says what was retired and by which record.
+    // `enterplace audit verify` still proves the rest, and says what was retired and by which record.
     gw.log.flush();
     let summary = audit::verify_full(&gw.audit, None)?;
     assert_eq!(summary.first, through + 1);
@@ -1572,7 +1574,7 @@ fn request_batch() -> Batch {
     ];
     for (i, fields) in bodies.iter().enumerate() {
         let body = format!(r#"{{"n":{},{fields},"prev":"{prev}""#, i + 1);
-        let hash = gantry_core::id::sha256_hex(format!("{body}}}").as_bytes());
+        let hash = enterplace_core::id::sha256_hex(format!("{body}}}").as_bytes());
         lines.push(format!(r#"{body},"hash":"{hash}"}}"#));
         prev = hash;
     }
@@ -1629,9 +1631,12 @@ fn trace_destinations_get_genai_spans_with_cost_tokens_and_the_hash_range() -> R
         "generation"
     );
     assert_eq!(attribute(span, "user.id")["stringValue"], "alice");
-    assert_eq!(attribute(span, "gantry.client")["stringValue"], "10.0.0.1");
     assert_eq!(
-        attribute(span, "gantry.hash"),
+        attribute(span, "enterplace.client")["stringValue"],
+        "10.0.0.1"
+    );
+    assert_eq!(
+        attribute(span, "enterplace.hash"),
         &json!({ "stringValue": batch.records[1]["hash"] })
     );
     assert!(
@@ -1657,14 +1662,14 @@ fn trace_destinations_get_genai_spans_with_cost_tokens_and_the_hash_range() -> R
             .unwrap_or(Value::Null)
     };
     assert_eq!(
-        res("gantry.batch.first_hash")["stringValue"],
+        res("enterplace.batch.first_hash")["stringValue"],
         batch.records[0]["hash"]
     );
     assert_eq!(
-        res("gantry.batch.last_hash")["stringValue"],
+        res("enterplace.batch.last_hash")["stringValue"],
         batch.records[1]["hash"]
     );
-    assert_eq!(res("gantry.batch.prev")["stringValue"], "0".repeat(64));
+    assert_eq!(res("enterplace.batch.prev")["stringValue"], "0".repeat(64));
 
     // Langfuse: its OTLP endpoint, Basic auth of the key pair, and the real-time ingestion header.
     let out = sinks::request(
@@ -1703,7 +1708,7 @@ fn trace_destinations_get_genai_spans_with_cost_tokens_and_the_hash_range() -> R
     );
     let sent: Value = serde_json::from_slice(&out.body)?;
     assert!(out.headers.contains(&(
-        "x-gantry-signature".into(),
+        "x-enterplace-signature".into(),
         format!("sha256={}", sinks::signature("gsig_cb", &out.body))
     )));
     assert_eq!(sent["requests"][0]["decision"], "d1");
@@ -1791,7 +1796,7 @@ async fn text_goes_only_to_destinations_that_opt_in_redacted_encrypted_and_for_a
         assert!(saved.text.contains("Saved destination"), "{}", saved.text);
     }
     let captures = ex.captures.clone().ok_or("no capture hook")?;
-    use gantry_server::Capture;
+    use enterplace_server::Capture;
     // Destinations are read on the next tick; until one opts in nothing is wanted.
     assert!(!captures.wanted("research"));
     ex.ship().await?;
@@ -1811,7 +1816,7 @@ async fn text_goes_only_to_destinations_that_opt_in_redacted_encrypted_and_for_a
     });
     record.insert("team".into(), "research".into());
     gw.log.append_record(&record)?;
-    captures.take(gantry_server::Captured {
+    captures.take(enterplace_server::Captured {
         decision: id.into(),
         person: "alice".into(),
         team: "research".into(),
@@ -1878,9 +1883,9 @@ async fn text_goes_only_to_destinations_that_opt_in_redacted_encrypted_and_for_a
             .iter()
             .any(|l| l.contains("please") || l.contains("AKIA"))
     );
-    let (client, connection) = gantry_server::store::tokio_postgres::connect(
+    let (client, connection) = enterplace_server::store::tokio_postgres::connect(
         &url,
-        gantry_server::store::tokio_postgres::NoTls,
+        enterplace_server::store::tokio_postgres::NoTls,
     )
     .await?;
     tokio::spawn(connection);
@@ -1997,7 +2002,7 @@ async fn per_org_each_chain_is_exported_retained_held_and_alerted_on_its_own() -
             "SELECT count(*) FROM enterprise_audit WHERE replica = '{replica}' AND line LIKE '%\"org\":\"acme\"%'"
         )
     };
-    let n = |rows: Vec<gantry_server::store::tokio_postgres::Row>| -> i64 {
+    let n = |rows: Vec<enterplace_server::store::tokio_postgres::Row>| -> i64 {
         rows.first().and_then(|r| r.try_get(0).ok()).unwrap_or(-1)
     };
     let rows = crate::enterprise::alerts::tests::rows;
@@ -2107,9 +2112,9 @@ async fn an_org_added_by_a_reload_is_exported_retained_held_and_shipped_at_once(
         &licensed(&["siem", "retention", "alerts"]),
         &[
             (KEY_ENV, KEY),
-            ("GANTRY_EXPORT_TICK_MS", "3600000"),
+            ("ENTERPLACE_EXPORT_TICK_MS", "3600000"),
             ("HOSTNAME", "pod-0"),
-            ("GANTRY_AUDIT_SEGMENTS_URL", &segments),
+            ("ENTERPLACE_AUDIT_SEGMENTS_URL", &segments),
         ],
         &policy,
     )?;
@@ -2122,14 +2127,15 @@ async fn an_org_added_by_a_reload_is_exported_retained_held_and_shipped_at_once(
 
     // The policy now names globex: the reload opens its chain and starts everything on it, with no restart.
     std::fs::write(
-        gw.dir.join("gantry.policy.yaml"),
+        gw.dir.join("enterplace.policy.yaml"),
         format!("{POLICY}orgs: [acme, globex]\naudit: {{ per_org: true }}\n"),
     )?;
     let reloader = gw.governed.reloader.clone();
     let reload =
-        tokio::task::spawn_blocking(move || reloader.check(gantry_server::Trigger::Signal)).await?;
+        tokio::task::spawn_blocking(move || reloader.check(enterplace_server::Trigger::Signal))
+            .await?;
     assert!(
-        matches!(reload, gantry_server::Reload::Loaded),
+        matches!(reload, enterplace_server::Reload::Loaded),
         "{reload:?}"
     );
     let org = exporter(&globex).ok_or("no exporter for globex's chain after the reload")?;

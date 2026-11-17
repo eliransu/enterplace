@@ -1,5 +1,5 @@
 name: Bug
-description: Gantry did something wrong
+description: Enterplace did something wrong
 labels: [bug]
 body:
   - type: textarea
@@ -19,7 +19,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: Output of `gantry --version`, or the image tag.
+      description: Output of `enterplace --version`, or the image tag.
     validations:
       required: true
   - type: dropdown

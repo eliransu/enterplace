@@ -30,8 +30,8 @@ async fn call(
     agent(app, method, path, token, "", body).await
 }
 
-/// A request as the device agent sends it: the enrolment token as bearer and the person's Gantry key (from `gantry
-/// login`) in x-gantry-key, when there is one.
+/// A request as the device agent sends it: the enrolment token as bearer and the person's Enterplace key (from `enterplace
+/// login`) in x-enterplace-key, when there is one.
 async fn agent(
     app: &Router,
     method: &str,
@@ -47,7 +47,7 @@ async fn agent(
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::CONTENT_TYPE, "application/json");
     if !person_key.is_empty() {
-        request = request.header("x-gantry-key", person_key);
+        request = request.header("x-enterplace-key", person_key);
     }
     let body = body.map_or_else(Body::empty, |b| Body::from(b.to_string()));
     let response = app.clone().oneshot(request.body(body)?).await?;
@@ -62,9 +62,9 @@ async fn agent(
 }
 
 fn token_in(page: &str) -> Option<String> {
-    let rest = page.split("gantry_dev_").nth(1)?;
+    let rest = page.split("enterplace_dev_").nth(1)?;
     let hex: String = rest.chars().take_while(char::is_ascii_hexdigit).collect();
-    (hex.len() == 64).then(|| format!("gantry_dev_{hex}"))
+    (hex.len() == 64).then(|| format!("enterplace_dev_{hex}"))
 }
 
 fn admin_records(gw: &Gateway) -> Result<Vec<Value>, Error> {
@@ -114,9 +114,20 @@ async fn enrol_profile_report_and_coverage() -> Result<(), Error> {
     let page = owner.go(&gw.app, "GET", "/console/devices", &[]).await?;
     assert!(page.text.contains("jamf-test") && !page.text.contains(&token));
 
-    let wrong = call(&gw.app, "GET", "/device/profile", "gantry_dev_nope", None).await?;
+    let wrong = call(
+        &gw.app,
+        "GET",
+        "/device/profile",
+        "enterplace_dev_nope",
+        None,
+    )
+    .await?;
     assert_eq!(wrong.status, StatusCode::UNAUTHORIZED, "{}", wrong.text);
-    assert!(wrong.text.contains("GANTRY_DEVICE_TOKEN"), "{}", wrong.text);
+    assert!(
+        wrong.text.contains("ENTERPLACE_DEVICE_TOKEN"),
+        "{}",
+        wrong.text
+    );
     let first = call(&gw.app, "GET", "/device/profile", &token, None).await?;
     assert_eq!(first.status, StatusCode::OK, "{}", first.text);
     assert_eq!(first.body["gateway_url"], format!("http://{HOST}"));
@@ -181,7 +192,7 @@ async fn enrol_profile_report_and_coverage() -> Result<(), Error> {
     assert_eq!(noa.body["team"], "platform");
     assert_eq!(noa.body["person"], "noa");
 
-    // Reports: Claude Code through Gantry, Codex straight to OpenAI, one drift.
+    // Reports: Claude Code through Enterplace, Codex straight to OpenAI, one drift.
     let sent = agent(
         &gw.app,
         "POST",
@@ -192,7 +203,7 @@ async fn enrol_profile_report_and_coverage() -> Result<(), Error> {
             "noa",
             "mbp",
             json!([
-                {"tool": "claude-code", "state": "gantry", "installed": true, "configured": true, "drift": true},
+                {"tool": "claude-code", "state": "enterplace", "installed": true, "configured": true, "drift": true},
                 {"tool": "codex", "state": "direct", "installed": true, "configured": false, "drift": false, "endpoints": ["https://api.openai.com/v1"]},
                 {"tool": "cursor", "state": "not_installed", "installed": false, "configured": false, "drift": false},
                 {"tool": "made-up", "state": "direct", "installed": true}
@@ -213,8 +224,8 @@ async fn enrol_profile_report_and_coverage() -> Result<(), Error> {
     assert_eq!(bad.status, StatusCode::BAD_REQUEST);
     assert!(bad.text.contains("device_id"), "{}", bad.text);
 
-    // Traffic from noa's Claude Code reached Gantry.
-    gw.log.append(&gantry_core::audit::Entry {
+    // Traffic from noa's Claude Code reached Enterplace.
+    gw.log.append(&enterplace_core::audit::Entry {
         id: "D1",
         person: Some("noa"),
         team: Some("platform"),
@@ -247,7 +258,7 @@ async fn enrol_profile_report_and_coverage() -> Result<(), Error> {
     assert!(row.contains("codex on mbp"), "going direct: {row}");
     assert!(page.text.contains("Drift"), "{}", page.text);
 
-    // The download `gantry audit coverage --devices` reads, by session and by admin key.
+    // The download `enterplace audit coverage --devices` reads, by session and by admin key.
     let listed = call(
         &gw.app,
         "GET",
@@ -268,7 +279,7 @@ async fn enrol_profile_report_and_coverage() -> Result<(), Error> {
     assert_eq!(codex["state"], "direct");
     assert_eq!(codex["endpoints"], json!(["https://api.openai.com/v1"]));
     assert!(!listed.text.contains("made-up"));
-    let devices: Vec<gantry_core::coverage::Device> = serde_json::from_str(&listed.text)?;
+    let devices: Vec<enterplace_core::coverage::Device> = serde_json::from_str(&listed.text)?;
     assert_eq!(devices.len(), 1);
     let by_session = owner
         .go(&gw.app, "GET", "/console/devices/devices.json", &[])
@@ -316,8 +327,8 @@ async fn a_report_is_from_the_person_of_its_key_and_a_device_stays_bound() -> Re
         return Ok(());
     };
     let gw = gateway("devices_bound", &url, &licensed(&["devices"]))?;
-    const ANA_KEY: &str = "gantry_ana_0123456789abcdef0123456789abcdef";
-    gantry_core::keyfile::add_entry("ana", "web", ANA_KEY, false, &gw.keys)?;
+    const ANA_KEY: &str = "enterplace_ana_0123456789abcdef0123456789abcdef";
+    enterplace_core::keyfile::add_entry("ana", "web", ANA_KEY, false, &gw.keys)?;
     let mut tokens = Vec::new();
     for team in ["", "web"] {
         let made = call(
@@ -346,11 +357,11 @@ async fn a_report_is_from_the_person_of_its_key_and_a_device_stays_bound() -> Re
         }
     };
 
-    // The person comes from a Gantry key, never from the report.
+    // The person comes from a Enterplace key, never from the report.
     let none = send(all, "").await?;
     assert_eq!(none.status, StatusCode::UNAUTHORIZED, "{}", none.text);
     assert!(none.text.contains("person_key_required"), "{}", none.text);
-    let bogus = send(all, "gantry_not_a_key").await?;
+    let bogus = send(all, "enterplace_not_a_key").await?;
     assert!(bogus.text.contains("invalid_person_key"), "{}", bogus.text);
     let first = send(all, ADMIN_KEY).await?;
     assert_eq!(first.status, StatusCode::OK, "{}", first.text);
@@ -434,7 +445,7 @@ async fn admin_api_issues_team_tokens_that_expire_and_revoke() -> Result<(), Err
         &gw.app,
         "GET",
         "/console/devices/tokens",
-        "gantry_wrong",
+        "enterplace_wrong",
         None,
     )
     .await?;
@@ -451,7 +462,7 @@ async fn admin_api_issues_team_tokens_that_expire_and_revoke() -> Result<(), Err
     assert_eq!(made.status, StatusCode::CREATED, "{}", made.text);
     let token = made.body["token"].as_str().unwrap_or_default().to_string();
     let id = made.body["id"].as_str().unwrap_or_default().to_string();
-    assert!(token.starts_with("gantry_dev_") && !made.body["expires_at"].is_null());
+    assert!(token.starts_with("enterplace_dev_") && !made.body["expires_at"].is_null());
     let too_long = call(
         &gw.app,
         "POST",
@@ -493,7 +504,7 @@ async fn admin_api_issues_team_tokens_that_expire_and_revoke() -> Result<(), Err
 
     // Expired: refused, and says so.
     let client = {
-        use gantry_server::store::tokio_postgres;
+        use enterplace_server::store::tokio_postgres;
         let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
         tokio::spawn(connection);
         client
@@ -561,9 +572,9 @@ async fn the_agent_enrols_applies_and_reports() -> Result<(), Error> {
         home.join(".gemini/settings.json"),
         r#"{"security":{"auth":{"selectedType":"gemini-api-key"}}}"#,
     )?;
-    std::fs::create_dir_all(home.join(".config/gantry"))?;
+    std::fs::create_dir_all(home.join(".config/enterplace"))?;
     std::fs::write(
-        home.join(".config/gantry/credentials"),
+        home.join(".config/enterplace/credentials"),
         format!("name=noa\nkey={ADMIN_KEY}\n"),
     )?;
     let opts = crate::device::Options {
@@ -598,7 +609,7 @@ async fn the_agent_enrols_applies_and_reports() -> Result<(), Error> {
             .unwrap_or_default()
     };
     assert_eq!(listed.body[0]["person"], "noa", "{}", listed.text);
-    assert_eq!(state("claude-code"), "gantry", "{}", listed.text);
+    assert_eq!(state("claude-code"), "enterplace", "{}", listed.text);
     assert_eq!(state("gemini-cli"), "direct", "{}", listed.text);
     Ok(())
 }
@@ -625,7 +636,7 @@ async fn without_the_feature_devices_answer_license_required() -> Result<(), Err
             "nav offers Devices"
         );
         for (method, path) in [("GET", "/device/profile"), ("POST", "/device/report")] {
-            let answer = call(&gw.app, method, path, "gantry_dev_x", Some(json!({}))).await?;
+            let answer = call(&gw.app, method, path, "enterplace_dev_x", Some(json!({}))).await?;
             assert_eq!(answer.status, StatusCode::FORBIDDEN, "{path}");
             assert_eq!(
                 answer.body["error"]["code"], "license_required",
@@ -634,7 +645,7 @@ async fn without_the_feature_devices_answer_license_required() -> Result<(), Err
             );
         }
         let client = {
-            use gantry_server::store::tokio_postgres;
+            use enterplace_server::store::tokio_postgres;
             let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
             tokio::spawn(connection);
             client
@@ -672,8 +683,8 @@ async fn mcp_servers_are_stored_shown_and_approved_or_blocked() -> Result<(), Er
     let mut sent = report("noa", "nuc", json!([]));
     sent["os"] = json!("linux");
     sent["mcp"] = json!([
-        {"tool": "cursor", "file": "/home/noa/.cursor/mcp.json", "server": "github", "transport": "http", "target": "https://u:p@api.githubcopilot.com/mcp?token=abc", "via_gantry": false},
-        {"tool": "claude-code", "file": "/home/noa/.claude.json", "server": "gantry", "transport": "http", "target": "https://gw.example.com/mcp", "via_gantry": true},
+        {"tool": "cursor", "file": "/home/noa/.cursor/mcp.json", "server": "github", "transport": "http", "target": "https://u:p@api.githubcopilot.com/mcp?token=abc", "via_enterplace": false},
+        {"tool": "claude-code", "file": "/home/noa/.claude.json", "server": "enterplace", "transport": "http", "target": "https://gw.example.com/mcp", "via_enterplace": true},
         {"tool": "vscode", "file": "/home/noa/.config/Code/User/mcp.json", "error": "the file is not JSON"}
     ]);
     let stored = agent(
@@ -711,13 +722,13 @@ async fn mcp_servers_are_stored_shown_and_approved_or_blocked() -> Result<(), Er
         .unwrap_or_default();
     assert_eq!(github["target"], "https://api.githubcopilot.com/mcp");
     assert_eq!(
-        (&github["via_gantry"], &github["decision"]),
+        (&github["via_enterplace"], &github["decision"]),
         (&json!(false), &json!("pending"))
     );
-    // The download `gantry audit coverage --devices` reads takes the new fields.
-    let _: Vec<gantry_core::coverage::Device> = serde_json::from_str(&listed.text)?;
+    // The download `enterplace audit coverage --devices` reads takes the new fields.
+    let _: Vec<enterplace_core::coverage::Device> = serde_json::from_str(&listed.text)?;
 
-    // An admin blocks GitHub's server by API and approves Gantry's on the page; a viewer cannot decide.
+    // An admin blocks GitHub's server by API and approves Enterplace's on the page; a viewer cannot decide.
     let blocked = call(
         &gw.app,
         "POST",
@@ -740,7 +751,7 @@ async fn mcp_servers_are_stored_shown_and_approved_or_blocked() -> Result<(), Er
     let page = owner.go(&gw.app, "GET", "/console/devices", &[]).await?;
     assert!(page.text.contains("MCP servers"), "{}", page.text);
     assert!(page.text.contains("https://api.githubcopilot.com/mcp"));
-    assert!(page.text.contains("not via Gantry") && page.text.contains("via Gantry"));
+    assert!(page.text.contains("not via Enterplace") && page.text.contains("via Enterplace"));
     let approved = owner
         .go(
             &gw.app,
@@ -898,7 +909,7 @@ async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> R
     assert!(
         saved
             .text
-            .contains("approved MCP servers go through Gantry"),
+            .contains("approved MCP servers go through Enterplace"),
         "{}",
         saved.text
     );
@@ -952,7 +963,7 @@ async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> R
     let cursor = r#"{"mcpServers":{"shady":{"command":"/opt/shady-mcp","env":{"T":"s3cret"}},"docs":{"url":"https://docs.example.com/mcp","headers":{"Authorization":"Bearer up"}},"mine":{"command":"mine"}}}"#;
     put(".cursor/mcp.json", cursor)?;
     put(
-        ".config/gantry/credentials",
+        ".config/enterplace/credentials",
         &format!("name=noa\nkey={ADMIN_KEY}\n"),
     )?;
     let opts = crate::device::Options {
@@ -984,7 +995,7 @@ async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> R
         json!({"docs": {"url": format!("{gateway_url}/mcp")}, "mine": {"command": "mine"}})
     );
     assert_eq!(
-        std::fs::read_to_string(home.join(".cursor/mcp.json.gantry-backup"))?,
+        std::fs::read_to_string(home.join(".cursor/mcp.json.enterplace-backup"))?,
         cursor
     );
 
@@ -1005,7 +1016,7 @@ async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> R
             .unwrap_or_default()
     };
     for t in ["claude-code", "gemini-cli", "aider"] {
-        assert_eq!(tool(t)["state"], "gantry", "{t}: {}", listed.text);
+        assert_eq!(tool(t)["state"], "enterplace", "{t}: {}", listed.text);
     }
     assert_eq!(tool("cursor")["state"], "installed");
     assert!(
@@ -1023,12 +1034,12 @@ async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> R
         listed.text
     );
     assert!(!listed.text.contains("s3cret") && !listed.text.contains("Bearer up"));
-    let devices: Vec<gantry_core::coverage::Device> = serde_json::from_str(&listed.text)?;
-    let noa = gantry_core::coverage::people(&devices)
+    let devices: Vec<enterplace_core::coverage::Device> = serde_json::from_str(&listed.text)?;
+    let noa = enterplace_core::coverage::people(&devices)
         .remove("noa")
         .unwrap_or_default();
     assert!(
-        noa.gantry.contains("aider") && noa.blocked_mcp.is_empty(),
+        noa.enterplace.contains("aider") && noa.blocked_mcp.is_empty(),
         "{noa:?}"
     );
     assert_eq!(noa.denied_apps.len(), 1, "{noa:?}");
@@ -1041,7 +1052,7 @@ async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> R
         json!([{"tool": "codex", "state": "direct", "installed": true}]),
     );
     sent["apps"] = json!([{"app": "chatgpt", "status": "denied", "running": true}, {"app": "notepad", "status": "denied"}]);
-    sent["mcp"] = json!([{"tool": "claude-code", "file": "/Library/x/managed-mcp.json", "server": "shady", "transport": "stdio", "target": "shady-mcp", "via_gantry": false}]);
+    sent["mcp"] = json!([{"tool": "claude-code", "file": "/Library/x/managed-mcp.json", "server": "shady", "transport": "stdio", "target": "shady-mcp", "via_enterplace": false}]);
     sent["mcp_actions"] = json!([{"tool": "zed", "file": "/h/settings.json", "server": "other", "transport": "stdio", "target": "shady-mcp", "action": "removed"}, {"tool": "zed", "server": "x", "transport": "stdio", "target": "y", "action": "exploded"}]);
     let stored = agent(
         &gw.app,
@@ -1055,7 +1066,7 @@ async fn a_profile_denies_apps_and_the_agent_enforces_blocked_mcp_servers() -> R
     assert_eq!(stored.status, StatusCode::OK, "{}", stored.text);
     let page = owner.go(&gw.app, "GET", "/console/devices", &[]).await?;
     for shown in [
-        "set to Gantry: aider, claude-code, gemini-cli",
+        "set to Enterplace: aider, claude-code, gemini-cli",
         "installed, set by hand: cursor",
         "codex on mbp",
         "denied app",
@@ -1245,7 +1256,7 @@ async fn an_admin_kept_to_an_organization_or_to_teams_reaches_only_its_own_devic
         let token = made.body["token"].as_str().ok_or("no token")?.to_string();
         let mut sent = report("x", host, json!([]));
         sent["mcp"] = json!([{"tool": "cursor", "file": "/mcp.json", "server": host, "transport": "http",
-            "target": format!("https://{host}.example.com/mcp"), "via_gantry": false}]);
+            "target": format!("https://{host}.example.com/mcp"), "via_enterplace": false}]);
         let stored = agent(
             app,
             "POST",

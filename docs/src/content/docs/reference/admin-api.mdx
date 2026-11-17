@@ -1,17 +1,17 @@
 ---
 title: Admin API
-description: Keys, kill switches, credentials, usage, the policy by part (providers, models, rules, guardrails, MCP servers, aliases, budgets) and alert rules over HTTP while Gantry runs, with the OpenAPI document and the shape of every /admin route.
+description: Keys, kill switches, credentials, usage, the policy by part (providers, models, rules, guardrails, MCP servers, aliases, budgets) and alert rules over HTTP while Enterplace runs, with the OpenAPI document and the shape of every /admin route.
 sidebar:
   order: 4
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-The admin API does over HTTP what the console does, with the same permissions and the same audit records: keys, kill switches, provider credentials, usage, the policy and its parts, and (Gantry Enterprise) alert rules. It is on the gateway's own address. The keys file stays the one source of truth for keys, and a change to the policy is a new [policy version](/governance/policy/), checked as `gantry check` checks a file.
+The admin API does over HTTP what the console does, with the same permissions and the same audit records: keys, kill switches, provider credentials, usage, the policy and its parts, and (Enterplace Enterprise) alert rules. It is on the gateway's own address. The keys file stays the one source of truth for keys, and a change to the policy is a new [policy version](/governance/policy/), checked as `enterplace check` checks a file.
 
 ## OpenAPI document
 
-`GET /admin/openapi.json` answers an OpenAPI 3.1 document of every admin route this gateway serves, with the permission each needs (`x-gantry-permission`) and the `action` of its record (`operationId`). It needs no key and is not recorded. The document and the routes come from one table, so a route that is not in it is refused with `unknown_route`, and CI calls every route in it to check that it is served with that action, and fails when the router serves an `/admin` path of its own outside the table.
+`GET /admin/openapi.json` answers an OpenAPI 3.1 document of every admin route this gateway serves, with the permission each needs (`x-enterplace-permission`) and the `action` of its record (`operationId`). It needs no key and is not recorded. The document and the routes come from one table, so a route that is not in it is refused with `unknown_route`, and CI calls every route in it to check that it is served with that action, and fails when the router serves an `/admin` path of its own outside the table.
 
 ```bash
 curl -s http://127.0.0.1:8080/admin/openapi.json | jq '.paths | keys'
@@ -19,10 +19,10 @@ curl -s http://127.0.0.1:8080/admin/openapi.json | jq '.paths | keys'
 
 ## Authentication
 
-Send an admin key, one whose entry in the keys file says `admin: true`, as `Authorization: Bearer gantry_...` or `x-api-key: gantry_...`. Make the first one on the command line:
+Send an admin key, one whose entry in the keys file says `admin: true`, as `Authorization: Bearer enterplace_...` or `x-api-key: enterplace_...`. Make the first one on the command line:
 
 ```bash
-gantry key new noa.bar --team platform --admin
+enterplace key new noa.bar --team platform --admin
 ```
 
 | Caller | Result |
@@ -37,9 +37,9 @@ Each route needs one permission, named in the table below and in the OpenAPI doc
 
 `DELETE /admin/keys/self` is the one exception: any valid key may revoke itself.
 
-Every call, allowed or refused, is an `admin` record in the audit log, written before anything is done. A call that cannot be recorded is refused with 503 `audit_unavailable`. Every response carries `X-Gantry-Decision`. Errors use the OpenAI shape in [Refusal codes](/reference/refusal-codes/#response-shape).
+Every call, allowed or refused, is an `admin` record in the audit log, written before anything is done. A call that cannot be recorded is refused with 503 `audit_unavailable`. Every response carries `X-Enterplace-Decision`. Errors use the OpenAI shape in [Refusal codes](/reference/refusal-codes/#response-shape).
 
-The admin API exists only when Gantry serves from a keys file. Under `gantry serve --unchecked` every `/admin` route is refused with `unknown_route`.
+The admin API exists only when Enterplace serves from a keys file. Under `enterplace serve --unchecked` every `/admin` route is refused with `unknown_route`.
 
 ## Routes
 
@@ -93,7 +93,7 @@ Any other method or path under `/admin` is refused with 404 `unknown_route` and 
 Lists the keys of the version in use, sorted by name. Never a key.
 
 ```bash
-curl http://127.0.0.1:8080/admin/keys -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+curl http://127.0.0.1:8080/admin/keys -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY"
 ```
 
 ```json title="200"
@@ -115,11 +115,11 @@ curl http://127.0.0.1:8080/admin/keys -H "Authorization: Bearer $GANTRY_ADMIN_KE
 
 ## POST /admin/keys
 
-Issues a key and appends its hash to the end of the keys file, exactly as `gantry key new` does. The key works as soon as the answer arrives. The admin API issues non-admin keys only; make admin keys with `gantry key new --admin` or in the console.
+Issues a key and appends its hash to the end of the keys file, exactly as `enterplace key new` does. The key works as soon as the answer arrives. The admin API issues non-admin keys only; make admin keys with `enterplace key new --admin` or in the console.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/admin/keys \
-  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -H "Content-Type: application/json" \
   -d '{"name":"maya.cohen","team":"payments","expires":"2026-12-31","budget":{"usd":20,"per":"month"}}'
 ```
 
@@ -135,7 +135,7 @@ curl -X POST http://127.0.0.1:8080/admin/keys \
 Unknown fields are refused with `invalid_request`.
 
 ```json title="201"
-{"key":"gantry_3f9a...","name":"maya.cohen","team":"payments","sha256_prefix":"5d1e4a07","rotated":false,"status":{"in_effect":true},"message":"This key is shown once and is not stored anywhere. Only its hash is in the keys file."}
+{"key":"enterplace_3f9a...","name":"maya.cohen","team":"payments","sha256_prefix":"5d1e4a07","rotated":false,"status":{"in_effect":true},"message":"This key is shown once and is not stored anywhere. Only its hash is in the keys file."}
 ```
 
 | Field | Type | Description |
@@ -150,7 +150,7 @@ Unknown fields are refused with `invalid_request`.
 | Field | Type | Description |
 |---|---|---|
 | `in_effect` | boolean | `true` when the new keys file is in use |
-| `problems` | array of strings | Only when `false`: the files on disk fail the check for another reason, so Gantry keeps the version it has |
+| `problems` | array of strings | Only when `false`: the files on disk fail the check for another reason, so Enterplace keeps the version it has |
 | `message` | string | Only when `false`: what to do. The change applies within 2 seconds of the files passing |
 
 ## GET /admin/keys/&lt;prefix&gt;
@@ -193,7 +193,7 @@ Name, team, `org`, `role` and `admin` cannot be changed: a new name or organizat
 Body `{"grace": "48h"}` (optional, default `24h`; `90s`, `30m`, `48h`, `7d`, at most `90d`, or `0`).
 
 ```json
-{"key": "gantry_8a41...", "name": "maya.cohen", "team": "payments", "sha256_prefix": "8a41c2d0",
+{"key": "enterplace_8a41...", "name": "maya.cohen", "team": "payments", "sha256_prefix": "8a41c2d0",
  "replaces": "5d1e4a07", "old_key_until": "2026-11-16T09:14:02Z", "status": {"in_effect": true}, "message": "..."}
 ```
 
@@ -204,7 +204,7 @@ The new key has the old one's settings and is shown once. The old key gets `expi
 Removes the entry whose hash starts with `<prefix>` from the keys file, only if nobody changed the file meanwhile, and stops the key at once. The prefix is 8 to 64 hex characters, as `GET /admin/keys` lists it.
 
 ```bash
-curl -X DELETE http://127.0.0.1:8080/admin/keys/5d1e4a07 -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+curl -X DELETE http://127.0.0.1:8080/admin/keys/5d1e4a07 -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY"
 ```
 
 ```json title="200"
@@ -220,10 +220,10 @@ curl -X DELETE http://127.0.0.1:8080/admin/keys/5d1e4a07 -H "Authorization: Bear
 
 ## DELETE /admin/keys/self
 
-Revokes the key the request is sent with. Any valid key may call it. `gantry logout` uses it.
+Revokes the key the request is sent with. Any valid key may call it. `enterplace logout` uses it.
 
 ```bash
-curl -X DELETE http://127.0.0.1:8080/admin/keys/self -H "Authorization: Bearer $GANTRY_KEY"
+curl -X DELETE http://127.0.0.1:8080/admin/keys/self -H "Authorization: Bearer $ENTERPLACE_KEY"
 ```
 
 The response is that of `DELETE /admin/keys/<prefix>`.
@@ -231,7 +231,7 @@ The response is that of `DELETE /admin/keys/<prefix>`.
 ## GET /admin/kills
 
 ```bash
-curl http://127.0.0.1:8080/admin/kills -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+curl http://127.0.0.1:8080/admin/kills -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY"
 ```
 
 ```json title="200"
@@ -248,11 +248,11 @@ curl http://127.0.0.1:8080/admin/kills -H "Authorization: Bearer $GANTRY_ADMIN_K
 
 ## POST /admin/kills
 
-Turns a kill switch on. Gantry refuses matching requests with `killed` at once, and within 1 second on every node serving the same files. `gantry kill` calls this route.
+Turns a kill switch on. Enterplace refuses matching requests with `killed` at once, and within 1 second on every node serving the same files. `enterplace kill` calls this route.
 
 ```bash
 curl -X POST http://127.0.0.1:8080/admin/kills \
-  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -H "Content-Type: application/json" \
   -d '{"scope":"team","value":"payments","reason":"runaway agent, investigating"}'
 ```
 
@@ -271,11 +271,11 @@ curl -X POST http://127.0.0.1:8080/admin/kills \
 
 ## DELETE /admin/kills
 
-Turns a kill switch off. `gantry unkill` calls this route.
+Turns a kill switch off. `enterplace unkill` calls this route.
 
 ```bash
 curl -X DELETE http://127.0.0.1:8080/admin/kills \
-  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -H "Content-Type: application/json" \
   -d '{"scope":"team","value":"payments"}'
 ```
 
@@ -292,11 +292,11 @@ No switch on for that scope and value is 404 `no_such_switch`. A kill switch fil
 
 ## Provider credentials
 
-Need `store:` in the policy and `GANTRY_MASTER_KEY` on the gateway: without the store each call is 404 `credentials_need_store`, without the master key 409 `no_master_key`. See [Provider credentials](/governance/provider-credentials/).
+Need `store:` in the policy and `ENTERPLACE_MASTER_KEY` on the gateway: without the store each call is 404 `credentials_need_store`, without the master key 409 `no_master_key`. See [Provider credentials](/governance/provider-credentials/).
 
 ```bash
 curl -X POST http://127.0.0.1:8080/admin/credentials \
-  -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -H "Content-Type: application/json" \
   -d '{"name":"openai-prod","provider":"openai","value":"sk-..."}'
 ```
 
@@ -338,7 +338,7 @@ Spend, tokens and requests of the requests that match, summed by one dimension, 
 | `format` | `csv` for CSV; or send `Accept: text/csv`. `focus` for a [FOCUS cost file](/operations/cost-export/), where `group_by` does not apply. JSON otherwise |
 
 ```bash
-curl "http://127.0.0.1:8080/admin/usage?group_by=team&from=2026-11-01&to=2026-11-30" -H "Authorization: Bearer $GANTRY_ADMIN_KEY"
+curl "http://127.0.0.1:8080/admin/usage?group_by=team&from=2026-11-01&to=2026-11-30" -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY"
 ```
 
 ```json title="200"
@@ -354,18 +354,18 @@ curl "http://127.0.0.1:8080/admin/usage?group_by=team&from=2026-11-01&to=2026-11
 Each part of the policy file has its routes: `providers`, `rules`, `guardrails`, `mcp` (MCP servers) and `aliases` are lists of entries named by `name`; `budgets` is the `limits:` list whole. An entry is the JSON of what the policy file holds for it, with the same fields.
 
 ```bash
-curl -X PUT http://127.0.0.1:8080/admin/rules/payments -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+curl -X PUT http://127.0.0.1:8080/admin/rules/payments -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" \
   -d '{"principals": {"team": "payments"}, "models": ["gpt-4o-mini"], "budget": {"usd": 200, "per": "month"}}'
-curl -X PUT http://127.0.0.1:8080/admin/budgets -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+curl -X PUT http://127.0.0.1:8080/admin/budgets -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" \
   -d '[{"team": "payments", "budget": {"usd": 500, "per": "month"}}]'
-curl -X POST http://127.0.0.1:8080/admin/models -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+curl -X POST http://127.0.0.1:8080/admin/models -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" \
   -d '{"provider": "openai", "model": "gpt-4o-mini", "input": 0.15, "output": 0.60, "aliases": ["fast"]}'
-curl -X PUT http://127.0.0.1:8080/admin/models/gpt-4o-mini/price -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -d '{"input": 0.15, "output": 0.60}'
+curl -X PUT http://127.0.0.1:8080/admin/models/gpt-4o-mini/price -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -d '{"input": 0.15, "output": 0.60}'
 ```
 
 - A change is a new policy version on the live one, exactly as `PUT /admin/policy` saves it: 201 with the version, its state (`live`, or `pending` when the live version asks for approval) and `in_effect`. Every gateway on the store uses it within 2 seconds.
 - `If-Match: "<version>"` is optional: send it to be refused with 409 `version_conflict` when someone saved meanwhile. Without it the change is made on the version live now.
-- A version `gantry check` refuses is 400 `invalid_policy` with each problem; a missing entry is 404 `no_such_entry`.
+- A version `enterplace check` refuses is 400 `invalid_policy` with each problem; a missing entry is 404 `no_such_entry`.
 - Changes need `edit_policy` in a role not kept to an organization, teams or customers, and the policy kept in the store (`store.policy_from: store`). A policy kept in its file is read through these routes, and a change is 409 `policy_in_file`.
 - The record's `target` names the part, the entry and what was sent. The policy holds no secrets: provider keys are named by `key_env` or `credential:`, and credentials are added write-only with `POST /admin/credentials`.
 - Comments of the policy file are not kept by a change through these routes, as in the console's forms; `PUT /admin/policy` keeps them.
@@ -374,10 +374,10 @@ curl -X PUT http://127.0.0.1:8080/admin/models/gpt-4o-mini/price -H "Authorizati
 
 ## Alert rules
 
-Gantry Enterprise with the `alerts` feature adds these routes; without it each answers 403 `license_required`. Reading needs `see_records`; changing `edit_policy`. See [Alerting](/operations/alerting/) for the kinds and their parameters.
+Enterplace Enterprise with the `alerts` feature adds these routes; without it each answers 403 `license_required`. Reading needs `see_records`; changing `edit_policy`. See [Alerting](/operations/alerting/) for the kinds and their parameters.
 
 ```bash
-curl -X POST http://127.0.0.1:8080/admin/alerts/rules -H "Authorization: Bearer $GANTRY_ADMIN_KEY" \
+curl -X POST http://127.0.0.1:8080/admin/alerts/rules -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" \
   -d '{"name": "Payments spend", "kind": "budget", "params": {"scope": "team", "name": "payments", "period": "month", "usd": "500"}, "channels": [1], "cooldown_minutes": 60, "max_per_hour": 10, "enabled": true}'
 ```
 

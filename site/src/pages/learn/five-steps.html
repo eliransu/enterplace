@@ -7,8 +7,8 @@ nav: learn
   <nav class="crumbs" aria-label="Breadcrumb"><a href="/learn/">Learn</a><span>The five steps</span></nav>
   <h1>Five steps, one change at a time.</h1>
   <p class="lead">Each step is one change on top of the last, and each works without the next. Stay on a step for a day or a quarter. Nothing is blocked in the first two.</p>
-  <figure class="code cmd"><pre>curl -fsSL https://gantry.enterplace.dev/install.sh | sh
-gantry start</pre></figure>
+  <figure class="code cmd"><pre>curl -fsSL https://enterplace.dev/install.sh | sh
+enterplace start</pre></figure>
 </section>
 
 <nav class="rail" aria-label="The five steps">
@@ -26,23 +26,23 @@ gantry start</pre></figure>
   <div class="step-body">
     <div class="stack">
       <div><h3>What you get</h3><p>A list of the AI tools and models in use and what each one costs, from the first day. Nothing is blocked.</p></div>
-      <div><h3>The one change</h3><p>On the machine that will run Gantry, run gantry start. No provider key is needed: it writes a policy in observe mode with one rule that allows everyone, a free demo model and Claude subscription passthrough, and opens the dashboard. Its Start here checklist sends a first request and shows the settings for each coding tool. Then have the first people point their tool at the gateway.</p></div>
-      <div><h3>Check it worked</h3><p>gantry start opens the console through a one-time sign-in link. The banner says <strong>Observe mode: nothing is blocked</strong>. The Analytics page ranks requests, tokens and cost by coding agent, model or key.</p></div>
+      <div><h3>The one change</h3><p>On the machine that will run Enterplace, run enterplace start. No provider key is needed: it writes a policy in observe mode with one rule that allows everyone, a free demo model and Claude subscription passthrough, and opens the dashboard. Its Start here checklist sends a first request and shows the settings for each coding tool. Then have the first people point their tool at the gateway.</p></div>
+      <div><h3>Check it worked</h3><p>enterplace start opens the console through a one-time sign-in link. The banner says <strong>Observe mode: nothing is blocked</strong>. The Analytics page ranks requests, tokens and cost by coding agent, model or key.</p></div>
       <div><h3>Who does it</h3><p>A platform engineer. For everyone else it is one settings change in each tool.</p></div>
       <a class="more" href="docs:/start/step-1-see/">Step 1 in the docs {{> arrow}}</a>
     </div>
     <div class="stack">
-      <figure class="code"><figcaption>Start Gantry</figcaption><pre>curl -fsSL https://gantry.enterplace.dev/install.sh | sh
-gantry start
+      <figure class="code"><figcaption>Start Enterplace</figcaption><pre>curl -fsSL https://enterplace.dev/install.sh | sh
+enterplace start
 
 <span class="c"># a key for the first people to try it</span>
-gantry key new pilot --team pilot</pre></figure>
-      <figure class="code"><figcaption>gantry.policy.yaml, as gantry start writes it</figcaption><pre>version: 1
+enterplace key new pilot --team pilot</pre></figure>
+      <figure class="code"><figcaption>enterplace.policy.yaml, as enterplace start writes it</figcaption><pre>version: 1
 mode: observe
 providers:
   - name: demo
     preset: demo
-    models: [gantry-demo]
+    models: [enterplace-demo]
   - name: claude-subscriptions
     kind: anthropic
     auth: passthrough
@@ -63,29 +63,29 @@ rules:
     <div class="stack">
       <div><h3>What you get</h3><p>Every request has a name and a team on it. Usage and cost show up per person and per team.</p></div>
       <div><h3>The one change</h3><p>Give each person a key of their own, in place of the shared one from step 1. The command prints the key once, with the lines their tool reads. With more than a handful of people, let them sign in with the company account and issue their own.</p></div>
-      <div><h3>Check it worked</h3><p>Analytics ranks by person or team. The People and workloads page lists every key by name and team, with what it spent this month and today. <code>gantry audit coverage</code> names the people who hold a key and have sent nothing.</p></div>
+      <div><h3>Check it worked</h3><p>Analytics ranks by person or team. The People and workloads page lists every key by name and team, with what it spent this month and today. <code>enterplace audit coverage</code> names the people who hold a key and have sent nothing.</p></div>
       <div><h3>Who does it</h3><p>The same engineer, or your identity team. People swap a shared key for their own. Nothing is blocked in this step either.</p></div>
       <a class="more" href="docs:/start/step-2-know/">Step 2 in the docs {{> arrow}}</a>
     </div>
     <div class="stack">
-      <figure class="code"><figcaption>A key per person</figcaption><pre>gantry key new sarah.miller --team payments</pre></figure>
-      <figure class="code"><figcaption>Or sign-in with the company account</figcaption><pre><span class="c"># gantry.policy.yaml (added)</span>
+      <figure class="code"><figcaption>A key per person</figcaption><pre>enterplace key new sarah.miller --team payments</pre></figure>
+      <figure class="code"><figcaption>Or sign-in with the company account</figcaption><pre><span class="c"># enterplace.policy.yaml (added)</span>
 console:
   sso:
     issuer: https://login.example.com
-    client_id: gantry-console
-    client_secret_env: GANTRY_SSO_SECRET
-    redirect_url: https://gantry.example.com/console/sso/callback
+    client_id: enterplace-console
+    client_secret_env: ENTERPLACE_SSO_SECRET
+    redirect_url: https://enterplace.example.com/console/sso/callback
     allowed_domains: [example.com]
     role_claim: groups
-    admin_values: [gantry-admins]
+    admin_values: [enterplace-admins]
     self_issue:
       allowed_domains: [example.com]
       team: developers
       expires_days: 30
 
 <span class="c"># each developer, once</span>
-gantry login https://gantry.example.com</pre></figure>
+enterplace login https://enterplace.example.com</pre></figure>
     </div>
   </div>
 </section>
@@ -101,11 +101,11 @@ gantry login https://gantry.example.com</pre></figure>
       <a class="more" href="docs:/start/step-3-limit/">Step 3 in the docs {{> arrow}}</a>
     </div>
     <div class="stack">
-      <figure class="code"><figcaption>gantry.policy.yaml (added)</figcaption><pre>limits:
+      <figure class="code"><figcaption>enterplace.policy.yaml (added)</figcaption><pre>limits:
   - { team: "*", budget: { usd: 500, per: month } }</pre></figure>
-      <figure class="code"><figcaption>The stop button, with no policy change</figcaption><pre>gantry kill --team support \
+      <figure class="code"><figcaption>The stop button, with no policy change</figcaption><pre>enterplace kill --team support \
   --reason "agent retrying one ticket in a loop"
-gantry unkill --team support</pre></figure>
+enterplace unkill --team support</pre></figure>
     </div>
   </div>
 </section>
@@ -117,11 +117,11 @@ gantry unkill --team support</pre></figure>
       <div><h3>What you get</h3><p>A prompt that holds an API key, a private key or a database password is stopped before it leaves. You see what would be stopped before anything is.</p></div>
       <div><h3>The one change</h3><p>Add a guardrail and name it in your rule. Until the date, it records what it finds and blocks nothing. From that date it refuses a request that holds a secret with <code>guardrail_blocked</code>.</p></div>
       <div><h3>Check it worked</h3><p>In the request log, filter by guardrail finding, such as <code>aws_access_key</code> or <code>database_url</code>. During the trial each finding says <code>shadow</code>. If the findings are real secrets, let the date arrive. If it catches text it should leave alone, move the date.</p></div>
-      <div><h3>Who does it</h3><p>Security picks the date. The engineer adds the lines. The detector runs inside Gantry, and the text it matched is never written to a record.</p></div>
+      <div><h3>Who does it</h3><p>Security picks the date. The engineer adds the lines. The detector runs inside Enterplace, and the text it matched is never written to a record.</p></div>
       <a class="more" href="docs:/start/step-4-protect/">Step 4 in the docs {{> arrow}}</a>
     </div>
     <div class="stack">
-      <figure class="code"><figcaption>gantry.policy.yaml (changed)</figcaption><pre>guardrails:
+      <figure class="code"><figcaption>enterplace.policy.yaml (changed)</figcaption><pre>guardrails:
   - name: no-secrets
     type: secrets
     action: block
@@ -135,8 +135,8 @@ rules:
     principals: { any: true }
     models: ["*"]
     guardrails: [no-secrets, mask-pii]</pre></figure>
-      <figure class="code"><figcaption>Try it on examples first</figcaption><pre>gantry guardrail test no-secrets \
-  --corpus examples.jsonl --policy gantry.policy.yaml</pre></figure>
+      <figure class="code"><figcaption>Try it on examples first</figcaption><pre>enterplace guardrail test no-secrets \
+  --corpus examples.jsonl --policy enterplace.policy.yaml</pre></figure>
     </div>
   </div>
 </section>
@@ -146,14 +146,14 @@ rules:
   <div class="step-body">
     <div class="stack">
       <div><h3>What you get</h3><p>One record for every request, allowed or refused, kept where a restart cannot lose it, with a check that shows no record was changed.</p></div>
-      <div><h3>The one change</h3><p>Gantry has written an audit record for every request since step 1. Put the file on storage that outlives the container: mount a volume, move the file onto it, add one line to the policy, and restart once.</p></div>
-      <div><h3>Check it worked</h3><p>Run the verify command, or press Verify on the console's Audit log page. Copy the last hash to a place the Gantry host cannot write, such as a ticket. Later, <code>--expect-last</code> shows that nothing up to that record was changed or removed.</p></div>
-      <div><h3>With Gantry Enterprise <span class="ent">Enterprise</span></h3><p>Export of every record to a SIEM, retention that keeps the chain verifiable, and a legal hold.</p></div>
+      <div><h3>The one change</h3><p>Enterplace has written an audit record for every request since step 1. Put the file on storage that outlives the container: mount a volume, move the file onto it, add one line to the policy, and restart once.</p></div>
+      <div><h3>Check it worked</h3><p>Run the verify command, or press Verify on the console's Audit log page. Copy the last hash to a place the Enterplace host cannot write, such as a ticket. Later, <code>--expect-last</code> shows that nothing up to that record was changed or removed.</p></div>
+      <div><h3>With Enterplace Enterprise <span class="ent">Enterprise</span></h3><p>Export of every record to a SIEM, retention that keeps the chain verifiable, and a legal hold.</p></div>
       <a class="more" href="docs:/start/step-5-prove/">Step 5 in the docs {{> arrow}}</a>
     </div>
     <div class="stack">
-      <figure class="code"><figcaption>gantry.policy.yaml (added)</figcaption><pre>audit: { path: /var/lib/gantry/gantry-audit.jsonl }</pre></figure>
-      <figure class="code"><figcaption>Verify the chain</figcaption><pre><span class="c">$</span> gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+      <figure class="code"><figcaption>enterplace.policy.yaml (added)</figcaption><pre>audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }</pre></figure>
+      <figure class="code"><figcaption>Verify the chain</figcaption><pre><span class="c">$</span> enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl
 <span class="ok">9 records in an unbroken chain from record 1 to record 9.</span>
 5 requests, 1 configuration record, 0 admin records,
 3 usage records.

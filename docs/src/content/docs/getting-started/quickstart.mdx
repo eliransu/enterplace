@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-description: Install Gantry, run gantry start, and follow the dashboard to your first request in about two minutes. No provider key needed to start.
+description: Install Enterplace, run enterplace start, and follow the dashboard to your first request in about two minutes. No provider key needed to start.
 sidebar:
   order: 1
 ---
@@ -15,17 +15,17 @@ Three steps, about two minutes, no provider key needed.
 <TabItem label="macOS and Linux">
 
 ```bash
-curl -fsSL https://gantry.enterplace.dev/install.sh | sh
+curl -fsSL https://enterplace.dev/install.sh | sh
 ```
 
 </TabItem>
 <TabItem label="Docker">
 
 ```bash
-docker run --pull always -d --name gantry -p 8080:8080 -v gantry-data:/var/lib/gantry ghcr.io/eliransu/gantry
+docker run --pull always -d --name enterplace -p 8080:8080 -v enterplace-data:/var/lib/enterplace ghcr.io/eliransu/enterplace
 ```
 
-The container runs step 2 itself. `docker logs gantry` prints the dashboard link: open it in your browser and go to step 3.
+The container runs step 2 itself. `docker logs enterplace` prints the dashboard link: open it in your browser and go to step 3.
 
 </TabItem>
 </Tabs>
@@ -33,88 +33,88 @@ The container runs step 2 itself. `docker logs gantry` prints the dashboard link
 **2. Start it**
 
 ```bash
-gantry start
+enterplace start
 ```
 
 **3. Your browser opens:** pick what you want to start with and follow the steps. The first step connects a model (paste a provider key) or tries the free demo model; the second sends your first request, and you see it arrive.
 
-Or send the first request from the terminal, with the `export GANTRY_KEY=...` line that `gantry start` printed:
+Or send the first request from the terminal, with the `export ENTERPLACE_KEY=...` line that `enterplace start` printed:
 
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer $GANTRY_KEY" \
+  -H "Authorization: Bearer $ENTERPLACE_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"gantry-demo","messages":[{"role":"user","content":"hello"}]}'
+  -d '{"model":"enterplace-demo","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-The answer starts with `Hello from the Gantry demo model.`, and the request is in the dashboard under **Requests**. Next, [connect Claude Code](/integrations/claude-code/) or [another tool](/integrations/coding-tools/).
+The answer starts with `Hello from the Enterplace demo model.`, and the request is in the dashboard under **Requests**. Next, [connect Claude Code](/integrations/claude-code/) or [another tool](/integrations/coding-tools/).
 
 Everything below is detail.
 
-## What gantry start does
+## What enterplace start does
 
-In the current folder it writes `gantry.policy.yaml` in observe mode (nothing is blocked: every request is sent and recorded, and one a rule would stop is marked `would_refuse`), an admin key (its hash in `gantry.keys.yaml`) and `gantry-master.key`, then serves on `http://127.0.0.1:8080`. The first lines it prints:
+In the current folder it writes `enterplace.policy.yaml` in observe mode (nothing is blocked: every request is sent and recorded, and one a rule would stop is marked `would_refuse`), an admin key (its hash in `enterplace.keys.yaml`) and `enterplace-master.key`, then serves on `http://127.0.0.1:8080`. The first lines it prints:
 
 ```text
-Gantry is running. Open the dashboard:
+Enterplace is running. Open the dashboard:
 
   http://127.0.0.1:8080/console/sign-in/4be1...
 
 The link signs you in once, from this machine, within 10 minutes. Opening it in your browser now.
 
-Admin key, shown once (Gantry keeps only its hash). Use it for the command line and the API:
+Admin key, shown once (Enterplace keeps only its hash). Use it for the command line and the API:
 
-  export GANTRY_KEY=gantry_3f9c...
+  export ENTERPLACE_KEY=enterplace_3f9c...
 ```
 
-The link is the sign-in: it works once, only from a browser on the same machine, for 10 minutes, and the sign-in is recorded in the audit log. On a terminal with a display, Gantry opens it for you; `--no-open` skips that. Keep the admin key in your password manager: it signs in to the console too, and the command line and the admin API use it.
+The link is the sign-in: it works once, only from a browser on the same machine, for 10 minutes, and the sign-in is recorded in the audit log. On a terminal with a display, Enterplace opens it for you; `--no-open` skips that. Keep the admin key in your password manager: it signs in to the console too, and the command line and the admin API use it.
 
-**Claude subscriptions.** The policy also has a provider named `claude-subscriptions` with `auth: passthrough`: Claude Code on a Claude Pro, Max, Team or Enterprise login goes through Gantry with no Anthropic key at all. See [Subscriptions](/governance/subscriptions/).
+**Claude subscriptions.** The policy also has a provider named `claude-subscriptions` with `auth: passthrough`: Claude Code on a Claude Pro, Max, Team or Enterprise login goes through Enterplace with no Anthropic key at all. See [Subscriptions](/governance/subscriptions/).
 
-**Provider keys.** None is needed to start. A key in the environment is picked up (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or the `*_PROVIDER_KEY` form), so `OPENAI_API_KEY=sk-... gantry start` works too. A key pasted in the dashboard's **Connect a model** is sealed with `gantry-master.key` (AES-256-GCM) and kept in `gantry-credentials.json`, which holds only sealed bytes: keep the master key with the policy, and out of version control. To send a provider's requests through a proxy, set `GANTRY_OPENAI_BASE_URL` (or `GANTRY_ANTHROPIC_BASE_URL`, `GANTRY_GEMINI_BASE_URL`) before `gantry start`.
+**Provider keys.** None is needed to start. A key in the environment is picked up (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or the `*_PROVIDER_KEY` form), so `OPENAI_API_KEY=sk-... enterplace start` works too. A key pasted in the dashboard's **Connect a model** is sealed with `enterplace-master.key` (AES-256-GCM) and kept in `enterplace-credentials.json`, which holds only sealed bytes: keep the master key with the policy, and out of version control. To send a provider's requests through a proxy, set `ENTERPLACE_OPENAI_BASE_URL` (or `ENTERPLACE_ANTHROPIC_BASE_URL`, `ENTERPLACE_GEMINI_BASE_URL`) before `enterplace start`.
 
-**The demo model.** The policy always has a provider named `demo` with the model `gantry-demo`. Gantry answers it itself with a short sample text (chat completions, responses and messages, streaming too), sends nothing anywhere and prices it at zero, so the first request works before any key is set. Its requests are recorded under the provider `demo`.
+**The demo model.** The policy always has a provider named `demo` with the model `enterplace-demo`. Enterplace answers it itself with a short sample text (chat completions, responses and messages, streaming too), sends nothing anywhere and prices it at zero, so the first request works before any key is set. Its requests are recorded under the provider `demo`.
 
-**Restart and start over.** Stop it with Ctrl-C, or with `gantry stop` in the same folder from another terminal. `gantry start` in the same folder serves the same policy again and prints a new sign-in link (no new admin key). To start over, delete `gantry.policy.yaml`, `gantry.keys.yaml`, `gantry-credentials.json`, `gantry-master.key` and `gantry-audit.jsonl`, or run `gantry start --force` (which keeps the master key).
+**Restart and start over.** Stop it with Ctrl-C, or with `enterplace stop` in the same folder from another terminal. `enterplace start` in the same folder serves the same policy again and prints a new sign-in link (no new admin key). To start over, delete `enterplace.policy.yaml`, `enterplace.keys.yaml`, `enterplace-credentials.json`, `enterplace-master.key` and `enterplace-audit.jsonl`, or run `enterplace start --force` (which keeps the master key).
 
 ## The install script
 
-The script picks the binary for your machine (macOS or Linux, x86_64 or arm64) from the latest GitHub Release, checks its release signature and SHA256, and installs it to `~/.local/bin`. When that folder is not on your PATH it adds it in your shell's startup file (`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` on macOS, fish's `conf.d`, or `~/.profile`), once, and prints the one line that does it in the current terminal; `GANTRY_NO_MODIFY_PATH=1` leaves the file alone. `GANTRY_VERSION=edge` installs the build of the latest commit on main, `GANTRY_VERSION=v0.1.0` a given release, and `GANTRY_INSTALL_DIR=/usr/local/bin` another folder (with sudo when needed).
+The script picks the binary for your machine (macOS or Linux, x86_64 or arm64) from the latest GitHub Release, checks its release signature and SHA256, and installs it to `~/.local/bin`. When that folder is not on your PATH it adds it in your shell's startup file (`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` on macOS, fish's `conf.d`, or `~/.profile`), once, and prints the one line that does it in the current terminal; `ENTERPLACE_NO_MODIFY_PATH=1` leaves the file alone. `ENTERPLACE_VERSION=edge` installs the build of the latest commit on main, `ENTERPLACE_VERSION=v0.1.0` a given release, and `ENTERPLACE_INSTALL_DIR=/usr/local/bin` another folder (with sudo when needed).
 
 ## The Docker image
 
-The image is public: no login. `--pull always` fetches the newest `latest`, so a copy cached from an earlier day is never used. The first start writes the policy, the admin key and the master key to the `gantry-data` volume and serves on port 8080; its log starts with the same block as `gantry start`, with the link on `http://127.0.0.1:8080`. Inside a container the browser's address is the container network's, so the link works from any address there (once, within 10 minutes), as the admin key in the same log does.
+The image is public: no login. `--pull always` fetches the newest `latest`, so a copy cached from an earlier day is never used. The first start writes the policy, the admin key and the master key to the `enterplace-data` volume and serves on port 8080; its log starts with the same block as `enterplace start`, with the link on `http://127.0.0.1:8080`. Inside a container the browser's address is the container network's, so the link works from any address there (once, within 10 minutes), as the admin key in the same log does.
 
-- Restart: `docker restart gantry`. Each start prints a new sign-in link in `docker logs gantry`, and no new admin key.
-- Start over: `docker rm -f gantry && docker volume rm gantry-data`.
+- Restart: `docker restart enterplace`. Each start prints a new sign-in link in `docker logs enterplace`, and no new admin key.
+- Start over: `docker rm -f enterplace && docker volume rm enterplace-data`.
 - A provider key in the environment works too (`-e OPENAI_API_KEY=sk-...`), but you can paste it in the dashboard instead.
 
 <Aside type="caution">
-The admin key stays in the container's log until the container is removed. Copy it to your password manager, then read it back with `docker logs gantry 2>&1 | grep GANTRY_KEY` only if you lost it.
+The admin key stays in the container's log until the container is removed. Copy it to your password manager, then read it back with `docker logs enterplace 2>&1 | grep ENTERPLACE_KEY` only if you lost it.
 </Aside>
 
 ## The dashboard
 
-The console opens on one question, **What do you want to start with?**, with five answers: coding agents, your own apps and agents, MCP tools, a spend limit for the team, or Claude Team seats you can only watch (Gantry Enterprise). The answer picks a short checklist on **Start here**, the console's home. Every checklist starts the same way:
+The console opens on one question, **What do you want to start with?**, with five answers: coding agents, your own apps and agents, MCP tools, a spend limit for the team, or Claude Team seats you can only watch (Enterplace Enterprise). The answer picks a short checklist on **Start here**, the console's home. Every checklist starts the same way:
 
 1. **Connect a model**: pick OpenAI, Anthropic or Google Gemini and paste its key, or choose **Try without a key** for the demo model.
-2. **Send your first request**: a ready-to-copy curl (with Python and Node tabs) holding the gateway's address and a key: `$GANTRY_KEY`, or a key the step makes for it, shown once. The step turns done by itself when the request arrives, even if the provider refuses it: the request shows in Requests with the provider's answer.
+2. **Send your first request**: a ready-to-copy curl (with Python and Node tabs) holding the gateway's address and a key: `$ENTERPLACE_KEY`, or a key the step makes for it, shown once. The step turns done by itself when the request arrives, even if the provider refuses it: the request shows in Requests with the provider's answer.
 
-**Coding agents** first asks how your team pays for Claude Code. With **Claude subscriptions (Pro, Max, Team, Enterprise)**, the default, there is no model to connect and no API key: `gantry start` already wrote the `claude-subscriptions` provider, and the checklist mints a free person token and shows the two lines for Claude Code (`ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS`). Every step has **Copy for your agent**, a ready prompt that has Claude Code, Codex or Cursor do the step for you. See [Subscriptions](/governance/subscriptions/).
+**Coding agents** first asks how your team pays for Claude Code. With **Claude subscriptions (Pro, Max, Team, Enterprise)**, the default, there is no model to connect and no API key: `enterplace start` already wrote the `claude-subscriptions` provider, and the checklist mints a free person token and shows the two lines for Claude Code (`ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS`). Every step has **Copy for your agent**, a ready prompt that has Claude Code, Codex or Cursor do the step for you. See [Subscriptions](/governance/subscriptions/).
 
-The steps that follow are the choice's own: a key per person, the lines for Claude Code, Codex, Cursor or an SDK, a budget, an MCP server. Each says what **turns it done** and what you **then see**, and Gantry checks its own records for it. Once the checklist is done, Start here shows the five steps of a rollout (See, Know, Limit, Protect, Prove, the same as the [Start here](/start/why/) pages).
+The steps that follow are the choice's own: a key per person, the lines for Claude Code, Codex, Cursor or an SDK, a budget, an MCP server. Each says what **turns it done** and what you **then see**, and Enterplace checks its own records for it. Once the checklist is done, Start here shows the five steps of a rollout (See, Know, Limit, Protect, Prove, the same as the [Start here](/start/why/) pages).
 
 ## Verify the audit log
 
-The audit log is `gantry-audit.jsonl` beside the policy (in the container, `/var/lib/gantry/gantry-audit.jsonl` on the volume). Each record holds the hash of the one before it, so a removed or changed record shows:
+The audit log is `enterplace-audit.jsonl` beside the policy (in the container, `/var/lib/enterplace/enterplace-audit.jsonl` on the volume). Each record holds the hash of the one before it, so a removed or changed record shows:
 
 ```bash
-gantry audit verify gantry-audit.jsonl
-docker exec gantry /gantry audit verify /var/lib/gantry/gantry-audit.jsonl
+enterplace audit verify enterplace-audit.jsonl
+docker exec enterplace /enterplace audit verify /var/lib/enterplace/enterplace-audit.jsonl
 ```
 
 ```text
-gantry-audit.jsonl: 3 records in an unbroken chain from record 1 to record 3.
+enterplace-audit.jsonl: 3 records in an unbroken chain from record 1 to record 3.
 1 request, 1 configuration record, 1 admin record, 0 usage records.
 Last hash: 9be869bf...
 ```
@@ -123,11 +123,11 @@ See [Audit log](/governance/audit-log/).
 
 ## With Postgres: Docker Compose
 
-For a team, keys, kill switches, budgets and credentials live in Postgres, so they are shared and survive the container. One command runs Gantry and Postgres 16 on one machine, with no provider key and no file to write:
+For a team, keys, kill switches, budgets and credentials live in Postgres, so they are shared and survive the container. One command runs Enterplace and Postgres 16 on one machine, with no provider key and no file to write:
 
 ```bash
-mkdir gantry && cd gantry && curl -fsSLO https://raw.githubusercontent.com/eliransu/gantry/main/deploy/compose/compose.yaml && docker compose up -d
-docker compose logs gantry | grep GANTRY_KEY
+mkdir enterplace && cd enterplace && curl -fsSLO https://raw.githubusercontent.com/eliransu/enterplace/main/deploy/compose/compose.yaml && docker compose up -d
+docker compose logs enterplace | grep ENTERPLACE_KEY
 ```
 
 The second line prints the admin key, once. The console is at `http://127.0.0.1:8080/console`, with the same **Start here** checklist and the free demo model. To write your own policy file, follow the [Docker Compose guide](/deploy/docker/); to run it in your cloud, use a [one-click deploy](/deploy/one-click/).
@@ -137,10 +137,10 @@ The second line prints the admin key, once. The console is at `http://127.0.0.1:
 You need Rust 1.88 or later. The repository pins it in `rust-toolchain.toml`, so `rustup` installs it on the first build.
 
 ```bash
-git clone https://github.com/eliransu/gantry.git
-cd gantry
+git clone https://github.com/eliransu/enterplace.git
+cd enterplace
 cargo build --release
-target/release/gantry start
+target/release/enterplace start
 ```
 
 This binary is the open source edition (MIT). The image runs the enterprise build, which without a license key is the same open source gateway.
@@ -149,6 +149,6 @@ This binary is the open source edition (MIT). The image runs the enterprise buil
 
 - [Connect Claude Code](/integrations/claude-code/) on your developers' own Claude subscriptions, with no API key.
 - [Policy file](/governance/policy/): rules per team and model, budgets, rate limits and guardrails, then `mode: enforce`.
-- [Keys and identity](/governance/keys/): a key per person and workload, and self-service keys with `gantry login`.
-- [One-click deploys](/deploy/one-click/): Gantry and Postgres in your cloud in a few clicks.
-- [Deploy Gantry Enterprise](/deploy/overview/): Docker Compose, Kubernetes, AWS, Google Cloud or Azure, from nothing to a production gateway.
+- [Keys and identity](/governance/keys/): a key per person and workload, and self-service keys with `enterplace login`.
+- [One-click deploys](/deploy/one-click/): Enterplace and Postgres in your cloud in a few clicks.
+- [Deploy Enterplace Enterprise](/deploy/overview/): Docker Compose, Kubernetes, AWS, Google Cloud or Azure, from nothing to a production gateway.

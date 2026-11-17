@@ -1,16 +1,16 @@
 ---
 title: Coverage
-description: See which people's coding tools send through Gantry, request by request, and which key holders have sent nothing.
+description: See which people's coding tools send through Enterplace, request by request, and which key holders have sent nothing.
 sidebar:
   order: 9
 ---
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-`gantry audit coverage` reads the audit log and counts requests per person and coding tool, with refusals and the last time each was seen. With the keys file, it also lists every person who holds a key and has sent nothing.
+`enterplace audit coverage` reads the audit log and counts requests per person and coding tool, with refusals and the last time each was seen. With the keys file, it also lists every person who holds a key and has sent nothing.
 
 ```bash
-gantry audit coverage /var/lib/gantry/gantry-audit.jsonl --keys gantry.keys.yaml
+enterplace audit coverage /var/lib/enterplace/enterplace-audit.jsonl --keys enterplace.keys.yaml
 ```
 
 ```text
@@ -45,27 +45,27 @@ Matching ignores case. Any other user agent is shown by its first product withou
 
 | Row | Means |
 |---|---|
-| A tool with requests | That person's tool reached Gantry with their key |
-| A tool with only refusals | It reaches Gantry but is not allowed, or is misconfigured. Gemini CLI shows this way, refused with `no_key` |
-| `unknown` person | Requests with no key Gantry knows: a tool configured with a wrong or missing key |
+| A tool with requests | That person's tool reached Enterplace with their key |
+| A tool with only refusals | It reaches Enterplace but is not allowed, or is misconfigured. Gemini CLI shows this way, refused with `no_key` |
+| `unknown` person | Requests with no key Enterplace knows: a tool configured with a wrong or missing key |
 | Tool `-`, last seen `never` | The person holds a key and has sent nothing: their tools call providers directly, or they do not use AI tools |
-| `claude-code (watch)` | Gantry Enterprise: the person's Claude Code is on a Claude Team or Enterprise seat and reports through [watch mode](/integrations/claude-team/). `requests` counts the model requests it reported; none can be refused |
+| `claude-code (watch)` | Enterplace Enterprise: the person's Claude Code is on a Claude Team or Enterprise seat and reports through [watch mode](/integrations/claude-team/). `requests` counts the model requests it reported; none can be refused |
 | `OpenAI/JS`, `OpenAI/Python` and similar | A tool or script that sends its SDK's user agent |
 
 <Aside type="caution">
-The audit log shows what reached Gantry. It cannot show a tool that calls a provider directly. A person who uses Gantry from one tool and a provider key in another shows up as covered, until their devices report (below).
+The audit log shows what reached Enterplace. It cannot show a tool that calls a provider directly. A person who uses Enterplace from one tool and a provider key in another shows up as covered, until their devices report (below).
 </Aside>
 
 MCP calls (`/mcp`) carry `user_agent` too, so an MCP client counts under its tool.
 
-## Devices: tools that bypass Gantry
+## Devices: tools that bypass Enterplace
 
-The device agent of Gantry Enterprise (`gantry device`, license feature `devices`) reads each coding tool's documented configuration on every enrolled machine and reports one state per tool: `not_installed`, `installed`, `gantry` (pointed at the gateway) or `direct` (pointed at a provider, or holding a provider key or login). See [Devices](/operations/devices/) for enrolment and what is read for each tool. The agent runs on macOS, Linux and Windows, and each report also lists the MCP servers configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed, whether each goes through Gantry's MCP gateway, and the AI apps installed with what the device profile says of each (`allowed`, `denied`, `unlisted`).
+The device agent of Enterplace Enterprise (`enterplace device`, license feature `devices`) reads each coding tool's documented configuration on every enrolled machine and reports one state per tool: `not_installed`, `installed`, `enterplace` (pointed at the gateway) or `direct` (pointed at a provider, or holding a provider key or login). See [Devices](/operations/devices/) for enrolment and what is read for each tool. The agent runs on macOS, Linux and Windows, and each report also lists the MCP servers configured in Claude Desktop, Claude Code, Cursor, VS Code and Zed, whether each goes through Enterplace's MCP gateway, and the AI apps installed with what the device profile says of each (`allowed`, `denied`, `unlisted`).
 
-The console's **Devices** page merges those reports with every replica's traffic (the store's request index), per person: the tools their traffic came from, their enrolled devices, the tools set to go through Gantry, and a tag for each tool going direct (`codex on mbp-ana`), each denied app installed and each blocked MCP server still configured. Its **Download devices.json** link gives the reports to the command line:
+The console's **Devices** page merges those reports with every replica's traffic (the store's request index), per person: the tools their traffic came from, their enrolled devices, the tools set to go through Enterplace, and a tag for each tool going direct (`codex on mbp-ana`), each denied app installed and each blocked MCP server still configured. Its **Download devices.json** link gives the reports to the command line:
 
 ```bash
-gantry audit coverage /var/lib/gantry/gantry-audit.jsonl --keys gantry.keys.yaml --devices devices.json
+enterplace audit coverage /var/lib/enterplace/enterplace-audit.jsonl --keys enterplace.keys.yaml --devices devices.json
 ```
 
 ```text
@@ -80,30 +80,30 @@ dan	web	-	0	0	never	1	0
 | `devices` | The person's enrolled devices with the tool installed. For tool `-`, every enrolled device of theirs, none with a tool |
 | `direct` | Of those, the devices where the tool is configured to call a provider directly |
 
-Then one row per person with enrolled devices: the tools configured to go through Gantry, the tools going direct, the denied apps installed (see [Apps](/operations/devices/#apps-allowed-and-denied)) and the blocked MCP servers still configured, each with the device it is on. `-` is none:
+Then one row per person with enrolled devices: the tools configured to go through Enterplace, the tools going direct, the denied apps installed (see [Apps](/operations/devices/#apps-allowed-and-denied)) and the blocked MCP servers still configured, each with the device it is on. `-` is none:
 
 ```text
-person	team	via_gantry	direct	denied_apps	blocked_mcp
+person	team	via_enterplace	direct	denied_apps	blocked_mcp
 ana	dev	claude-code	codex on mbp	chatgpt on mbp	github in cursor on mbp
 dan	web	-	-	-	-
 ```
 
-Then each device's MCP servers, whether each goes through Gantry's MCP gateway, and the admin's decision on it (see [MCP servers](/operations/devices/#mcp-servers)):
+Then each device's MCP servers, whether each goes through Enterplace's MCP gateway, and the admin's decision on it (see [MCP servers](/operations/devices/#mcp-servers)):
 
 ```text
-device	person	os	tool	server	transport	target	via_gantry	decision
+device	person	os	tool	server	transport	target	via_enterplace	decision
 mbp:ana	ana	macos	cursor	github	http	https://api.githubcopilot.com/mcp	no	blocked
-mbp:ana	ana	macos	claude-code	gantry	http	https://gantry.example.com/mcp	yes	approved
+mbp:ana	ana	macos	claude-code	enterplace	http	https://enterplace.example.com/mcp	yes	approved
 ```
 
-A tool with requests and `direct` 0 is covered. A tool with `direct` above 0 reaches a provider from at least one device, whatever its traffic says. A row with 0 requests and `devices` above 0 is installed and has never reached Gantry.
+A tool with requests and `direct` 0 is covered. A tool with `direct` above 0 reaches a provider from at least one device, whatever its traffic says. A row with 0 requests and `devices` above 0 is installed and has never reached Enterplace.
 
-Devices are matched to people by the Gantry key `gantry login` saved on the machine: the agent sends it, and the gateway takes the person from the key. A device whose user never ran `gantry login` is refused until someone does.
+Devices are matched to people by the Enterplace key `enterplace login` saved on the machine: the agent sends it, and the gateway takes the person from the key. A device whose user never ran `enterplace login` is refused until someone does.
 
 ## Related
 
 <CardGrid>
-	<LinkCard title="Coding tools" href="/integrations/coding-tools/" description="Every tool with a guide, and what stays outside Gantry." />
+	<LinkCard title="Coding tools" href="/integrations/coding-tools/" description="Every tool with a guide, and what stays outside Enterplace." />
 	<LinkCard title="Audit records" href="/reference/audit-records/" description="Every field of a request record." />
 	<LinkCard title="Devices" href="/operations/devices/" description="Enrol machines, and what the device agent reads per tool." />
 </CardGrid>

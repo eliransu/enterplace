@@ -78,7 +78,7 @@ async fn new_token(gw: &Gateway, owner: &mut Browser) -> Result<String, Error> {
 }
 
 fn records(gw: &Gateway) -> Result<Vec<Value>, Error> {
-    let log = std::fs::read_to_string(gw.dir.join("gantry-audit.jsonl"))?;
+    let log = std::fs::read_to_string(gw.dir.join("enterplace-audit.jsonl"))?;
     Ok(log
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
@@ -94,8 +94,8 @@ fn record<'a>(all: &'a [Value], action: &str) -> Result<&'a Value, Error> {
         .ok_or(format!("{action} not recorded"))?)
 }
 
-async fn client(url: &str) -> Result<gantry_server::store::tokio_postgres::Client, Error> {
-    use gantry_server::store::tokio_postgres;
+async fn client(url: &str) -> Result<enterplace_server::store::tokio_postgres::Client, Error> {
+    use enterplace_server::store::tokio_postgres;
     let config: tokio_postgres::Config = url.parse()?;
     let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
     tokio::spawn(connection);
@@ -362,24 +362,24 @@ async fn okta_provisions_updates_and_deactivates_a_person() -> Result<(), Error>
     assert_eq!(refused.body["scimType"], "mutability");
 
     // Okta deactivates with a PATCH that has no path. Their keys go, everywhere.
-    gantry_core::keyfile::add_entry(
+    enterplace_core::keyfile::add_entry(
         email,
         "default",
-        "gantry_ada1_0123456789abcdef0123456789",
+        "enterplace_ada1_0123456789abcdef0123456789",
         false,
         &gw.keys,
     )?;
-    gantry_core::keyfile::add_entry(
+    enterplace_core::keyfile::add_entry(
         "Ada@Example.com",
         "default",
-        "gantry_ada2_0123456789abcdef0123456789",
+        "enterplace_ada2_0123456789abcdef0123456789",
         false,
         &gw.keys,
     )?;
-    gantry_core::keyfile::add_entry(
+    enterplace_core::keyfile::add_entry(
         "stays@example.com",
         "default",
-        "gantry_stay_0123456789abcdef0123456789",
+        "enterplace_stay_0123456789abcdef0123456789",
         false,
         &gw.keys,
     )?;
@@ -399,7 +399,7 @@ async fn okta_provisions_updates_and_deactivates_a_person() -> Result<(), Error>
         "{}",
         off.body
     );
-    let keys = gantry_core::config::read_keys(&gw.keys)?.unwrap_or_default();
+    let keys = enterplace_core::config::read_keys(&gw.keys)?.unwrap_or_default();
     assert!(!keys.to_lowercase().contains(email), "{keys}");
     assert!(keys.contains("stays@example.com"));
     let gone = call(&gw.app, "GET", &format!("/Users/{id}"), &token, None).await?;
@@ -511,10 +511,10 @@ async fn entra_provisions_updates_and_deactivates_a_person() -> Result<(), Error
     assert_eq!(bad.body["scimType"], "invalidSyntax");
 
     // Entra disables with the value as a string, "False".
-    gantry_core::keyfile::add_entry(
+    enterplace_core::keyfile::add_entry(
         &lower,
         "research",
-        "gantry_grace_0123456789abcdef012345678",
+        "enterplace_grace_0123456789abcdef012345678",
         false,
         &gw.keys,
     )?;
@@ -534,7 +534,7 @@ async fn entra_provisions_updates_and_deactivates_a_person() -> Result<(), Error
         "{}",
         off.body
     );
-    let keys = gantry_core::config::read_keys(&gw.keys)?.unwrap_or_default();
+    let keys = enterplace_core::config::read_keys(&gw.keys)?.unwrap_or_default();
     assert!(!keys.contains(&lower), "{keys}");
     assert_eq!(
         call(&gw.app, "GET", &format!("/Users/{id}"), &token, None)
@@ -995,7 +995,7 @@ async fn tokens_are_made_by_an_owner_shown_once_and_kept_hashed() -> Result<(), 
         .iter()
         .filter_map(|r| r.try_get(0).ok())
         .collect();
-    assert_eq!(stored, [gantry_core::id::sha256_hex(token.as_bytes())]);
+    assert_eq!(stored, [enterplace_core::id::sha256_hex(token.as_bytes())]);
 
     // An admin who is not an owner cannot make one.
     let made = call(
@@ -1065,7 +1065,7 @@ async fn tokens_are_made_by_an_owner_shown_once_and_kept_hashed() -> Result<(), 
     let all = records(&gw)?;
     record(&all, "scim_token_created")?;
     record(&all, "scim_token_revoked")?;
-    assert!(!std::fs::read_to_string(gw.dir.join("gantry-audit.jsonl"))?.contains(&token));
+    assert!(!std::fs::read_to_string(gw.dir.join("enterplace-audit.jsonl"))?.contains(&token));
     Ok(())
 }
 

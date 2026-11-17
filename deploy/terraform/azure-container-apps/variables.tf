@@ -1,7 +1,7 @@
 variable "name" {
   description = "Prefix for every resource this module creates. Lowercase letters and digits, 3 to 16 characters (it also names the storage account)."
   type        = string
-  default     = "gantry"
+  default     = "enterplace"
   validation {
     condition     = can(regex("^[a-z][a-z0-9]{2,15}$", var.name))
     error_message = "name must be 3 to 16 lowercase letters and digits, starting with a letter."
@@ -19,7 +19,7 @@ variable "resource_group_name" {
 }
 
 variable "image" {
-  description = "The gantry image, such as ghcr.io/eliransu/gantry:0.1.0."
+  description = "The enterplace image, such as ghcr.io/eliransu/enterplace:0.1.0."
   type        = string
 }
 
@@ -34,7 +34,7 @@ variable "registry" {
 }
 
 variable "policy" {
-  description = "The Gantry policy, as YAML text (for example file(\"gantry.policy.yaml\")). It must put the audit log under /var/lib/gantry and have `store: { postgres_url_env: DATABASE_URL }`. A change makes a new revision."
+  description = "The Enterplace policy, as YAML text (for example file(\"enterplace.policy.yaml\")). It must put the audit log under /var/lib/enterplace and have `store: { postgres_url_env: DATABASE_URL }`. A change makes a new revision."
   type        = string
 }
 
@@ -50,19 +50,19 @@ variable "provider_key_secrets" {
 }
 
 variable "master_key_secret" {
-  description = "Optional. Secret name in key_vault_id holding the master key (64 hex characters) that seals provider credentials kept in the store. Becomes GANTRY_MASTER_KEY. Null makes one with a random value as the secret <name>-master-key, kept across applies (its value is in Terraform state). Keep a copy elsewhere: a lost master key cannot be recovered."
+  description = "Optional. Secret name in key_vault_id holding the master key (64 hex characters) that seals provider credentials kept in the store. Becomes ENTERPLACE_MASTER_KEY. Null makes one with a random value as the secret <name>-master-key, kept across applies (its value is in Terraform state). Keep a copy elsewhere: a lost master key cannot be recovered."
   type        = string
   default     = null
 }
 
 variable "export_key_secret" {
-  description = "Optional. Secret name in key_vault_id holding the key (64 hex characters) that encrypts SIEM export destinations' secrets. Becomes GANTRY_EXPORT_KEY. Null makes one with a random value as the secret <name>-export-key, kept across applies (its value is in Terraform state)."
+  description = "Optional. Secret name in key_vault_id holding the key (64 hex characters) that encrypts SIEM export destinations' secrets. Becomes ENTERPLACE_EXPORT_KEY. Null makes one with a random value as the secret <name>-export-key, kept across applies (its value is in Terraform state)."
   type        = string
   default     = null
 }
 
 variable "license_secret" {
-  description = "Secret name in key_vault_id holding the Gantry license key. Becomes GANTRY_LICENSE. Null runs without the enterprise features."
+  description = "Secret name in key_vault_id holding the Enterplace license key. Becomes ENTERPLACE_LICENSE. Null runs without the enterprise features."
   type        = string
   default     = null
 }
@@ -80,7 +80,7 @@ variable "internal" {
 }
 
 variable "allowed_cidrs" {
-  description = "Address ranges allowed to reach the app. Empty allows all; Gantry's keys still decide who may call."
+  description = "Address ranges allowed to reach the app. Empty allows all; Enterplace's keys still decide who may call."
   type        = list(string)
   default     = []
 }

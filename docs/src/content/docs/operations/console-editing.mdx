@@ -7,20 +7,20 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-With the policy kept in the store, admins change providers, models, prices, rules and keys from the console, and every gateway on the database uses each change within 2 seconds, without a restart. Each change is a policy version: checked as `gantry check` checks a file, recorded in the audit chain, and one click away from being undone.
+With the policy kept in the store, admins change providers, models, prices, rules and keys from the console, and every gateway on the database uses each change within 2 seconds, without a restart. Each change is a policy version: checked as `enterplace check` checks a file, recorded in the audit chain, and one click away from being undone.
 
 ## Turn it on
 
 The policy file names the store and says the store is the source:
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 store: { postgres_url_env: DATABASE_URL, policy_from: store }
 ```
 
-Restart Gantry once. The first gateway imports the file as version 1, and says so:
+Restart Enterplace once. The first gateway imports the file as version 1, and says so:
 
 ```text
-gantry: the policy is kept in the store from now on: /etc/gantry/gantry.policy.yaml is version 1. Edit it in the console or with PUT /admin/policy.
+enterplace: the policy is kept in the store from now on: /etc/enterplace/enterplace.policy.yaml is version 1. Edit it in the console or with PUT /admin/policy.
 ```
 
 Without `policy_from: store` the policy stays in the file. The pages below show it and export it, and every change is refused with how to turn editing on. See [which one wins](/governance/policy/#which-one-wins).
@@ -38,7 +38,7 @@ Each form saves a new version. A form edit writes the policy without its comment
 
 On `/console/people`, **Edit** beside a key changes what it may do: admin, expiry, its own budget, the models it may use (within its rule's) and its tokens per minute. The key itself does not change and is never shown again. **Issue a key** shows the new key once; **Revoke key** removes it. The last admin key keeps its admin flag, so someone can always sign in.
 
-The same page rotates the key: **Rotate the key** makes a new key with the same settings and shows it once, and the old key keeps working for the grace you write (`24h` unless changed; `48h`, `30m`, `7d`, at most `90d`, or `0` to end it now). Requests made with the old key until then are recorded with `key_rotated`, so the request log shows who still uses it. It is the change `gantry key rotate` and `POST /admin/keys/<prefix>/rotate` make, recorded as `rotate_key`. Only an admin of the whole install rotates an admin key or a key with a role. See [Rotate a key](/governance/keys/#rotate-a-key).
+The same page rotates the key: **Rotate the key** makes a new key with the same settings and shows it once, and the old key keeps working for the grace you write (`24h` unless changed; `48h`, `30m`, `7d`, at most `90d`, or `0` to end it now). Requests made with the old key until then are recorded with `key_rotated`, so the request log shows who still uses it. It is the change `enterplace key rotate` and `POST /admin/keys/<prefix>/rotate` make, recorded as `rotate_key`. Only an admin of the whole install rotates an admin key or a key with a role. See [Rotate a key](/governance/keys/#rotate-a-key).
 
 ## Teams
 
@@ -49,13 +49,13 @@ The same page rotates the key: **Rotate the key** makes a new key with the same 
 **Policy**, then **Edit**, opens the YAML of the live version. Change anything, or load a YAML file to import it, add a note for the history, and:
 
 - **Dry run** checks the draft and replays the last hours of requests (24 by default, up to 720) against it.
-- **Save version** checks the draft and saves it. A draft `gantry check` refuses comes back with every problem; nothing is saved.
+- **Save version** checks the draft and saves it. A draft `enterplace check` refuses comes back with every problem; nothing is saved.
 
 A save starts from the live version. If someone saved another version meanwhile, the save is refused and the editor says so: open the live version and make the change again, so no change is overwritten.
 
 ## Approval
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 store: { postgres_url_env: DATABASE_URL, policy_from: store, approval: true }
 ```
 
@@ -75,7 +75,7 @@ A dry run replays the request records of the last hours against the draft, with 
 
 Requests refused before the policy decided (an unknown key, a budget, a guardrail, a kill switch) are counted and not replayed.
 
-With a [store](/operations/store/), a dry run on any gateway replays the requests every gateway served: it reads the shared request index (`gantry_requests`, copied from each gateway every 2 seconds) and this gateway's own audit log for what the index has not copied yet, each request once. At most the newest 100,000 requests are replayed; the result says so when there were more. Without a store it replays this gateway's own audit log, and says so. The result names its `source` (`store` or `audit_log`) and a `note`, and the console shows the note above the lists.
+With a [store](/operations/store/), a dry run on any gateway replays the requests every gateway served: it reads the shared request index (`enterplace_requests`, copied from each gateway every 2 seconds) and this gateway's own audit log for what the index has not copied yet, each request once. At most the newest 100,000 requests are replayed; the result says so when there were more. Without a store it replays this gateway's own audit log, and says so. The result names its `source` (`store` or `audit_log`) and a `note`, and the console shows the note above the lists.
 
 ## Versions and rollback
 
@@ -83,12 +83,12 @@ With a [store](/operations/store/), a dry run on any gateway replays the request
 
 ## GitOps
 
-**Export YAML** downloads the live policy as `gantry.policy.yaml`, from the console or `GET /admin/policy`. A team that reviews every change in git has two ways to work:
+**Export YAML** downloads the live policy as `enterplace.policy.yaml`, from the console or `GET /admin/policy`. A team that reviews every change in git has two ways to work:
 
-- Keep `policy_from: file` (the default). The file in git is the only source, CI runs `gantry check` on it, and the console is read only for the policy. Keys are still edited in the console.
+- Keep `policy_from: file` (the default). The file in git is the only source, CI runs `enterplace check` on it, and the console is read only for the policy. Keys are still edited in the console.
 - Use the store, and treat git as a record: export after each change, or import from CI with `PUT /admin/policy` and `If-Match`, so the store and the repository hold the same text.
 
-When the file and the live version differ, Gantry prints it at every start and the Policy page shows a banner. They never disagree in silence.
+When the file and the live version differ, Enterplace prints it at every start and the Policy page shows a banner. They never disagree in silence.
 
 ## What is recorded
 

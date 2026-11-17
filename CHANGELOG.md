@@ -1,6 +1,6 @@
 # Changelog
 
-Every change to Gantry that a user or operator can see, newest first. The format follows
+Every change to Enterplace that a user or operator can see, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow [Semantic Versioning](https://semver.org/).
 The open source crates and the enterprise features in `enterprise/` (commercial license) share one version number and
 one repository. How a release is made: RELEASING.md.
@@ -16,7 +16,7 @@ one repository. How a release is made: RELEASING.md.
 
 - `auth: passthrough` is allowed on a provider of kind `openai` (url `https://chatgpt.com/backend-api/codex`), so Codex
   signed in with ChatGPT is governed with no OpenAI key. Codex's `session-id` header tells sessions apart when no
-  person is named. The refusals name Codex's fix: `requires_openai_auth = true` and `http_headers` with `x-gantry-user`.
+  person is named. The refusals name Codex's fix: `requires_openai_auth = true` and `http_headers` with `x-enterplace-user`.
 
 ### Console: simpler, from the approved design
 
@@ -30,7 +30,7 @@ one repository. How a release is made: RELEASING.md.
 - Requests: a Tokens column, the time opens the request, and the Proof column is gone: only a row that does not
   prove says so.
 - Audit log: a kill switch reads "Traffic stopped for ... since ... by ...: reason" with a Restore traffic button,
-  recorded as `clear_kill` like `gantry unkill`. Verify chain sits under the records.
+  recorded as `clear_kill` like `enterplace unkill`. Verify chain sits under the records.
 - Start here leads with a live strip once requests arrive: the tools seen, the lime gate, the providers, how many
   requests in the last 10 minutes and how many were refused, and the newest three. The page redraws as a request
   arrives and its disc crosses the gate once: lime when it passed, flame and held at the gate when it was refused.
@@ -47,7 +47,7 @@ one repository. How a release is made: RELEASING.md.
 - Empty pages say one line and offer one button. An empty Requests page tells Claude desktop app users that its Code
   tab ignores the base URL.
 
-### Fixed, found by running Claude Code and Codex through Gantry
+### Fixed, found by running Claude Code and Codex through Enterplace
 
 - `tpd` on a rule with no other limit was never applied: every request passed. It holds now, for subscription
   traffic too.
@@ -55,7 +55,7 @@ one repository. How a release is made: RELEASING.md.
   `wrong_route`.
 - The demo model's streamed Responses answer opens its output item and text part before the text, so Codex shows the
   text instead of logging `OutputTextDelta without active item` and printing nothing.
-- `gantry --help` from the image's binary lists every command, `start` included, and exits 0.
+- `enterplace --help` from the image's binary lists every command, `start` included, and exits 0.
 - The `tpd` refusal and the kill switch refusal no longer say UTC twice.
 - Claude Code in auto mode on a chat provider (`accept_messages`) gets one answer per prompt instead of three
   `untranslatable` refusals first. Its `safeguards` field is dropped on purpose (`SAFE_TO_DROP`): Claude Code then
@@ -63,17 +63,17 @@ one repository. How a release is made: RELEASING.md.
 
 ### First run, made shorter
 
-- `gantry help` (and `gantry` alone) opens with `gantry start`, the one command a newcomer runs. It was the 23rd of
+- `enterplace help` (and `enterplace` alone) opens with `enterplace start`, the one command a newcomer runs. It was the 23rd of
   35.
-- `gantry kill`, `gantry unkill` and the other admin commands take the admin key from `GANTRY_KEY` too, the name
-  `gantry start` prints it under. With only `GANTRY_ADMIN_KEY` read, the first `gantry kill` after a first run failed.
+- `enterplace kill`, `enterplace unkill` and the other admin commands take the admin key from `ENTERPLACE_KEY` too, the name
+  `enterplace start` prints it under. With only `ENTERPLACE_ADMIN_KEY` read, the first `enterplace kill` after a first run failed.
 - The console's Codex settings and its curl name a model this install serves (the demo model on a fresh install).
   Codex left to its default model, and the curl's `gpt-5-mini`, were refused with `unknown_model`.
-- The website and docs moved to gantry.enterplace.dev and gantry-docs.enterplace.dev. The old eliran.me
+- The website and docs moved to enterplace.dev and docs.enterplace.dev. The old eliran.me
   addresses keep serving the same pages, so saved install commands and links in installed binaries still work.
-- `gantry stop` stops the gateway that serves from the folder (or `--dir`), so a gateway started in another
+- `enterplace stop` stops the gateway that serves from the folder (or `--dir`), so a gateway started in another
   terminal, or left running, no longer needs its process number.
-- `gantry start` checks the port before it writes anything. On a taken port it used to write a policy and an admin
+- `enterplace start` checks the port before it writes anything. On a taken port it used to write a policy and an admin
   key, fail to listen without showing the key, and leave the next start saying the key "was shown".
 - The console's Copy for your agent prompt for Claude Code holds no placeholder. With no person token made it is one
   line (`ANTHROPIC_BASE_URL`) and tells the agent that no token is needed; an agent given `<person token>` stopped
@@ -83,7 +83,7 @@ one repository. How a release is made: RELEASING.md.
 - Docs: the Claude Code guide says that the Claude desktop app's Code tab sets `ANTHROPIC_BASE_URL` itself, so
   subscription passthrough works from a terminal and VS Code and not from that app.
 - Docs: the quickstart is the first page of the sidebar and shows a first request with its answer; every tool guide
-  says how to get a gateway and a key in one line and that `gantry-demo` works with no provider key; the pages that
+  says how to get a gateway and a key in one line and that `enterplace-demo` works with no provider key; the pages that
   said Claude Team and Enterprise seats cannot go through a gateway now describe subscription passthrough; guides
   no longer say the Responses route reaches `openai` providers only or that `/v1/completions` is not served.
 
@@ -93,65 +93,65 @@ one repository. How a release is made: RELEASING.md.
   from a Claude Pro, Max, Team or Enterprise login, goes to the provider unchanged with `anthropic-beta` and the rest of
   Claude Code's headers. The provider holds no key. The login is taken off the request before any check and is never
   stored, logged, recorded, hashed into a record, cached, or sent to a guardrail webhook, plugin or trace. A login never
-  reaches a keyed provider (`login_not_accepted`) and a Gantry key never reaches a passthrough one (`login_needed`),
+  reaches a keyed provider (`login_not_accepted`) and a Enterplace key never reaches a passthrough one (`login_needed`),
   fallbacks included. A passthrough and a keyed provider may list the same model: the request's credential picks.
-- Person tokens: `gantry_u_...`, free, sent in `x-gantry-user` through Claude Code's `ANTHROPIC_CUSTOM_HEADERS`. They
+- Person tokens: `enterplace_u_...`, free, sent in `x-enterplace-user` through Claude Code's `ANTHROPIC_CUSTOM_HEADERS`. They
   name the person and team for rules, records, guardrails, kill switches and limits, and reach no model on their own
-  (`person_token_only`). Made by `gantry key new --identity-only`, the console's Start here, or any Gantry key of the
-  person (`gantry login`, whose env file now sets `ANTHROPIC_CUSTOM_HEADERS` and unsets `ANTHROPIC_API_KEY` on a gateway
+  (`person_token_only`). Made by `enterplace key new --identity-only`, the console's Start here, or any Enterplace key of the
+  person (`enterplace login`, whose env file now sets `ANTHROPIC_CUSTOM_HEADERS` and unsets `ANTHROPIC_API_KEY` on a gateway
   with passthrough). The device agent writes the header into each person's Claude Code settings from their login.
-- `identity: optional` records a passthrough request without `x-gantry-user` as the person `unknown` (team `unknown`),
+- `identity: optional` records a passthrough request without `x-enterplace-user` as the person `unknown` (team `unknown`),
   told apart by Claude Code's session ID; a kill switch can stop `unknown`. `identity: required` (the default) refuses it
   with `person_needed`. Subscription refusals are 403, never 401, which Claude Code reads as an expired login.
 - Subscription traffic is recorded with tokens and an API-equivalent cost estimate (`"cost_basis":
   "api_equivalent_estimate"`, `"auth": "passthrough"`), shown as `~$x (est.)` in the console. Dollar budgets do not
   count it unless the rule sets `budget_basis: api_equivalent`.
 - `tpd`: tokens per calendar day (UTC), in a rule's `rate:` or a `limits:` entry, per person, team or any scope.
-- `gantry start` writes the `claude-subscriptions` passthrough provider (`models: ["claude-*"]`, `identity: optional`),
-  so Claude Code on a subscription works with no key at all. `GANTRY_ANTHROPIC_BASE_URL` points it elsewhere.
+- `enterplace start` writes the `claude-subscriptions` passthrough provider (`models: ["claude-*"]`, `identity: optional`),
+  so Claude Code on a subscription works with no key at all. `ENTERPLACE_ANTHROPIC_BASE_URL` points it elsewhere.
 - Start here: Coding agents asks "How does your team pay for Claude Code?", Claude subscriptions first. Its steps: turn
-  on subscriptions (one click), point Claude Code at Gantry (a person token, the two shell lines or managed settings for
-  MDM), which turns done when that person's first subscription request arrives, a second person, and `gantry login`.
+  on subscriptions (one click), point Claude Code at Enterplace (a person token, the two shell lines or managed settings for
+  MDM), which turns done when that person's first subscription request arrives, a second person, and `enterplace login`.
   Anthropic API keys keep the earlier steps.
 - Every Start here step has **Copy for your agent**: a prompt for Claude Code, Codex or Cursor with the goal, the exact
   values, the commands, how to verify, and the docs page as Markdown. Admin keys never go into a prompt.
 - Docs: every page is also served as Markdown (`<page>.md` and `<page>/index.md`), with `/llms.txt` and
   `/llms-full.txt`, and each page has Copy page, Open in Claude and Open in ChatGPT under its title. New page
   Governance, Subscriptions; Claude Code, Claude Team and the quickstart lead with subscriptions.
-- Website: the home page's **Set up with your agent** copies a prompt that installs Gantry, runs `gantry start` and
+- Website: the home page's **Set up with your agent** copies a prompt that installs Enterplace, runs `enterplace start` and
   points Claude Code at it on the person's own subscription, with the docs as Markdown.
 
 ### First run in under two minutes, no provider key needed
 
-- `gantry start` needs no provider key. It writes an observe-mode policy with the demo model (`preset: demo`, model
-  `gantry-demo`: answered inside the gateway with a sample text for chat completions, responses and messages,
+- `enterplace start` needs no provider key. It writes an observe-mode policy with the demo model (`preset: demo`, model
+  `enterplace-demo`: answered inside the gateway with a sample text for chat completions, responses and messages,
   streaming included, nothing sent anywhere, priced at zero, recorded under the provider `demo`) plus every provider
-  whose key is in the environment, an admin key, and `gantry-master.key` (0600), then serves.
-- The first thing it prints is `Gantry is running. Open the dashboard:` and a link that signs in once: a random code
+  whose key is in the environment, an admin key, and `enterplace-master.key` (0600), then serves.
+- The first thing it prints is `Enterplace is running. Open the dashboard:` and a link that signs in once: a random code
   kept only as its hash, single use, 10 minutes, from a loopback address only (any address under `--container`),
   recorded as `console_sign_in` with `via: start_link`. On a terminal with a display it opens the browser (`open` on
   macOS, `xdg-open` on Linux); `--no-open` skips that. Then the admin key once, and one line that the dashboard shows
   the settings for each tool. The per-tool settings and the provider-key export paragraph left the terminal.
-- `gantry start` again in the same folder (or `docker restart gantry`) serves the policy it wrote with a new sign-in
+- `enterplace start` again in the same folder (or `docker restart enterplace`) serves the policy it wrote with a new sign-in
   link and no new admin key; `--force` writes new ones and keeps the master key. `--yes` and `--all-tools` are still
   accepted and do nothing.
 - Start here opens every checklist with **Connect a model** (paste an OpenAI, Anthropic or Gemini key, sealed as a
   provider credential and recorded, and the provider is added to the policy; or **Try without a key**, the demo
   model) and **Send your first request** (a curl, Python or Node snippet with the gateway's address and a key: the
-  admin key's `$GANTRY_KEY`, or a key the step makes, shown once). It turns done when the request arrives, answered
+  admin key's `$ENTERPLACE_KEY`, or a key the step makes, shown once). It turns done when the request arrives, answered
   or refused, and the first rows show on Start here.
-- Provider credentials work without Postgres: sealed under the master key in `gantry-credentials.json` beside the
+- Provider credentials work without Postgres: sealed under the master key in `enterplace-credentials.json` beside the
   policy. `credential:` in a policy without `store:` loads when that file exists.
-- `GANTRY_OPENAI_BASE_URL`, `GANTRY_ANTHROPIC_BASE_URL` and `GANTRY_GEMINI_BASE_URL` point a provider that `gantry
+- `ENTERPLACE_OPENAI_BASE_URL`, `ENTERPLACE_ANTHROPIC_BASE_URL` and `ENTERPLACE_GEMINI_BASE_URL` point a provider that `enterplace
   start` or Connect a model sets up at another URL, such as a proxy.
 - A browser at the gateway's root (`/` with `Accept: text/html`) is sent to the console; API clients keep the JSON
   `no_key` answer. A browser's own `/favicon.ico` and touch icon requests are no longer recorded as refused requests.
-- The console sign-in takes the whole `export GANTRY_KEY=...` line, and says plainly when what was pasted is not a
-  Gantry key. Issuing a key on People and workloads shows the Claude Code, Codex and SDK lines with that key.
+- The console sign-in takes the whole `export ENTERPLACE_KEY=...` line, and says plainly when what was pasted is not a
+  Enterplace key. Issuing a key on People and workloads shows the Claude Code, Codex and SDK lines with that key.
 - The installer adds the install folder to the PATH in the shell's startup file (`~/.zshrc`, `~/.bashrc` or
-  `~/.bash_profile` on macOS, fish's `conf.d`, `~/.profile`), once, unless `GANTRY_NO_MODIFY_PATH=1`, and prints the
+  `~/.bash_profile` on macOS, fish's `conf.d`, `~/.profile`), once, unless `ENTERPLACE_NO_MODIFY_PATH=1`, and prints the
   one line for the current terminal.
-- `scripts/ftue_check.py` walks the new-user path in CI: install from a local release, `gantry start --no-open`, the
+- `scripts/ftue_check.py` walks the new-user path in CI: install from a local release, `enterplace start --no-open`, the
   sign-in link in headless Chrome, a starting choice, the demo model, the shown curl, the step turning done and the
   request in Requests; then a provider connected through the console against a mock.
 - Docs: the quickstart and README open with three steps; the docs home and the website point at the same quickstart;
@@ -159,32 +159,32 @@ one repository. How a release is made: RELEASING.md.
 
 ### One-command install of the CLI
 
-- `curl -fsSL https://gantry.enterplace.dev/install.sh | sh` installs `gantry` on macOS and Linux, x86_64 and arm64: it
-  picks the latest stable release (or the `edge` pre-release while there is none; `GANTRY_VERSION=edge|vX.Y.Z`),
+- `curl -fsSL https://enterplace.dev/install.sh | sh` installs `enterplace` on macOS and Linux, x86_64 and arm64: it
+  picks the latest stable release (or the `edge` pre-release while there is none; `ENTERPLACE_VERSION=edge|vX.Y.Z`),
   verifies the release signature with `ssh-keygen` and the tarball's SHA256, installs to `~/.local/bin`
-  (`GANTRY_INSTALL_DIR`, with sudo for a folder you cannot write), and prints the PATH line and `gantry start`.
-- Homebrew: `brew install eliransu/tap/gantry`, the formula pushed to the tap by every stable release.
+  (`ENTERPLACE_INSTALL_DIR`, with sudo for a folder you cannot write), and prints the PATH line and `enterplace start`.
+- Homebrew: `brew install eliransu/tap/enterplace`, the formula pushed to the tap by every stable release.
 - Releases now ship macOS arm64 and amd64 tarballs beside the linux ones. Every push to main publishes the rolling
   pre-release `edge` with the same signed files.
 
 ### Public image and one-command quickstart
 
-- The image `ghcr.io/eliransu/gantry` and the chart `oci://ghcr.io/eliransu/charts/gantry` are public: no
+- The image `ghcr.io/eliransu/enterplace` and the chart `oci://ghcr.io/eliransu/charts/enterplace` are public: no
   `docker login` or `helm registry login`, and no image pull secret. The deploy guides, the Helm chart README and
   `scripts/verify_release.sh` no longer ask for a registry token. The Terraform registry credential variables stay,
   for a private mirror, and default to none.
-- The quickstart opens with one command, `docker run --name gantry -p 8080:8080 -v gantry-data:/var/lib/gantry -e
-  OPENAI_API_KEY=sk-... ghcr.io/eliransu/gantry`, then Docker Compose with Postgres, then a build from source.
+- The quickstart opens with one command, `docker run --name enterplace -p 8080:8080 -v enterplace-data:/var/lib/enterplace -e
+  OPENAI_API_KEY=sk-... ghcr.io/eliransu/enterplace`, then Docker Compose with Postgres, then a build from source.
 
 ### Tests that do not depend on timing
 
-- The audit lock reads its time from a clock: a holder's beats, the watch of another Gantry's lock and the fence
+- The audit lock reads its time from a clock: a holder's beats, the watch of another Enterplace's lock and the fence
   that stops records are all decided on it. Production uses the system clock with the same 5 second beat and the
   same messages; the lock tests drive a clock they advance themselves, so each runs the exact sequence of beats
   and checks with no real waiting.
-- Fixed: while a new Gantry watched another one's audit lock, it held a process-wide lock through each wait, so
+- Fixed: while a new Enterplace watched another one's audit lock, it held a process-wide lock through each wait, so
   every other audit log in the same process (an organization's chain, say) waited up to 40 seconds to open or close.
-- Fixed: `/readyz` and the `gantry_audit_broken` gauge could report a healthy audit log as unwritable for one
+- Fixed: `/readyz` and the `enterplace_audit_broken` gauge could report a healthy audit log as unwritable for one
   check when a record was written at the same moment: the check read the file's size before the count of bytes
   written. It now reads the count first.
 - The store can be polled on request (`Store::poll_now`). The cross-gateway store tests for deployment limits,
@@ -194,9 +194,9 @@ one repository. How a release is made: RELEASING.md.
 
 ### Device agent: more tools, MCP enforcement, app lists, Windows and Linux installers (Enterprise)
 
-- The device agent (`gantry device`) now points nine tools at the gateway, each through the file the tool documents:
+- The device agent (`enterplace device`) now points nine tools at the gateway, each through the file the tool documents:
   OpenCode, Kilo CLI, Continue, Zed, Gemini CLI, Qwen Code and Aider beside Claude Code and Codex, with drift
-  detection and repair for each and a backup (`<name>.gantry-backup`) of every file it changes. It also finds
+  detection and repair for each and a backup (`<name>.enterplace-backup`) of every file it changes. It also finds
   OpenCode, Continue, Cline and Aider. Cursor, Cline, Roo Code, JetBrains AI, GitHub Copilot and Claude Desktop keep
   their endpoint where no documented file sets it: they stay `installed`, and the report, `devices.json` and the
   Devices page say why. A device with no saved profile still manages Claude Code and Codex only.
@@ -204,10 +204,10 @@ one repository. How a release is made: RELEASING.md.
   which lists a blocked server where it is configured and changes no file. With `remove`, a blocked server is taken
   out of Claude Desktop's, Claude Code's, Cursor's, VS Code's and Zed's MCP file, the file as it was is kept beside
   it, and the Devices page lists each change under **MCP enforcement**. A profile can send approved HTTP servers
-  through Gantry's MCP gateway, a setting of its own.
+  through Enterplace's MCP gateway, a setting of its own.
 - A device profile lists allowed and denied AI apps. The agent reports which are installed or running (detection
   only, nothing is stopped), and the Devices page tags each denied app on its person's row.
-- `gantry audit coverage --devices` and the Devices page show, per person, the tools set to go through Gantry, the
+- `enterplace audit coverage --devices` and the Devices page show, per person, the tools set to go through Enterplace, the
   tools going direct, the denied apps and the blocked MCP servers still configured.
 - Packaging: `deploy/mdm/windows/install.ps1` (binary, token, scheduled task at sign-in; deployed by Intune as a Win32
   app), `deploy/mdm/install-linux.sh` (binary, token, systemd unit), and a deployment guide for Intune, Jamf, Kandji
@@ -216,12 +216,12 @@ one repository. How a release is made: RELEASING.md.
 
 ### One-click deploys
 
-- Deploy Gantry with Postgres in a few clicks or one command: a Render blueprint (`render.yaml`), a Railway template
+- Deploy Enterplace with Postgres in a few clicks or one command: a Render blueprint (`render.yaml`), a Railway template
   (`deploy/railway/`), Fly.io (`deploy/fly/fly.toml`), DigitalOcean App Platform (`.do/`), Cloud Run with Cloud SQL
   (`deploy/gcp-cloud-run/`), AWS ECS on Fargate with RDS (`deploy/aws-cloudformation/`), Azure Container Apps with
   PostgreSQL flexible server (`deploy/azure-arm/`) and Docker Compose (`deploy/compose/compose.yaml`). Guide:
   `/deploy/one-click/`.
-- `gantry start --container` with `DATABASE_URL` set writes `store: { postgres_url_env: DATABASE_URL,
+- `enterplace start --container` with `DATABASE_URL` set writes `store: { postgres_url_env: DATABASE_URL,
   policy_from: store }` and keeps the admin key in that store, made only when the store holds no admin key, so a
   redeploy on a fresh disk keeps keys and the policy and prints no second key.
 - The store reads libpq's `PGSSLMODE` when the connection string names no `sslmode`.
@@ -237,10 +237,10 @@ one repository. How a release is made: RELEASING.md.
   more than 1% of it) and admits the next requests from memory, so most budgeted requests make no store round trip.
   A budget is never passed: near its limit each request is reserved exactly. A gateway may hold up to 1% of a budget
   unused for up to a second.
-- Each gateway writes a heartbeat to the store every 2 seconds (`gantry_replicas`): its name, host, version, store
+- Each gateway writes a heartbeat to the store every 2 seconds (`enterplace_replicas`): its name, host, version, store
   schema, start time and last write. `GET /admin/replicas` lists them with whether each is healthy (a heartbeat in
   the last 10 seconds), and the console's Policy page shows them in a Gateways panel.
-- A new migration namespace, `gantry_ha`, holds the heartbeats, the answer cache and budget raises.
+- A new migration namespace, `enterplace_ha`, holds the heartbeats, the answer cache and budget raises.
 
 ### Governance: required fields, default and per-key guardrails, key bounds, model groups, raises, sessions
 
@@ -254,13 +254,13 @@ one repository. How a release is made: RELEASING.md.
 - `key_bounds:` (top level, and per role) caps what a key may be issued with: `max_days`, `max_budget` and
   `models`. A key issued without one of them gets the bound; one over a bound is refused with
   `key_bounds_exceeded` (403). A change to a key through `PATCH /admin/keys/<prefix>` holds to the same bounds.
-  Keys from `gantry login` hold to the top-level bounds: past `max_days` they get the longest lifetime allowed.
+  Keys from `enterplace login` hold to the top-level bounds: past `max_days` they get the longest lifetime allowed.
 - `model_groups:` names sets of models: `group:<name>` in a rule's, a key's or a budget's `models`, and
   `{ model_group: <name>, budget, rate }` in `limits:` for one budget or rate over the whole group.
 - `rate: { rph, rpd }` limits requests per calendar hour and day (UTC), in a rule and in `limits:` entries, shared
   across replicas on a store.
-- Budget raises: `POST /v1/budget/raises` (or `gantry budget raise request`) asks for more room until a date,
-  `/admin/budget/raises` and `gantry budget raise list | approve | reject | add` decide it, and while it runs every
+- Budget raises: `POST /v1/budget/raises` (or `enterplace budget raise request`) asks for more room until a date,
+  `/admin/budget/raises` and `enterplace budget raise list | approve | reject | add` decide it, and while it runs every
   budget of its scope is that much larger. It ends by itself, shows in `GET /admin/explain`, and every request and
   decision is on the audit log.
 - Session budgets: `budget: { usd, per: session }` and `rate: { session_requests }` on a rule cap what one session
@@ -270,35 +270,35 @@ one repository. How a release is made: RELEASING.md.
 
 ### Operator visibility
 
-- Time by stage. Each forwarded answer's `Server-Timing` header names Gantry's time in `auth`, `read`, `policy`,
+- Time by stage. Each forwarded answer's `Server-Timing` header names Enterplace's time in `auth`, `read`, `policy`,
   `guardrails`, `cache`, `audit`, `connect` and `first-byte` after the total. The usage record carries `stages_ms`
   (with `stream`) and `guardrail_ms`, and a request's detail in the console's request log shows them. New
-  histograms: `gantry_stage_seconds{stage}` and `gantry_guardrail_seconds{guardrail}`. The request index gains a
+  histograms: `enterplace_stage_seconds{stage}` and `enterplace_guardrail_seconds{guardrail}`. The request index gains a
   column for it (`insights` migration 2).
-- More metrics: `gantry_unpriced_requests_total{model}`, `gantry_budget_reserved_usd`,
-  `gantry_deployment_rate_headroom_ratio{deployment}`, `gantry_mcp_calls_total{server,outcome}` and, with
-  `GANTRY_METRICS_DIMENSIONS=env,app`, `gantry_requests_by_dimension_total` from `x-gantry-dim-<name>` request
-  headers (values cleaned and capped at 100 a dimension). `GANTRY_METRICS_PUSH_URL` pushes the metrics to a
+- More metrics: `enterplace_unpriced_requests_total{model}`, `enterplace_budget_reserved_usd`,
+  `enterplace_deployment_rate_headroom_ratio{deployment}`, `enterplace_mcp_calls_total{server,outcome}` and, with
+  `ENTERPLACE_METRICS_DIMENSIONS=env,app`, `enterplace_requests_by_dimension_total` from `x-enterplace-dim-<name>` request
+  headers (values cleaned and capped at 100 a dimension). `ENTERPLACE_METRICS_PUSH_URL` pushes the metrics to a
   Prometheus Pushgateway.
 - Traces go out as OTLP `http/json`, `http/protobuf` or `grpc` (`OTEL_EXPORTER_OTLP_PROTOCOL`). A request's span
   has a child span per attempt at a provider, named by the OpenTelemetry GenAI conventions (`chat gpt-4o`, with
   `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`), and per guardrail call. The provider's
-  `traceparent` names the attempt's span. `GANTRY_TRACE_PROPAGATION` (`caller`, `provider`, `none`) chooses whether
-  Gantry joins the caller's trace and whether it sends trace context to the provider. A protocol other than the
+  `traceparent` names the attempt's span. `ENTERPLACE_TRACE_PROPAGATION` (`caller`, `provider`, `none`) chooses whether
+  Enterplace joins the caller's trace and whether it sends trace context to the provider. A protocol other than the
   three stops the start; `grpc` no longer does.
 - Deployment health. `GET /admin/deployments` and the console's Deployments page show each alias deployment's state
   (up, cooling, down), last probe, limits and load, latency p50 and p90, error rate and rate headroom, and each
-  provider's key pool. With a store every gateway publishes its report and reads the others' (`gantry_routing`
+  provider's key pool. With a store every gateway publishes its report and reads the others' (`enterplace_routing`
   migration 4), so every replica shows the same.
 - `POST /admin/providers/<name>/test` and a **Test connection** button test a provider with its model list, which
   bills nothing, and record the outcome as `test_provider`.
-- The console rotates a key from its page, as `gantry key rotate` does: the new key is shown once and the old one
+- The console rotates a key from its page, as `enterplace key rotate` does: the new key is shown once and the old one
   ends after the grace.
-- `gantry usage` prints spend, tokens and requests by team, person and model from `GET /admin/usage`, with
+- `enterplace usage` prints spend, tokens and requests by team, person and model from `GET /admin/usage`, with
   `--since`, `--group-by` and `--csv`.
-- A caller's own budget: `GET /v1/gantry/me`, `gantry budget status` (`--short` for a status line, with an example
+- A caller's own budget: `GET /v1/enterplace/me`, `enterplace budget status` (`--short` for a status line, with an example
   script for Claude Code's `statusLine` setting), and, on a rule with `budget_headers: true`,
-  `x-gantry-budget-remaining-usd` and `x-gantry-budget-reset` on each answer.
+  `x-enterplace-budget-remaining-usd` and `x-enterplace-budget-reset` on each answer.
 - `GET /admin/usage?format=focus` writes usage as a FOCUS 1.2 cost and usage file, one line per day, organization,
   team, provider and model.
 - Docs: the comparison with Bifrost's published overhead now links its benchmark pages with the date read and no
@@ -306,22 +306,22 @@ one repository. How a release is made: RELEASING.md.
 
 ### Secret managers: CyberArk Conjur and KMS-wrapped values
 
-- Gantry Enterprise (`secrets`): `conjur://<variable id>` reads CyberArk Conjur, signed in with a host API key or the
+- Enterplace Enterprise (`secrets`): `conjur://<variable id>` reads CyberArk Conjur, signed in with a host API key or the
   workload's JWT. `aws-kms://`, `gcp-kms://` and `azure-kv-key://` hold a value encrypted with a cloud key and are
-  decrypted by AWS KMS, Google Cloud KMS or Azure Key Vault's unwrapKey, so `GANTRY_MASTER_KEY` can be kept wrapped.
+  decrypted by AWS KMS, Google Cloud KMS or Azure Key Vault's unwrapKey, so `ENTERPLACE_MASTER_KEY` can be kept wrapped.
   A raw decrypted key is used as hex.
 
 ### WebSocket passthrough
 
-- A WebSocket to `/passthrough/<provider>/<path>` reaches a provider's realtime API that Gantry has no route of its
+- A WebSocket to `/passthrough/<provider>/<path>` reaches a provider's realtime API that Enterplace has no route of its
   own for, on the paths a rule lists under `passthrough:`. Decided at connect, relayed frame for frame with the
   provider's key, read by the rule's guardrails, ended by a kill switch, and recorded as a `realtime_session` with
   `api: websocket_passthrough`. Not metered.
 
 ### Guardrails: an LLM judge and five more vendors
 
-- New guardrail type `judge`: a model asked through Gantry's own chat completions route whether the conversation
-  breaks a `rubric`, with a Gantry key of its own, so each judge call is governed, recorded and charged to that key's
+- New guardrail type `judge`: a model asked through Enterplace's own chat completions route whether the conversation
+  breaks a `rubric`, with a Enterplace key of its own, so each judge call is governed, recorded and charged to that key's
   person and team. `FAIL` blocks with the finding `rubric`. Verdicts are reused for `cache_seconds` (300 by
   default). A judge never runs on requests made with its own key.
 - New guardrail types, each asked in the vendor's own API: `prisma_airs` (Palo Alto Networks Prisma AIRS AI
@@ -337,12 +337,12 @@ one repository. How a release is made: RELEASING.md.
   with no equivalent is refused by name. Images priced `per_image` are charged for each image returned.
 - `POST /v1/rerank` reaches Cohere Rerank 3.5 and Amazon Rerank on Bedrock.
 - `POST /v1/messages/count_tokens` counts Converse models through Bedrock's CountTokens. For a provider with no count
-  API, Gantry answers with its own estimate, marked `"estimated": true` and `x-gantry-token-count: estimate`.
+  API, Enterplace answers with its own estimate, marked `"estimated": true` and `x-enterplace-token-count: estimate`.
 - New route `POST /v1/responses/input_tokens`: as sent to OpenAI and Azure, as a messages count elsewhere.
 - New route `POST /v1/ocr` (Mistral's OCR API), priced by the page with the new `per_page` price field.
-- The Gantry key is read from `api-key`, the header Azure OpenAI's SDKs send, with the same ambiguity check.
-- boto3 and the AWS SDKs reach Bedrock through Gantry on `/model/<id>/converse`, `/converse-stream`, `/invoke`,
-  `/invoke-with-response-stream` and `/count-tokens` with a Gantry key (`AWS_BEARER_TOKEN_BEDROCK`, or `x-api-key`
+- The Enterplace key is read from `api-key`, the header Azure OpenAI's SDKs send, with the same ambiguity check.
+- boto3 and the AWS SDKs reach Bedrock through Enterplace on `/model/<id>/converse`, `/converse-stream`, `/invoke`,
+  `/invoke-with-response-stream` and `/count-tokens` with a Enterplace key (`AWS_BEARER_TOKEN_BEDROCK`, or `x-api-key`
   beside a SigV4 signature, which is removed). The caller's rule decides the model; refusals come back in the AWS
   error shape (`x-amzn-errortype`).
 
@@ -350,16 +350,16 @@ one repository. How a release is made: RELEASING.md.
 
 - MCP servers are added, changed and removed without a restart: by a saved policy file, `SIGHUP`, or
   `PUT`/`DELETE /admin/mcp/<name>` with the policy in the store. A server reached as before keeps the sessions
-  Gantry holds at it. `/mcp` is served whenever Gantry runs with a policy, so the first server can be added the same
+  Enterplace holds at it. `/mcp` is served whenever Enterplace runs with a policy, so the first server can be added the same
   way. A reload that names an unset variable is rejected and the version in use stays.
 - `transport: sse` reaches servers that speak the older HTTP+SSE transport (MCP 2024-11-05). `transport: stdio`
-  starts a server as a process (`command`, `args`, `env`): only a command listed in `GANTRY_MCP_STDIO_ALLOW` in the
+  starts a server as a process (`command`, `args`, `env`): only a command listed in `ENTERPLACE_MCP_STDIO_ALLOW` in the
   gateway's own environment, with an environment emptied of everything but what `env:` names. The policy alone
   cannot make the gateway run a program.
 - `call_price_usd` and `tool_prices` on a server price its tool calls. A priced call the server answered writes a
   usage record (`provider: "mcp"`, the tool as its model) and counts against the caller's budgets; with a budget
   spent, the call is refused with `budget_exceeded` before it reaches the server.
-- `user_auth: token_exchange` trades the token a caller sends in `x-gantry-subject-token` for the server's at the
+- `user_auth: token_exchange` trades the token a caller sends in `x-enterplace-subject-token` for the server's at the
   identity provider's token endpoint (RFC 8693); `user_auth: on_behalf_of` sends the on-behalf-of form. Records say
   `upstream_auth` and hold neither token.
 - `GET /admin/mcp/sessions` and the console's MCP sessions page list the MCP clients connected to a gateway and each
@@ -370,16 +370,16 @@ one repository. How a release is made: RELEASING.md.
 
 ### Console: Start here, the first run
 
-- **Start here** is the console's new home, first in the nav; the Gantry mark, the console root and every sign-in
+- **Start here** is the console's new home, first in the nav; the Enterplace mark, the console root and every sign-in
   open it (they opened the Audit log). On an empty install it asks **What do you want to start with?**: coding
   agents, our own apps and agents, MCP tools, a spend limit for the team, or Claude Team seats we can only watch
   (Enterprise). The choice is recorded (`start_choice`), kept in the store (new store migration 7,
-  `gantry_settings`) or else in `gantry-start.json` beside the audit log, and can be changed or skipped.
+  `enterplace_settings`) or else in `enterplace-start.json` beside the audit log, and can be changed or skipped.
 - Each choice has a checklist built from the gateway's real configuration: its address, the key made on the page
   (through the People issue flow, shown once), the lines for Claude Code, Codex, Cursor and the SDKs, the policy
   lines (a draft in the editor with `policy_from: store`, else Copy and the file's path), the `claude mcp add`
   command and the Claude Code managed settings with a watch token made on the page. Every step says what turns it
-  done and what you then see, computed from Gantry's records; a waiting step polls `GET /console/start/state.json`
+  done and what you then see, computed from Enterplace's records; a waiting step polls `GET /console/start/state.json`
   every 2 seconds while the tab is visible, with a **Check now** link without JavaScript.
 - The first requests show on Start here with a reading of each part and the next step. Once a choice is done, the
   five-step strip (See, Know, Limit, Protect, Prove) shows the current step's next action, with the other choices
@@ -387,8 +387,8 @@ one repository. How a release is made: RELEASING.md.
 - Requests, Analytics, Spend, People and workloads, Teams, Policy, Audit log, MCP approvals (now listed when the
   policy has no MCP server), Alerts, Devices and a new **Watch** page (Enterprise) say what fills them when empty,
   with one action that opens the Start here step and the docs link. People who may not act see the docs link only.
-- Extensions: `gantry_console::Extension::watch` lets a binary make and count watch tokens for Start here;
-  `gantry_console::empty_page` and `request_base` draw an extension page's empty state.
+- Extensions: `enterplace_console::Extension::watch` lets a binary make and count watch tokens for Start here;
+  `enterplace_console::empty_page` and `request_base` draw an extension page's empty state.
 - `scripts/onboarding_check.py` walks the whole first run in Chrome against a mock provider.
 
 ### Plugin events: guardrail contract v2
@@ -403,18 +403,18 @@ one repository. How a release is made: RELEASING.md.
   realtime text: `allow`, `block`, `mask` (per event: text, or a tool call's arguments) and `session_action: end`,
   which refuses the session with `session_ended` for `session_end_seconds`, on every replica with a store.
   `mode: observe` queues envelopes and sends them in the background, batched (`batch_url`) and retried, and never
-  delays a request; a full queue drops and counts in `gantry_events_dropped_total`.
+  delays a request; a full queue drops and counts in `enterplace_events_dropped_total`.
 - `stream: { chunk_chars, hold }` sends a streamed answer's text in windows; with `hold: true` the caller's tokens
   wait for each window's verdict, and a block ends the stream with the caller's API's error event.
 - Deliveries are signed the Standard Webhooks way with `secret_env`. `on_failure`, `timeout_ms`, `headers_env` and
   `shadow_until` work as on other guardrails.
-- `applications:` in the policy and on a rule (or `x-gantry-application` and `x-gantry-application-intent`, where
+- `applications:` in the policy and on a rule (or `x-enterplace-application` and `x-enterplace-application-intent`, where
   the rule allows) give each envelope the application's name and stated purpose. New refusal code:
   `application_not_allowed`.
 - Decision and usage records carry `session` and `turn`, and an `events` entry per plugin with findings by kind,
   event kind, index and severity, never content. `GET /admin/usage` and the request log filter by `session` and
   group by `turn`.
-- A binary that embeds Gantry sets `Extension::events` to judge the same envelopes in process.
+- A binary that embeds Enterplace sets `Extension::events` to judge the same envelopes in process.
 - `examples/plugins/event-printer`: a reference plugin in one Python file that prints the event stream and blocks
   a tool call by name. Docs: governance/plugin-events.
 
@@ -430,7 +430,7 @@ one repository. How a release is made: RELEASING.md.
   used to be refused with a 502.
 - Several events guardrails on one rule run in the order of the rule's `guardrails` list, and each sees the events
   as the ones before it masked them.
-- A Responses API request with `previous_response_id` takes its session and turn from the response Gantry recorded
+- A Responses API request with `previous_response_id` takes its session and turn from the response Enterplace recorded
   as the caller's, so a chain stays one session with no header.
 - Embeddings, completions, speech, moderations, image prompts, token counting, known-shape passthrough bodies, each
   line of a batch (`phase: batch`), each line of its results (`phase: batch_result`) and a video job's prompt are
@@ -440,22 +440,22 @@ one repository. How a release is made: RELEASING.md.
 - An observing plugin's answer record is no longer waited for before the answer is returned.
 - A binary's own plugin (`Extension::events`) sees realtime text on a rule with no guardrail.
 - The console's Requests page filters by session, and a row's detail shows its session and turn.
-- `gantry-bench --events` measures the gateway with an events guardrail in observe mode on every rule.
+- `enterplace-bench --events` measures the gateway with an events guardrail in observe mode on every rule.
 
-### Watch mode in the self-hosted gateway (Gantry Enterprise)
+### Watch mode in the self-hosted gateway (Enterplace Enterprise)
 
 - License feature `watch`: the gateway receives Claude Code's own OpenTelemetry export at `POST /otlp/v1/metrics` and
   `POST /otlp/v1/logs` (OTLP over HTTP, protobuf or JSON), for people on Claude Team and Enterprise seats whose
   requests cannot go through a gateway. It records who used Claude Code, models, tokens by type, estimated cost,
   lines, commits, pull requests and tool decisions. It never blocks or budgets, and never keeps prompt, answer or tool
   text, even when Claude Code is told to send it.
-- Watch tokens (`gantry_watch_...`) per team or person, kept as a hash, expiring and revocable, at
-  `/console/watch/tokens`. `gantry watch setup --gateway <url> --team <team>` creates one and prints Claude Code's
+- Watch tokens (`enterplace_watch_...`) per team or person, kept as a hash, expiring and revocable, at
+  `/console/watch/tokens`. `enterplace watch setup --gateway <url> --team <team>` creates one and prints Claude Code's
   managed settings for Claude Team, Claude Enterprise, device management and a single developer.
 - New audit record type `watch`, one per reported model request, error, tool decision, tool result and prompt. The
   request log has a new dimension, `source`: watched requests are rows with `source` `watch` on the Requests and
   Analytics pages and in `/admin/usage` (`?source=watch`, `group_by=source`), and count against no budget.
-  `gantry audit coverage` lists them as the tool `claude-code (watch)`. Alert rules on spend by amount and on
+  `enterplace audit coverage` lists them as the tool `claude-code (watch)`. Alert rules on spend by amount and on
   unusual spend count watched cost. Audit export and retention cover the records as any other.
 - `GET /console/watch/summary.json`: sums per person, model and tool. Tables in namespace `enterprise.watch`
   (`enterprise_watch_tokens`, `enterprise_watch_seen`, `enterprise_watch_series`, `enterprise_watch_daily`), which
@@ -467,14 +467,14 @@ one repository. How a release is made: RELEASING.md.
   a key whose `metadata` has that `email`, or of a key named by it. An email of the policy's `teams:` or of Members
   (SCIM's people among them) stays the email. Anyone else is listed in `summary.json` under `not_known_members`.
   A record whose `person` is a key holder's name keeps the reported address in `email`.
-- Watch tokens can belong to an organization (`"org"`, `gantry watch setup --org`): their records carry `org`, and
+- Watch tokens can belong to an organization (`"org"`, `enterplace watch setup --org`): their records carry `org`, and
   with `audit: { per_org: true }` go to that organization's chain. Tables: `enterprise_watch_tokens.org`.
 - The daily digest's spend and top users include watched cost, and a `Watched:` line says how much of it was.
 - The hosted app's watch page is not carried over: a console page waits for a design.
 
 ### Security
 
-- Watch tokens and device enrolment tokens follow the admin's role (Gantry Enterprise). An admin whose role is kept
+- Watch tokens and device enrolment tokens follow the admin's role (Enterplace Enterprise). An admin whose role is kept
   to teams (`teams:`) could create, list and revoke watch tokens and enrolment tokens of any team, and an admin key
   sent as a bearer token to `/console/watch/tokens` or `/console/devices/tokens` acted with no role at all, so its
   organization or teams were not applied. Now a role kept to an organization, teams or customers reaches only its
@@ -484,7 +484,7 @@ one repository. How a release is made: RELEASING.md.
 - Enrolment tokens belong to the organization of the admin who created them (`org` in the list), or to the one an
   admin of the whole install names with `"org"` in the body, which must be one the policy lists under `orgs:`.
   Tables: `enterprise_device_tokens.org` (namespace `enterprise.devices`, migration 4).
-- What an admin kept to part of the install reads follows the role too (Gantry Enterprise). An admin whose role is
+- What an admin kept to part of the install reads follows the role too (Enterplace Enterprise). An admin whose role is
   kept to an organization or to teams read every person in `GET /console/watch/summary.json`, every device in
   `GET /console/devices/devices.json` and on the Devices page, and every MCP server in `GET /console/devices/mcp`,
   and could approve or block any server and remove any device. Now the summary holds the sums of tokens within the
@@ -502,7 +502,7 @@ one repository. How a release is made: RELEASING.md.
 - `PgStore::close` stops a store's thread and closes its connections, for a program that embeds the gateway and is
   done with its store before it exits. The enterprise tests call it: a finished test used to leave its connections
   open, and a run on 16 cores peaked near 100 of them. It now peaks under 50.
-- Each store test drops its database when it ends (`gantry_server::store::TestDatabase`, in the open source and
+- Each store test drops its database when it ends (`enterplace_server::store::TestDatabase`, in the open source and
   the enterprise tests), and `scripts/console_edit_check.py --fresh` drops the one it made. A run of
   `scripts/ci.sh` used to leave about 1 GB of test databases in the Postgres it ran against.
 
@@ -514,7 +514,7 @@ one repository. How a release is made: RELEASING.md.
 
 ### Fixed: deleting a running background response
 
-- A background response deleted before Gantry saw it end is read at the provider before the delete is sent, so it is
+- A background response deleted before Enterplace saw it end is read at the provider before the delete is sent, so it is
   charged the usage the provider last reported for it (it was read after the delete, which the provider no longer
   answers, and always charged its reservation). With no usage reported it is still charged its reservation.
 
@@ -529,7 +529,7 @@ one repository. How a release is made: RELEASING.md.
 - A deployment's `tpm` counts each request at its estimate while it runs and at the tokens its answer used once it
   is settled.
 - With a store, `max_parallel`, `rpm` and `tpm` count every replica's requests: each replica writes its load with the
-  500 ms poll (table `gantry_deployment_load`, migration 3 of namespace `gantry_routing`) and checks against the
+  500 ms poll (table `enterplace_deployment_load`, migration 3 of namespace `enterplace_routing`) and checks against the
   others' from memory, with no database call on the request path.
 
 ### Devices: MCP servers approved or blocked
@@ -537,11 +537,11 @@ one repository. How a release is made: RELEASING.md.
 - The self-hosted `/device/report` takes the agent's `os` and its `mcp` inventory and keeps them (migration 3 of
   namespace `enterprise.devices`: `enterprise_devices.os`, `enterprise_device_mcp`, `enterprise_mcp_decisions`). A
   target's query or login is stripped before it is stored.
-- The Devices page lists every reported MCP server with its tools, devices, whether it goes through Gantry, and an
+- The Devices page lists every reported MCP server with its tools, devices, whether it goes through Enterplace, and an
   Approve or Block button; `GET` and `POST /console/devices/mcp` do the same by API. Each decision is an admin record
   `device_mcp_decided`. The device profile carries the decisions (`mcp: {approved, blocked}`); the agent marks each
   server of its report and warns about blocked ones it finds configured.
-- `gantry audit coverage --devices` prints each device's MCP servers, `via_gantry` and the decision.
+- `enterplace audit coverage --devices` prints each device's MCP servers, `via_enterplace` and the decision.
 
 ### Routing resilience, continued
 
@@ -553,10 +553,10 @@ one repository. How a release is made: RELEASING.md.
   `rate_limit_headroom_percent` (default 5).
 - A request's own `fallbacks` field is honored for models the caller's rule allows; one it does not allow is refused
   with `model_not_allowed`. The field never reaches the provider.
-- `gantry check` prints each alias's worst-case wait for the first byte across retries, timeouts and fallbacks.
-- Health probes are written to the audit log as the workload `gantry-probe`, and a chat probe's cost is charged to the
-  `gantry-probe` scope. With a store, one replica at a time probes each deployment (lease in `gantry_probe_leases`,
-  migration 2 of namespace `gantry_routing`).
+- `enterplace check` prints each alias's worst-case wait for the first byte across retries, timeouts and fallbacks.
+- Health probes are written to the audit log as the workload `enterplace-probe`, and a chat probe's cost is charged to the
+  `enterplace-probe` scope. With a store, one replica at a time probes each deployment (lease in `enterplace_probe_leases`,
+  migration 2 of namespace `enterplace_routing`).
 
 ### An organization added by a reload is covered at once
 
@@ -567,7 +567,7 @@ one repository. How a release is made: RELEASING.md.
 
 ### Devices: verified people and bound devices
 
-- The device agent sends the person's Gantry key from `gantry login` in `x-gantry-key`, and the gateway takes the
+- The device agent sends the person's Enterplace key from `enterplace login` in `x-enterplace-key`, and the gateway takes the
   person (and, without a team token, the team) from that key, never from the report. Reports without one are refused
   with `person_key_required`, with a bad key with `invalid_person_key`.
 - A device is bound to the first person and token scope that reported it. Reports from another are refused with
@@ -577,14 +577,14 @@ one repository. How a release is made: RELEASING.md.
 
 ### Google's Gemini API
 
-- Gantry serves Google's own Gemini API, so Gemini CLI (`GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_KEY`) and Google's
+- Enterplace serves Google's own Gemini API, so Gemini CLI (`GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_KEY`) and Google's
   SDKs go through it: `POST /v1beta/models/<model>:generateContent`, `:streamGenerateContent` (with `alt=sse`, or
   as one JSON array without it), `:countTokens`, `:embedContent`, `:batchEmbedContents` (and the `/v1/` forms), and
   `GET /v1beta/models` and `/v1beta/models/<model>`, which list only what the caller's rule allows. Requests go as
   sent to `gemini` and `vertex` providers, with the rule, aliases, kill switches, observe mode, regions, guardrails
   on request and answer text (streamed too), budgets and limits from `usageMetadata` and
   `generationConfig.maxOutputTokens`, the cache and the audit record, user agent included.
-- On those routes the Gantry key may come in `x-goog-api-key` or `?key=`. A query key is taken out before the
+- On those routes the Enterplace key may come in `x-goog-api-key` or `?key=`. A query key is taken out before the
   request is checked: it is never forwarded, traced or recorded. Refusals there use Google's error shape. A body
   naming another model than the path is refused with `ambiguous_model`. An alias in the path is sent as its
   deployment, in the body too (countTokens' `generateContentRequest.model`).
@@ -597,11 +597,11 @@ one repository. How a release is made: RELEASING.md.
   and cools it down.
 - Health probes: `probe: { every_seconds, with: models | chat }` on an alias's deployment checks it in the background
   and cools it down when it fails, shared through the store's cooldowns. Shown in `/readyz` under
-  `checks.deployments` and as `gantry_deployment_up`.
+  `checks.deployments` and as `enterplace_deployment_up`.
 - Key pools: `keys: [{ key_env }, { credential }]` and `key_balance: round_robin | least_used` on a provider. A key
   answered 401 or 403 is set aside for an hour, one answered 429 rests for its Retry-After; the request moves to the
   next key at once. Each switch is in the attempts record (`key`, a hash prefix) and
-  `gantry_provider_key_switches_total`.
+  `enterplace_provider_key_switches_total`.
 - Fallbacks: a provider's `fallback` chain is followed hop by hop (A, then B, then C). An alias's `fallbacks` and
   `fallback_on` (`rate_limit`, `server_error`, `timeout`, `unreachable`, `context_window`, `content_policy`) try
   other models or aliases in turn, across APIs (chat to messages and back, translated as sent). The caller's rule
@@ -614,16 +614,16 @@ one repository. How a release is made: RELEASING.md.
   and weighted.
 - Wildcard models: `*` patterns in a provider's and a rule's `models`, and `<provider>/<model>` names. A budgeted
   request for an unpriced model is refused with `no_price`, so a pattern never escapes a budget.
-- Answer headers: `x-gantry-request-id` on every answer, and `x-gantry-provider`, `x-gantry-model`,
-  `x-gantry-deployment`, `x-gantry-attempts` and `x-gantry-cost-usd` on forwarded ones (a stream's cost is the
+- Answer headers: `x-enterplace-request-id` on every answer, and `x-enterplace-provider`, `x-enterplace-model`,
+  `x-enterplace-deployment`, `x-enterplace-attempts` and `x-enterplace-cost-usd` on forwarded ones (a stream's cost is the
   prompt's estimate).
 
 ### Replicas share routing and the dry run
 
 - With a store, session affinity pins and `lowest_latency` measurements are shared: every replica pins a coding
   agent's session to the same deployment and ranks deployments on the same pooled p90 time to first byte, read from
-  memory and refreshed with the 500 ms poll (no database call per request). New tables `gantry_affinity` and
-  `gantry_latency` in the migration namespace `gantry_routing`. Without a store, each gateway keeps its own, as before.
+  memory and refreshed with the 500 ms poll (no database call per request). New tables `enterplace_affinity` and
+  `enterplace_latency` in the migration namespace `enterplace_routing`. Without a store, each gateway keeps its own, as before.
 - The policy dry run (`POST /admin/policy/dry-run` and the console's **Dry run**) replays every gateway's requests from
   the store's shared request index, plus this gateway's not yet copied ones, each once. Without a store it replays
   this gateway's audit log. The result names its `source` (`store` or `audit_log`) and a `note`.
@@ -637,14 +637,14 @@ one repository. How a release is made: RELEASING.md.
 ### CI
 
 - `scripts/console_edit_check.py` (the console's editing pages in a real Chrome) runs in CI as the `console-edit` job,
-  against its own Postgres, and in `scripts/ci.sh` when `GANTRY_TEST_DATABASE_URL`, Chrome and `psql` are present.
+  against its own Postgres, and in `scripts/ci.sh` when `ENTERPLACE_TEST_DATABASE_URL`, Chrome and `psql` are present.
   `--fresh` makes its own database.
 
 ### Batches, images and realtime
 
 - Amazon Bedrock batch inference and Vertex AI batch prediction (Gemini, and Claude on Vertex AI) behind `/v1/files`
   and `/v1/batches`: a provider's new `batch: { bucket, role_arn, url, storage_url }` names the S3 or Cloud Storage
-  bucket. Gantry checks and translates the lines, keeps the file in the bucket, starts the provider's job, answers
+  bucket. Enterplace checks and translates the lines, keeps the file in the bucket, starts the provider's job, answers
   status in OpenAI's shape, meters each result line at the batch price, and serves the results as OpenAI output and
   error files owned by the batch's creator. The provider is the model's deployment; a rule with `regions:` reaches an
   alias deployment labelled with one of them. New refusal codes `batch_not_configured`, `wrong_endpoint`,
@@ -675,10 +675,10 @@ one repository. How a release is made: RELEASING.md.
 - `provider_errors` alerts count every request no provider answered, retried or not. The `upstream_error` record
   names the provider of the last try and how many tries there were (`provider`, `tries`).
 - `audit: { per_org: true }` keeps each organization's records in a hash chain of its own
-  (`gantry-audit.jsonl.orgs/<org>.jsonl`); records of no organization stay in the install's chain. `gantry audit
+  (`enterplace-audit.jsonl.orgs/<org>.jsonl`); records of no organization stay in the install's chain. `enterplace audit
   verify` checks every chain, `--org <org>` one. People kept to an organization read its chain in the console, and
   others switch between chains. Retention, legal hold, audit export, alerts, the request log and segment shipping
-  (under `orgs/<org>` in the bucket) work per chain. Gantry checks every chain at start.
+  (under `orgs/<org>` in the bucket) work per chain. Enterplace checks every chain at start.
 
 ### Devices and coverage
 
@@ -688,12 +688,12 @@ one repository. How a release is made: RELEASING.md.
   admin key as bearer). Profiles are per team. Reports, tools and drift are kept in Postgres (namespace
   `enterprise.devices`). The Devices page shows, per person, the tools seen in traffic, enrolled devices and each tool
   calling a provider directly.
-- `gantry device` reports a state per tool (`not_installed`, `installed`, `gantry`, `direct`) and looks for Codex,
+- `enterplace device` reports a state per tool (`not_installed`, `installed`, `enterplace`, `direct`) and looks for Codex,
   Claude Code, Cursor, GitHub Copilot (VS Code and CLI), Zed, JetBrains AI Assistant, Qwen Code, Gemini CLI, Kilo Code,
-  Roo Code and Claude Desktop, from each tool's documented configuration files only. It sends the person `gantry
-  login` saved, so the gateway answers with their team's profile. Tool names now match `gantry audit coverage`
+  Roo Code and Claude Desktop, from each tool's documented configuration files only. It sends the person `enterplace
+  login` saved, so the gateway answers with their team's profile. Tool names now match `enterplace audit coverage`
   (`github-copilot`, was `vscode`).
-- `gantry audit coverage --devices devices.json` merges the device reports (downloaded from the Devices page) with
+- `enterplace audit coverage --devices devices.json` merges the device reports (downloaded from the Devices page) with
   the audit log: two more columns, `devices` and `direct`.
 - MCP records (`/mcp`) carry `user_agent`, so MCP clients count in the coverage report.
 
@@ -701,7 +701,7 @@ one repository. How a release is made: RELEASING.md.
 
 - Published images are signed with cosign, keyless (the release workflow's GitHub identity, through Sigstore), and
   carry a CycloneDX SBOM and SLSA provenance as signed attestations. The Helm chart is published as a signed OCI
-  artifact, `oci://ghcr.io/eliransu/charts/gantry`. `scripts/verify_release.sh X.Y.Z` checks the image, its SBOM and
+  artifact, `oci://ghcr.io/eliransu/charts/enterplace`. `scripts/verify_release.sh X.Y.Z` checks the image, its SBOM and
   provenance, and the chart, and prints the digest to pin. Docs: Operations, Verify a release.
 - The binary records its exact crate list inside itself (cargo-auditable), so `syft`, `grype` and `cargo audit bin`
   read the dependencies of the image and of any release binary.
@@ -712,25 +712,25 @@ one repository. How a release is made: RELEASING.md.
 
 ### Docker first start
 
-- `docker run -v gantry-data:/var/lib/gantry -e OPENAI_API_KEY ghcr.io/eliransu/gantry` with no policy starts a
-  working gateway in observe mode, with an admin key printed once and the tool settings, as `gantry start` does.
+- `docker run -v enterplace-data:/var/lib/enterplace -e OPENAI_API_KEY ghcr.io/eliransu/enterplace` with no policy starts a
+  working gateway in observe mode, with an admin key printed once and the tool settings, as `enterplace start` does.
   Later starts serve what the first one wrote. The image's default command is now `start --container`; a policy
-  mounted at `/etc/gantry/gantry.policy.yaml` is served as before, and explicit `serve ...` commands (Compose, Helm,
+  mounted at `/etc/enterplace/enterplace.policy.yaml` is served as before, and explicit `serve ...` commands (Compose, Helm,
   Terraform) are unchanged.
-- `gantry start` with `--listen 0.0.0.0:<port>` prints `http://localhost:<port>` in the tool settings, not an address
+- `enterplace start` with `--listen 0.0.0.0:<port>` prints `http://localhost:<port>` in the tool settings, not an address
   a browser cannot open.
 
 ### Helm
 
 - `autoscaling.enabled` renders a HorizontalPodAutoscaler on CPU and an optional per-pod custom metric (for example
-  from `gantry_overhead_seconds`); it needs `store:` in the policy, as more than one replica always did. A
+  from `enterplace_overhead_seconds`); it needs `store:` in the policy, as more than one replica always did. A
   PodDisruptionBudget (`maxUnavailable: 1`) is rendered with more than one replica or with autoscaling.
 
 ### Rolling upgrades
 
 - Two versions one minor version apart now run on one Postgres at the same time: the newer applies its migrations
   while the older keeps serving, and an older replica restarting mid-rollout still starts. A version two or more minor
-  versions behind refuses the database, naming both versions. Store migration 6 adds the `gantry_writer` table, which
+  versions behind refuses the database, naming both versions. Store migration 6 adds the `enterplace_writer` table, which
   records the newest version that started on the database. Versions released before this one refuse any newer schema
   at restart, so for the upgrade to this version keep old pods from restarting during the rollout.
 ### Identity
@@ -744,7 +744,7 @@ one repository. How a release is made: RELEASING.md.
 - Teams as a policy object: `teams:` with `owner`, `members` by email, `sso_values` and `metadata`, listed beside
   the teams keys name. `GET /admin/teams` and `GET /admin/teams/<name>`; `POST`, `PUT` and `DELETE` save a new policy
   version when the policy is kept in the store. The console's Teams page shows owners.
-- `gantry login` puts a developer's key in their team: the team that lists their email, else the first whose
+- `enterplace login` puts a developer's key in their team: the team that lists their email, else the first whose
   `sso_values` match their `role_claim` values, else `self_issue.team`. When `teams:` places people and places this
   one nowhere, and `self_issue.team` is not written, the login is refused with `sso_team`.
 - Console roles kept to teams (`teams:`) or end customers (`customers:`), as `org:` keeps one to an organization: in
@@ -753,7 +753,7 @@ one repository. How a release is made: RELEASING.md.
   teams.
 - Setup guides for Okta, Microsoft Entra ID, Google Workspace, OneLogin, Keycloak and JumpCloud, for OpenID Connect
   and SAML.
-- `gantry login` over SAML: on a setup with `console.saml` and no `console.sso`, `gantry login` opens the SAML
+- `enterplace login` over SAML: on a setup with `console.saml` and no `console.sso`, `enterplace login` opens the SAML
   sign-in and the browser comes back to the CLI's listener on 127.0.0.1 with a one-use code, traded for the key with
   the PKCE verifier, as with OpenID Connect. Turned on by `console.saml.self_issue` (same fields as
   `console.sso.self_issue`); groups place the key in a team the same way.
@@ -769,17 +769,17 @@ one repository. How a release is made: RELEASING.md.
 
 ### Secrets
 
-- Secret managers in `gantry serve` (enterprise feature `secrets`): a variable the policy names with `*_env` may hold
+- Secret managers in `enterplace serve` (enterprise feature `secrets`): a variable the policy names with `*_env` may hold
   `vault://<path>#<field>`, `aws-sm://<name>`, `gcp-sm://projects/<p>/secrets/<s>` or `azure-kv://<vault>/<secret>`.
   Each is read at start (a failure stops the start, naming the variable), kept in memory, and read again every
-  `GANTRY_SECRETS_REFRESH_SECONDS` (300) and on SIGHUP; a rotated provider key is used for new requests within a
+  `ENTERPLACE_SECRETS_REFRESH_SECONDS` (300) and on SIGHUP; a rotated provider key is used for new requests within a
   second. Each manager signs in with its platform's chain (Vault token or Kubernetes auth, the AWS default chain,
   Application Default Credentials, Entra client secret, workload or managed identity). Without the feature a
   reference stops the start with the fix, and is never sent as a key.
 - Each secret a refresh finds rotated writes a `secret_rotated` audit record, and each one it cannot read a
   `secret_refresh_failed` record (code `secret_refresh_failed`, with the reason): the variable, its reference and the
-  manager, never the value. Counted in `/metrics` as `gantry_secret_rotations_total` and
-  `gantry_secret_refresh_failures_total` by manager. With the `alerts` feature, a **system** alert rule fires on a
+  manager, never the value. Counted in `/metrics` as `enterplace_secret_rotations_total` and
+  `enterplace_secret_refresh_failures_total` by manager. With the `alerts` feature, a **system** alert rule fires on a
   failed refresh.
 ### Operator API and metrics
 
@@ -793,23 +793,23 @@ one repository. How a release is made: RELEASING.md.
 - `GET /admin/openapi.json`: an OpenAPI 3.1 document of every admin route, its permission and record action. Routes
   and document come from one table; any path not in it is refused with `unknown_route` and recorded as an `admin`
   record.
-- `/metrics` adds `gantry_tokens_total` (input, output, cached, cache_write), `gantry_request_seconds`,
-  `gantry_first_byte_seconds`, `gantry_refusals_total`, `gantry_guardrail_findings_total`,
-  `gantry_cache_lookups_total`, `gantry_deployment_up`, `gantry_deployment_cooldowns_total`,
-  `gantry_budget_limit_usd`, `gantry_budget_remaining_usd` and `gantry_store_up`. Labels come from the policy only;
-  `GANTRY_METRICS_BUDGET_SCOPES` chooses the budget scopes shown (default `global,org,team,model`).
+- `/metrics` adds `enterplace_tokens_total` (input, output, cached, cache_write), `enterplace_request_seconds`,
+  `enterplace_first_byte_seconds`, `enterplace_refusals_total`, `enterplace_guardrail_findings_total`,
+  `enterplace_cache_lookups_total`, `enterplace_deployment_up`, `enterplace_deployment_cooldowns_total`,
+  `enterplace_budget_limit_usd`, `enterplace_budget_remaining_usd` and `enterplace_store_up`. Labels come from the policy only;
+  `ENTERPLACE_METRICS_BUDGET_SCOPES` chooses the budget scopes shown (default `global,org,team,model`).
 - Alerts (enterprise): `unusual_requests`, `unusual_errors` and `unusual_latency` against a 14-day baseline per
   team, key or provider; `deployment_down`, `key_expiring`, `credential_failing`, `guardrail_vendor_failing` and
   `export_lagging`. Alert rules are in the admin API (`/admin/alerts/rules`), and an embedding binary adds admin routes
-  through `gantry_server::AdminApi`, checked and recorded by the gateway.
+  through `enterplace_server::AdminApi`, checked and recorded by the gateway.
 - Alerts (enterprise): `daily_digest` (per rule's channels, at a local time, the last 24 hours of spend, refusals,
   top users and alerts), `region_outage` (every alias deployment of a `region:` failing with none answering),
   `config_rejected` (a reload refusing a policy or keys change, or a policy version refused as `invalid_policy`),
   `kill_cleared` and `circuit_open` (an alias deployment put to cool down).
 - `/admin/usage`, `/admin/teams` and the policy-changing routes honor roles kept to teams or end customers (`teams:`
   and `customers:` on a role) as they do roles kept to an organization.
-- `gantry import litellm --url <proxy> --master-key-env <VAR>` reads a running LiteLLM proxy's model list, keys and
-  teams through its management API, writes team budgets as `limits:`, and issues one Gantry key per LiteLLM key into a
+- `enterplace import litellm --url <proxy> --master-key-env <VAR>` reads a running LiteLLM proxy's model list, keys and
+  teams through its management API, writes team budgets as `limits:`, and issues one Enterplace key per LiteLLM key into a
   new keys file, printing each beside the key it replaces.
 ### Cloud providers and translation
 
@@ -831,7 +831,7 @@ one repository. How a release is made: RELEASING.md.
   providers overview. **Changed:** `reasoning_effort` `low`, `medium` and `high` to Claude now sends a thinking budget
   instead of `output_config.effort`; `xhigh` and `max` still send effort.
 - Signed passthrough: `/bedrock/<path>` and `/vertex/<path>` (and `/passthrough/<provider>/` for those kinds, which
-  `gantry check` no longer refuses) are signed with SigV4 or the Google token, with the model in the path decided.
+  `enterplace check` no longer refuses) are signed with SigV4 or the Google token, with the model in the path decided.
 - `/v1/videos` (Sora, and Veo through the same route) and `/v1/containers`, owned by their creator, guarded,
   budgeted and priced with the new `per_second` and `per_call` price fields (containers: see below).
 - Native kinds `cohere` (v2 chat, embed, rerank) and `watsonx` (IBM watsonx.ai, IAM token traded for the API key).
@@ -849,10 +849,10 @@ one repository. How a release is made: RELEASING.md.
   `veo-3.1-fast-generate-001` and `veo-3.1-lite-generate-001` added. Google lists Veo "per count"; the per-second unit
   is LiteLLM's (MIT price map), and the docs say so. Sora 2 is shut down at OpenAI since 2026-09-24; its prices stay.
 - `GET`, `DELETE` and `cancel` on `/v1/responses/<id>`, and `GET /v1/responses/<id>/input_items`, for the response's
-  creator alone (others get 404), at OpenAI or Azure. A response translated for another provider is kept by Gantry,
+  creator alone (others get 404), at OpenAI or Azure. A response translated for another provider is kept by Enterplace,
   for an hour, when the request says `"store": true`.
 - Async jobs: `POST /v1/async/<route>` runs a model request in the background on the governed route and
-  `GET /v1/async/<route>/<id>` reads its answer, held for its submitter for an hour (`x-gantry-async-ttl`).
+  `GET /v1/async/<route>/<id>` reads its answer, held for its submitter for an hour (`x-enterplace-async-ttl`).
 - Azure: images, transcription, speech and legacy completions on deployment paths, and the v1 API (a `url` ending in
   `/openai/v1`, no `api_version`), with images and audio sent to its preview.
 - Vertex AI and the Gemini API count a Gemini model's tokens (`countTokens`) for `POST /v1/messages/count_tokens`.
@@ -861,10 +861,10 @@ one repository. How a release is made: RELEASING.md.
   `replicate`, `oci` (OCI Generative AI, API key) and `triton` (Triton's OpenAI-compatible frontend).
 - A Bedrock stream through signed passthrough is charged the usage its events report, not its reservation.
 - With a store, async job answers and translated responses kept with `store: true` are kept in Postgres (table
-  `gantry_batches_held`, namespace `batches`, migration 2), sealed under the master key when there is one, so any
+  `enterplace_batches_held`, namespace `batches`, migration 2), sealed under the master key when there is one, so any
   replica answers for them; without a store they stay in the memory of the replica that took them.
 - Background responses (`background: true`): the queued answer charges nothing and keeps its reservation; what the
-  response used is charged once, the first time Gantry sees it ended (read by its creator, cancelled, deleted, or polled
+  response used is charged once, the first time Enterplace sees it ended (read by its creator, cancelled, deleted, or polled
   once a minute), on one replica only with a store.
 - Replicate streams live: `stream: true` creates the prediction with `"stream": true` and passes each event of its
   `urls.stream` on as a chat chunk, with usage read from the prediction when it is done. Input fields follow each
@@ -882,18 +882,18 @@ one repository. How a release is made: RELEASING.md.
 
 ### Browser access
 
-- `cors:` in the policy: `allowed_origins` lists the browser origins (or `"*"`) that may call Gantry's routes. Off by
-  default. Gantry answers the preflight itself and never allows credentials; the console and the admin API answer no
+- `cors:` in the policy: `allowed_origins` lists the browser origins (or `"*"`) that may call Enterplace's routes. Off by
+  default. Enterplace answers the preflight itself and never allows credentials; the console and the admin API answer no
   other origin. The Claude for Office and Open WebUI guides use it in place of a reverse proxy.
 
 ### One repository, one image
 
 - The enterprise features moved into this repository as `enterprise/`, under their own commercial license
   (`enterprise/LICENSE`); everything outside it stays Apache 2.0. The open source crates still build, test and install
-  (`cargo install --path crates/gantry-cli`) on their own and never import `enterprise/`.
-- One image: **`ghcr.io/eliransu/gantry-enterprise` is renamed `ghcr.io/eliransu/gantry`**. Change the image in your
+  (`cargo install --path crates/enterplace-cli`) on their own and never import `enterprise/`.
+- One image: **`ghcr.io/eliransu/enterplace-enterprise` is renamed `ghcr.io/eliransu/enterplace`**. Change the image in your
   Compose file, Helm values (`image.repository`), Terraform `image` variable and Cloudflare `wrangler.jsonc`. Its
-  binary is `/gantry` (was `/gantry-enterprise`): update `kubectl exec ... -- /gantry-enterprise` commands. Without a
+  binary is `/enterplace` (was `/enterplace-enterprise`): update `kubectl exec ... -- /enterplace-enterprise` commands. Without a
   license key it runs as the open source edition; a valid key unlocks the enterprise features, as before.
 - The Helm chart, Terraform modules, Cloudflare template and MDM files are at `deploy/` in this repository, and still
   ship inside the image under `/deploy`. The old single-replica chart and the plain manifests in
@@ -902,7 +902,7 @@ one repository. How a release is made: RELEASING.md.
 
 ### Fixed
 
-- Cloudflare (and any `GANTRY_AUDIT_SEGMENTS_URL` deployment) with a store: a sealed audit segment is removed from the
+- Cloudflare (and any `ENTERPLACE_AUDIT_SEGMENTS_URL` deployment) with a store: a sealed audit segment is removed from the
   disk only after the console's request log has copied its records, as it already waited for the audit export and
   alerting. Before, a segment could be retired between two copies and its requests never appeared in the request log.
 - The guardrail backtest admin API (`POST /admin/guardrails/test`) needs `edit_policy`, not `credentials`.
@@ -916,12 +916,12 @@ one repository. How a release is made: RELEASING.md.
   whole-word options), each entry named so findings, refusals and masks say which one matched; block, mask or warn,
   on requests, answers or both.
 - `shadow_until` on any guardrail: until that UTC date it records `action: shadow` and enforces nothing.
-- `gantry guardrail test <name> --corpus <file>` and `POST /admin/guardrails/test`: a backtest of a guardrail over
+- `enterplace guardrail test <name> --corpus <file>` and `POST /admin/guardrails/test`: a backtest of a guardrail over
   examples before it goes live, with hits, kinds, masked sample spans, and precision and recall on labelled examples.
   The admin API call needs the `edit_policy` permission (it asked for `credentials` at first).
 - Nine more secrets kinds: `gcp_service_account_key`, `gcp_api_key`, `azure_connection_string`, `stripe_key`,
   `twilio_api_key`, `sendgrid_key`, `openai_project_key`, `anthropic_key` and `database_url`, measured on the new
-  `gantry-detectors-v2` corpus. A URL's login part is no longer reported as an email address.
+  `enterplace-detectors-v2` corpus. A URL's login part is no longer reported as an email address.
 - `type: model_armor`: Google Cloud Model Armor through sanitizeUserPrompt and sanitizeModelResponse.
 - Function tool permissions: `function.<name>` and `!function.<name>` entries in a rule's `tools:` decide the function
   tools a request declares (OpenAI `tools` and `functions`, Responses, Anthropic, Gemini `functionDeclarations`) and
@@ -929,12 +929,12 @@ one repository. How a release is made: RELEASING.md.
   Each is recorded by tool name, never with its arguments. `!` deny entries work for MCP tools too. An MCP server can
   no longer be named `function`.
 - MCP tools narrowed per key (`mcp_tools:` in the keys file and the admin API) and per request (the
-  `x-gantry-mcp-tools` header). Both only narrow the rule's `tools:`, never widen it.
+  `x-enterplace-mcp-tools` header). Both only narrow the rule's `tools:`, never widen it.
 - Answer guardrails read tool call arguments in every format: Anthropic `tool_use` input, Responses `function_call`
   arguments and Gemini `functionCall` args, besides chat `tool_calls`. Request guardrails read Gemini `contents` and
   `systemInstruction` text.
 - `pack: gitleaks` on a `secrets` guardrail: Gitleaks' default rule set (221 rules, MIT, attributed in
-  `crates/gantry-core/data/GITLEAKS-LICENSE`), measured at 97.2% precision and 84.9% recall on the detector corpus.
+  `crates/enterplace-core/data/GITLEAKS-LICENSE`), measured at 97.2% precision and 84.9% recall on the detector corpus.
 - Six more vendors: `pangea`, `nemo_guardrails`, `hiddenlayer`, `lasso`, `guardrails_ai` and `aporia`.
 - Transforms: `type: transform` services and the `Transform` extension hook rewrite the request before it is checked
   and sent and the answer before it is checked and returned. Each change is recorded as a diff summary of JSON paths
@@ -946,28 +946,28 @@ one repository. How a release is made: RELEASING.md.
 ### Integrations
 
 - LangChain guide (Python and JavaScript) and `scripts/langchain_check.py`, which drives LangChain against a local
-  Gantry. The Cursor guide gains a quick tunnel setup and a test of the requests Cursor's docs describe; Cursor itself
+  Enterplace. The Cursor guide gains a quick tunnel setup and a test of the requests Cursor's docs describe; Cursor itself
   is not run.
 
 ### Device agent
 
-- `gantry device` runs on Linux (root systemd unit, `deploy/mdm/gantry-device.service`) and Windows (a logon task),
+- `enterplace device` runs on Linux (root systemd unit, `deploy/mdm/enterplace-device.service`) and Windows (a logon task),
   with each tool's paths on each OS. Each report lists the MCP servers configured in Claude Desktop, Claude Code,
-  Cursor, VS Code and Zed, and whether each goes through Gantry's MCP gateway.
+  Cursor, VS Code and Zed, and whether each goes through Enterplace's MCP gateway.
 
 ### Access and budget hierarchy
 
 - Organizations: `orgs:` in the policy, `org:` on keys, rules, limits and roles. Each organization has its own rules,
   budgets, keys and console view; counters and records are kept per organization.
-- End customers (`customer:` on a key, or `x-gantry-customer` for names a rule's `customers:` lists) and request tags
-  (`tags:` on a key, or `x-gantry-tags` for tags a rule lists). An unlisted name is refused by name. Records carry
+- End customers (`customer:` on a key, or `x-enterplace-customer` for names a rule's `customers:` lists) and request tags
+  (`tags:` on a key, or `x-enterplace-tags` for tags a rule lists). An unlisted name is refused by name. Records carry
   `org`, `customer` and `tags`; `principals: { tag: ... }` names keys by tag.
 - Budgets at every scope through `limits:` (global, organization, team, person, key, customer, tag, model), several
   per place, per model on a rule, with periods from a minute to a year (`day`, `week`, `6h`, `3mo`, ...) aligned to
   an IANA time zone (`tz:`). Fixed-length windows such as `per: 30d` start again every 30 days.
 - `parallel:` on a rule, a key or a scope caps requests in flight, shared across replicas with a store
   (`parallel_limited`).
-- Within a kind of scope each limit comes from the most specific entry; `gantry explain` and `GET /admin/explain` list
+- Within a kind of scope each limit comes from the most specific entry; `enterplace explain` and `GET /admin/explain` list
   every limit that applies with where it is written, what it overrides and (from the gateway) what it has spent.
 - Access profiles (`profiles:`) a rule includes: models, guardrails, tools and limits, with the rule's own values
   winning and every override listed.
@@ -980,23 +980,23 @@ one repository. How a release is made: RELEASING.md.
 
 - `GET /readyz`: ready only when a request would be served (audit log writable, store reachable when set, a policy
   with keys or a JWT issuer, not draining, and any check an embedder adds). `/healthz` stays liveness. On `SIGTERM`
-  Gantry stops accepting, answers `/readyz` with 503 and finishes requests in flight.
-- Key management: `PATCH /admin/keys/<prefix>` and `gantry key update` change a key's expiry, budget, models, tpm,
+  Enterplace stops accepting, answers `/readyz` with 503 and finishes requests in flight.
+- Key management: `PATCH /admin/keys/<prefix>` and `enterplace key update` change a key's expiry, budget, models, tpm,
   rpm, parallel, customer, tags, metadata, routes and source ranges, each change recorded with its before and after;
-  `GET /admin/keys/<prefix>` and `gantry key info` show a key with its spend; `POST /admin/keys/<prefix>/rotate` and
-  `gantry key rotate --grace 48h` make a new key and keep the old one for the grace, recording every use of it.
+  `GET /admin/keys/<prefix>` and `enterplace key info` show a key with its spend; `POST /admin/keys/<prefix>/rotate` and
+  `enterplace key rotate --grace 48h` make a new key and keep the old one for the grace, recording every use of it.
 - Access: `from:` address ranges on keys and rules with `trusted_proxies:` for `X-Forwarded-For` (`ip_not_allowed`),
   key `routes` (`route_not_allowed`), key `rpm`, and `jwt:` issuers whose RS256 or
-  ES256 tokens are accepted in place of a Gantry key and recorded with their issuer and subject.
+  ES256 tokens are accepted in place of a Enterplace key and recorded with their issuer and subject.
 - Routing: `balance: lowest_latency` (90th percentile time to first byte) and `lowest_cost`, deployments kept `for:` a
-  team or tag with `x-gantry-tags` limited to the rule's `tags:`, `region:` labels with `regions:` residency on rules
+  team or tag with `x-enterplace-tags` limited to the rule's `tags:`, `region:` labels with `regions:` residency on rules
   (a refusal, never a preference), and `session_affinity` for coding agent sessions. Each choice and its reason is in
   the decision record's `routing`.
 
 ### Added
 
 - The policy kept in the store as versions (`store.policy_from: store`): the console and `PUT /admin/policy` save a
-  new version, checked as `gantry check` checks a file, live on every gateway within 2 seconds. Optional approval by a
+  new version, checked as `enterplace check` checks a file, live on every gateway within 2 seconds. Optional approval by a
   second admin (`store.approval: true`), a dry run against recent requests, one-click rollback, export and import as
   YAML, and every change in the audit chain. The file stays the source by default, for GitOps.
 - Console pages: Models (add a model with its price and aliases, change a price), Teams, key editing on People and
@@ -1013,7 +1013,7 @@ one repository. How a release is made: RELEASING.md.
   `/v1/fine_tuning/jobs`): each owned by the person who created it, every batch line decided by the policy and the
   guardrails before the provider sees the file (a refused line is named by number), the batch's estimate reserved at
   batch prices against budgets, and results metered with one usage record per line.
-- `file_retention_days` on a rule: uploads expire at the provider and Gantry deletes what is left when the time is up.
+- `file_retention_days` on a rule: uploads expire at the provider and Enterplace deletes what is left when the time is up.
 - Realtime sessions over WebSocket: OpenAI Realtime and Gemini Live, decided at connect (Gemini on its setup),
   metered per response from the provider's usage events, ended by a kill switch or a spent budget, and recorded
   without content.
@@ -1022,7 +1022,7 @@ one repository. How a release is made: RELEASING.md.
 ## [0.1.0] - Unreleased
 
 The first tagged release: a governed AI gateway in one static binary. Every request carries a person's or workload's
-identity, passes a policy decision and lands in a hash-chained audit log before Gantry forwards it with the provider key.
+identity, passes a policy decision and lands in a hash-chained audit log before Enterplace forwards it with the provider key.
 
 ### Gateway and routes
 
@@ -1032,7 +1032,7 @@ identity, passes a policy decision and lands in a hash-chained audit log before 
 - Passthrough to a provider's own API on the paths a rule names (`/passthrough/<provider>/<path>`), recorded, limited
   and charged like any other call.
 - An MCP gateway at `/mcp`: tools from upstream MCP servers, limited per rule, each call audited.
-- Proxy, CDN and caller address headers stay with Gantry and never reach a provider. `accept-encoding` is not
+- Proxy, CDN and caller address headers stay with Enterplace and never reach a provider. `accept-encoding` is not
   forwarded, so every answer can be read for usage, guardrails and translation.
 
 ### Providers
@@ -1042,21 +1042,21 @@ identity, passes a policy decision and lands in a hash-chained audit log before 
 - Translation both ways: chat completions to Claude models (`accept_chat`) and Claude Code's messages to chat models
   (`accept_messages`). A field that cannot be carried across is refused, never dropped.
 - A catalog of 119 provider presets (`preset: groq`), each URL taken from the vendor's own API documentation, with
-  `gantry providers` to list them.
+  `enterplace providers` to list them.
 - Provider keys from a file (`key_file`), rotated without a restart.
 - A live test matrix (`scripts/live_matrix.py`, `.github/workflows/live.yml`): every route against each real provider
   kind, nightly, with a token cap per run. Without provider keys every cell says it was skipped.
 
 ### Identity and policy
 
-- Gantry keys per person and workload, with an optional expiry, budget, model list and tokens-per-minute limit, issued
+- Enterplace keys per person and workload, with an optional expiry, budget, model list and tokens-per-minute limit, issued
   from the command line, the admin API or the console.
-- A policy file of rules by team, person or anyone, checked by `gantry check` with the line and the fix for every
+- A policy file of rules by team, person or anyone, checked by `enterplace check` with the line and the fix for every
   mistake. Policy and keys reload within 2 seconds, without a restart.
-- Kill switches with a reason (`gantry kill`, `gantry unkill`).
-- First run: `gantry init` writes a starter policy and `gantry serve` prints a one-time setup link that makes the first
-  admin key, with a prompt to copy into a coding agent that connects a project to Gantry.
-- `gantry login` gives a developer an expiring key of their own through single sign-on.
+- Kill switches with a reason (`enterplace kill`, `enterplace unkill`).
+- First run: `enterplace init` writes a starter policy and `enterplace serve` prints a one-time setup link that makes the first
+  admin key, with a prompt to copy into a coding agent that connects a project to Enterplace.
+- `enterplace login` gives a developer an expiring key of their own through single sign-on.
 
 ### Guardrails
 
@@ -1067,7 +1067,7 @@ identity, passes a policy decision and lands in a hash-chained audit log before 
 
 ### Spend and routing
 
-- Usage and cost of every answer, with prices built in for most models (`gantry prices`).
+- Usage and cost of every answer, with prices built in for most models (`enterplace prices`).
 - Budgets per team, person or key, requests and tokens per minute, and a cache per rule.
 - Retries, one fallback per provider, and model aliases over several deployments with weights, context window and
   content policy fallbacks, and a circuit breaker per deployment with half-open probes.
@@ -1080,7 +1080,7 @@ identity, passes a policy decision and lands in a hash-chained audit log before 
 
 ### Audit and observability
 
-- A hash-chained audit log and `gantry audit verify`. The log cannot be removed or replaced while Gantry holds it, on
+- A hash-chained audit log and `enterplace audit verify`. The log cannot be removed or replaced while Enterplace holds it, on
   Linux, macOS and Windows, and its lock holds across containers and machines on one share.
 - Prometheus metrics on an address of their own (`--metrics`).
 - OpenTelemetry traces over OTLP/HTTP, joined to the caller's trace, carrying no prompt, answer or key.
@@ -1088,9 +1088,9 @@ identity, passes a policy decision and lands in a hash-chained audit log before 
 ### Console and command line
 
 - An admin console: audit log, people and keys, policy and spend, with sign-in by admin key or OpenID Connect.
-- `gantry import litellm`: a policy from a LiteLLM proxy configuration.
-- The command line is a library (`gantry_cli::run`), and the server has extension points (routes, console pages,
-  `/healthz` fields, store migrations), so a binary that embeds Gantry adds its own commands and pages.
+- `enterplace import litellm`: a policy from a LiteLLM proxy configuration.
+- The command line is a library (`enterplace_cli::run`), and the server has extension points (routes, console pages,
+  `/healthz` fields, store migrations), so a binary that embeds Enterplace adds its own commands and pages.
 
 ### Releases and deployment
 
@@ -1110,14 +1110,14 @@ The commercial features (`enterprise/`, licensed by key), in the same image:
 
 ### Enterprise: One image
 
-- `ghcr.io/eliransu/gantry` (first published as `ghcr.io/eliransu/gantry-enterprise`) for amd64 and arm64, under 50 MB, running as a non-root user. It serves
-  `/etc/gantry/gantry.policy.yaml` by default and runs every open source command too (`key new`, `audit verify`,
+- `ghcr.io/eliransu/enterplace` (first published as `ghcr.io/eliransu/enterplace-enterprise`) for amd64 and arm64, under 50 MB, running as a non-root user. It serves
+  `/etc/enterplace/enterplace.policy.yaml` by default and runs every open source command too (`key new`, `audit verify`,
   `check`), so no separate binary is needed.
 - The image carries the Helm chart and the Terraform modules under `/deploy`.
 
 ### Enterprise: License
 
-- A signed license key (`GANTRY_LICENSE` or `GANTRY_LICENSE_FILE`), checked offline, unlocks the enterprise features.
+- A signed license key (`ENTERPLACE_LICENSE` or `ENTERPLACE_LICENSE_FILE`), checked offline, unlocks the enterprise features.
   An expired license keeps them on for 30 days, then turns them off; model traffic is never stopped. `/healthz` shows
   the license without its token.
 
@@ -1125,7 +1125,7 @@ The commercial features (`enterprise/`, licensed by key), in the same image:
 
 - Members with owner, admin and viewer roles, invites by one-time link and password sign-in, on the gateway's own
   console. Removing a person revokes every key named with their email and ends their session at once.
-- In the Gantry app: single sign-on per organization through its own OpenID Connect provider (Okta, Entra ID, Google
+- In the Enterplace app: single sign-on per organization through its own OpenID Connect provider (Okta, Entra ID, Google
   Workspace), two-step sign-in with recovery codes, and SCIM 2.0 provisioning.
 - Scoped, expiring admin API tokens for staff, each write recorded with the caller's name.
 

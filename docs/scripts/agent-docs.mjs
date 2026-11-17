@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pages = join(root, 'src/content/docs');
 const dist = join(root, 'dist');
-const site = (process.env.DOCS_SITE ?? 'https://gantry-docs.enterplace.dev').replace(/\/$/, '');
+const site = (process.env.DOCS_SITE ?? 'https://docs.enterplace.dev').replace(/\/$/, '');
 
 function walk(dir) {
 	return readdirSync(dir).flatMap((name) => {
@@ -72,7 +72,7 @@ for (const file of walk(pages).sort()) {
 
 const section = (route) => (route.split('/')[0] || 'start');
 const index = [
-	'# Gantry',
+	'# Enterplace',
 	'',
 	'> The open source AI gateway built for governance: identity, policy and a tamper-evident audit log on every model request. Every page below is Markdown.',
 	'',

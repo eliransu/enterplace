@@ -1,6 +1,6 @@
 # azure-container-apps
 
-Gantry on Azure: a Container App with HTTPS ingress, Azure Database for PostgreSQL Flexible Server 16 for keys,
+Enterplace on Azure: a Container App with HTTPS ingress, Azure Database for PostgreSQL Flexible Server 16 for keys,
 kill switches and budgets, the audit log on Azure Files, and secrets as Key Vault references.
 
 ## What it creates
@@ -9,12 +9,12 @@ kill switches and budgets, the audit log on Azure Files, and secrets as Key Vaul
 |---|---|
 | Resource group, virtual network with a subnet for the apps and a delegated subnet for the database | Private network for everything |
 | Container Apps environment (Consumption workload profile) and app (one replica, single revision mode) | HTTPS ingress on the app's address, health probes on `/healthz` |
-| PostgreSQL Flexible Server 16, private access only, private DNS zone, database `gantry` | The store. Its certificate chains to roots Gantry trusts, so it connects with `sslmode=verify-full`, checking the certificate and host name |
-| Key Vault secrets `<name>-master-key` and `<name>-export-key`, random 64 hex characters each | `GANTRY_MASTER_KEY` (seals provider credentials in the store) and `GANTRY_EXPORT_KEY` (encrypts SIEM destination secrets). Made once and kept across applies; skipped for a key you pass as `master_key_secret` or `export_key_secret` |
+| PostgreSQL Flexible Server 16, private access only, private DNS zone, database `enterplace` | The store. Its certificate chains to roots Enterplace trusts, so it connects with `sslmode=verify-full`, checking the certificate and host name |
+| Key Vault secrets `<name>-master-key` and `<name>-export-key`, random 64 hex characters each | `ENTERPLACE_MASTER_KEY` (seals provider credentials in the store) and `ENTERPLACE_EXPORT_KEY` (encrypts SIEM destination secrets). Made once and kept across applies; skipped for a key you pass as `master_key_secret` or `export_key_secret` |
 | Key Vault secret `<name>-database-url` in your vault | The app reads `DATABASE_URL`, the provider keys and the license as Key Vault references |
 | User-assigned identity with Key Vault Secrets User on the vault | What the app reads secrets as |
-| Storage account (ZRS) and Azure Files share, mounted at `/var/lib/gantry` | The audit log, one folder per revision |
-| busybox init container and an EmptyDir volume | Writes the policy to `/etc/gantry/gantry.policy.yaml`: the image has no shell |
+| Storage account (ZRS) and Azure Files share, mounted at `/var/lib/enterplace` | The audit log, one folder per revision |
+| busybox init container and an EmptyDir volume | Writes the policy to `/etc/enterplace/enterplace.policy.yaml`: the image has no shell |
 | Log Analytics workspace | The app's logs |
 
 **One replica, one folder per revision.** Container Apps cannot give each replica its own volume, and each gateway
@@ -28,24 +28,24 @@ Put the provider keys and the license in a Key Vault that uses RBAC authorizatio
 Vault Secrets Officer on it (to add `DATABASE_URL` and the keys it makes). Then:
 
 ```hcl
-module "gantry" {
-  # Copied out of the image: docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
-  #   && docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
-  source = "./gantry-deploy/terraform/azure-container-apps"
+module "enterplace" {
+  # Copied out of the image: docker create --name enterplace-files ghcr.io/eliransu/enterplace:<version>
+  #   && docker cp enterplace-files:/deploy ./enterplace-deploy && docker rm enterplace-files
+  source = "./enterplace-deploy/terraform/azure-container-apps"
 
   location            = "westeurope"
-  resource_group_name = "gantry"
-  image               = "ghcr.io/eliransu/gantry:0.1.0"
-  policy              = file("gantry.policy.yaml")
+  resource_group_name = "enterplace"
+  image               = "ghcr.io/eliransu/enterplace:0.1.0"
+  policy              = file("enterplace.policy.yaml")
 
   key_vault_id         = "/subscriptions/.../providers/Microsoft.KeyVault/vaults/acme-secrets"
-  license_secret       = "gantry-license"
+  license_secret       = "enterplace-license"
   provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key" }
   registry             = { server = "ghcr.io", username = "acme-bot", password_secret = "ghcr-token" }
 }
 ```
 
-The policy must have `audit: { path: /var/lib/gantry/gantry-audit.jsonl }` and
+The policy must have `audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }` and
 `store: { postgres_url_env: DATABASE_URL }`. Then issue a key and call the output `gateway_url`.
 
 `examples/basic` is the configuration CI plans. azurerm needs an Entra ID token before it plans anything, so CI runs

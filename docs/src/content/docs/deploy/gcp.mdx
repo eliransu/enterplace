@@ -1,6 +1,6 @@
 ---
 title: Google Cloud
-description: Deploy Gantry Enterprise on Google Cloud with the gcp-cloud-run Terraform module, Cloud Run with Cloud SQL and Filestore, then verify and run it in production.
+description: Deploy Enterplace Enterprise on Google Cloud with the gcp-cloud-run Terraform module, Cloud Run with Cloud SQL and Filestore, then verify and run it in production.
 sidebar:
   label: Google Cloud
   order: 6
@@ -8,24 +8,24 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The Terraform module `gcp-cloud-run`, which ships inside the `gantry` image, runs one gateway on Cloud Run, with Cloud SQL Postgres 16 for the store, the audit log on Filestore over NFS, and the policy and secrets in Secret Manager.
+The Terraform module `gcp-cloud-run`, which ships inside the `enterplace` image, runs one gateway on Cloud Run, with Cloud SQL Postgres 16 for the store, the audit log on Filestore over NFS, and the policy and secrets in Secret Manager.
 
 ## What it creates
 
 | Resource | Why |
 |---|---|
 | Cloud Run service: second generation, one instance, CPU always on | HTTPS on the service URL. CPU stays on because the gateway syncs its audit log and polls the store between requests |
-| Cloud SQL Postgres 16: regional, backups and point-in-time recovery, database and user `gantry` | The store |
-| Cloud SQL connector volume at `/cloudsql` | Gantry connects to the database over a Unix socket |
-| Filestore BASIC_HDD share `gantry`, mounted at `/var/lib/gantry` | The audit log, one folder per revision |
-| Secret Manager secrets `<name>-database-url` and `<name>-policy` | The policy is mounted as `/etc/gantry/gantry.policy.yaml` |
-| Secret Manager secrets `<name>-master-key` and `<name>-export-key` | `GANTRY_MASTER_KEY`, which seals [provider credentials](/governance/provider-credentials/) kept in the store, and `GANTRY_EXPORT_KEY`, which encrypts [SIEM export](/operations/siem-export/) destination secrets. Random 64 hex characters, made on the first apply and kept on every later one. Skipped for a key you bring |
+| Cloud SQL Postgres 16: regional, backups and point-in-time recovery, database and user `enterplace` | The store |
+| Cloud SQL connector volume at `/cloudsql` | Enterplace connects to the database over a Unix socket |
+| Filestore BASIC_HDD share `enterplace`, mounted at `/var/lib/enterplace` | The audit log, one folder per revision |
+| Secret Manager secrets `<name>-database-url` and `<name>-policy` | The policy is mounted as `/etc/enterplace/enterplace.policy.yaml` |
+| Secret Manager secrets `<name>-master-key` and `<name>-export-key` | `ENTERPLACE_MASTER_KEY`, which seals [provider credentials](/governance/provider-credentials/) kept in the store, and `ENTERPLACE_EXPORT_KEY`, which encrypts [SIEM export](/operations/siem-export/) destination secrets. Random 64 hex characters, made on the first apply and kept on every later one. Skipped for a key you bring |
 | Service account `<name>-run`, with `cloudsql.client`, `aiplatform.user` (when `vertex_ai = true`, the default) and access to each secret | What the gateway runs as, and what [Vertex AI](/providers/vertex/) providers sign in as. The module also enables `aiplatform.googleapis.com` |
-| `allUsers` invoker, when `public = true` | Gantry's own keys decide who may call |
+| `allUsers` invoker, when `public = true` | Enterplace's own keys decide who may call |
 
-**Cloud SQL through the connector.** The connector authenticates with IAM, encrypts to Cloud SQL with mutual TLS, and gives the gateway a local Unix socket. Gantry connects to a socket without TLS of its own, since the traffic never leaves the instance. The database has a public IP with no authorized networks and requires client certificates, so only the connector reaches it.
+**Cloud SQL through the connector.** The connector authenticates with IAM, encrypts to Cloud SQL with mutual TLS, and gives the gateway a local Unix socket. Enterplace connects to a socket without TLS of its own, since the traffic never leaves the instance. The database has a public IP with no authorized networks and requires client certificates, so only the connector reaches it.
 
-**Filestore, not Cloud Storage FUSE.** The audit log is one file that Gantry appends to and syncs every second. Cloud Storage FUSE rewrites a whole object on each sync and has no locking, so a crash or a second writer could cut the chain. NFS appends in place.
+**Filestore, not Cloud Storage FUSE.** The audit log is one file that Enterplace appends to and syncs every second. Cloud Storage FUSE rewrites a whole object on each sync and has no locking, so a crash or a second writer could cut the chain. NFS appends in place.
 
 ## Prerequisites
 
@@ -45,31 +45,31 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
    ```bash
    gcloud config set project my-project
    gcloud services enable artifactregistry.googleapis.com secretmanager.googleapis.com
-   gcloud artifacts repositories create gantry --repository-format=docker --location=europe
+   gcloud artifacts repositories create enterplace --repository-format=docker --location=europe
    gcloud auth configure-docker europe-docker.pkg.dev
    docker buildx imagetools create \
-     --tag europe-docker.pkg.dev/my-project/gantry/gantry:<version> \
-     ghcr.io/eliransu/gantry:<version>
+     --tag europe-docker.pkg.dev/my-project/enterplace/enterplace:<version> \
+     ghcr.io/eliransu/enterplace:<version>
    ```
 
 2. Put the provider key and the license in Secret Manager. The module only references them by ID, so their values never enter Terraform state.
 
    ```bash
    printf '%s' 'sk-...' | gcloud secrets create openai-key --data-file=-
-   printf '%s' 'eyJjdXN0b21lciI6...' | gcloud secrets create gantry-license --data-file=-
+   printf '%s' 'eyJjdXN0b21lciI6...' | gcloud secrets create enterplace-license --data-file=-
    ```
 
    The master key and the export key need nothing here: the module makes both, with random values, unless you pass your own secret IDs as `master_key_secret` and `export_key_secret`. Both are optional for the gateway; with them, provider credentials and SIEM destinations with a secret work from the first start. Vertex AI needs no secret either: see [Vertex AI](#vertex-ai) below.
 
-3. Copy the module out of the image you will run, and save a starting policy beside it as `gantry.policy.yaml`. The image carries the module for its own version, so nothing is cloned.
+3. Copy the module out of the image you will run, and save a starting policy beside it as `enterplace.policy.yaml`. The image carries the module for its own version, so nothing is cloned.
 
    ```bash
-   mkdir gantry-gcp && cd gantry-gcp
-   docker create --name gantry-files ghcr.io/eliransu/gantry:<version>
-   docker cp gantry-files:/deploy ./gantry-deploy && docker rm gantry-files
+   mkdir enterplace-gcp && cd enterplace-gcp
+   docker create --name enterplace-files ghcr.io/eliransu/enterplace:<version>
+   docker cp enterplace-files:/deploy ./enterplace-deploy && docker rm enterplace-files
    ```
 
-   ```yaml title="gantry.policy.yaml"
+   ```yaml title="enterplace.policy.yaml"
    version: 1
    providers:
      - name: openai
@@ -81,11 +81,11 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
      - name: everyone
        principals: { any: true }
        models: [gpt-4o-mini]
-   audit: { path: /var/lib/gantry/gantry-audit.jsonl }
+   audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
    store: { postgres_url_env: DATABASE_URL }
    ```
 
-   The policy must keep its last two lines: the audit log under `/var/lib/gantry` and `store: { postgres_url_env: DATABASE_URL }`.
+   The policy must keep its last two lines: the audit log under `/var/lib/enterplace` and `store: { postgres_url_env: DATABASE_URL }`.
 
 4. Write `main.tf`.
 
@@ -99,29 +99,29 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
      region  = "europe-west1"
    }
 
-   module "gantry" {
-     source = "./gantry-deploy/terraform/gcp-cloud-run"
+   module "enterplace" {
+     source = "./enterplace-deploy/terraform/gcp-cloud-run"
 
      project = "my-project"
      region  = "europe-west1"
      zone    = "europe-west1-b"
-     image   = "europe-docker.pkg.dev/my-project/gantry/gantry:<version>"
-     policy  = file("gantry.policy.yaml")
+     image   = "europe-docker.pkg.dev/my-project/enterplace/enterplace:<version>"
+     policy  = file("enterplace.policy.yaml")
 
-     license_secret       = "gantry-license"
+     license_secret       = "enterplace-license"
      provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key" }
    }
 
    output "gateway_url" {
-     value = module.gantry.gateway_url
+     value = module.enterplace.gateway_url
    }
 
    output "revision" {
-     value = module.gantry.revision
+     value = module.enterplace.revision
    }
 
    output "filestore_ip" {
-     value = module.gantry.filestore_ip
+     value = module.enterplace.filestore_ip
    }
    ```
 
@@ -149,8 +149,8 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
 | `provider_key_secrets` | `{}` | The variable each `key_env` names, mapped to a secret ID in this project. The latest version is read |
 | `license_secret` | `null` | Secret ID of the license. Null runs the open source features only |
 | `vertex_ai` | `true` | Grant the service account `roles/aiplatform.user` and enable `aiplatform.googleapis.com`, so Vertex AI providers sign in as it |
-| `master_key_secret` | `null` | Optional. Your own master key secret ID (`GANTRY_MASTER_KEY`). Null makes `<name>-master-key` |
-| `export_key_secret` | `null` | Optional. Your own export key secret ID (`GANTRY_EXPORT_KEY`). Null makes `<name>-export-key` |
+| `master_key_secret` | `null` | Optional. Your own master key secret ID (`ENTERPLACE_MASTER_KEY`). Null makes `<name>-master-key` |
+| `export_key_secret` | `null` | Optional. Your own export key secret ID (`ENTERPLACE_EXPORT_KEY`). Null makes `<name>-export-key` |
 | `network`, `subnetwork` | `default`, `default` | For Filestore and the service's Direct VPC egress to it |
 | `cpu`, `memory` | `1`, `1Gi` | The instance's size |
 | `public` | `true` | Let anyone reach the URL. With `false`, callers also need a Google identity token with `run.invoker` |
@@ -158,7 +158,7 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
 | `db_tier`, `db_availability_type` | `db-custom-1-3840`, `REGIONAL` | The database's machine and a standby in a second zone |
 | `filestore_capacity_gb` | `1024` | BASIC_HDD starts at 1024 |
 | `deletion_protection` | `true` | Protects the database and the service |
-| `name`, `labels` | `gantry`, `{}` | Prefix and labels for every resource |
+| `name`, `labels` | `enterplace`, `{}` | Prefix and labels for every resource |
 
 ### Outputs
 
@@ -166,18 +166,18 @@ The service URL comes with a Google-managed certificate, so the first deploy nee
 |---|---|
 | `gateway_url` | The service's HTTPS URL |
 | `service_name` | The Cloud Run service |
-| `revision` | The current revision, and the Filestore folder under `/gantry` holding its audit log |
+| `revision` | The current revision, and the Filestore folder under `/enterplace` holding its audit log |
 | `sql_connection_name` | The Cloud SQL instance's connection name |
 | `database_url_secret` | The secret holding `DATABASE_URL` |
 | `filestore_ip` | The Filestore address, to mount the audit logs for a check or a backup |
 | `service_account` | The service account the gateway runs as, and Vertex AI providers sign in as |
-| `master_key_secret`, `export_key_secret` | The secrets the gateway reads `GANTRY_MASTER_KEY` and `GANTRY_EXPORT_KEY` from |
+| `master_key_secret`, `export_key_secret` | The secrets the gateway reads `ENTERPLACE_MASTER_KEY` and `ENTERPLACE_EXPORT_KEY` from |
 
 ## Vertex AI
 
 The gateway signs in to Vertex AI as the service account it runs as, through the metadata server, with `roles/aiplatform.user` the module grants: no key or access token is stored. Leave `key_env` out of `vertex` and `vertex_anthropic` providers, and do not keep a Vertex access token in Secret Manager or in `provider_key_secrets`:
 
-```yaml title="gantry.policy.yaml"
+```yaml title="enterplace.policy.yaml"
 providers:
   - name: claude-vertex
     kind: vertex_anthropic
@@ -201,7 +201,7 @@ The role is granted on the module's project. For Vertex AI in another project, g
 2. Find the one-time link to make the first admin. The gateway prints it once at start, with the license line before it.
 
    ```bash
-   gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="gantry" AND textPayload:"First run"' \
+   gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="enterplace" AND textPayload:"First run"' \
      --limit 1 --format='value(textPayload)'
    ```
 
@@ -214,9 +214,9 @@ The role is granted on the module's project. For Vertex AI in another project, g
 4. Issue a key with the admin API and make a governed call.
 
    ```bash
-   export GANTRY_ADMIN_KEY=gantry_...
+   export ENTERPLACE_ADMIN_KEY=enterplace_...
    KEY=$(curl -s -X POST $GATEWAY/admin/keys \
-     -H "Authorization: Bearer $GANTRY_ADMIN_KEY" -H 'Content-Type: application/json' \
+     -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" -H 'Content-Type: application/json' \
      -d '{"name":"maya.cohen","team":"payments"}' | sed -n 's/.*"key":"\([^"]*\)".*/\1/p')
    curl -s $GATEWAY/v1/chat/completions \
      -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
@@ -226,10 +226,10 @@ The role is granted on the module's project. For Vertex AI in another project, g
 5. Verify the audit log. In the console, open **Audit log** and select **Verify chain now**, and keep the last hash it shows where the project cannot write. To check with the command line, mount the share read-only on a Compute Engine VM in the same network, with Docker and `nfs-common` installed, and run the image's own `audit verify` on it:
 
    ```bash
-   sudo mkdir -p /mnt/gantry
-   sudo mount -o ro <filestore_ip>:/gantry /mnt/gantry
-   docker run --rm -v /mnt/gantry:/mnt/gantry:ro ghcr.io/eliransu/gantry:<version> \
-     audit verify /mnt/gantry/<revision>/gantry-audit.jsonl
+   sudo mkdir -p /mnt/enterplace
+   sudo mount -o ro <filestore_ip>:/enterplace /mnt/enterplace
+   docker run --rm -v /mnt/enterplace:/mnt/enterplace:ro ghcr.io/eliransu/enterplace:<version> \
+     audit verify /mnt/enterplace/<revision>/enterplace-audit.jsonl
    ```
 
 </Steps>
@@ -241,7 +241,7 @@ The role is granted on the module's project. For Vertex AI in another project, g
 - **A rotated secret needs a new revision.** Cloud Run reads secret versions when an instance starts, and the module makes a new revision only when its inputs change. To rotate a key, create a new secret (such as `openai-key-2`) and point `provider_key_secrets` at it.
 - **No metrics port.** Cloud Run serves one port, so `/metrics` is not exposed. Use Cloud Run's own request metrics and OpenTelemetry traces.
 - **Filestore BASIC_HDD starts at 1 TiB.** It is the smallest NFS share Filestore offers.
-- **`public = false` blocks most callers.** Coding tools and SDKs send a Gantry key, not a Google identity token. With an organization policy that forbids `allUsers`, put an internal load balancer in front and set `ingress` to match.
+- **`public = false` blocks most callers.** Coding tools and SDKs send a Enterplace key, not a Google identity token. With an organization policy that forbids `allUsers`, put an internal load balancer in front and set `ingress` to match.
 - **Deletion is protected.** Set `deletion_protection = false` and apply before `terraform destroy`.
 
 ## Production checklist
@@ -250,17 +250,17 @@ The role is granted on the module's project. For Vertex AI in another project, g
 - **Secrets.** Provider keys and the license in Secret Manager, referenced by ID. `DATABASE_URL`, and the master and export keys unless you bring them, are secrets the module writes. Keep the Terraform state encrypted: it holds the database password and those keys. Never change the master key in place: the credentials sealed with it would no longer open.
 - **Backups.** Cloud SQL keeps automated backups with point-in-time recovery. Back up the share from the console: **Filestore**, **Backups**, **Create backup**, on a schedule. Keep each revision's last hash outside the project.
 - **Monitoring.** An uptime check on `$GATEWAY/healthz` in Cloud Monitoring, and alerts on the service's 5xx count. For traces, store the collector's address in a secret and add it to the map: `provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key", OTEL_EXPORTER_OTLP_ENDPOINT = "otel-endpoint" }`. The map sets any variable from a secret.
-- **Upgrades.** Take a backup first, since a newer Gantry may update the schema and an older one refuses a database a newer one has written. Then copy the new image into Artifact Registry, change `image` and apply. The new revision starts before the old one drains, so there is no gap.
+- **Upgrades.** Take a backup first, since a newer Enterplace may update the schema and an older one refuses a database a newer one has written. Then copy the new image into Artifact Registry, change `image` and apply. The new revision starts before the old one drains, so there is no gap.
 
   ```bash
-  gcloud sql backups create --instance=gantry
+  gcloud sql backups create --instance=enterplace
   ```
 
 - **Rollback.** Send the traffic back to the previous revision. It mounts its own folder and continues its own chain. If it refuses the database because the new version changed the schema, restore the backup first.
 
   ```bash
-  gcloud run revisions list --service gantry --region europe-west1
-  gcloud run services update-traffic gantry --region europe-west1 --to-revisions=<previous revision>=100
+  gcloud run revisions list --service enterplace --region europe-west1
+  gcloud run services update-traffic enterplace --region europe-west1 --to-revisions=<previous revision>=100
   ```
 
 ### What to watch
