@@ -55,7 +55,7 @@ enterplace</a>
         <div class="menu menu-wide" id="menu-use-cases">
           <div class="menu-col">
             <p class="menu-title">By what you run</p>
-            <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Claude Code, Codex, Copilot, Cursor, Gemini CLI</span></a>
+            <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Codex, Claude Code, Copilot, Cursor, Gemini CLI</span></a>
             <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Apps and agents calling models from your cloud</span></a>
             <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Your MCP servers behind one endpoint</span></a>
             <a href="/use-cases/local-models/"><strong>Local and self-hosted models</strong><span>Ollama, vLLM, on-prem, air-gapped</span></a>
@@ -113,17 +113,17 @@ enterplace</a>
 <div class="gate-lanes" aria-hidden="true">
 <div class="lane"><span class="lane-from">sarah.miller<i>Claude Code</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
 <div class="lane"><span class="lane-from">mike.johnson<i>Codex</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">OpenAI</span></div>
-<div class="lane"><span class="lane-from">emily.davis<i>Claude Code</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">budget_exceeded</span></span><span class="lane-to">Anthropic</span></div>
+<div class="lane"><span class="lane-from">emily.davis<i>Codex</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">budget_exceeded</span></span><span class="lane-to">OpenAI</span></div>
 <div class="lane"><span class="lane-from">josh.taylor<i>Gemini CLI</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Gemini</span></div>
 </div>
 <ol class="records" aria-label="Example audit records, newest first">
-<li><span>#41</span><span class="r-who">sarah.miller<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule engineering</span><span class="r-hash">e8cdd9 &larr; 091585</span></li>
-<li><span>#40</span><span class="r-who">emily.davis<i>interns</i></span><span class="v v-refused">refused</span><span class="r-meta">claude-sonnet-5-5, budget_exceeded</span><span class="r-hash">2ad164 &larr; e8cdd9</span></li>
+<li><span>#41</span><span class="r-who">sarah.miller<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule engineering</span><span class="r-hash">692c29 &larr; 1fd40b</span></li>
+<li><span>#40</span><span class="r-who">emily.davis<i>interns</i></span><span class="v v-refused">refused</span><span class="r-meta">gpt-5-codex, budget_exceeded</span><span class="r-hash">2ad164 &larr; 692c29</span></li>
 <li><span>#39</span><span class="r-who">josh.taylor<i>platform</i></span><span class="v v-allow">allow</span><span class="r-meta">Gemini API, rule engineering</span><span class="r-hash">dc0a56 &larr; 2ad164</span></li>
 <li><span>#38</span><span class="r-who">mike.johnson<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">gpt-5-codex, rule engineering</span><span class="r-hash">000000 &larr; dc0a56</span></li>
 </ol>
 <figcaption class="gate-foot"><span>Example requests. Three tools, one policy.</span><button class="gate-pause" type="button" aria-pressed="false">Pause</button></figcaption>
-<script type="application/json">{"n": 41, "last": "091585", "seq": [[0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule engineering"], [1, "mike.johnson", "payments", "allow", "gpt-5-codex, rule engineering"], [3, "josh.taylor", "platform", "allow", "Gemini API, rule engineering"], [0, "sarah.miller", "payments", "allow", "claude-haiku-5-5, rule engineering"], [1, "mike.johnson", "payments", "allow", "gpt-5-codex, rule engineering"], [3, "josh.taylor", "platform", "allow", "Gemini API, rule engineering"], [2, "emily.davis", "interns", "refused", "claude-sonnet-5-5, budget_exceeded", "budget_exceeded"], [0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule engineering"]]}</script>
+<script type="application/json">{"n": 41, "last": "1fd40b", "seq": [[0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule engineering"], [1, "mike.johnson", "payments", "allow", "gpt-5-codex, rule engineering"], [3, "josh.taylor", "platform", "allow", "Gemini API, rule engineering"], [0, "sarah.miller", "payments", "allow", "claude-haiku-5-5, rule engineering"], [1, "mike.johnson", "payments", "allow", "gpt-5-codex, rule engineering"], [3, "josh.taylor", "platform", "allow", "Gemini API, rule engineering"], [2, "emily.davis", "interns", "refused", "gpt-5-codex, budget_exceeded", "budget_exceeded"], [0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule engineering"]]}</script>
 </figure>
 </section>
 
@@ -136,7 +136,7 @@ enterplace</a>
     <div><dt>Two settings, once</dt><dd>A base URL and a key, or one <code>enterplace login</code> with the company account. The tool behaves as before.</dd></div>
     <div><dt>Their own name on their work</dt><dd>Each session runs under the developer's key, inside the team's budget. Nobody shares a secret.</dd></div>
     <div><dt>A refusal they can act on</dt><dd>When a budget or a rule stops a request, the reason shows up in the terminal they already use, with a decision ID.</dd></div>
-    <div><dt>The tool they chose</dt><dd>Claude Code, Codex, OpenCode, Copilot CLI, Gemini CLI and others go through the same gateway. <a href="/use-cases/coding-agents/#tools">Which tools were run against Enterplace</a></dd></div>
+    <div><dt>The tool they chose</dt><dd>Codex, Claude Code, OpenCode, Copilot CLI, Gemini CLI and others go through the same gateway. <a href="/use-cases/coding-agents/#tools">Which tools were run against Enterplace</a></dd></div>
   </dl>
 </section>
 

@@ -25,12 +25,16 @@ Key for maya.cohen, team payments. It is shown once and is not stored anywhere:
 
   enterplace_3f9c...(64 hex characters)
 
-To hand it over, send these lines through your secret manager, never in chat. Claude Code and the OpenAI SDKs read them:
+To hand it over, send these lines through your secret manager, never in chat. The OpenAI SDKs and OpenAI-compatible tools, Gemini CLI and Claude Code read them:
 
-export ANTHROPIC_BASE_URL=https://enterplace.example.com
-export ANTHROPIC_API_KEY=enterplace_3f9c...
 export OPENAI_BASE_URL=https://enterplace.example.com/v1
 export OPENAI_API_KEY=enterplace_3f9c...
+export GOOGLE_GEMINI_BASE_URL=https://enterplace.example.com
+export GEMINI_API_KEY=enterplace_3f9c...
+export ANTHROPIC_BASE_URL=https://enterplace.example.com
+export ANTHROPIC_API_KEY=enterplace_3f9c...
+
+For Codex, put the key in ENTERPLACE_KEY and see https://docs.enterplace.dev/integrations/codex/ for its provider settings.
 
 Its hash was added to /srv/enterplace/enterplace.keys.yaml. A running `enterplace serve` accepts it within 2 seconds. `enterplace serve` reads the keys file beside its policy file unless `--keys` names another.
 ```

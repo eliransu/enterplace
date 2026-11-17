@@ -2581,21 +2581,23 @@ fn key_status(
     (status, fix)
 }
 
-/// How to point Claude Code, Codex and the OpenAI SDKs at the gateway at `base` with `key`, ready to paste.
+/// How to point the OpenAI SDKs, Codex, Gemini CLI and Claude Code at the gateway at `base` with `key`, ready to paste.
 pub(crate) fn tool_lines(base: &str, key: &str) -> Vec<String> {
     vec![
-        "# Claude Code".into(),
-        format!("export ANTHROPIC_BASE_URL={base}"),
-        format!("export ANTHROPIC_API_KEY={key}"),
-        "claude".into(),
+        "# OpenAI SDKs and OpenAI-compatible tools".into(),
+        format!("export OPENAI_BASE_URL={base}/v1"),
+        format!("export OPENAI_API_KEY={key}"),
         "# Codex: in ~/.codex/config.toml set model_provider = \"enterplace\" and".into(),
         format!(
             "#   [model_providers.enterplace] base_url = \"{base}/v1\", env_key = \"ENTERPLACE_KEY\", wire_api = \"responses\""
         ),
         format!("export ENTERPLACE_KEY={key}"),
-        "# OpenAI SDKs".into(),
-        format!("export OPENAI_BASE_URL={base}/v1"),
-        format!("export OPENAI_API_KEY={key}"),
+        "# Gemini CLI".into(),
+        format!("export GOOGLE_GEMINI_BASE_URL={base}"),
+        format!("export GEMINI_API_KEY={key}"),
+        "# Claude Code".into(),
+        format!("export ANTHROPIC_BASE_URL={base}"),
+        format!("export ANTHROPIC_API_KEY={key}"),
     ]
 }
 

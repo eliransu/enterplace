@@ -15,13 +15,13 @@ Every model request gets an identity, a policy decision and a tamper-evident aud
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-enterplace--docs.enterplace.dev-e3ff45.svg)](https://docs.enterplace.dev/)
 
-[Documentation](https://docs.enterplace.dev/) · [Quickstart](https://docs.enterplace.dev/getting-started/quickstart/) · [Claude Code](https://docs.enterplace.dev/integrations/claude-code/) · [Policy reference](https://docs.enterplace.dev/governance/policy/)
+[Documentation](https://docs.enterplace.dev/) · [Quickstart](https://docs.enterplace.dev/getting-started/quickstart/) · [Coding tools](https://docs.enterplace.dev/integrations/coding-tools/) · [Policy reference](https://docs.enterplace.dev/governance/policy/)
 
 </div>
 
 ---
 
-Enterplace sits between your people, agents and workloads and the model providers they call. Claude Code, Codex, Cursor and any OpenAI or Anthropic SDK point at Enterplace instead of the provider. For every request, Enterplace:
+Enterplace sits between your people, agents and workloads and the model providers they call. Coding agents (Codex, Claude Code, Cursor, Gemini CLI, Copilot), internal apps, agents, MCP clients and any OpenAI, Anthropic or Gemini SDK point at Enterplace instead of the provider, and it sends their requests on to OpenAI, Anthropic, Gemini, Vertex AI, Bedrock, Azure OpenAI, Mistral or local models on Ollama, vLLM and LM Studio. For every request, Enterplace:
 
 1. **Identifies** the caller by a personal Enterplace key, never a shared provider key.
 2. **Decides** by a policy file: which person or team may use which model, within what budget, under which guardrails.
@@ -93,9 +93,10 @@ Full walkthrough: [Quickstart](https://docs.enterplace.dev/getting-started/quick
 
 | Tool | Route | Guide |
 |---|---|---|
-| Claude Code | `/v1/messages` | [docs](https://docs.enterplace.dev/integrations/claude-code/) |
 | Codex CLI | `/v1/responses` | [docs](https://docs.enterplace.dev/integrations/codex/) |
-| Cursor, Continue, Cline, Aider, OpenCode, Gemini CLI, Copilot, Zed and 8 more | `/v1/chat/completions` and others | [docs](https://docs.enterplace.dev/integrations/coding-tools/) |
+| Claude Code | `/v1/messages` | [docs](https://docs.enterplace.dev/integrations/claude-code/) |
+| Gemini CLI | `/v1beta/models/<model>:streamGenerateContent` | [docs](https://docs.enterplace.dev/integrations/gemini-cli/) |
+| Cursor, Continue, Cline, Aider, OpenCode, Copilot, Zed and 8 more | `/v1/chat/completions` and others | [docs](https://docs.enterplace.dev/integrations/coding-tools/) |
 | OpenAI and Anthropic SDKs | all | [docs](https://docs.enterplace.dev/integrations/sdks/) |
 
 ## Repository

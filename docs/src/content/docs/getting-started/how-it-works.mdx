@@ -12,7 +12,7 @@ Enterplace is a reverse proxy with a fixed order of checks. Each request is iden
 ## The request path
 
 ```text
-client (Claude Code, Codex, an SDK, an agent)
+client (a coding agent, an SDK, an app, an agent)
    |  Authorization: Bearer enterplace_...   or   x-api-key: enterplace_...
    v
 Enterplace
@@ -51,7 +51,7 @@ Step 11 runs for every request, including those refused earlier: a refusal is re
 | 11. record | `audit_unavailable` |
 | 12. forward | `upstream_unreachable`, `upstream_failed`, `upstream_timeout` |
 
-Every response carries `X-Enterplace-Decision` with the decision ID. Every refusal repeats that ID in its message and uses the error shape the client already understands, so Claude Code and the SDKs show the cause and the fix to the person. See [Refusal codes](/reference/refusal-codes/).
+Every response carries `X-Enterplace-Decision` with the decision ID. Every refusal repeats that ID in its message and uses the error shape the client already understands, so coding agents and SDKs show the cause and the fix to the person. See [Refusal codes](/reference/refusal-codes/).
 
 ## What reaches the provider
 

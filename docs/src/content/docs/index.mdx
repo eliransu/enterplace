@@ -40,13 +40,13 @@ Your people already use AI tools. Enterplace sits between those tools and the mo
 
 ## How it works
 
-Claude Code, Codex, Cursor and any OpenAI or Anthropic SDK point at Enterplace instead of the provider. Enterplace identifies the caller, decides by policy, writes an audit record chained to the one before it (so a removed record shows), and only then forwards the request with the provider key in place of the caller's.
+Coding agents (Codex, Claude Code, Cursor, Gemini CLI, Copilot), your own apps and agents, MCP clients, and any OpenAI, Anthropic or Gemini SDK point at Enterplace instead of the provider. Behind it are OpenAI, Anthropic, Gemini, Vertex AI, Bedrock, Azure OpenAI, Mistral and local models on Ollama, vLLM or LM Studio. Enterplace identifies the caller, decides by policy, writes an audit record chained to the one before it (so a removed record shows), and only then forwards the request with the provider key in place of the caller's.
 
 It ships as one binary, or one container image. Policy, keys and the audit log are plain files you can review, version and verify; Postgres is optional, for teams that share keys and budgets across gateways.
 
 <CardGrid>
 	<LinkCard title="Quickstart" description="Install, run enterplace start, and follow the dashboard to your first request. No provider key needed." href="/getting-started/quickstart/" />
-	<LinkCard title="Connect Claude Code" description="Route every Claude Code session in your company through Enterplace." href="/integrations/claude-code/" />
+	<LinkCard title="Connect a coding agent" description="Codex, Claude Code, Cursor, Gemini CLI and the rest: the route each uses and its guide." href="/integrations/coding-tools/" />
 	<LinkCard title="How it works" description="The request path: identify, decide, record, forward." href="/getting-started/how-it-works/" />
 	<LinkCard title="Policy file" description="Every field of enterplace.policy.yaml, with the errors enterplace check reports." href="/governance/policy/" />
 </CardGrid>

@@ -1,12 +1,12 @@
 <!--
-title: Track Claude Code, Codex and Cursor usage per developer, with budgets
-description: Roll out Claude Code, Codex, GitHub Copilot, Cursor, Gemini CLI and other coding agents through Enterplace. Each developer signs in as themselves, each session has a budget, and every request is recorded. With the table of tools and which were run against Enterplace.
+title: Track Codex, Claude Code, Cursor and Gemini CLI usage per developer, with budgets
+description: Roll out Codex, Claude Code, GitHub Copilot, Cursor, Gemini CLI and other coding agents through Enterplace. Each developer signs in as themselves, each session has a budget, and every request is recorded. With the table of tools and which were run against Enterplace.
 nav: use-cases
 -->
 <section class="wrap head">
   <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>Coding agents</span></nav>
   <h1>Coding agents for every developer, each one under a name and a budget.</h1>
-  <p class="lead">Your developers already run Claude Code, Codex, Copilot or Cursor. Most of them share one provider key, or each team bought its own. This page moves them behind Enterplace without taking a tool away from anyone.</p>
+  <p class="lead">Your developers already run Codex, Claude Code, Copilot, Cursor or Gemini CLI. Most of them share one provider key, or each team bought its own. This page moves them behind Enterplace without taking a tool away from anyone.</p>
   <figure class="code cmd"><pre>curl -fsSL https://enterplace.dev/install.sh | sh
 enterplace start</pre></figure>
 </section>
@@ -17,7 +17,7 @@ label: Four developers send coding agent requests through Enterplace. Three are 
 foot: Example requests from four developers.
 lane: sarah.miller | Claude Code | Anthropic
 lane: mike.johnson | Codex | OpenAI
-lane: emily.davis | Claude Code | Anthropic
+lane: emily.davis | Gemini CLI | Google
 lane: josh.taylor | OpenCode | OpenAI
 req: 0 | sarah.miller | engineering | allow | claude-sonnet-5-5, rule engineering
 req: 1 | mike.johnson | engineering | allow | gpt-5-codex, rule engineering
@@ -25,7 +25,7 @@ req: 3 | josh.taylor | platform | blocked | gpt-5, database_url | database_url
 req: 0 | sarah.miller | engineering | allow | claude-haiku-5-5, rule engineering
 req: 1 | mike.johnson | engineering | allow | gpt-5-codex, rule engineering
 req: 3 | josh.taylor | platform | allow | gpt-5, rule engineering
-req: 2 | emily.davis | interns | refused | claude-sonnet-5-5, budget_exceeded | budget_exceeded
+req: 2 | emily.davis | interns | refused | gemini-2.5-pro, budget_exceeded | budget_exceeded
 req: 0 | sarah.miller | engineering | allow | claude-sonnet-5-5, rule engineering
 }}
 </section>
@@ -61,13 +61,20 @@ enterplace start
     <li>
       <div class="guide-text">
         <h3>Point each tool at the gateway</h3>
-        <p>A coding tool goes through Enterplace when it lets you set a base URL. Claude Code on a Claude subscription needs one line and keeps its own login. On API billing it takes a Enterplace key in place of the provider's, which never reaches the laptop.</p>
+        <p>A coding tool goes through Enterplace when it lets you set a base URL. It takes a Enterplace key in place of the provider's, which never reaches the laptop. Claude Code on a Claude subscription needs one line and keeps its own login.</p>
         <a class="more" href="docs:/integrations/coding-tools/">A guide for each tool {{> arrow}}</a>
       </div>
-      <figure class="code"><figcaption>On each laptop, for Claude Code</figcaption><pre><span class="c"># on a Claude subscription: no API key</span>
-export ANTHROPIC_BASE_URL=https://enterplace.example.com
+      <figure class="code"><figcaption>On each laptop, for the tool it runs</figcaption><pre><span class="c"># Codex, in ~/.codex/config.toml</span>
+[model_providers.enterplace]
+base_url = "https://enterplace.example.com/v1"
+env_key = "ENTERPLACE_KEY"
 
-<span class="c"># on API billing: add a Enterplace key</span>
+<span class="c"># Gemini CLI</span>
+export GOOGLE_GEMINI_BASE_URL=https://enterplace.example.com
+export GEMINI_API_KEY=enterplace_...
+
+<span class="c"># Claude Code: the first line alone on a Claude subscription</span>
+export ANTHROPIC_BASE_URL=https://enterplace.example.com
 export ANTHROPIC_API_KEY=enterplace_...</pre></figure>
     </li>
     <li>
@@ -128,7 +135,7 @@ rules:
 
 <span class="c"># the admin asks which rule and limits apply</span>
 enterplace explain enterplace.policy.yaml \
-  --key emily.davis --model claude-sonnet-5-5</pre></figure>
+  --key emily.davis --model gemini-2.5-pro</pre></figure>
   </div>
 </section>
 

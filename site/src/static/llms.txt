@@ -1,6 +1,6 @@
 # Enterplace
 
-> Self-hosted AI gateway, open source (MIT core). Coding agents (Claude Code, Codex, Cursor, Copilot, Gemini CLI), apps and MCP clients call models through it. Each request gets a person's name, a budget, guardrails and a line in a tamper-evident audit log. One Docker image plus Postgres, in your own cloud. Claude Code users keep their own subscription login.
+> Self-hosted AI gateway, open source (MIT core). Coding agents (Codex, Claude Code, Cursor, Copilot, Gemini CLI), apps and MCP clients call models through it. Each request gets a person's name, a budget, guardrails and a line in a tamper-evident audit log. One Docker image plus Postgres, in your own cloud. Any provider: OpenAI, Anthropic, Gemini, Bedrock, Azure, Mistral, or local models on Ollama and vLLM.
 
 Install and start: `curl -fsSL https://enterplace.dev/install.sh | sh` then `enterplace start`.
 
@@ -9,6 +9,7 @@ Install and start: `curl -fsSL https://enterplace.dev/install.sh | sh` then `ent
 - [Docs index for agents](https://docs.enterplace.dev/llms.txt): every docs page as Markdown
 - [All docs in one file](https://docs.enterplace.dev/llms-full.txt)
 - [Quickstart](https://docs.enterplace.dev/getting-started/quickstart.md)
+- [Coding tools through Enterplace](https://docs.enterplace.dev/integrations/coding-tools.md)
 - [Claude Code through Enterplace](https://docs.enterplace.dev/integrations/claude-code.md)
 
 ## Pages

@@ -47,7 +47,7 @@ curl http://127.0.0.1:8080/v1/chat/completions \
   -d '{"model":"enterplace-demo","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-The answer starts with `Hello from the Enterplace demo model.`, and the request is in the dashboard under **Requests**. Next, [connect Claude Code](/integrations/claude-code/) or [another tool](/integrations/coding-tools/).
+The answer starts with `Hello from the Enterplace demo model.`, and the request is in the dashboard under **Requests**. Next, connect a coding agent ([Codex](/integrations/codex/), [Claude Code](/integrations/claude-code/), [Gemini CLI](/integrations/gemini-cli/) or [another tool](/integrations/coding-tools/)) or [your own app](/integrations/sdks/).
 
 Everything below is detail.
 
@@ -100,9 +100,9 @@ The console opens on one question, **What do you want to start with?**, with fiv
 1. **Connect a model**: pick OpenAI, Anthropic or Google Gemini and paste its key, or choose **Try without a key** for the demo model.
 2. **Send your first request**: a ready-to-copy curl (with Python and Node tabs) holding the gateway's address and a key: `$ENTERPLACE_KEY`, or a key the step makes for it, shown once. The step turns done by itself when the request arrives, even if the provider refuses it: the request shows in Requests with the provider's answer.
 
-**Coding agents** first asks how your team pays for Claude Code. With **Claude subscriptions (Pro, Max, Team, Enterprise)**, the default, there is no model to connect and no API key: `enterplace start` already wrote the `claude-subscriptions` provider, and the checklist mints a free person token and shows the two lines for Claude Code (`ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS`). Every step has **Copy for your agent**, a ready prompt that has Claude Code, Codex or Cursor do the step for you. See [Subscriptions](/governance/subscriptions/).
+**Coding agents** first asks how your team pays for its coding agents. With **API keys**, any coding agent works: the checklist makes a key per person and shows the lines for Claude Code, Codex, Cursor, Gemini CLI or any OpenAI-compatible tool. With **Claude subscriptions (Pro, Max, Team, Enterprise)**, the default answer, Claude Code keeps its own login: there is no model to connect and no API key, since `enterplace start` already wrote the `claude-subscriptions` provider, and the checklist mints a free person token and shows the two lines for Claude Code (`ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS`). Every step has **Copy for your agent**, a ready prompt that has your coding agent do the step for you. See [Subscriptions](/governance/subscriptions/).
 
-The steps that follow are the choice's own: a key per person, the lines for Claude Code, Codex, Cursor or an SDK, a budget, an MCP server. Each says what **turns it done** and what you **then see**, and Enterplace checks its own records for it. Once the checklist is done, Start here shows the five steps of a rollout (See, Know, Limit, Protect, Prove, the same as the [Start here](/start/why/) pages).
+The steps that follow are the choice's own: a key per person, the lines for Codex, Claude Code, Cursor, Gemini CLI or an SDK, a budget, an MCP server. Each says what **turns it done** and what you **then see**, and Enterplace checks its own records for it. Once the checklist is done, Start here shows the five steps of a rollout (See, Know, Limit, Protect, Prove, the same as the [Start here](/start/why/) pages).
 
 ## Verify the audit log
 
@@ -147,7 +147,7 @@ This binary is the open source edition (MIT). The image runs the enterprise buil
 
 ## Next steps
 
-- [Connect Claude Code](/integrations/claude-code/) on your developers' own Claude subscriptions, with no API key.
+- [Coding tools](/integrations/coding-tools/): Codex, Claude Code, Cursor, Gemini CLI and the rest, with the route each uses. Claude Code can keep your developers' own Claude subscriptions, with no API key.
 - [Policy file](/governance/policy/): rules per team and model, budgets, rate limits and guardrails, then `mode: enforce`.
 - [Keys and identity](/governance/keys/): a key per person and workload, and self-service keys with `enterplace login`.
 - [One-click deploys](/deploy/one-click/): Enterplace and Postgres in your cloud in a few clicks.

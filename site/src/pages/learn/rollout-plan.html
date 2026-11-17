@@ -52,8 +52,8 @@ nav: learn
   </div>
   <div class="qa">
     <details open>
-      <summary>Example: a 200-person fintech rolling out Claude Code</summary>
-      <p>Sixty engineers already use Claude Code with one shared Anthropic key. Finance sees a single invoice. Security has been asked whether card data has gone into a prompt.</p>
+      <summary>Example: a 200-person fintech rolling out coding agents</summary>
+      <p>Sixty engineers already use Claude Code and Codex on shared Anthropic and OpenAI keys. Finance sees a single invoice. Security has been asked whether card data has gone into a prompt.</p>
       <div class="split" style="padding-bottom: 28px">
         <ul class="ticks">
           <li><strong>See.</strong> The shared key moves into Enterplace and laptops point at the gateway. Nothing is blocked for two weeks.</li>
@@ -65,7 +65,7 @@ nav: learn
         <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>rules:
   - name: engineering
     principals: { team: engineering }
-    models: [claude-sonnet-5-5, claude-haiku-5-5]
+    models: [claude-sonnet-5-5, gpt-5-codex]
     guardrails: [no-secrets, mask-pii]
 limits:
   - { team: engineering, budget: { usd: 6000, per: month } }

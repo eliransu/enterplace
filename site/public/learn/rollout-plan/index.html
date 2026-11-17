@@ -55,7 +55,7 @@ enterplace</a>
         <div class="menu menu-wide" id="menu-use-cases">
           <div class="menu-col">
             <p class="menu-title">By what you run</p>
-            <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Claude Code, Codex, Copilot, Cursor, Gemini CLI</span></a>
+            <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Codex, Claude Code, Copilot, Cursor, Gemini CLI</span></a>
             <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Apps and agents calling models from your cloud</span></a>
             <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Your MCP servers behind one endpoint</span></a>
             <a href="/use-cases/local-models/"><strong>Local and self-hosted models</strong><span>Ollama, vLLM, on-prem, air-gapped</span></a>
@@ -151,8 +151,8 @@ enterplace</a>
   </div>
   <div class="qa">
     <details open>
-      <summary>Example: a 200-person fintech rolling out Claude Code</summary>
-      <p>Sixty engineers already use Claude Code with one shared Anthropic key. Finance sees a single invoice. Security has been asked whether card data has gone into a prompt.</p>
+      <summary>Example: a 200-person fintech rolling out coding agents</summary>
+      <p>Sixty engineers already use Claude Code and Codex on shared Anthropic and OpenAI keys. Finance sees a single invoice. Security has been asked whether card data has gone into a prompt.</p>
       <div class="split" style="padding-bottom: 28px">
         <ul class="ticks">
           <li><strong>See.</strong> The shared key moves into Enterplace and laptops point at the gateway. Nothing is blocked for two weeks.</li>
@@ -164,7 +164,7 @@ enterplace</a>
         <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>rules:
   - name: engineering
     principals: { team: engineering }
-    models: [claude-sonnet-5-5, claude-haiku-5-5]
+    models: [claude-sonnet-5-5, gpt-5-codex]
     guardrails: [no-secrets, mask-pii]
 limits:
   - { team: engineering, budget: { usd: 6000, per: month } }

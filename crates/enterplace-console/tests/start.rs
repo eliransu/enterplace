@@ -218,9 +218,9 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
         (
             "coding",
             &[
-                "How does your team pay for Claude Code?",
-                "Claude subscription",
-                "Anthropic API keys",
+                "How does your team pay for its coding agents?",
+                "Claude subscriptions, for Claude Code",
+                "API keys, any coding agent",
                 "Turn on Claude subscriptions",
                 "Point Claude Code at Enterplace",
                 "Add a second person",
@@ -244,7 +244,7 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
                 "  - name: github",
                 "tools: [github.*]",
                 "GITHUB_MCP_AUTHORIZATION",
-                "Connect Claude Code and call one tool",
+                "Connect an MCP client and call one tool",
             ],
         ),
         (
@@ -317,6 +317,17 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
     .await?;
     assert!(
         page.contains(&format!("base_url = &quot;{BASE}/v1&quot;")),
+        "{page}"
+    );
+    // Gemini CLI has its own lines, and the tabs keep the API key answer instead of falling back to subscriptions.
+    let (_, _, page) = send(
+        &s.app,
+        get("/console/start?track=coding&pay=api&tool=gemini", &cookie)?,
+    )
+    .await?;
+    assert!(
+        page.contains(&format!("export GOOGLE_GEMINI_BASE_URL={BASE}"))
+            && page.contains("/console/start?pay=api&amp;tool=codex#step-4"),
         "{page}"
     );
     let (_, _, page) = send(&s.app, get("/console/start?track=apps", &cookie)?).await?;

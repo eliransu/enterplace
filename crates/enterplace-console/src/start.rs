@@ -105,7 +105,7 @@ impl Track {
     fn line(self) -> &'static str {
         match self {
             Track::Coding => {
-                "Claude Code, Codex, Cursor and the other coding tools your developers use."
+                "Codex, Claude Code, Cursor, Gemini CLI and the other coding agents your developers use."
             }
             Track::Apps => {
                 "Services, scripts and agents in your code that call OpenAI, Anthropic or Gemini."
@@ -681,7 +681,7 @@ pub(crate) struct Step {
     listen: String,
     done_text: String,
     open: Option<(&'static str, &'static str)>,
-    /// What "Copy for your agent" copies: the step as a prompt for Claude Code, Codex or Cursor.
+    /// What "Copy for your agent" copies: the step as a prompt for any coding agent.
     agent: String,
 }
 
@@ -773,7 +773,7 @@ struct Ctx<'a> {
     watch_token: Option<&'a str>,
     error: String,
     policy: String,
-    /// The Coding agents choice is paid with Anthropic API keys, not Claude subscriptions.
+    /// The Coding agents choice is paid with provider API keys, not Claude subscriptions.
     pay_api: bool,
     /// How step 2 of Claude subscriptions sets Claude Code up: `shell` or `mdm`.
     setup: String,
@@ -930,6 +930,13 @@ fn tool_lines(base: &str, key: &str, model: &str, tool: &str) -> Vec<String> {
             format!("Override OpenAI Base URL: {base}/v1"),
             format!("OpenAI API key: {key}"),
             "# Cursor's servers send the requests: Enterplace needs a public HTTPS address".into(),
+        ],
+        // Gemini CLI speaks Google's own API, which only a gemini or vertex provider answers.
+        "gemini" => vec![
+            format!("export GOOGLE_GEMINI_BASE_URL={base}"),
+            format!("export GEMINI_API_KEY={key}"),
+            "# its models must be on a gemini or vertex provider: the demo model does not answer it".into(),
+            "gemini".into(),
         ],
         "other" | "app" => vec![
             format!("export OPENAI_BASE_URL={base}/v1"),
@@ -1198,22 +1205,31 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         ),
 )
     .finished(made_text(c, first));
+    let (tool_name, tool_doc) = match tool {
+        "codex" => ("Codex", "/integrations/codex/"),
+        "cursor" => ("Cursor", "/integrations/cursor/"),
+        "gemini" => ("Gemini CLI", "/integrations/gemini-cli/"),
+        "other" => ("coding tools", "/integrations/coding-tools/"),
+        _ => ("Claude Code", "/integrations/claude-code/"),
+    };
     let s2 = Step::new(
-        "Point Claude Code at Enterplace and send one prompt",
+        "Point your coding agent at Enterplace and send one prompt",
         !f.sent_by_people().is_empty(),
         format!(
-            r#"<p class="t-body">Paste these lines in the terminal where Claude Code runs, then ask it anything. The key from step 3 is already in them.</p>{}{}"#,
+            r#"<p class="t-body">Paste these lines where your coding agent runs, then ask it anything. The key from step 3 is already in them.</p>{}{}"#,
             block(
                 "lines-coding",
+                // The tabs keep the API key answer: without it the address falls back to Claude subscriptions.
                 &tabs(
                     "Coding tool",
                     4,
-                    &[("claude", "Claude Code"), ("codex", "Codex"), ("cursor", "Cursor"), ("other", "Other tools")],
+                    &[("claude", "Claude Code"), ("codex", "Codex"), ("cursor", "Cursor"), ("gemini", "Gemini CLI"), ("other", "Other tools")],
                     tool
-                ),
+                )
+                .replace("/console/start?tool=", "/console/start?pay=api&amp;tool="),
                 &coding_lines(c, first, tool)
             ),
-            acts(&docs("Read the Claude Code guide", "/integrations/claude-code/"))
+            acts(&docs(&format!("Read the {tool_name} guide"), tool_doc))
         ),
 )
     .listening(
@@ -1252,7 +1268,7 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         &[],
         &["On the machine that runs the gateway, in the folder of its policy, run: `enterplace key new <name> --team <team>`. It prints the key once; send it to the developer through the company's secret manager.".into()],
         "`enterplace key list` shows the new key.",
-        "/integrations/claude-code/",
+        "/integrations/coding-tools/",
     ));
     let s2 = s2.agent(prompt(
         base,
@@ -1263,7 +1279,7 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             coding_lines(c, first, tool).join("\n"),
         ],
         "The prompt answers and shows in Requests under my name.",
-        "/integrations/claude-code/",
+        tool_doc,
     ));
     let s3 = s3.agent(prompt(
         base,
@@ -1271,7 +1287,7 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         &[],
         &["On the gateway's machine, run `enterplace key new <name> --team <team>` and send the printed lines through the company's secret manager.".into()],
         "Their first request shows in Requests.",
-        "/integrations/claude-code/",
+        "/integrations/coding-tools/",
     ));
     let s4 = s4.agent(prompt(
         base,
@@ -1700,10 +1716,10 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     ));
     let call = f.tool_calls.last();
     let s2 = Step::new(
-        "Connect Claude Code and call one tool",
+        "Connect an MCP client and call one tool",
         call.is_some(),
         format!(
-            r#"<p class="t-body">Run this where Claude Code runs. It reads your Enterplace key from <span class="t-mono">ENTERPLACE_KEY</span>.</p>{}{}"#,
+            r#"<p class="t-body">For Claude Code, run this where it runs. It reads your Enterplace key from <span class="t-mono">ENTERPLACE_KEY</span>. Any other client that speaks MCP over Streamable HTTP takes the same address and header.</p>{}{}"#,
             command(
                 "cmd-mcp",
                 &format!(
@@ -1768,11 +1784,11 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     ));
     let s2 = s2.agent(prompt(
         base,
-        "Connect Claude Code to Enterplace's MCP gateway and call one tool",
+        "Connect my MCP client to Enterplace's MCP gateway and call one tool",
         &[],
         &[
-            format!("1. With my Enterplace key in ENTERPLACE_KEY, run: claude mcp add --transport http enterplace {base}/mcp --header \"Authorization: Bearer $ENTERPLACE_KEY\""),
-            "2. Ask Claude Code to use one of the enterplace tools.".into(),
+            format!("1. With my Enterplace key in ENTERPLACE_KEY, add an MCP server named enterplace at {base}/mcp (Streamable HTTP) with the header `Authorization: Bearer $ENTERPLACE_KEY`. In Claude Code that is: claude mcp add --transport http enterplace {base}/mcp --header \"Authorization: Bearer $ENTERPLACE_KEY\""),
+            "2. Ask my agent to use one of the enterplace tools.".into(),
         ],
         "The tool call answers and shows in the console's Audit log.",
         "/governance/mcp-gateway/",
@@ -1791,7 +1807,7 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
 fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let first = f.newest(false).or_else(|| f.people.last());
     let tool = match c.tool.as_str() {
-        "codex" | "app" => c.tool.as_str(),
+        "codex" | "gemini" | "app" => c.tool.as_str(),
         _ => "claude",
     };
     let spent: f64 = f.requests.iter().filter_map(|r| r.cost_usd).sum();
@@ -1808,10 +1824,10 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         "Send requests through Enterplace",
         !f.requests.is_empty(),
         format!(
-            r#"<p class="t-body">Paste these lines where Claude Code runs, or point an app at the same address.</p>{}"#,
+            r#"<p class="t-body">Paste these lines where your coding agent runs, or point an app at the same address.</p>{}"#,
             block(
                 "lines-limit",
-                &tabs("Client", 4, &[("claude", "Claude Code"), ("codex", "Codex"), ("app", "An app")], tool),
+                &tabs("Client", 4, &[("claude", "Claude Code"), ("codex", "Codex"), ("gemini", "Gemini CLI"), ("app", "An app")], tool),
                 &coding_lines(c, first, tool)
             )
         ),
@@ -2613,11 +2629,12 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
         } else {
             checklist(&list, &st)
         };
-        // Coding agents first asks how the team pays: Claude subscriptions route with no API key at all.
+        // Coding agents first asks how the team pays. API keys serve every coding agent; a Claude subscription is
+        // Claude Code's own login, routed with no API key at all, and stays the default answer.
         let body = if track == Track::Coding {
             let items: String = [
-                ("subscriptions", "Claude subscription"),
-                ("api", "Anthropic API keys"),
+                ("api", "API keys, any coding agent"),
+                ("subscriptions", "Claude subscriptions, for Claude Code"),
             ]
             .iter()
             .map(|(id, label)| {
@@ -2630,7 +2647,7 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
             })
             .collect();
             format!(
-                r#"<div class="g-stack" style="gap: var(--space-2)"><h2 class="t-sm">How does your team pay for Claude Code?</h2><div class="g-tabs" role="group" aria-label="How your team pays for Claude Code">{items}</div></div>{body}"#
+                r#"<div class="g-stack" style="gap: var(--space-2)"><h2 class="t-sm">How does your team pay for its coding agents?</h2><div class="g-tabs" role="group" aria-label="How your team pays for its coding agents">{items}</div></div>{body}"#
             )
         } else {
             body
@@ -2866,7 +2883,7 @@ async fn make_key(
         f.problem = err;
     }
     let mut view = view_of(&kept, &Form(Vec::new()));
-    // The key form of Anthropic API keys says so; a person token is for Claude subscriptions.
+    // The key form of provider API keys says so; a person token is for Claude subscriptions.
     view.pay_api = form.get("pay") == "api";
     if token {
         view.track = Some(Track::Coding);
@@ -3333,7 +3350,7 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
             docs: "/integrations/coding-tools/",
             // The Code tab of the Claude desktop app sets ANTHROPIC_BASE_URL itself, so nothing ever arrives from it.
             extra: format!(
-                r#"{}<p class="t-small g-muted" style="margin: 0">Using the Claude desktop app? Its Code tab ignores your base URL. Run <span class="t-mono-sm">claude</span> in a terminal.</p>"#,
+                r#"<p class="t-small g-muted" style="margin: 0">Claude Code on a Claude subscription needs this one line and no key. Other tools take a key: Start here shows their lines.</p>{}<p class="t-small g-muted" style="margin: 0">Using the Claude desktop app? Its Code tab ignores your base URL. Run <span class="t-mono-sm">claude</span> in a terminal.</p>"#,
                 command("empty-copy", &format!("export ANTHROPIC_BASE_URL={base}"))
             ),
         },
@@ -3631,7 +3648,7 @@ mod tests {
                 "{track:?}"
             );
         }
-        // Coding agents with Anthropic API keys has the two first steps and the four of its own.
+        // Coding agents with provider API keys has the two first steps and the four of its own.
         assert_eq!(list_for(Track::Coding, true, &f).len(), 6);
     }
 }

@@ -55,7 +55,7 @@ enterplace</a>
         <div class="menu menu-wide" id="menu-use-cases">
           <div class="menu-col">
             <p class="menu-title">By what you run</p>
-            <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Claude Code, Codex, Copilot, Cursor, Gemini CLI</span></a>
+            <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Codex, Claude Code, Copilot, Cursor, Gemini CLI</span></a>
             <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Apps and agents calling models from your cloud</span></a>
             <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Your MCP servers behind one endpoint</span></a>
             <a href="/use-cases/local-models/"><strong>Local and self-hosted models</strong><span>Ollama, vLLM, on-prem, air-gapped</span></a>
@@ -114,24 +114,26 @@ enterplace</a>
 enterplace start</pre></figure>
     <details class="agent-setup">
       <summary class="muted">Show the agent prompt</summary>
-<pre id="agent-setup">Set up Enterplace, the self-hosted AI gateway, on this machine, and route my Claude Code through it while I keep my own Claude subscription login (no API key).
+<pre id="agent-setup">Set up Enterplace, the self-hosted AI gateway, on this machine, and route my coding agent through it. First ask me which one I use: Claude Code, Codex, Cursor, Gemini CLI or another, and for Claude Code whether I am on a Claude subscription or API billing.
 
 1. Install it: curl -fsSL https://enterplace.dev/install.sh | sh
    Then open a new shell, or run the PATH line it prints.
 2. Make a folder for it (~/enterplace) and run "enterplace start --no-open" there in the background.
-   It serves http://127.0.0.1:8080 and already has the claude-subscriptions provider, which passes my Claude login on unchanged.
+   It serves http://127.0.0.1:8080 with a free demo model (enterplace-demo) and the claude-subscriptions provider, which passes a Claude login on unchanged.
    It prints a dashboard sign-in link and an admin key once: show me the link, and never put the admin key in chat, files or commits.
-3. Optional, so my requests carry my name (without it they are recorded as unknown). In that folder, make a person token for me (ask me for my name and team):
-   enterplace key new &lt;name&gt; --team &lt;team&gt; --identity-only --url http://127.0.0.1:8080
-4. Add these lines to my shell profile (the second only with a token from step 3):
+3. In that folder, make my key (ask me for my name and team):
+   enterplace key new &lt;name&gt; --team &lt;team&gt; --url http://127.0.0.1:8080
+   For Claude Code on a Claude subscription, add --identity-only: it makes a person token that only names me, and is optional.
+4. Point my tool at http://127.0.0.1:8080 with that key, as its page under https://docs.enterplace.dev/integrations/ says (Codex: codex.md, Cursor: cursor.md, Gemini CLI: gemini-cli.md, others: coding-tools.md).
+   Claude Code on a Claude subscription takes two lines in my shell profile, and ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN must stay unset:
    export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
    export ANTHROPIC_CUSTOM_HEADERS="x-enterplace-user: &lt;token&gt;"
-   ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN must stay unset, so Claude Code keeps using my subscription.
-5. Verify: in a new shell run: claude -p "say hello". It answers, and the request shows at http://127.0.0.1:8080/console/requests once I open the sign-in link.
+   Gemini CLI needs a Gemini provider key on the gateway: the demo model does not answer it.
+5. Verify: send one prompt from my tool. It answers, and the request shows at http://127.0.0.1:8080/console/requests once I open the sign-in link.
 
 Docs as Markdown, read them for anything not covered here:
 https://docs.enterplace.dev/getting-started/quickstart.md
-https://docs.enterplace.dev/integrations/claude-code.md
+https://docs.enterplace.dev/integrations/coding-tools.md
 https://docs.enterplace.dev/governance/subscriptions.md
 Every page: https://docs.enterplace.dev/llms.txt</pre>
     </details>
@@ -142,16 +144,16 @@ Every page: https://docs.enterplace.dev/llms.txt</pre>
 <div class="lane"><span class="lane-from">sarah.miller<i>Claude Code</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
 <div class="lane"><span class="lane-from">svc-invoice-bot<i>internal app</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">OpenAI</span></div>
 <div class="lane"><span class="lane-from">emily.davis<i>Codex</i></span><span class="lane-track"><span class="runner stopped"><span class="disc"></span></span><span class="lane-stop on">budget_exceeded</span></span><span class="lane-to">OpenAI</span></div>
-<div class="lane"><span class="lane-from">ci.release<i>CI job</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Anthropic</span></div>
+<div class="lane"><span class="lane-from">ci.release<i>CI job</i></span><span class="lane-track"><span class="runner passed"><span class="disc"></span></span></span><span class="lane-to">Google</span></div>
 </div>
 <ol class="records" aria-label="Example audit records, newest first">
-<li><span>#41</span><span class="r-who">sarah.miller<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule payments-team</span><span class="r-hash">45190c &larr; 9edaa7</span></li>
-<li><span>#40</span><span class="r-who">emily.davis<i>interns</i></span><span class="v v-refused">refused</span><span class="r-meta">gpt-5, budget_exceeded</span><span class="r-hash">963777 &larr; 45190c</span></li>
-<li><span>#39</span><span class="r-who">ci.release<i>platform</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-haiku-5-5, rule platform</span><span class="r-hash">0e47c0 &larr; 963777</span></li>
+<li><span>#41</span><span class="r-who">sarah.miller<i>payments</i></span><span class="v v-allow">allow</span><span class="r-meta">claude-sonnet-5-5, rule payments-team</span><span class="r-hash">9d6ea1 &larr; 2bc72a</span></li>
+<li><span>#40</span><span class="r-who">emily.davis<i>interns</i></span><span class="v v-refused">refused</span><span class="r-meta">gpt-5, budget_exceeded</span><span class="r-hash">d37d62 &larr; 9d6ea1</span></li>
+<li><span>#39</span><span class="r-who">ci.release<i>platform</i></span><span class="v v-allow">allow</span><span class="r-meta">gemini-2.5-flash, rule platform</span><span class="r-hash">0e47c0 &larr; d37d62</span></li>
 <li><span>#38</span><span class="r-who">svc-invoice-bot<i>finance</i></span><span class="v v-masked">masked</span><span class="r-meta">gpt-5-mini, credit_card masked</span><span class="r-hash">000000 &larr; 0e47c0</span></li>
 </ol>
 <figcaption class="gate-foot"><span>Example requests.</span><button class="gate-pause" type="button" aria-pressed="false">Pause</button></figcaption>
-<script type="application/json">{"n": 41, "last": "9edaa7", "seq": [[0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule payments-team"], [3, "ci.release", "platform", "blocked", "claude-haiku-5-5, aws_access_key", "aws_access_key"], [1, "svc-invoice-bot", "finance", "allow", "gpt-5-mini, rule finance-apps"], [0, "sarah.miller", "payments", "allow", "claude-haiku-5-5, rule payments-team"], [1, "svc-invoice-bot", "finance", "masked", "gpt-5-mini, credit_card masked"], [3, "ci.release", "platform", "allow", "claude-haiku-5-5, rule platform"], [2, "emily.davis", "interns", "refused", "gpt-5, budget_exceeded", "budget_exceeded"], [0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule payments-team"]]}</script>
+<script type="application/json">{"n": 41, "last": "2bc72a", "seq": [[0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule payments-team"], [3, "ci.release", "platform", "blocked", "gemini-2.5-flash, aws_access_key", "aws_access_key"], [1, "svc-invoice-bot", "finance", "allow", "gpt-5-mini, rule finance-apps"], [0, "sarah.miller", "payments", "allow", "claude-haiku-5-5, rule payments-team"], [1, "svc-invoice-bot", "finance", "masked", "gpt-5-mini, credit_card masked"], [3, "ci.release", "platform", "allow", "gemini-2.5-flash, rule platform"], [2, "emily.davis", "interns", "refused", "gpt-5, budget_exceeded", "budget_exceeded"], [0, "sarah.miller", "payments", "allow", "claude-sonnet-5-5, rule payments-team"]]}</script>
 </figure>
 </section>
 
@@ -203,7 +205,7 @@ Every page: https://docs.enterplace.dev/llms.txt</pre>
     <p>Each page is a short path: the situation, what goes wrong without control, the steps with the exact policy lines, and what you see afterwards.</p>
   </div>
   <nav class="rows" aria-label="Use cases">
-    <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Developers run Claude Code, Codex, Copilot or Cursor on a shared provider key, and nobody can say who spent what.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+    <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Developers run Codex, Claude Code, Copilot, Cursor or Gemini CLI on a shared provider key, and nobody can say who spent what.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
     <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Services and agents in your cloud call models with keys copied into environment files.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>

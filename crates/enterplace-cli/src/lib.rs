@@ -50,7 +50,7 @@ Commands:
           [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>]
           [--url <gateway url>] [--quiet] [--keys <file>]
         Make a key for a person or a workload. The key is printed once, with the lines that point
-        Claude Code and OpenAI SDKs at Enterplace (--url, default http://127.0.0.1:8080). Only its hash is
+        coding agents and SDKs at Enterplace (--url, default http://127.0.0.1:8080). Only its hash is
         saved. --admin makes a key that may sign in to the console and call the admin API (the first
         admin starts here). --expires 2026-12-31 refuses the key from that UTC day on (or a time:
         2026-12-31T18:00:00Z). --budget 20/month caps what this key alone may spend. --models
@@ -1172,7 +1172,7 @@ fn key_new(
     );
     let url = url.unwrap_or("http://127.0.0.1:8080").trim_end_matches('/');
     println!(
-        "To hand it over, send these lines through your secret manager, never in chat. Claude Code and the OpenAI SDKs read them:\n\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_API_KEY={key}\nexport OPENAI_BASE_URL={url}/v1\nexport OPENAI_API_KEY={key}\n\nFor Codex, put the key in ENTERPLACE_KEY and see https://docs.enterplace.dev/integrations/codex/ for its provider settings.\n",
+        "To hand it over, send these lines through your secret manager, never in chat. The OpenAI SDKs and OpenAI-compatible tools, Gemini CLI and Claude Code read them:\n\nexport OPENAI_BASE_URL={url}/v1\nexport OPENAI_API_KEY={key}\nexport GOOGLE_GEMINI_BASE_URL={url}\nexport GEMINI_API_KEY={key}\nexport ANTHROPIC_BASE_URL={url}\nexport ANTHROPIC_API_KEY={key}\n\nFor Codex, put the key in ENTERPLACE_KEY and see https://docs.enterplace.dev/integrations/codex/ for its provider settings.\n",
         key = issued.key
     );
     if enterplace_core::store::attached(keys).is_some() {
@@ -2859,7 +2859,7 @@ fn init(provider: &str, models: Option<&str>, out: &Path) -> ExitCode {
         "\n  export {variable}=<your {name} API key>"
     };
     println!(
-        "Wrote {out} for {name}. Next:\n{local}\n  enterplace serve {out}\n  then open the setup link it prints: it makes your admin key and shows how to point Claude Code and the OpenAI SDKs at Enterplace.",
+        "Wrote {out} for {name}. Next:\n{local}\n  enterplace serve {out}\n  then open the setup link it prints: it makes your admin key and shows how to point coding agents and SDKs at Enterplace.",
         out = out.display(),
         name = preset.name,
         local = local
