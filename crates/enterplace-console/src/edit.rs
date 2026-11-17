@@ -86,7 +86,7 @@ fn base_field(live: Option<&PolicyVersion>) -> String {
 pub(crate) fn policy_source(console: &Console, admin: &Admin) -> PolicySource {
     let path = &console.config().policy;
     let live = live(console);
-    let mut actions = String::new();
+    let mut actions = link("Edit with forms", "", "/console/app/#/policy", false);
     if live.is_some() && edits_policy(admin) {
         actions.push_str(&link("Edit", "", "/console/policy/edit", false));
     }
@@ -241,11 +241,15 @@ fn models_body(console: &Console, admin: &Admin, query: &Form, error: &str) -> S
     };
     let live = live(console);
     let editable = live.is_some() && edits_policy(admin);
-    let add = if editable {
-        link("Add a model", "", "/console/models?add=1", false)
-    } else {
-        String::new()
-    };
+    let mut add = link(
+        "Providers and models",
+        "quiet",
+        "/console/app/#/providers",
+        false,
+    );
+    if editable {
+        add.push_str(&link("Add a model", "", "/console/models?add=1", false));
+    }
     // A plain line, not a banner: read only is how a file-kept policy works, nothing went wrong.
     let banner = if live.is_none() {
         format!(

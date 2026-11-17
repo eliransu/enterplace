@@ -14,6 +14,14 @@
 # The policy file must say `audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }`: /etc/enterplace is read-only.
 # Admin commands use the same binary: docker run --rm <image> audit verify <file>.
 
+# The console app (console-ui: React and shadcn/ui), built here so the image never depends on a committed build.
+FROM node:22-alpine AS console
+WORKDIR /src/console-ui
+COPY console-ui/package.json console-ui/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY console-ui ./
+RUN npm run build
+
 FROM rust:1.88-alpine AS build
 RUN apk add --no-cache musl-dev
 # cargo-auditable writes the binary's exact crate list into the binary itself. The image is FROM scratch, with no
@@ -21,6 +29,7 @@ RUN apk add --no-cache musl-dev
 RUN cargo install cargo-auditable --locked --version 0.7.5
 WORKDIR /src
 COPY . .
+COPY --from=console /src/crates/enterplace-console/app crates/enterplace-console/app
 # Reproducible: the release pipeline passes the commit's time, and paths in the binary do not name this machine.
 # Two builds of one commit give the same binary (scripts/release.sh reproduce checks it).
 ARG SOURCE_DATE_EPOCH=0

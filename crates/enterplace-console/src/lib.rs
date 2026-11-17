@@ -4,6 +4,7 @@
 //! policy file names under `console.sso`. The browser gets a random session ID, never the key or a token. Every page
 //! reads the policy, keys and audit files when it is asked for.
 
+mod api;
 pub mod cli;
 mod edit;
 mod figures;
@@ -581,6 +582,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .route("/credentials/{action}", post(credential_change))
         .route("/policy", get(policy_page))
         .merge(edit::routes())
+        .merge(api::routes())
         .merge(start::routes())
         .route("/spend", get(spend_page))
         .route("/live.json", get(live_json))

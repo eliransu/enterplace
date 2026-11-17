@@ -1,0 +1,74 @@
+/* shadcn/ui on Tailwind, themed only with the Enterplace design tokens (tokens.css, served by the console and linked
+   from index.html). Tailwind's stock colors, radii, type sizes and shadows are cleared, so a class that is not a
+   token does not exist. */
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@font-face { font-family: "Familjen Grotesk"; src: url("/console/assets/fonts/FamiljenGrotesk-Variable.woff2") format("woff2"); font-weight: 400 700; font-display: swap; }
+@font-face { font-family: "Fragment Mono"; src: url("/console/assets/fonts/FragmentMono-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+
+@theme {
+  --color-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+  --text-*: initial;
+  --font-*: initial;
+}
+
+/* Reference only: the names point at the tokens and nothing new is written to :root, so a token is never redefined. */
+@theme inline reference {
+  --spacing: var(--space-1);
+
+  /* shadcn's roles, each a token. */
+  --color-background: var(--ground);
+  --color-foreground: var(--text);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--text);
+  --color-popover: var(--ground);
+  --color-popover-foreground: var(--text);
+  --color-primary: var(--inverse);
+  --color-primary-hover: var(--inverse-hover);
+  --color-primary-foreground: var(--on-inverse);
+  --color-secondary: var(--surface);
+  --color-secondary-foreground: var(--text);
+  --color-muted: var(--surface);
+  --color-muted-foreground: var(--text-muted);
+  --color-accent: var(--well);
+  --color-accent-foreground: var(--text);
+  --color-destructive: var(--flame);
+  --color-destructive-hover: var(--flame-hover);
+  --color-destructive-foreground: var(--on-flame);
+  --color-destructive-text: var(--flame-text);
+  --color-border: var(--line);
+  --color-input: var(--line-strong);
+  --color-ring: var(--focus);
+  --color-well: var(--well);
+  --color-overlay: var(--overlay);
+  --color-lime: var(--lime);
+  --color-on-lime: var(--on-lime);
+
+  --radius-small: var(--radius-sm);
+  --radius-box: var(--radius-md);
+  --radius-panel: var(--radius-lg);
+  --radius-dialog: var(--radius-xl);
+  --radius-pill: var(--radius-pill);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-display: var(--font-display);
+
+  --container-measure: var(--measure);
+  --container-wide: var(--measure-wide);
+  --container-dialog: var(--col-lg);
+  --width-nav: var(--nav);
+}
+
+@layer base {
+  * { border-color: var(--line); outline-color: var(--focus); }
+  html { color-scheme: light; }
+  html[data-theme="dark"] { color-scheme: dark; }
+  body { margin: 0; background: var(--ground); color: var(--text); font-family: var(--font-sans); }
+  button { cursor: pointer; }
+  :focus-visible { outline: var(--focus-ring) solid var(--focus); outline-offset: var(--focus-ring); }
+}

@@ -358,6 +358,9 @@ const GROUPS: [(&str, &[Item]); 3] = [
                 "People",
                 &["People and workloads", "Teams"],
             ),
+            // The console app: models, providers, MCP servers and the policy's basics as forms. Its pages move
+            // over from these one by one.
+            ("/console/app/", "Manage", &[]),
             ("/console/policy", "Policy", &["Policy"]),
             ("/console/models", "Models", &["Models"]),
             (

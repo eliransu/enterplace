@@ -107,6 +107,14 @@ elif [ -n "${ENTERPLACE_TEST_DATABASE_URL:-}" ] && [ -n "$chrome" ] && command -
 else
   echo "skipped: needs ENTERPLACE_TEST_DATABASE_URL, Chrome and psql."
 fi
+step "console app build matches the committed one"
+# The binary embeds crates/enterplace-console/app, built from console-ui. A source change without a rebuild fails here.
+if command -v npm >/dev/null; then
+  (cd console-ui && npm ci --no-audit --no-fund && npm run build)
+  git diff --exit-code -- crates/enterplace-console/app
+else
+  echo "skipped: npm is not installed."
+fi
 step "docs build"
 # The docs site needs Node. Without it this step says so instead of failing a Rust-only machine.
 if command -v npm >/dev/null; then

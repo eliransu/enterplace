@@ -315,7 +315,7 @@ pub fn diff_text(old: &str, new: &str) -> String {
 // ---------------------------------------------------------------- structured edits
 
 /// The policy text as a tree, for an edit the console makes from a form.
-fn tree(text: &str) -> Result<Map<String, Value>, String> {
+pub fn tree(text: &str) -> Result<Map<String, Value>, String> {
     match serde_saphyr::from_str::<Value>(text) {
         Ok(Value::Object(map)) => Ok(map),
         Ok(_) => Err("the live policy is not a YAML mapping. Fix it in the editor first.".into()),

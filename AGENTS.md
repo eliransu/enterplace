@@ -17,7 +17,7 @@ This is Enterplace, an AI gateway: the open source crates (MIT) and, in `enterpr
 ## UI
 
 - No UI code without an approved design in Claude Design behind it. Every component comes from the design system's component inventory.
-- No Tailwind, no stock component library look, no color, radius, shadow, spacing or font size that is not a design token.
+- New console pages are built in `console-ui/` with shadcn/ui components on Tailwind, themed only with the Enterplace design tokens (`crates/enterplace-console/assets/tokens.css`): Tailwind's stock colors, radii, shadows, type sizes and fonts are cleared, so no color, radius, shadow, spacing or font size that is not a design token can be used. The build is embedded in the console and served at `/console/app/`; run `npm run build` in `console-ui/` and commit `crates/enterplace-console/app/` with the source. Server-rendered pages move over one by one.
 - Built components are compared with their design by screenshot in CI.
 
 ## Teams
@@ -36,7 +36,8 @@ Each session works as one team: product, design, engineering or DevOps. A packag
 
 - `crates/enterplace-core`: types, routing, policy, hooks. Embeddable as a library. No HTTP server code.
 - `crates/enterplace-server`: the HTTP server, as a library.
-- `crates/enterplace-console`: the admin console.
+- `crates/enterplace-console`: the admin console: server-rendered pages, the JSON API of the console app, and the app's build in `app/`.
+- `console-ui/`: the console app (React, TypeScript, Vite, Tailwind, shadcn/ui), served at `/console/app/`.
 - `crates/enterplace-cli`: the open source `enterplace` binary. Server and command line in one. `cargo install` builds it.
 - `crates/enterplace-bench`: the overhead benchmark and the CI bench gate.
 - `enterprise/`: the `enterplace-enterprise` crate (commercial license). Its binary is the `enterplace` shipped in the image: every open source command plus `license`, `node` and `device`; with no license key it behaves as the open source edition, a valid key unlocks the paid features (30-day grace after expiry). Test it with `cargo test -p enterplace-enterprise` and `--all-features` (`issuer`, staff only).
