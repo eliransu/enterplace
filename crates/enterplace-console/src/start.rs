@@ -800,10 +800,10 @@ impl Ctx<'_> {
         format!(
             r#"{error}<form class="g-check__form" method="post" action="/console/start/key"><input type="hidden" name="kind" value="{}">{}{}{}<button class="g-btn t-body" type="submit">Make key</button></form>"#,
             if workload { "workload" } else { "person" },
-            if self.pay_api && self.track == Track::Coding {
-                r#"<input type="hidden" name="pay" value="api">"#
-            } else {
-                ""
+            match (self.track == Track::Coding, self.pay_api) {
+                (true, true) => r#"<input type="hidden" name="pay" value="api">"#,
+                (true, false) => r#"<input type="hidden" name="pay" value="subscriptions">"#,
+                _ => "",
             },
             field(&Field {
                 id: &format!("key-name-{n}"),
@@ -1512,7 +1512,9 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             r#"<p class="t-body">Paste this where Claude Code runs. Your Claude login stays as it is.</p>{}<p class="t-small g-check__muted">{}</p>{}"#,
             block(
                 "lines-subscription",
-                &tabs_by("setup", "How to set it", 2, &[("shell", "Shell"), ("mdm", "Managed settings (MDM)")], if mdm { "mdm" } else { "shell" }),
+                // API keys are the default way to pay, so these tabs keep the subscription choice.
+                &tabs_by("setup", "How to set it", 2, &[("shell", "Shell"), ("mdm", "Managed settings (MDM)")], if mdm { "mdm" } else { "shell" })
+                    .replace("/console/start?setup=", "/console/start?pay=subscriptions&amp;setup="),
                 &subscription_lines(base, token.as_deref(), mdm)
             ),
             // One line under the lines shown: the paths only where the managed settings are, not under the shell lines.
@@ -2675,6 +2677,11 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
     console.page(StatusCode::OK, admin, "Start here", uri, &main)
 }
 
+/// The Coding agents track pays with API keys, which every coding agent takes, unless Claude subscriptions were picked.
+fn pays_api(pay: &str) -> bool {
+    pay != "subscriptions"
+}
+
 fn view_of<'a>(kept: &'a Kept, query: &Form) -> View<'a> {
     let picking = query.get("pick") == "1";
     View {
@@ -2689,7 +2696,7 @@ fn view_of<'a>(kept: &'a Kept, query: &Form) -> View<'a> {
         watch_token: None,
         error: String::new(),
         picking,
-        pay_api: query.get("pay") == "api",
+        pay_api: pays_api(query.get("pay")),
         setup: query.get("setup").to_string(),
     }
 }
@@ -2746,7 +2753,7 @@ async fn state_json(
                 watch_token: None,
                 error: String::new(),
                 policy: String::new(),
-                pay_api: query.get("pay") == "api",
+                pay_api: pays_api(query.get("pay")),
                 setup: String::new(),
                 mine: console.mine(&admin.name),
             };
@@ -2884,7 +2891,7 @@ async fn make_key(
     }
     let mut view = view_of(&kept, &Form(Vec::new()));
     // The key form of provider API keys says so; a person token is for Claude subscriptions.
-    view.pay_api = form.get("pay") == "api";
+    view.pay_api = !token && pays_api(form.get("pay"));
     if token {
         view.track = Some(Track::Coding);
     }
@@ -3166,7 +3173,7 @@ async fn turn_on_passthrough(
         .await
     };
     match result {
-        Ok(()) => redirect("/console/start?track=coding#step-2"),
+        Ok(()) => redirect("/console/start?track=coding&pay=subscriptions#step-2"),
         Err(err) => {
             let f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
             let kept = read_kept(&console).unwrap_or_default();

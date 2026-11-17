@@ -221,11 +221,10 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
                 "How does your team pay for its coding agents?",
                 "Claude subscriptions, for Claude Code",
                 "API keys, any coding agent",
-                "Turn on Claude subscriptions",
-                "Point Claude Code at Enterplace",
+                "Make a key for the first person",
+                "Point your coding agent at Enterplace and send one prompt",
                 "Add a second person",
-                "Let people get their own token",
-                "Optional",
+                "Let people make their own keys",
                 "Copy for your agent",
             ],
         ),
@@ -809,8 +808,14 @@ async fn claude_subscriptions_need_no_api_key_and_each_step_copies_for_an_agent(
     )
     .await?;
 
-    // Subscriptions are the default answer, and the first step turns them on with one click.
+    // API keys are the default answer, since every coding agent takes them. Picking subscriptions shows their
+    // steps, and the first one turns them on with one click.
     let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+    assert!(
+        page.contains(r#"href="/console/start?track=coding&amp;pay=api" aria-current="true""#),
+        "{page}"
+    );
+    let (_, _, page) = send(&s.app, get("/console/start?pay=subscriptions", &cookie)?).await?;
     assert!(
         page.contains(
             r#"href="/console/start?track=coding&amp;pay=subscriptions" aria-current="true""#
@@ -825,7 +830,11 @@ async fn claude_subscriptions_need_no_api_key_and_each_step_copies_for_an_agent(
         !page.contains("ANTHROPIC_API_KEY="),
         "no API key anywhere: {page}"
     );
-    let (_, _, state) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    let (_, _, state) = send(
+        &s.app,
+        get("/console/start/state.json?pay=subscriptions", &cookie)?,
+    )
+    .await?;
     assert!(
         state.contains(r#""steps":["now","ahead","ahead","ahead"]"#),
         "{state}"
@@ -833,13 +842,20 @@ async fn claude_subscriptions_need_no_api_key_and_each_step_copies_for_an_agent(
     let (status, headers, _) =
         send(&s.app, post("/console/start/passthrough", &cookie, "")?).await?;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    assert_eq!(location(&headers), "/console/start?track=coding#step-2");
+    assert_eq!(
+        location(&headers),
+        "/console/start?track=coding&pay=subscriptions#step-2"
+    );
     let policy = std::fs::read_to_string(s.dir.join("enterplace.policy.yaml"))?;
     assert!(
         policy.contains("auth: passthrough") && policy.contains("identity: optional"),
         "{policy}"
     );
-    let (_, _, state) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    let (_, _, state) = send(
+        &s.app,
+        get("/console/start/state.json?pay=subscriptions", &cookie)?,
+    )
+    .await?;
     assert!(
         state.contains(r#""steps":["done","listening","ahead","ahead"]"#),
         "{state}"
@@ -896,7 +912,11 @@ async fn claude_subscriptions_need_no_api_key_and_each_step_copies_for_an_agent(
         "{page}"
     );
     // Managed settings for an MDM rollout.
-    let (_, _, page) = send(&s.app, get("/console/start?setup=mdm", &cookie)?).await?;
+    let (_, _, page) = send(
+        &s.app,
+        get("/console/start?setup=mdm&pay=subscriptions", &cookie)?,
+    )
+    .await?;
     assert!(
         page.contains("&quot;ANTHROPIC_CUSTOM_HEADERS&quot;: &quot;x-enterplace-user:"),
         "{page}"
@@ -907,12 +927,16 @@ async fn claude_subscriptions_need_no_api_key_and_each_step_copies_for_an_agent(
     let keys = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
     assert!(keys.contains(&sha256_hex(token.as_bytes())), "{keys}");
     subscribed(&s, "01SUB00000000000000000000", "sarah.miller", "platform")?;
-    let (_, _, state) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    let (_, _, state) = send(
+        &s.app,
+        get("/console/start/state.json?pay=subscriptions", &cookie)?,
+    )
+    .await?;
     assert!(
         state.contains(r#""steps":["done","done","now","ahead"]"#),
         "{state}"
     );
-    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+    let (_, _, page) = send(&s.app, get("/console/start?pay=subscriptions", &cookie)?).await?;
     assert!(
         page.contains("Your steps") && page.contains("Add a second person"),
         "{page}"
