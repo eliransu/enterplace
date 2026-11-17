@@ -163,8 +163,9 @@ Exit `0` when valid, `1` with every problem otherwise. Warnings that do not fail
 Makes a key for a person or a workload. The key is printed once, with the lines that point Claude Code and the OpenAI SDKs at Gantry. Only its SHA-256 is saved.
 
 ```text
-gantry key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<day|month>]
-  [--models <a,b>] [--tpm <n>] [--url <gateway url>] [--quiet] [--keys <file>]
+gantry key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>[@<tz>]]
+  [--models <a,b>] [--tpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>]
+  [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]
 ```
 
 | Flag | Default | Description |
@@ -174,12 +175,18 @@ gantry key new <name> --team <team> [--admin | --identity-only] [--expires <date
 | `--admin` | off | The key may sign in to the console and call the admin API. The first admin starts here |
 | `--identity-only` | off | Make a person token (`gantry_u_...`) in place of a key: it names the person for [Claude subscription passthrough](/governance/subscriptions/) in `x-gantry-user` and reaches no model on its own. Prints the two Claude Code lines. Takes no `--admin`, `--budget`, `--models` or `--tpm` |
 | `--expires <date>` | none | Refused from that UTC day on (`2026-12-31`) or that time (`2026-12-31T18:00:00Z`), with `key_expired` |
-| `--budget <usd>/<period>` | none | What this key alone may spend, on top of its rule's budget: `20/month` or `5/day`. Refused with `key_budget_exceeded` |
+| `--budget <usd>/<period>[@<tz>]` | none | Caps this key's spend. Use `day`, `week`, `month`, `year`, `hour`, `minute`, or an interval such as `6h`. A period can include a time zone, as in `100/month@America/New_York`. Refused with `key_budget_exceeded` |
 | `--models <a,b>` | none | Narrows the rule's models for this key, comma separated |
 | `--tpm <n>` | none | Tokens per minute for this key, 1 to 1000000000 |
+| `--org <org>` | none | Organization to assign to the key. It must be listed in the policy |
+| `--customer <name>` | none | End customer associated with requests made using this key |
+| `--tags <a,b>` | none | Comma-separated tags attached to requests |
+| `--parallel <n>` | none | Maximum in-flight requests for this key |
+| `--role <role>` | none | Console role defined by the policy |
 | `--url <gateway url>` | `http://127.0.0.1:8080` | The address printed in the setup lines |
 | `--quiet` | off | Print the key alone |
 | `--keys <file>` | `gantry.keys.yaml` | The keys file to append to |
+| `--policy <file>` | `gantry.policy.yaml` if present | Policy to read for store settings |
 
 ```bash
 gantry key new maya.cohen --team payments --budget 20/month --expires 2026-12-31 \
