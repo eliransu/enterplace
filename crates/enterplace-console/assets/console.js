@@ -8,12 +8,41 @@
 
 document.addEventListener("DOMContentLoaded", function () {
   // A button that copies the text of the element its data-copy names, such as the prompt for a coding agent.
-  document.querySelectorAll("button[data-copy]").forEach(function (button) {
-    button.addEventListener("click", function () {
-      var source = document.getElementById(button.getAttribute("data-copy"));
-      if (!source || !navigator.clipboard) return;
-      navigator.clipboard.writeText(source.innerText).then(function () { button.textContent = "Copied"; });
-    });
+  // Listened for on the document, not on each button: pages that redraw in place (Start here, Requests) replace the
+  // buttons, and a listener on the old one would be gone. Without the Clipboard API (a page served over plain http
+  // from another machine) or when it refuses, a selected textarea and execCommand copy instead.
+  function fallback(text) {
+    var area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(area);
+    return ok;
+  }
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest && event.target.closest("button[data-copy]");
+    if (!button) return;
+    var source = document.getElementById(button.getAttribute("data-copy"));
+    if (!source) return;
+    var text = source.textContent;
+    var label = button.getAttribute("data-label") || button.innerHTML;
+    button.setAttribute("data-label", label);
+    function said(word) {
+      button.textContent = word;
+      setTimeout(function () { button.innerHTML = label; }, 2000);
+    }
+    var done = function () { said("Copied"); };
+    var failed = function () { said(fallback(text) ? "Copied" : "Copy failed: select the text and copy it"); };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, failed);
+    } else {
+      failed();
+    }
   });
   // A filter that is a select applies when it changes, as the pills do when pressed.
   document.querySelectorAll("select[data-submit]").forEach(function (select) {
@@ -25,12 +54,6 @@ document.addEventListener("DOMContentLoaded", function () {
     function check() { button.disabled = input.value.trim() !== input.getAttribute("data-confirm"); }
     check();
     input.addEventListener("input", check);
-  });
-  document.querySelectorAll("button[data-copy]").forEach(function (button) {
-    button.addEventListener("click", function () {
-      var text = document.getElementById(button.getAttribute("data-copy")).textContent;
-      navigator.clipboard.writeText(text);
-    });
   });
 
   // Dialogs and sheets are pages of their own, so "return focus" spans two loads: the link that opened one is

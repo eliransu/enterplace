@@ -205,6 +205,9 @@ struct Inner {
     codes: Mutex<HashMap<String, Pending>>,
     /// The one-time setup link's token, and whether it was used.
     setup: Mutex<Option<(String, bool)>>,
+    /// Each signed-in person's own person token, made for them this run, by name. The keys file keeps only its hash;
+    /// kept here so Start here can put it in the lines its owner copies. Lost on restart, when they make a new one.
+    mine: Mutex<HashMap<String, String>>,
     accounts: Option<Accounts>,
     watch: Option<Watch>,
     /// Nav entries and the sign-in link an extension added, set on every request for the pages to draw.
@@ -538,6 +541,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         verified: Mutex::default(),
         codes: Mutex::default(),
         setup: Mutex::new(setup.map(|token| (token, false))),
+        mine: Mutex::default(),
         accounts: extension.accounts,
         watch: extension.watch,
         extra: Arc::new(html::Extra {
@@ -754,6 +758,24 @@ pub fn foreign() -> Response {
 impl Console {
     fn config(&self) -> &ConsoleConfig {
         &self.0.config
+    }
+
+    /// The person token made for `name` this run, if any.
+    pub(crate) fn mine(&self, name: &str) -> Option<String> {
+        self.0
+            .mine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(name)
+            .cloned()
+    }
+
+    pub(crate) fn keep_mine(&self, name: &str, token: String) {
+        self.0
+            .mine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(name.to_string(), token);
     }
 
     fn sessions(&self) -> std::sync::MutexGuard<'_, HashMap<String, Session>> {
@@ -3326,6 +3348,28 @@ async fn setup_done(
             );
         }
     };
+    // The first admin's own person token too, so the lines Start here hands them for Claude Code name them from the
+    // first request. It reaches no model; a failure here leaves the admin key standing and Start here offers one.
+    if let Ok(token) = id::new_person_token() {
+        let act = Act {
+            action: "issue_key",
+            by: Some((&name, &team)),
+            key: None,
+            target: json!({ "name": name, "team": team, "sha256_prefix": &id::sha256_hex(token.as_bytes())[..8], "admin": false, "person_token": true }),
+        };
+        if record(&console, &act, None, None).await.is_ok()
+            && keyfile::add_with(
+                &name,
+                &team,
+                &token,
+                &keyfile::Attributes::default(),
+                &console.config().keys,
+            )
+            .is_ok()
+        {
+            console.keep_mine(&name, token);
+        }
+    }
     let origin = headers
         .get("host")
         .and_then(|h| h.to_str().ok())

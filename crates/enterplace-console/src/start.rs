@@ -777,6 +777,8 @@ struct Ctx<'a> {
     pay_api: bool,
     /// How step 2 of Claude subscriptions sets Claude Code up: `shell` or `mdm`.
     setup: String,
+    /// The signed-in person's own person token, when one was made for them this run.
+    mine: Option<String>,
 }
 
 impl Ctx<'_> {
@@ -1442,6 +1444,13 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     // A token made on this page, whole. Else a placeholder naming whose token goes there, but only where a name is
     // needed or people already hold tokens: a first run shows one line.
     let made = c.made.filter(|m| !m.start).map(|m| m.key.clone());
+    // The signed-in person's own token: made with the console's first admin, or by the button below. It goes in
+    // the lines and in what Copy for your agent copies, so their requests carry their name from the first one.
+    let own = made
+        .clone()
+        .filter(|_| c.made.is_some_and(|m| m.name == c.admin.name))
+        .or_else(|| c.mine.clone());
+    let made = made.or_else(|| own.clone());
     let mdm = c.setup == "mdm";
     // Managed settings are a rollout, one token per person: they keep the header line, with the place to put it.
     let token = made
@@ -1449,16 +1458,37 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         .or_else(|| (!f.unnamed_ok || mdm).then(|| person_token(c, first)));
     let seen = f.subscribed();
     let first_seen = seen.last();
-    // The person token is optional: without it requests show as unknown. Open once a token was asked for.
-    let name_on_requests = format!(
-        r#"<details class="g-stack" style="gap: var(--space-3)"{}><summary class="t-small g-link">Add your name to the requests</summary><p class="t-small g-check__muted">Until then they show as the person unknown. The token is free and reaches no model.</p>{}</details>"#,
-        if c.error.is_empty() && made.is_none() {
-            ""
+    let who = if own.is_some() {
+        c.admin.name.clone()
+    } else {
+        who
+    };
+    // The lines carry the signed-in person's token. Without one yet (a restart forgets it, single sign-on never made
+    // one), one button makes it in their own name.
+    let name_on_requests = if own.is_some() {
+        format!(
+            r#"<p class="t-small g-check__muted">The lines carry your person token, so your requests show as {}. It reaches no model on its own.</p>"#,
+            mono(&c.admin.name)
+        )
+    } else if c.may_keys() {
+        let error = if c.error.is_empty() {
+            String::new()
         } else {
-            " open"
-        },
-        token_form(c, ("sarah.miller", "platform"))
-    );
+            pages::alert(&esc(&c.error))
+        };
+        let team = if c.admin.team.is_empty() {
+            "people"
+        } else {
+            c.admin.team.as_str()
+        };
+        format!(
+            r#"{error}<form class="g-check__form" method="post" action="/console/start/key"><input type="hidden" name="kind" value="person_token"><input type="hidden" name="name" value="{}"><input type="hidden" name="team" value="{}"><button class="g-btn t-body" type="submit">Make my token</button></form><p class="t-small g-check__muted">Puts your name on your requests: the lines above get your token. Until then they show as the person unknown.</p>"#,
+            esc(&c.admin.name),
+            esc(team)
+        )
+    } else {
+        r#"<p class="t-small g-check__muted">Your role cannot make person tokens. Ask an admin for yours.</p>"#.into()
+    };
     let s2 = Step::new(
         "Point Claude Code at Enterplace",
         !seen.is_empty(),
@@ -2485,6 +2515,7 @@ fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) 
         policy: policy_text(console),
         pay_api: v.pay_api,
         setup: v.setup.clone(),
+        mine: console.mine(&admin.name),
     };
     let list = steps(&ctx);
     let st = states(&list);
@@ -2700,6 +2731,7 @@ async fn state_json(
                 policy: String::new(),
                 pay_api: query.get("pay") == "api",
                 setup: String::new(),
+                mine: console.mine(&admin.name),
             };
             let list = steps(&ctx);
             (states(&list), complete(&list))
@@ -2843,6 +2875,9 @@ async fn make_key(
     let status;
     match result {
         Ok((key, _)) => {
+            if token && name == admin.name {
+                console.keep_mine(&name, key.clone());
+            }
             made = Made {
                 name,
                 team,
@@ -3532,6 +3567,7 @@ mod tests {
             policy: String::new(),
             pay_api,
             setup: String::new(),
+            mine: None,
         };
         steps(&ctx)
     }

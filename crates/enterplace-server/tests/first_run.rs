@@ -115,6 +115,8 @@ async fn the_setup_link_makes_the_first_admin_once_and_that_key_makes_a_governed
         "{keys}"
     );
     assert!(!keys.contains("eve"));
+    // The first admin also gets their own person token, so the Claude Code lines Start here hands them carry it.
+    assert_eq!(keys.matches("name: maya.cohen").count(), 2, "{keys}");
 
     // The new key is in use within the 2 seconds a reload takes, and makes a governed call.
     let mut status = StatusCode::UNAUTHORIZED;
