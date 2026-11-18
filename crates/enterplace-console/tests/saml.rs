@@ -347,7 +347,7 @@ async fn a_signed_assertion_signs_in_with_the_role_and_team_its_groups_give() ->
     let (status, _, page) = send(
         &s.app,
         "GET",
-        "/console/audit",
+        "/console/teams",
         &format!("enterplace_console={session}"),
         "",
     )

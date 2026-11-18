@@ -226,6 +226,99 @@ fn key_named<'a>(
         .ok_or_else(|| format!("no key for {name}: {people}"))
 }
 
+/// The audit log as the app reads it, for `query` (`verdict=refused&q=maya.cohen`, `record=<id>`).
+async fn audit(
+    app: &Router,
+    cookie: &str,
+    query: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let (status, _, page) = call(
+        app,
+        "GET",
+        &format!("/console/api/audit?{query}"),
+        cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    Ok(page)
+}
+
+/// The sheet of one record, as the app opens it from its row.
+async fn sheet(
+    app: &Router,
+    cookie: &str,
+    record: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let page = audit(app, cookie, &format!("record={record}")).await?;
+    Ok(page["record"].clone())
+}
+
+/// The audit page and its open record as one text, for checks that it says something somewhere.
+async fn page_text(
+    app: &Router,
+    cookie: &str,
+    query: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(audit(app, cookie, query).await?.to_string())
+}
+
+/// One record's sheet as text, for checks that it says something somewhere.
+async fn sheet_text(
+    app: &Router,
+    cookie: &str,
+    record: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(sheet(app, cookie, record).await?.to_string())
+}
+
+/// The value of the sheet's fact `label`, or "".
+fn fact<'a>(sheet: &'a serde_json::Value, label: &str) -> &'a str {
+    sheet["facts"]
+        .as_array()
+        .and_then(|f| f.iter().find(|f| f["label"] == label))
+        .and_then(|f| f["text"].as_str())
+        .unwrap_or("")
+}
+
+/// Whether a listed row carries this verdict tag.
+fn has_tag(page: &serde_json::Value, kind: &str, word: &str, detail: &str) -> bool {
+    let tag = serde_json::json!({ "kind": kind, "word": word, "detail": detail });
+    page["rows"]
+        .as_array()
+        .is_some_and(|rows| rows.iter().any(|r| r["verdict"] == tag))
+}
+
+/// The IDs of the listed rows, newest first.
+fn ids(page: &serde_json::Value) -> Vec<String> {
+    page["rows"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|r| r["id"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Verify chain now, as the app sends it.
+async fn verify(
+    app: &Router,
+    cookie: &str,
+    chain: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let (status, _, answer) = call(
+        app,
+        "POST",
+        "/console/api/audit/verify",
+        cookie,
+        serde_json::json!({ "chain": chain }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    Ok(answer)
+}
+
 fn location(headers: &HeaderMap) -> &str {
     headers
         .get(header::LOCATION)
@@ -355,11 +448,10 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
     let s = setup("session")?;
     for path in [
         "/console",
-        "/console/audit",
-        // People moved to the app: its old address only points there, and the app needs the session.
+        // People and the audit log moved to the app: their old addresses only point there, and the app needs the
+        // session.
         "/console/app/",
         "/console/policy",
-        "/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAA1",
     ] {
         for cookie in ["", "enterplace_console=not-a-session"] {
             let (status, headers, page) = send(&s.app, get(path, cookie)?).await?;
@@ -372,15 +464,6 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
             );
             assert!(!page.contains("maya.cohen"), "{path}");
         }
-    }
-    for (path, form) in [("/console/audit/verify", "")] {
-        let (status, headers, _) =
-            send(&s.app, post(path, "enterplace_console=forged", form)?).await?;
-        assert_eq!(
-            (status, location(&headers)),
-            (StatusCode::SEE_OTHER, "/console/sign-in"),
-            "{path}"
-        );
     }
     // Spend moved to the app: its API refuses without a session, and the old address only points at the app.
     let (status, _, refused) = call(
@@ -401,6 +484,33 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
             "{path}"
         );
     }
+    // The old address of the audit log keeps what it asked for on the way to the app, session or not.
+    let (status, headers, page) = send(
+        &s.app,
+        get(
+            "/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAA1&verdict=refused",
+            "",
+        )?,
+    )
+    .await?;
+    assert_eq!(
+        (status, location(&headers)),
+        (
+            StatusCode::SEE_OTHER,
+            "/console/app/#/audit?verdict=refused&record=01AAAAAAAAAAAAAAAAAAAAAAA1"
+        )
+    );
+    assert!(!page.contains("maya.cohen"));
+    let (status, _, page) = call(
+        &s.app,
+        "GET",
+        "/console/api/audit",
+        "enterplace_console=forged",
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(!page.to_string().contains("maya.cohen"));
     for (path, body) in [
         (
             "/console/api/people/issue",
@@ -409,6 +519,14 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
         (
             "/console/api/people/revoke",
             serde_json::json!({ "sha256": "00", "confirm": "x" }),
+        ),
+        (
+            "/console/api/audit/verify",
+            serde_json::json!({ "chain": "" }),
+        ),
+        (
+            "/console/api/audit/restore",
+            serde_json::json!({ "scope": "all", "value": "" }),
         ),
     ] {
         let (status, _, refused) =
@@ -437,7 +555,7 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
     }
 
     let cookie = sign_in(&s.app).await?;
-    let (status, headers, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    let (status, headers, page) = send(&s.app, get("/console/policy", &cookie)?).await?;
     assert_eq!(status, StatusCode::OK);
     assert!(
         page.contains(r#"g-muted">noa.bar</span><span class="t-small g-muted">admin</span>"#)
@@ -469,7 +587,7 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
             .is_some_and(|c| c.contains("Max-Age=0"))
     );
     assert_eq!(
-        send(&s.app, get("/console/audit", &cookie)?).await?.0,
+        send(&s.app, get("/console/policy", &cookie)?).await?.0,
         StatusCode::SEE_OTHER
     );
 
@@ -477,12 +595,12 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
     let cookie = sign_in(&s.app).await?;
     std::fs::write(s.keys(), keys_text().replace("    admin: true\n", ""))?;
     assert_eq!(
-        send(&s.app, get("/console/audit", &cookie)?).await?.0,
+        send(&s.app, get("/console/policy", &cookie)?).await?.0,
         StatusCode::SEE_OTHER
     );
     std::fs::write(s.keys(), keys_text())?;
     assert_eq!(
-        send(&s.app, get("/console/audit", &cookie)?).await?.0,
+        send(&s.app, get("/console/policy", &cookie)?).await?.0,
         StatusCode::SEE_OTHER,
         "a dropped session came back"
     );
@@ -493,60 +611,78 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
 async fn the_audit_log_shows_records_newest_first_with_filters_and_a_record_sheet() -> TestResult {
     let s = setup("audit")?;
     let cookie = sign_in(&s.app).await?;
-    let (status, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
-    assert_eq!(status, StatusCode::OK);
+    let page = audit(&s.app, &cookie, "").await?;
+    let listed = ids(&page);
     let (first, last) = (
-        page.find("01AAAAAAAAAAAAAAAAAAAAAAA3")
+        listed
+            .iter()
+            .position(|id| id == "01AAAAAAAAAAAAAAAAAAAAAAA3")
             .ok_or("no record 3")?,
-        page.find("01AAAAAAAAAAAAAAAAAAAAAAA1")
+        listed
+            .iter()
+            .position(|id| id == "01AAAAAAAAAAAAAAAAAAAAAAA1")
             .ok_or("no record 1")?,
     );
     assert!(first < last, "not newest first");
+    let text = page.to_string();
     assert!(
-        page.contains("model not allowed")
-            && page.contains("key hash deadbeef")
-            && page.contains("1 to 4 of 4 decisions")
+        text.contains("model not allowed")
+            && text.contains("key hash deadbeef")
+            && page["pager"]["text"] == "1 to 4 of 4 decisions",
+        "{page}"
     );
-    assert!(page.contains("has not been verified"));
+    assert!(
+        page["verified"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("has not been verified")
+    );
 
-    let (_, _, refused) = send(&s.app, get("/console/audit?verdict=refused", &cookie)?).await?;
+    let refused = audit(&s.app, &cookie, "verdict=refused").await?;
     assert!(
-        !refused.contains("01AAAAAAAAAAAAAAAAAAAAAAA1")
-            && refused.contains("1 to 2 of 2 decisions")
+        !ids(&refused).contains(&"01AAAAAAAAAAAAAAAAAAAAAAA1".to_string())
+            && refused["pager"]["text"] == "1 to 2 of 2 decisions"
     );
-    let (_, _, model) = send(&s.app, get("/console/audit?model=gpt-4o-mini", &cookie)?).await?;
+    let model = audit(&s.app, &cookie, "model=gpt-4o-mini").await?;
+    assert_eq!(model["pager"]["text"], "1 to 1 of 1 decisions");
+    assert_eq!(ids(&model), ["01AAAAAAAAAAAAAAAAAAAAAAA1"]);
+    let person = audit(&s.app, &cookie, "q=maya.cohen").await?;
     assert!(
-        model.contains("1 to 1 of 1 decisions") && model.contains("01AAAAAAAAAAAAAAAAAAAAAAA1")
+        person["pager"]["text"] == "1 to 2 of 2 decisions"
+            && !ids(&person).contains(&"01AAAAAAAAAAAAAAAAAAAAAAA3".to_string())
     );
-    let (_, _, person) = send(&s.app, get("/console/audit?q=maya.cohen", &cookie)?).await?;
-    assert!(
-        person.contains("1 to 2 of 2 decisions") && !person.contains("01AAAAAAAAAAAAAAAAAAAAAAA3")
-    );
-    let (_, _, none) = send(&s.app, get("/console/audit?q=nobody", &cookie)?).await?;
-    assert!(none.contains("No decision matches"));
+    let none = audit(&s.app, &cookie, "q=nobody").await?;
+    assert_eq!(none["rows"], serde_json::json!([]));
+    assert_eq!(none["matched"], 0);
 
-    let (_, _, sheet) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAA2", &cookie)?,
-    )
-    .await?;
+    let page = audit(&s.app, &cookie, "record=01AAAAAAAAAAAAAAAAAAAAAAA2").await?;
+    let opened = &page["record"];
     assert!(
-        sheet.contains(r#"role="dialog""#)
-            && sheet.contains("This model is not allowed for this person")
-            && sheet.contains("does not list gpt-4o")
+        opened["title"] == "This model is not allowed for this person"
+            && opened["lead"]
+                .as_str()
+                .unwrap_or("")
+                .contains("does not list gpt-4o"),
+        "{opened}"
     );
-    for field in [
-        "Record</dt>",
-        "Record hash",
-        "Previous",
-        "Policy file",
-        "payments-team, line 10",
-        "POST /v1/chat/completions",
-    ] {
-        assert!(sheet.contains(field), "{field}");
+    for label in ["Record", "Record hash", "Previous", "Policy file"] {
+        assert!(!fact(opened, label).is_empty(), "{label}: {opened}");
     }
-    assert!(sheet.contains("g-code__line--hit") && sheet.contains("Open policy at line 10"));
-    assert!(sheet.contains(r#"aria-selected="true""#));
+    assert_eq!(fact(opened, "Rule"), "payments-team, line 10");
+    assert_eq!(fact(opened, "Request"), "POST /v1/chat/completions");
+    let hit = opened["snippet"]["lines"]
+        .as_array()
+        .and_then(|l| l.iter().find(|l| l["kind"] == "hit"))
+        .ok_or("no deciding line")?;
+    assert_eq!(hit["n"], 10);
+    assert_eq!(opened["actions"][0]["label"], "Open policy at line 10");
+    assert!(page["rows"].as_array().is_some_and(|rows| {
+        rows.iter()
+            .any(|r| r["id"] == "01AAAAAAAAAAAAAAAAAAAAAAA2" && r["selected"] == true)
+    }));
+    // An ID that is in no record says so, instead of opening nothing.
+    let missing = sheet(&s.app, &cookie, "01NOSUCHRECORD").await?;
+    assert_eq!(missing["title"], "No record has this ID");
     Ok(())
 }
 
@@ -554,29 +690,36 @@ async fn the_audit_log_shows_records_newest_first_with_filters_and_a_record_shee
 async fn verify_chain_now_reports_an_unbroken_chain_and_a_broken_one() -> TestResult {
     let s = setup("verify")?;
     let cookie = sign_in(&s.app).await?;
-    let (status, headers, _) = send(&s.app, post("/console/audit/verify", &cookie, "")?).await?;
+    let answer = verify(&s.app, &cookie, "").await?;
+    // Records 1 to 3 are requests; record 4 is the sign-in.
     assert_eq!(
-        (status, location(&headers)),
-        (StatusCode::SEE_OTHER, "/console/audit")
+        answer["message"],
+        "Chain verified: unbroken from record 1 to record 4."
     );
-    let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    let page = audit(&s.app, &cookie, "").await?;
     let (_, last) = enterplace_core::audit::verify(&s.audit())?;
     assert!(
-        // Records 1 to 3 are requests; record 4 is the sign-in.
-        page.contains("unbroken from record 1 to record 4") && page.contains(&last[..12]),
+        page["verified"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("unbroken from record 1 to record 4")
+            && page["verified"]["last_hash"] == last.as_str()
+            && page["verified"]["recent"] == true,
         "{page}"
     );
 
     let text = std::fs::read_to_string(s.audit())?;
     std::fs::write(s.audit(), text.replacen("gpt-4o\"", "gpt-5o\"", 1))?;
-    send(&s.app, post("/console/audit/verify", &cookie, "")?).await?;
-    let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    verify(&s.app, &cookie, "").await?;
+    let page = audit(&s.app, &cookie, "").await?;
+    let banner = page["verified"]["banner"].as_str().unwrap_or("");
     assert!(
-        page.contains("The chain is broken")
-            && page.contains("record 2")
-            && page.contains("Open record 2"),
+        banner.starts_with("The chain is broken") && banner.contains("record 2"),
         "{page}"
     );
+    assert_eq!(page["verified"]["open"]["label"], "Open record 2");
+    // A broken chain hides today's figures and warns over the list.
+    assert!(page["stats"].is_null() && page["caution"] == true, "{page}");
     Ok(())
 }
 
@@ -894,27 +1037,24 @@ async fn sign_in_sign_out_issue_and_revoke_are_each_recorded_with_who_did_them()
     enterplace_core::audit::verify(&s.audit())?;
     // The audit page shows them as admin actions, not as requests.
     let cookie = sign_in(&s.app).await?;
-    let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    let page = audit(&s.app, &cookie, "").await?;
     assert!(
-        page.contains(
-            r#"<span class="t-tag">Admin:</span><span class="t-mono-sm">issued a key</span>"#
-        ),
+        page["rows"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|r| r["verdict"]
+                == serde_json::json!({ "kind": "", "word": "Admin:", "detail": "issued a key" }))),
         "{page}"
     );
     // The three requests of the setup, and none of the admin records.
-    assert!(
-        page.contains(r#"<p class="g-stat__figure t-lg">3</p><p class="g-stat__label t-small">requests checked today"#),
-        "{page}"
-    );
+    assert_eq!(page["stats"]["checked"], "3", "{page}");
     let issue_id = records[2]["id"].as_str().unwrap_or("");
-    let (_, _, sheet) = send(
-        &s.app,
-        get(&format!("/console/audit?record={issue_id}"), &cookie)?,
-    )
-    .await?;
+    let issued = sheet(&s.app, &cookie, issue_id).await?;
     assert!(
-        sheet.contains("noa.bar issued an admin key for ops.lead, key hash "),
-        "{sheet}"
+        issued["lead"]
+            .as_str()
+            .unwrap_or("")
+            .contains("noa.bar issued an admin key for ops.lead, key hash "),
+        "{issued}"
     );
 
     // The new admin key is marked admin in the file, and it can sign in.
@@ -1004,22 +1144,28 @@ async fn the_record_sheet_shows_guardrail_findings_and_never_matched_text() -> T
     );
     // Appended the way the server writes a request record with findings.
     s.log.append_record(&record)?;
-    let (_, _, sheet) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAG1", &cookie)?,
-    )
-    .await?;
-    assert!(
-        sheet.contains("The prompt held an AWS access key"),
-        "{sheet}"
+    let blocked = sheet(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAG1").await?;
+    assert_eq!(blocked["title"], "The prompt held an AWS access key");
+    // Each finding is its badge, then the guardrail and how many: never the text that matched.
+    let findings: Vec<_> = blocked["facts"]
+        .as_array()
+        .map(|f| {
+            f.iter()
+                .filter(|f| f["label"] == "Finding")
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        findings,
+        [
+            serde_json::json!({ "label": "Finding", "tag": { "kind": "block", "word": "Block", "detail": "aws_access_key" }, "text": "no-secrets, 2" }),
+            serde_json::json!({ "label": "Finding", "tag": { "kind": "mask", "word": "Mask", "detail": "email_address" }, "text": "mask-pii, 1" }),
+        ],
+        "{blocked}"
     );
-    assert!(
-        sheet.contains(r#"aws_access_key</span></span><span style="white-space: nowrap">no-secrets, 2</span></span></dd>"#)
-            && sheet.contains(r#"email_address</span></span><span style="white-space: nowrap">mask-pii, 1</span></span></dd>"#),
-        "{sheet}"
-    );
-    let (_, _, list) = send(&s.app, get("/console/audit", &cookie)?).await?;
-    assert!(list.contains("g-tag--block"));
+    let list = audit(&s.app, &cookie, "").await?;
+    assert_eq!(list["rows"][0]["verdict"]["kind"], "block");
     Ok(())
 }
 
@@ -1136,14 +1282,17 @@ async fn spend_shows_this_months_usage_against_the_budgets() -> TestResult {
     // The two refused requests of the setup.
     assert_eq!(page["stopped"], "2");
     // Usage records belong to this page, not to the list of decisions.
-    let (_, _, audit) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    let list = audit(&s.app, &cookie, "").await?;
     // The three requests of the setup and the sign-in's admin record; none of the three usage records.
-    assert!(audit.contains("1 to 4 of 4"), "{audit}");
+    assert_eq!(list["pager"]["text"], "1 to 4 of 4 decisions", "{list}");
     // m12-3: Verify chain now walks every record of the chain, usage ones too, as enterplace audit verify counts them.
     let lines = std::fs::read_to_string(s.audit())?.lines().count();
     assert!(
-        audit.contains(&format!("walks all {lines} records")),
-        "{lines}: {audit}"
+        list["verified"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains(&format!("walks all {lines} records")),
+        "{lines}: {list}"
     );
     Ok(())
 }
@@ -1300,59 +1449,51 @@ async fn guardrail_blocks_and_masks_carry_their_finding_badge() -> TestResult {
     )?;
     let cookie = sign_in(&s.app).await?;
     // m12-9. A vendor category has a title that names the guardrail and the category in words.
-    let (_, _, vendor) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAV1", &cookie)?,
-    )
-    .await?;
-    assert!(
-        vendor.contains("Guardrail moderation blocked harassment threatening"),
+    let vendor = sheet(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAV1").await?;
+    assert_eq!(
+        vendor["title"], "Guardrail moderation blocked harassment threatening",
         "{vendor}"
     );
-    let (_, _, list) = send(&s.app, get("/console/audit", &cookie)?).await?;
-    assert!(
-        list.contains(r#"<span class="g-tag g-tag--block"><span class="t-tag">Block</span><span class="t-mono-sm">aws_access_key</span>"#),
-        "{list}"
-    );
-    assert!(
-        list.contains(r#"<span class="g-tag g-tag--mask"><span class="t-tag">Mask</span><span class="t-mono-sm">credit_card</span>"#),
-        "{list}"
-    );
+    let list = audit(&s.app, &cookie, "").await?;
+    assert!(has_tag(&list, "block", "Block", "aws_access_key"), "{list}");
+    assert!(has_tag(&list, "mask", "Mask", "credit_card"), "{list}");
     // Blocks are counted apart from refusals by policy.
-    assert!(list.contains("blocked by a guardrail today"), "{list}");
+    assert_eq!(list["stats"]["blocked"], "2", "{list}");
 
-    let (_, _, block) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAB1", &cookie)?,
-    )
-    .await?;
-    assert!(
-        block.contains("The prompt held an AWS access key"),
-        "{block}"
-    );
-    let (_, _, mask) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAM1", &cookie)?,
-    )
-    .await?;
-    assert!(
-        mask.contains("Masked 3 findings, then sent to openai"),
-        "{mask}"
-    );
+    let block = sheet(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAB1").await?;
+    assert_eq!(block["title"], "The prompt held an AWS access key");
+    let mask = sheet(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAM1").await?;
+    assert_eq!(mask["title"], "Masked 3 findings, then sent to openai");
     // One row per finding, each with its badge, never one run-on string.
-    assert!(
-        mask.contains(r#"credit_card</span></span><span style="white-space: nowrap">mask-pii, 1</span></span></dd>"#)
-            && mask.contains(r#"email_address</span></span><span style="white-space: nowrap">mask-pii, 2</span></span></dd>"#)
-            && !mask.contains("; mask-pii"),
+    let findings: Vec<(String, String)> = mask["facts"]
+        .as_array()
+        .map(|f| {
+            f.iter()
+                .filter(|f| f["label"] == "Finding")
+                .map(|f| (f["tag"]["detail"].to_string(), f["text"].to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        findings,
+        [
+            ("\"credit_card\"".to_string(), "\"mask-pii, 1\"".to_string()),
+            (
+                "\"email_address\"".to_string(),
+                "\"mask-pii, 2\"".to_string()
+            ),
+        ],
         "{mask}"
     );
     // The filters of the design.
-    let (_, _, blocked) = send(&s.app, get("/console/audit?verdict=blocked", &cookie)?).await?;
-    assert!(blocked.contains("1 to 2 of 2 decisions"), "{blocked}");
-    let (_, _, masked) = send(&s.app, get("/console/audit?verdict=masked", &cookie)?).await?;
-    assert!(
-        masked.contains("1 to 1 of 1 decisions") && masked.contains("01AAAAAAAAAAAAAAAAAAAAAAM1")
+    let blocked = audit(&s.app, &cookie, "verdict=blocked").await?;
+    assert_eq!(
+        blocked["pager"]["text"], "1 to 2 of 2 decisions",
+        "{blocked}"
     );
+    let masked = audit(&s.app, &cookie, "verdict=masked").await?;
+    assert_eq!(masked["pager"]["text"], "1 to 1 of 1 decisions");
+    assert_eq!(ids(&masked), ["01AAAAAAAAAAAAAAAAAAAAAAM1"]);
     Ok(())
 }
 
@@ -1365,24 +1506,33 @@ async fn admin_records_are_tagged_in_words_and_a_refused_one_says_it_was_tried()
     )
     .await?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, list) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    let list = audit(&s.app, &cookie, "").await?;
     assert!(
-        list.contains(r#"<span class="g-tag g-tag--refused"><span class="t-tag">Refused:</span><span class="t-mono-sm">sign-in</span>"#)
-            && list.contains(r#"<span class="g-tag"><span class="t-tag">Admin:</span><span class="t-mono-sm">signed in</span>"#)
-            && !list.contains("console_sign_in"),
+        has_tag(&list, "refused", "Refused:", "sign-in")
+            && has_tag(&list, "", "Admin:", "signed in")
+            && !list["rows"].to_string().contains("console_sign_in"),
         "{list}"
     );
-    assert!(list.contains("<th>Time</th>"));
+    // A row opens on its time.
+    assert!(
+        list["rows"][0]["open"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("Open decision "),
+        "{list}"
+    );
     let refused = admin_records(&s)?
         .first()
         .and_then(|r| r["id"].as_str().map(str::to_string))
         .ok_or("no record")?;
-    let (_, _, sheet) = send(
-        &s.app,
-        get(&format!("/console/audit?record={refused}"), &cookie)?,
-    )
-    .await?;
-    assert!(sheet.contains("tried to sign in"), "{sheet}");
+    let tried = sheet(&s.app, &cookie, &refused).await?;
+    assert!(
+        tried["lead"]
+            .as_str()
+            .unwrap_or("")
+            .contains("tried to sign in"),
+        "{tried}"
+    );
     Ok(())
 }
 
@@ -1413,30 +1563,19 @@ async fn issue_and_revoke_records_name_the_key_hash_and_search_finds_them() -> T
         .find(|r| r["action"] == "revoke_key")
         .ok_or("no revoke record")?;
     let id = revoke["id"].as_str().unwrap_or("");
-    let (_, _, sheet) = send(
-        &s.app,
-        get(&format!("/console/audit?record={id}"), &cookie)?,
-    )
-    .await?;
-    assert!(
-        sheet.contains(&format!(
-            "Key hash</dt><dd class=\"t-mono-sm\">{}",
-            &maya[..8]
-        )),
-        "{sheet}"
-    );
+    let revoked = sheet(&s.app, &cookie, id).await?;
+    assert_eq!(fact(&revoked, "Key hash"), &maya[..8], "{revoked}");
     for q in [&maya[..8], "maya.cohen"] {
-        let (_, _, found) = send(&s.app, get(&format!("/console/audit?q={q}"), &cookie)?).await?;
-        assert!(found.contains(id), "{q}: {found}");
+        let found = audit(&s.app, &cookie, &format!("q={q}")).await?;
+        assert!(ids(&found).iter().any(|i| i == id), "{q}: {found}");
     }
     // The revoked key's later use points back at who revoked it.
-    let (_, _, used) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAU1", &cookie)?,
-    )
-    .await?;
+    let used = sheet(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAU1").await?;
     assert!(
-        used.contains("Revoked by noa.bar") && used.contains(&format!("record={id}")),
+        fact(&used, "Revoked").starts_with("Revoked by noa.bar")
+            && used["actions"].as_array().is_some_and(|a| a
+                .iter()
+                .any(|a| a["href"] == format!("#/audit?record={id}"))),
         "{used}"
     );
     // A link to the revoke's toast keeps the key hash, for the app to say.
@@ -1462,13 +1601,16 @@ async fn issue_and_revoke_records_name_the_key_hash_and_search_finds_them() -> T
 async fn the_last_hash_is_shown_whole_to_keep_for_expect_last() -> TestResult {
     let s = setup("last-hash")?;
     let cookie = sign_in(&s.app).await?;
-    send(&s.app, post("/console/audit/verify", &cookie, "")?).await?;
-    let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    verify(&s.app, &cookie, "").await?;
+    let page = audit(&s.app, &cookie, "").await?;
     let (_, last) = enterplace_core::audit::verify(&s.audit())?;
+    assert_eq!(last.len(), 64);
     assert!(
-        page.contains(&format!(r#"id="last-hash">{last}<"#))
-            && page.contains(r#"data-copy="last-hash""#)
-            && page.contains("--expect-last"),
+        page["verified"]["last_hash"] == last.as_str()
+            && page["verified"]["note"]
+                .as_str()
+                .unwrap_or("")
+                .contains("--expect-last"),
         "{page}"
     );
     Ok(())
@@ -1514,14 +1656,21 @@ async fn policy_and_keys_changes_open_a_sheet_with_the_change() -> TestResult {
     );
     s.log.append_record(&rejected)?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, list) = send(&s.app, get("/console/audit?verdict=changes", &cookie)?).await?;
+    let list = audit(&s.app, &cookie, "verdict=changes").await?;
     // Records 4 to 6: a change has no decision ID, so it opens by its record number.
+    let listed = ids(&list);
     assert!(
-        list.contains("record=5") && list.contains("record=6") && list.contains("file change"),
+        listed.contains(&"5".to_string())
+            && listed.contains(&"6".to_string())
+            && list["rows"].to_string().contains("file change"),
         "{list}"
     );
-    assert!(!list.contains(r#"aria-label="Open decision ""#), "{list}");
-    let (_, _, sheet) = send(&s.app, get("/console/audit?record=5", &cookie)?).await?;
+    // A row without a decision ID is never labelled with an empty one.
+    assert!(
+        !list["rows"].to_string().contains(r#""Open decision ""#),
+        "{list}"
+    );
+    let sheet = sheet_text(&s.app, &cookie, "5").await?;
     for expected in [
         // Round 11: the title names what changed.
         "The policy and keys files changed",
@@ -1534,7 +1683,7 @@ async fn policy_and_keys_changes_open_a_sheet_with_the_change() -> TestResult {
     ] {
         assert!(sheet.contains(expected), "missing {expected}: {sheet}");
     }
-    let (_, _, sheet) = send(&s.app, get("/console/audit?record=6", &cookie)?).await?;
+    let sheet = sheet_text(&s.app, &cookie, "6").await?;
     assert!(
         sheet.contains("A change to the policy or keys file was rejected")
             && sheet.contains("is not a key Enterplace knows"),
@@ -1579,11 +1728,7 @@ async fn a_budget_refusal_sheet_names_the_budget_what_was_spent_and_when_it_rese
         ..Entry::default()
     })?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, sheet) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAX1", &cookie)?,
-    )
-    .await?;
+    let sheet = sheet_text(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAX1").await?;
     assert!(
         sheet.contains("The payments team's budget is spent"),
         "{sheet}"
@@ -1673,17 +1818,13 @@ async fn key_budget_and_expired_key_sheets_name_the_key_its_amounts_and_the_way_
     let s = setup("key-sheets")?;
     limited(&s)?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, sheet) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAK1", &cookie)?,
-    )
-    .await?;
+    let sheet = sheet_text(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAK1").await?;
     for expected in [
         "maya.cohen's key budget is spent",
         "$0.82 of $1.00 spent today",
         "Refused until 00:00 UTC",
-        "<dt class=\"t-tag\">Budget</dt>",
-        "<dt class=\"t-tag\">Resets</dt>",
+        r#"{"label":"Budget","text":"$0.82 of $1.00 spent today"}"#,
+        r#"{"label":"Resets","text":"#,
     ] {
         assert!(sheet.contains(expected), "missing {expected}: {sheet}");
     }
@@ -1691,15 +1832,11 @@ async fn key_budget_and_expired_key_sheets_name_the_key_its_amounts_and_the_way_
         !sheet.contains("Enterplace refused it with the code"),
         "{sheet}"
     );
-    let (_, _, sheet) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAK2", &cookie)?,
-    )
-    .await?;
+    let sheet = sheet_text(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAK2").await?;
     for expected in [
         "ci.release's key expired on 1 November 2020",
         "Issue a new key on People",
-        "/console/people?issue=1",
+        "#/people?issue=1&name=ci.release&team=platform",
     ] {
         assert!(sheet.contains(expected), "missing {expected}: {sheet}");
     }
@@ -1781,11 +1918,7 @@ async fn sheets_of_the_request_refusals_say_the_cause_and_the_fix() -> TestResul
         ("01AAAAAAAAAAAAAAAAAAAAAAR3", "/v1/embeddings"),
         ("01AAAAAAAAAAAAAAAAAAAAAAR4", "plain JSON"),
     ] {
-        let (_, _, sheet) = send(
-            &s.app,
-            get(&format!("/console/audit?record={id}"), &cookie)?,
-        )
-        .await?;
+        let sheet = sheet_text(&s.app, &cookie, id).await?;
         assert!(sheet.contains(expected), "missing {expected}: {sheet}");
         assert!(
             !sheet.contains("Enterplace refused it with the code"),
@@ -1849,22 +1982,22 @@ async fn changes_list_in_their_own_table_and_a_repair_is_one_of_them() -> TestRe
     repaired.insert("removed_text".into(), "{\"n\":4,\"id\":\"01AB".into());
     s.log.append_record(&repaired)?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, list) = send(&s.app, get("/console/audit?verdict=changes", &cookie)?).await?;
+    let list = page_text(&s.app, &cookie, "verdict=changes").await?;
     for expected in [
-        "<th>Who</th><th>Change and reason</th><th>Time</th>",
-        "record=4",
+        r#""noun":"changes""#,
+        r#""id":"4""#,
         "of 2 changes",
         "noa.bar signed in to the console",
     ] {
         assert!(list.contains(expected), "missing {expected}: {list}");
     }
-    let (_, _, sheet) = send(&s.app, get("/console/audit?record=4", &cookie)?).await?;
+    let sheet = sheet_text(&s.app, &cookie, "4").await?;
     for expected in [
         "The cut last line of the audit log was removed",
         "enterplace audit repair",
         "40 bytes",
         &"bf20eb45".repeat(8),
-        "{&quot;n&quot;:4,&quot;id&quot;:&quot;01AB",
+        r#"{\"n\":4,\"id\":\"01AB"#,
     ] {
         assert!(sheet.contains(expected), "missing {expected}: {sheet}");
     }
@@ -1904,9 +2037,10 @@ async fn a_kill_switch_shows_a_banner_on_audit_and_in_the_sheet_of_a_request_it_
 -> TestResult {
     let s = setup("kills")?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
-    assert!(
-        !page.contains("Traffic is stopped"),
+    let page = audit(&s.app, &cookie, "").await?;
+    assert_eq!(
+        page["kills"],
+        serde_json::json!([]),
         "a banner with no switch on"
     );
     let kills =
@@ -1928,38 +2062,40 @@ async fn a_kill_switch_shows_a_banner_on_audit_and_in_the_sheet_of_a_request_it_
         code: Some("killed"),
         ..Entry::default()
     })?;
-    let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
-    // One line per switch, in words, with the button that turns it off.
+    let page = audit(&s.app, &cookie, "").await?;
+    // One line per switch, in words, with what turns it off.
+    let kill = &page["kills"][0];
     assert!(
-        page.contains(r#"<div class="g-banner" role="alert""#)
-            && page.contains(
-                r#"Traffic stopped for <span class="t-mono">person maya.cohen</span> since "#
-            )
-            && page.contains("retrying &lt;the same&gt; ticket")
-            && page.contains(r#"action="/console/kills/restore""#)
-            && page.contains("Restore traffic"),
+        kill["label"] == "person maya.cohen"
+            && kill["by"] == "noa.bar"
+            && kill["reason"] == "retrying <the same> ticket"
+            && kill["command"] == "enterplace unkill --person maya.cohen"
+            && page["may_restore"] == true,
         "{page}"
     );
-    let (_, _, sheet) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAK1", &cookie)?,
-    )
-    .await?;
+    let stopped = sheet(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAK1").await?;
     assert!(
-        sheet.contains("Kill switch") && sheet.contains("Still on"),
-        "{sheet}"
+        stopped["lead"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("Kill switch person maya.cohen was on")
+            && fact(&stopped, "Switch") == "person maya.cohen, still on",
+        "{stopped}"
     );
     // Restore traffic turns the switch off, as enterplace unkill does, and the admin record says who did it.
-    let (status, _, _) = send(
+    let (status, _, answer) = call(
         &s.app,
-        post(
-            "/console/kills/restore",
-            &cookie,
-            "scope=person&value=maya.cohen",
-        )?,
+        "POST",
+        "/console/api/audit/restore",
+        &cookie,
+        serde_json::json!({ "scope": "person", "value": "maya.cohen" }),
     )
     .await?;
-    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        answer["message"],
+        "Traffic restored for person maya.cohen. Every gateway lets it through within 2 seconds."
+    );
     assert!(
         enterplace_core::kill::read(&enterplace_core::kill::path_beside(&s.keys()))?.is_empty(),
         "the switch is off"
@@ -1972,14 +2108,48 @@ async fn a_kill_switch_shows_a_banner_on_audit_and_in_the_sheet_of_a_request_it_
                 && r["verdict"] == "allow"),
         "recorded"
     );
-    let (_, _, sheet) = send(
+    let after = audit(&s.app, &cookie, "record=01AAAAAAAAAAAAAAAAAAAAAAK1").await?;
+    assert!(
+        fact(&after["record"], "Switch") == "Off now" && after["kills"] == serde_json::json!([]),
+        "{after}"
+    );
+    // A switch that does not parse is refused with what to do, and nothing is recorded.
+    let (status, _, refused) = call(
         &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAK1", &cookie)?,
+        "POST",
+        "/console/api/audit/restore",
+        &cookie,
+        serde_json::json!({ "scope": "planet", "value": "x" }),
     )
     .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert!(
-        sheet.contains("Off now") && !sheet.contains("Traffic is stopped"),
-        "{sheet}"
+        refused["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Restore traffic"),
+        "{refused}"
+    );
+    // People's form still turns a switch off through the console's own route.
+    kills.set(enterplace_core::kill::Kill {
+        scope: "person".into(),
+        value: "maya.cohen".into(),
+        reason: "again".into(),
+        by: "noa.bar".into(),
+        at: "2026-11-13T14:00:00.000Z".into(),
+    })?;
+    let (status, _, _) = send(
+        &s.app,
+        post(
+            "/console/kills/restore",
+            &cookie,
+            "scope=person&value=maya.cohen",
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(
+        enterplace_core::kill::read(&enterplace_core::kill::path_beside(&s.keys()))?.is_empty()
     );
     Ok(())
 }
@@ -1987,7 +2157,7 @@ async fn a_kill_switch_shows_a_banner_on_audit_and_in_the_sheet_of_a_request_it_
 // ---------------------------------------------------------------- round 12 review
 
 /// `enterplace unkill --person maya.cohen` as a page writes it: it wraps only between its words.
-const UNKILL_MAYA: &str = r#"<span style="white-space: nowrap">enterplace</span> <span style="white-space: nowrap">unkill</span> <span style="white-space: nowrap">--person</span> <span style="white-space: nowrap">maya.cohen</span>"#;
+const UNKILL_MAYA: &str = "enterplace unkill --person maya.cohen";
 
 /// An admin record of a kill switch set or cleared, as the admin API writes it.
 fn kill_record(
@@ -2076,63 +2246,53 @@ async fn a_killed_sheet_tells_the_story_of_the_switch_that_stopped_it_and_whethe
     killed_record(&s, "01AAAAAAAAAAAAAAAAAAAAAAK2", None)?;
     let cookie = sign_in(&s.app).await?;
 
-    let (_, _, sheet) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAK1", &cookie)?,
-    )
-    .await?;
-    assert!(
-        sheet.contains("A kill switch stopped maya.cohen"),
-        "{sheet}"
+    let sheet1 = sheet(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAK1").await?;
+    assert_eq!(
+        sheet1["title"], "A kill switch stopped maya.cohen",
+        "{sheet1}"
     );
     assert!(
-        sheet.contains("model gpt-4o") && sheet.contains("provider incident"),
-        "{sheet}"
+        sheet1["lead"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Kill switch model gpt-4o was on: provider incident"),
+        "{sheet1}"
     );
     // The person switch on now did not stop this request: it was set after.
+    assert_eq!(fact(&sheet1, "Switch"), "model gpt-4o, off now", "{sheet1}");
     assert!(
-        sheet.contains("Off now")
-            && !sheet.contains("Still on")
-            // The banner names the person switch on now; the sheet's facts do not.
-            && !sheet.contains(r#"<dd class="t-mono-sm">person maya.cohen"#),
-        "{sheet}"
+        !sheet1
+            .to_string()
+            .contains("Enterplace refused it with the code"),
+        "{sheet1}"
     );
-    assert!(
-        !sheet.contains("Enterplace refused it with the code"),
-        "{sheet}"
-    );
-    for label in [
-        r#"<dt class="t-tag">Switch</dt>"#,
-        r#"<dt class="t-tag">Reason</dt>"#,
-        r#"<dt class="t-tag">Set by</dt>"#,
-    ] {
-        assert!(sheet.contains(label), "missing {label}: {sheet}");
+    for label in ["Switch", "Reason", "Set by"] {
+        assert!(
+            !fact(&sheet1, label).is_empty(),
+            "missing {label}: {sheet1}"
+        );
     }
+    assert!(fact(&sheet1, "Turn off").is_empty(), "{sheet1}");
 
-    let (_, _, sheet) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAK2", &cookie)?,
-    )
-    .await?;
+    let sheet2 = sheet(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAK2").await?;
     assert!(
-        sheet.contains("A kill switch stopped maya.cohen")
-            && sheet.contains("person maya.cohen")
-            && sheet.contains("Still on")
-            && sheet.contains(r#"<dt class="t-tag">Turn off</dt>"#)
-            && sheet.contains(UNKILL_MAYA)
-            && !sheet.contains("model gpt-4o"),
-        "{sheet}"
+        sheet2["title"] == "A kill switch stopped maya.cohen"
+            && fact(&sheet2, "Switch") == "person maya.cohen, still on"
+            && fact(&sheet2, "Turn off") == UNKILL_MAYA
+            && !sheet2.to_string().contains("model gpt-4o"),
+        "{sheet2}"
     );
-    // m12-4. Kill switch records read in words.
-    let (_, _, list) = send(&s.app, get("/console/audit", &cookie)?).await?;
-    // UX m26. The first Tab stop skips the nav.
-    let skip = list.find(r##"href="#main">Skip to the page"##);
+    // UX m26. The first Tab stop of a server-rendered page skips the nav.
+    let (_, _, shell) = send(&s.app, get("/console/policy", &cookie)?).await?;
+    let skip = shell.find(r##"href="#main">Skip to the page"##);
     assert!(
         skip.is_some()
-            && skip < list.find(r#"class="g-nav__brand""#)
-            && list.contains(r#"<main class="g-shell__main" id="main""#),
-        "{list}"
+            && skip < shell.find(r#"class="g-nav__brand""#)
+            && shell.contains(r#"<main class="g-shell__main" id="main""#),
+        "{shell}"
     );
+    // m12-4. Kill switch records read in words.
+    let list = page_text(&s.app, &cookie, "").await?;
     assert!(
         list.contains("stopped traffic")
             && list.contains("restored traffic")
@@ -2141,12 +2301,12 @@ async fn a_killed_sheet_tells_the_story_of_the_switch_that_stopped_it_and_whethe
         "{list}"
     );
     // m12-5. One block per switch: its scope in mono, its reason, since when and by whom, and the one command.
+    let page = audit(&s.app, &cookie, "").await?;
     assert!(
-        list.contains(r#"<span class="t-mono">person maya.cohen</span>"#)
-            && list.contains("Traffic stopped for ")
-            && list.contains(" by noa.bar: ")
-            && list.contains("Restore traffic"),
-        "{list}"
+        page["kills"][0]["label"] == "person maya.cohen"
+            && page["kills"][0]["by"] == "noa.bar"
+            && page["may_restore"] == true,
+        "{page}"
     );
     Ok(())
 }
@@ -2209,11 +2369,7 @@ async fn tpm_and_key_model_sheets_name_the_limit_and_the_list_that_refused() -> 
         s.log.append_record(&record)?;
     }
     let cookie = sign_in(&s.app).await?;
-    let (_, _, tpm) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAT1", &cookie)?,
-    )
-    .await?;
+    let tpm = sheet_text(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAT1").await?;
     // The record does not say whether the rule's limit or the key's refused it, so the sheet says so and names both.
     assert!(
         tpm.contains("1,500 tokens a minute")
@@ -2235,11 +2391,7 @@ async fn tpm_and_key_model_sheets_name_the_limit_and_the_list_that_refused() -> 
             "Key limit",
         ),
     ] {
-        let (_, _, sheet) = send(
-            &s.app,
-            get(&format!("/console/audit?record={id}"), &cookie)?,
-        )
-        .await?;
+        let sheet = sheet_text(&s.app, &cookie, id).await?;
         assert!(sheet.contains(expected) && !sheet.contains(not), "{sheet}");
     }
     // m13-3: a request larger than the whole minute's limit says so, with both numbers and no retry promise.
@@ -2262,22 +2414,14 @@ async fn tpm_and_key_model_sheets_name_the_limit_and_the_list_that_refused() -> 
         policy_sha256: &sha256_hex(b"an older policy"),
         ..base.clone()
     })?;
-    let (_, _, big) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAT5", &cookie)?,
-    )
-    .await?;
+    let big = sheet_text(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAT5").await?;
     assert!(
         big.contains("This request alone is larger than maya.cohen's key allows in a minute")
             && big.contains("could use 528 tokens")
             && !big.contains("was told when to send again"),
         "{big}"
     );
-    let (_, _, old) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAT6", &cookie)?,
-    )
-    .await?;
+    let old = sheet_text(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAT6").await?;
     assert!(
         old.contains(
             "the record does not say whether rule payments-team or the key's own models refused"
@@ -2285,14 +2429,10 @@ async fn tpm_and_key_model_sheets_name_the_limit_and_the_list_that_refused() -> 
         "{old}"
     );
     assert!(!old.contains("does not list gpt-4o"), "{old}");
-    let (_, _, model) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAT2", &cookie)?,
-    )
-    .await?;
+    let model = sheet_text(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAT2").await?;
     assert!(
         model.contains("maya.cohen's key does not allow gpt-4o")
-            && model.contains(r#"<dt class="t-tag">Key models</dt>"#)
+            && model.contains(r#"{"label":"Key models","text":"gpt-4o-mini"}"#)
             && !model.contains("does not list gpt-4o"),
         "{model}"
     );
@@ -2320,16 +2460,12 @@ async fn a_self_issued_key_sheet_names_its_expiry() -> TestResult {
     };
     s.log.append_record(&record)?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, sheet) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAL1", &cookie)?,
-    )
-    .await?;
+    let sheet = sheet_text(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAL1").await?;
     assert!(
-        sheet.contains(r#"<dt class="t-tag">Expires</dt>"#) && sheet.contains("13 December 2026"),
+        sheet.contains(r#"{"label":"Expires","text":"13 December 2026"}"#),
         "{sheet}"
     );
-    let (_, _, list) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    let list = page_text(&s.app, &cookie, "").await?;
     assert!(
         list.contains("enterplace login key") && !list.contains("self_issue_key"),
         "{list}"
@@ -2422,27 +2558,20 @@ async fn an_answer_guardrail_shows_on_its_request_and_the_price_source_shows() -
         .ok_or("no answer record")?;
     let cookie = sign_in(&s.app).await?;
 
-    let (_, _, list) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    let list = audit(&s.app, &cookie, "").await?;
     assert!(
-        list.contains(r#"<span class="g-tag g-tag--block"><span class="t-tag">Block</span><span class="t-mono-sm">aws_access_key</span>"#)
-            && !list.contains("answer_guardrails"),
+        has_tag(&list, "block", "Block", "aws_access_key")
+            && !list.to_string().contains("answer_guardrails"),
         "{list}"
     );
-    assert!(
-        list.contains(r#"<p class="g-stat__figure t-lg">1</p><p class="g-stat__label t-small">blocked by a guardrail today"#),
-        "{list}"
-    );
-    let (_, _, blocked) = send(&s.app, get("/console/audit?verdict=blocked", &cookie)?).await?;
+    assert_eq!(list["stats"]["blocked"], "1", "{list}");
+    let blocked = page_text(&s.app, &cookie, "verdict=blocked").await?;
     assert!(blocked.contains("01AAAAAAAAAAAAAAAAAAAAAAA1"), "{blocked}");
 
     for selected in ["01AAAAAAAAAAAAAAAAAAAAAAA1".to_string(), n.to_string()] {
-        let (_, _, sheet) = send(
-            &s.app,
-            get(&format!("/console/audit?record={selected}"), &cookie)?,
-        )
-        .await?;
+        let sheet = sheet_text(&s.app, &cookie, &selected).await?;
         assert!(
-            sheet.contains(r#"Guardrail <span style="white-space: nowrap">no-secrets-out</span> withheld the answer"#)
+            sheet.contains("Guardrail no-secrets-out withheld the answer")
                 && sheet.contains("guardrail_blocked")
                 && sheet.contains("on the answer")
                 && sheet.contains("maya.cohen")
@@ -2592,7 +2721,7 @@ async fn a_custom_role_sees_only_the_pages_it_may_and_an_org_role_only_its_keys(
 async fn every_page_says_when_observe_mode_lets_everything_through() -> TestResult {
     let s = setup("observe-banner")?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    let page = page_text(&s.app, &cookie, "").await?;
     assert!(!page.contains("Observe mode"), "enforcing shows no banner");
     std::fs::write(
         s.dir.join("enterplace.policy.yaml"),
@@ -2609,7 +2738,7 @@ async fn every_page_says_when_observe_mode_lets_everything_through() -> TestResu
     )
     .await?;
     assert_eq!(me["observe"], true);
-    for path in ["/console/audit", "/console/policy", "/console/start"] {
+    for path in ["/console/policy", "/console/start"] {
         let (status, _, page) = send(&s.app, get(path, &cookie)?).await?;
         assert_eq!(status, StatusCode::OK, "{path}");
         assert_eq!(
@@ -2670,8 +2799,7 @@ async fn with_per_org_chains_an_org_role_reads_its_own_chain_and_an_admin_switch
         .and_then(|v| v.to_str().ok())
         .map(|c| c.split(';').next().unwrap_or("").to_string())
         .unwrap_or_default();
-    let (status, _, page) = send(&s.app, get("/console/audit", &ana)?).await?;
-    assert_eq!(status, StatusCode::OK, "{page}");
+    let page = page_text(&s.app, &ana, "").await?;
     assert!(
         page.contains("ACMEDECISION1") && page.contains("ACMEDECISION2"),
         "the whole of acme's chain: {page}"
@@ -2682,9 +2810,8 @@ async fn with_per_org_chains_an_org_role_reads_its_own_chain_and_an_admin_switch
     );
     assert!(page.contains("organization acme"), "{page}");
     // Verify checks acme's chain, whatever the address asks for.
-    let (status, _, _) = send(&s.app, post("/console/audit/verify?chain=", &ana, "")?).await?;
-    assert_eq!(status, StatusCode::SEE_OTHER);
-    let (_, _, page) = send(&s.app, get("/console/audit", &ana)?).await?;
+    verify(&s.app, &ana, "").await?;
+    let page = page_text(&s.app, &ana, "").await?;
     assert!(
         page.contains("unbroken from record 1 to record 2"),
         "{page}"
@@ -2692,14 +2819,14 @@ async fn with_per_org_chains_an_org_role_reads_its_own_chain_and_an_admin_switch
 
     // An admin kept to no organization starts on the install's chain and may switch to acme's.
     let cookie = sign_in(&s.app).await?;
-    let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
+    let page = page_text(&s.app, &cookie, "").await?;
     assert!(
         page.contains("maya.cohen")
             && !page.contains("ACMEDECISION1")
-            && page.contains("/console/audit?chain=acme"),
+            && page.contains(r#"{"label":"acme","chain":"acme","shown":false}"#),
         "{page}"
     );
-    let (_, _, page) = send(&s.app, get("/console/audit?chain=acme", &cookie)?).await?;
+    let page = page_text(&s.app, &cookie, "chain=acme").await?;
     assert!(
         page.contains("ACMEDECISION1") && !page.contains("maya.cohen"),
         "{page}"
@@ -2830,37 +2957,44 @@ async fn audit_rows_say_verdicts_in_words_and_open_on_their_time() -> TestResult
         "a loop",
     )?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, page) = send(&s.app, get("/console/audit", &cookie)?).await?;
-    for words in [
-        r#"<span class="g-tag g-tag--allow t-tag">Allowed</span>"#,
-        r#"<span class="t-tag">Refused:</span><span class="t-mono-sm">unknown key</span>"#,
-        r#"<span class="t-tag">Refused:</span><span class="t-mono-sm">kill switch</span>"#,
-        r#"<span class="t-tag">Admin:</span><span class="t-mono-sm">signed in</span>"#,
-        r#"<span class="t-tag">Admin:</span><span class="t-mono-sm">stopped traffic</span>"#,
-        "refused today</p>",
-        "<th>Time</th>",
-        r#"aria-label="Open decision 01AAAAAAAAAAAAAAAAAAAAAAA3""#,
+    let page = audit(&s.app, &cookie, "").await?;
+    for (kind, word, detail) in [
+        ("allow", "Allowed", ""),
+        ("refused", "Refused:", "unknown key"),
+        ("refused", "Refused:", "kill switch"),
+        ("", "Admin:", "signed in"),
+        ("", "Admin:", "stopped traffic"),
     ] {
-        assert!(page.contains(words), "{words}: {page}");
+        assert!(
+            has_tag(&page, kind, word, detail),
+            "{word} {detail}: {page}"
+        );
     }
+    assert!(page["stats"]["refused"].is_string(), "{page}");
+    // A row opens on its time, named for a screen reader by its decision.
+    let row = page["rows"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|r| r["id"] == "01AAAAAAAAAAAAAAAAAAAAAAA3")
+        })
+        .ok_or("no row")?;
+    assert_eq!(row["open"], "Open decision 01AAAAAAAAAAAAAAAAAAAAAAA3");
+    assert_ne!(row["time"], "01AAAAAAAAAAAAAAAAAAAAAAA3");
+    let rows = page["rows"].to_string();
     for gone in [
         "unknown_key",
-        ">Allow<",
+        "\"Allow\"",
         "by policy",
         "Time (UTC) and decision",
-        ">01AAAAAAAAAAAAAAAAAAAAAAA3<",
     ] {
-        assert!(!page.contains(gone), "{gone}: {page}");
+        assert!(!rows.contains(gone), "{gone}: {rows}");
     }
-    let (_, _, sheet) = send(
-        &s.app,
-        get("/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAA1", &cookie)?,
-    )
-    .await?;
+    let opened = sheet(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAA1").await?;
     assert!(
-        sheet.contains(r#"<dd class="t-mono-sm">Allowed</dd>"#)
-            && sheet.contains("01AAAAAAAAAAAAAAAAAAAAAAA1</dd>"),
-        "{sheet}"
+        fact(&opened, "Verdict") == "Allowed"
+            && fact(&opened, "Decision") == "01AAAAAAAAAAAAAAAAAAAAAAA1",
+        "{opened}"
     );
     Ok(())
 }

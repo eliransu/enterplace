@@ -6,6 +6,7 @@
 
 mod analytics;
 mod api;
+mod audit_log;
 pub mod cli;
 mod credentials;
 mod edit;
@@ -578,8 +579,6 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
                 )
             }),
         )
-        .route("/audit", get(audit_page))
-        .route("/audit/verify", post(verify))
         .route("/policy", get(policy_page))
         .merge(edit::routes())
         .merge(api::routes())
@@ -588,6 +587,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .merge(analytics::routes())
         .merge(requests::routes())
         .merge(spend::routes())
+        .merge(audit_log::routes())
         .merge(start::routes())
         .route("/live.json", get(live_json))
         .route("/kills/restore", post(restore_traffic))
@@ -2502,23 +2502,6 @@ fn read(path: &std::path::Path) -> Result<Option<String>, String> {
     }
 }
 
-/// The page a person without the permission a page needs gets instead of it.
-pub(crate) fn not_permitted(admin: &Admin, permission: Permission) -> Response {
-    page(
-        StatusCode::FORBIDDEN,
-        pages::notice(
-            "Not for your role",
-            &format!(
-                "Your role, {}, does not have the {} permission this page needs. Ask a Enterplace admin to add it to the role under roles: in the policy.",
-                admin.role,
-                permission.word()
-            ),
-            "/console/policy",
-            "Open the policy",
-        ),
-    )
-}
-
 /// What the pages that show requests ask every 2 seconds: a value that changes when a record is written. It is the
 /// audit log's size and time of change, which costs no read of the log, so the page redraws only when there is
 /// something new.
@@ -2598,64 +2581,6 @@ fn log_for(admin: &Admin, log: Result<Option<String>, String>) -> Result<Option<
     })
 }
 
-async fn audit_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    if !admin.may(Permission::SeeRecords) {
-        // The audit log is where the console starts: a role without it starts on a page it may see.
-        if admin.may(Permission::SeeSpend) {
-            return redirect("/console/spend");
-        }
-        return not_permitted(&admin, Permission::SeeRecords);
-    }
-    let config = console.config();
-    let query = Form::of(&uri);
-    let (chain, path) = chain_for(&admin, &config.audit, &query);
-    // ponytail: the whole audit log is read and parsed on every request. Fine for today's logs; an index or a tail read when they reach many megabytes.
-    let log = if chain.is_empty() {
-        log_for(&admin, read(&path))
-    } else {
-        read(&path)
-    };
-    // Someone kept to no organization may switch between the install's chain and each organization's.
-    let chains: Vec<(String, String, bool)> = match &admin.org {
-        Some(_) => Vec::new(),
-        None => {
-            let orgs = audit::org_chains(&config.audit).unwrap_or_default();
-            let mut list = Vec::new();
-            if !orgs.is_empty() {
-                list.push((
-                    "Install".to_string(),
-                    "/console/audit".to_string(),
-                    chain.is_empty(),
-                ));
-            }
-            for (org, _) in orgs {
-                let href = format!("/console/audit?chain={}", html::esc(&org));
-                list.push((org.clone(), href, org == chain));
-            }
-            list
-        }
-    };
-    let policy = config::policy_text(&config.policy).ok();
-    let loaded = config::load(&config.policy, Some(&config.keys)).ok();
-    let body = pages::audit(&pages::AuditView {
-        admin: &admin.label(),
-        query: &query,
-        log: &log,
-        chain: &chain,
-        chains: &chains,
-        policy: policy.as_deref(),
-        loaded: loaded.as_ref(),
-        verified: console.verified(&chain),
-        read_only: admin.read_only,
-        kills: &enterplace_core::kill::read(&enterplace_core::kill::path_beside(&config.keys)),
-        may_restore: admin.may(Permission::Kill),
-    });
-    page(StatusCode::OK, body)
-}
-
 /// Restore traffic: turns a kill switch off, as `enterplace unkill` and `DELETE /admin/kills` do, recorded first.
 async fn restore_traffic(
     State(console): State<Console>,
@@ -2691,37 +2616,6 @@ async fn restore_traffic(
     ));
     let _ = tokio::task::spawn_blocking(move || switches.clear(&scope, &value)).await;
     redirect("/console/audit")
-}
-
-async fn verify(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let (chain, path) = chain_for(&admin, &console.config().audit, &Form::of(&uri));
-    // The same walk as `enterplace audit verify`. It reads the whole file, so it runs off the request threads.
-    let result = tokio::task::spawn_blocking(move || {
-        if path.exists() {
-            audit::verify(&path)
-        } else {
-            Ok((0, String::new()))
-        }
-    })
-    .await
-    .unwrap_or_else(|err| Err(format!("the check stopped before it finished: {err}.")));
-    console
-        .0
-        .verified
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(chain.clone(), (Instant::now(), result));
-    if chain.is_empty() || admin.org.is_some() {
-        redirect("/console/audit")
-    } else {
-        redirect(&format!("/console/audit?chain={chain}"))
-    }
 }
 
 /// The keys file as a person may see it: whole, or written again with only their organization's keys.

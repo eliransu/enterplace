@@ -504,13 +504,23 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
             "/console/start?track=limit#step-5",
             "/governance/policy/",
         ),
-        (
-            "/console/audit",
-            "Only setup records so far",
-            "/console/start?track=coding#step-2",
-            "/governance/audit-log/",
-        ),
     ];
+    // The audit log is in the app too, with the same empty state while only setup records are in the chain.
+    let request = Request::get("/console/api/audit")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())?;
+    let (_, _, audit) = send(&s.app, request).await?;
+    let audit: serde_json::Value = serde_json::from_str(&audit)?;
+    assert_eq!(audit["empty"]["title"], "Only setup records so far");
+    assert_eq!(
+        audit["empty"]["action"]["href"],
+        "/console/start?track=coding#step-2"
+    );
+    assert_eq!(
+        audit["empty"]["docs"],
+        "https://docs.enterplace.dev/governance/audit-log/"
+    );
     // People is in the app: its API carries the same empty state for the app to show.
     let request = Request::get("/console/api/people")
         .header(header::HOST, HOST)

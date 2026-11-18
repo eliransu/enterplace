@@ -196,18 +196,19 @@ def run(chrome: Chrome, base: str, key: str, enterplace: str, folder: pathlib.Pa
     chrome.key("Enter")
     chrome.wait("location.pathname === '/console/start'", "Start here after sign-in")
     check(True, "an admin key signs in from a real browser form")
-    chrome.go(f"{base}/console/audit")
+    chrome.go(f"{base}/console/audit", f"{base}/console/app/#/audit")
+    chrome.wait("document.querySelector('table a[href*=\"record=\"]')", "the audit log in the app")
 
     # A record sheet takes focus, keeps Tab inside, closes on Escape, and gives focus back to the row's link.
     opener = chrome.js("(() => { const a = document.querySelector('table a[href*=\"record=\"]'); a.click(); return a.getAttribute('href') })()")
-    chrome.wait("document.querySelector('[aria-modal=\"true\"]') && document.readyState === 'complete'", "the record sheet")
-    inside = "document.querySelector('[aria-modal=\"true\"]').contains(document.activeElement)"
+    chrome.wait("document.querySelector('[role=\"dialog\"]') && document.readyState === 'complete'", "the record sheet")
+    inside = "document.querySelector('[role=\"dialog\"]').contains(document.activeElement)"
     check(chrome.js(inside), "the record sheet has focus when it opens")
     for _ in range(12):
         chrome.key("Tab")
     check(chrome.js(inside), "Tab stays inside the record sheet")
     chrome.key("Escape")
-    chrome.wait("!document.querySelector('[aria-modal]') && document.readyState === 'complete'", "the sheet to close on Escape")
+    chrome.wait("!document.querySelector('[role=\"dialog\"]') && document.readyState === 'complete'", "the sheet to close on Escape")
     check(chrome.js("document.activeElement.getAttribute('href')") == opener, "focus is back on the link that opened the sheet")
 
     # Issue a key: name, Tab, team, Enter. The old address opens the console app's dialog.
@@ -242,7 +243,8 @@ def run(chrome: Chrome, base: str, key: str, enterplace: str, folder: pathlib.Pa
     check(sha not in (folder / "enterplace.keys.yaml").read_text(), "the key is revoked from a real browser form")
 
     # Verify the chain, and check the hash the console shows with the CLI.
-    chrome.go(f"{base}/console/audit")
+    chrome.go(f"{base}/console/audit", f"{base}/console/app/#/audit")
+    chrome.wait("[...document.querySelectorAll('button')].some(b => b.textContent.includes('Verify chain now'))", "the audit log in the app")
     chrome.js("[...document.querySelectorAll('button')].find(b => b.textContent.includes('Verify chain now')).click()")
     chrome.wait("document.getElementById('last-hash')", "the verified chain")
     last = chrome.js("document.getElementById('last-hash').textContent")

@@ -528,7 +528,7 @@ async fn an_rs256_admin_signs_in_is_recorded_and_signs_out() -> TestResult {
     assert_eq!(session.len(), 64);
     let cookie = format!("enterplace_console={session}");
 
-    let (status, _, page) = send(&s.app, "GET", "/console/audit", &cookie, "").await?;
+    let (status, _, page) = send(&s.app, "GET", "/console/teams", &cookie, "").await?;
     assert_eq!(status, StatusCode::OK);
     assert!(
         page.contains(
@@ -542,7 +542,7 @@ async fn an_rs256_admin_signs_in_is_recorded_and_signs_out() -> TestResult {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     send(&s.app, "GET", "/console/sign-out", &cookie, "").await?;
-    let (status, _, _) = send(&s.app, "GET", "/console/audit", &cookie, "").await?;
+    let (status, _, _) = send(&s.app, "GET", "/console/start", &cookie, "").await?;
     assert_eq!(status, StatusCode::SEE_OTHER);
 
     let records = admin_records(&s)?;
@@ -905,7 +905,7 @@ async fn a_read_only_person_cannot_revoke_and_a_person_removed_from_the_policy_i
     );
 
     // The email leaves the policy: the next page is the sign-in page, with no restart.
-    let (status, _, _) = send(&s.app, "GET", "/console/audit", &cookie, "").await?;
+    let (status, _, _) = send(&s.app, "GET", "/console/start", &cookie, "").await?;
     assert_eq!(status, StatusCode::OK);
     let policy = s.dir.join("enterplace.policy.yaml");
     let text = std::fs::read_to_string(&policy)?;
@@ -916,11 +916,11 @@ async fn a_read_only_person_cannot_revoke_and_a_person_removed_from_the_policy_i
             "allowed_emails: [other@partner.org]",
         ),
     )?;
-    let (status, headers, _) = send(&s.app, "GET", "/console/audit", &cookie, "").await?;
+    let (status, headers, _) = send(&s.app, "GET", "/console/start", &cookie, "").await?;
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(
         headers.get(header::LOCATION).and_then(|v| v.to_str().ok()),
-        Some("/console/sign-in?next=%2Fconsole%2Faudit")
+        Some("/console/sign-in?next=%2Fconsole%2Fstart")
     );
     Ok(())
 }
@@ -1634,7 +1634,8 @@ async fn a_role_kept_to_a_team_signs_in_by_group_and_sees_only_that_team() -> Te
         page.contains("maya.ci") && !page.contains("omer.ci"),
         "{page}"
     );
-    let (_, _, page) = send(&s.app, "GET", "/console/audit", &cookie, "").await?;
+    // The audit log shows only the records of the role's own team.
+    let (_, _, page) = send(&s.app, "GET", "/console/api/audit", &cookie, "").await?;
     assert!(page.contains("dana@example.com"), "{page}");
     assert!(!page.contains("noa.bar"), "{page}");
     // A key for another team is refused before it is made.

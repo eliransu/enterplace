@@ -630,7 +630,7 @@ async fn without_the_feature_devices_answer_license_required() -> Result<(), Err
         let page = owner.go(&gw.app, "GET", "/console/devices", &[]).await?;
         assert_eq!(page.status, StatusCode::FORBIDDEN);
         assert!(page.text.contains("license_required"), "{}", page.text);
-        let audit = owner.go(&gw.app, "GET", "/console/audit", &[]).await?;
+        let audit = owner.go(&gw.app, "GET", "/console/start", &[]).await?;
         assert!(
             !audit.text.contains("/console/devices"),
             "nav offers Devices"

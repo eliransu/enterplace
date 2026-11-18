@@ -188,10 +188,10 @@ async fn extension_pages_share_the_session_and_appear_in_the_nav() -> TestResult
         page.contains(r#"href="/console/report" aria-current="page">Report"#),
         "{page}"
     );
-    let (_, _, audit) = send(&s.app, get_page("/console/audit", &cookie)?).await?;
+    let (_, _, teams) = send(&s.app, get_page("/console/teams", &cookie)?).await?;
     assert!(
-        audit.contains(r#"href="/console/report">Report"#),
-        "{audit}"
+        teams.contains(r#"href="/console/report">Report"#),
+        "{teams}"
     );
     Ok(())
 }
@@ -218,7 +218,7 @@ async fn an_account_session_is_checked_on_every_request_and_recorded() -> TestRe
     assert_eq!(status, StatusCode::FORBIDDEN, "a viewer issued a key");
     // The extension stops vouching for the account: its session ends at once.
     s.allowed.store(false, Ordering::SeqCst);
-    let (status, _, _) = send(&s.app, get_page("/console/audit", &cookie)?).await?;
+    let (status, _, _) = send(&s.app, get_page("/console/start", &cookie)?).await?;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let log = std::fs::read_to_string(s.dir.join("enterplace-audit.jsonl"))?;
     let sign_in = log
