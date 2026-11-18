@@ -819,10 +819,10 @@ async fn signing_in_returns_to_the_page_the_person_was_going_to() -> TestResult 
         location(&headers),
         "/console/sign-in?next=%2Fconsole%2Fapp%2F"
     );
-    let (_, headers) = raw(&s, "GET", "/console/models?add=1", "", "").await?;
+    let (_, headers) = raw(&s, "GET", "/console/teams?q=pay", "", "").await?;
     assert_eq!(
         location(&headers),
-        "/console/sign-in?next=%2Fconsole%2Fmodels%3Fadd%3D1"
+        "/console/sign-in?next=%2Fconsole%2Fteams%3Fq%3Dpay"
     );
     // The sign-in page keeps it; the app's # route is added by the page's script, as here.
     let (status, headers) = raw(
@@ -1051,6 +1051,165 @@ async fn in_store_mode_each_change_is_a_new_live_version_and_the_file_is_untouch
     assert!(error(&refused).contains("enterplace check"), "{refused}");
     assert_eq!(store.policy_versions()?.len(), 2);
     assert!(s.audit()?.contains(r#""action":"add_limit""#));
+    Ok(())
+}
+
+/// Prices: the old address opens the app's dialog; in store mode a model is added and a price changed as new
+/// versions, a stale page, a bad price and a role without edit_policy are refused, and each is recorded.
+#[tokio::test]
+async fn prices_add_a_model_and_change_a_price_as_new_versions() -> TestResult {
+    let s = setup("prices")?;
+    let (status, headers) = raw(&s, "GET", "/console/models?add=1&provider=openai", "", "").await?;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        location(&headers),
+        "/console/app/#/prices?add=1&provider=openai"
+    );
+    let (_, headers) = raw(&s, "GET", "/console/models?price=gpt-4o", "", "").await?;
+    assert_eq!(location(&headers), "/console/app/#/prices?price=gpt-4o");
+    let (_, headers) = raw(&s, "GET", "/console/models", "", "").await?;
+    assert_eq!(location(&headers), "/console/app/#/prices");
+
+    let versions = Versions::default();
+    versions
+        .add_policy_version(&enterplace_core::store::NewVersion {
+            text: POLICY.into(),
+            base: None,
+            note: "imported".into(),
+            by: "test".into(),
+            pending: false,
+        })
+        .map_err(|e| format!("{e:?}"))?;
+    let store: Arc<dyn enterplace_core::store::Store> = Arc::new(versions);
+    enterplace_core::store::attach_policy(&s.dir.join("enterplace.policy.yaml"), &store);
+    let cookie = sign_in(&s, ADMIN_KEY).await?;
+    let (status, list) = call(&s, "GET", "/console/api/prices", &cookie, None).await?;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(
+        (list["editable"].clone(), list["base"].clone()),
+        (json!(true), json!(1))
+    );
+    assert!(list["file"].is_null(), "{list}");
+    assert!(
+        list["note"].as_str().unwrap_or("").contains("A form edit"),
+        "{list}"
+    );
+    let row = &list["models"][0];
+    assert_eq!(row["model"], "gpt-4o-mini");
+    assert_eq!(row["provider"], "openai (openai)");
+    assert_eq!(row["source"], "built in");
+    assert_eq!(row["aliases"], "none");
+
+    // Add a model with its price and an alias: version 2.
+    let (status, done) = call(
+        &s,
+        "POST",
+        "/console/api/prices/add",
+        &cookie,
+        Some(json!({ "provider": "openai", "model": "m9", "input": "1.5", "output": "6", "aliases": "fast", "base": 1 })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(error(&done).is_empty() && done["version"] == 2, "{done}");
+    let live = store.live_policy().ok_or("no live version")?;
+    assert!(
+        live.text.contains("m9") && live.text.contains("fast") && live.text.contains("input: 1.5"),
+        "{}",
+        live.text
+    );
+    let (_, list) = call(&s, "GET", "/console/api/prices", &cookie, None).await?;
+    let m9 = list["models"]
+        .as_array()
+        .and_then(|m| m.iter().find(|m| m["model"] == "m9").cloned())
+        .ok_or("m9 is not listed")?;
+    assert_eq!(
+        (
+            m9["price"].clone(),
+            m9["source"].clone(),
+            m9["aliases"].clone(),
+            m9["input"].clone()
+        ),
+        (
+            json!("$1.50 / $6.00"),
+            json!("policy"),
+            json!("fast"),
+            json!("1.5")
+        )
+    );
+
+    // A page read before version 2 is refused, not overwritten.
+    let (status, stale) = call(
+        &s,
+        "POST",
+        "/console/api/prices/price",
+        &cookie,
+        Some(json!({ "model": "gpt-4o", "input": "2", "output": "8", "base": "1" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    let (status, done) = call(
+        &s,
+        "POST",
+        "/console/api/prices/price",
+        &cookie,
+        Some(json!({ "model": "gpt-4o", "input": "2", "output": "8", "base": 2 })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(error(&done).is_empty() && done["version"] == 3, "{done}");
+
+    // A price that is not a number, an alias a name may not hold, a provider the policy lacks.
+    for (path, body, words) in [
+        (
+            "price",
+            json!({ "model": "gpt-4o", "input": "-1", "output": "8", "base": 3 }),
+            "0 or more",
+        ),
+        (
+            "add",
+            json!({ "provider": "openai", "model": "m10", "input": "1", "output": "1", "aliases": "a b", "base": 3 }),
+            "The alias \"a b\"",
+        ),
+        (
+            "add",
+            json!({ "provider": "nobody", "model": "m10", "input": "1", "output": "1", "base": 3 }),
+            "There is no provider \"nobody\"",
+        ),
+    ] {
+        let (status, refused) = call(
+            &s,
+            "POST",
+            &format!("/console/api/prices/{path}"),
+            &cookie,
+            Some(body),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert!(error(&refused).contains(words), "{refused}");
+    }
+    assert_eq!(store.policy_versions()?.len(), 3);
+
+    // A role without edit_policy is refused, and the refusal is recorded.
+    let viewer = sign_in(&s, VIEWER_KEY).await?;
+    let (_, list) = call(&s, "GET", "/console/api/prices", &viewer, None).await?;
+    assert_eq!(list["editable"], false);
+    let (status, refused) = call(
+        &s,
+        "POST",
+        "/console/api/prices/price",
+        &viewer,
+        Some(json!({ "model": "gpt-4o", "input": "1", "output": "1", "base": 3 })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(error(&refused).contains("read only"), "{refused}");
+    let audit = s.audit()?;
+    assert!(
+        audit.contains(r#""action":"add_model""#)
+            && audit.contains(r#""action":"price_model""#)
+            && audit.contains("invalid_request"),
+        "{audit}"
+    );
     Ok(())
 }
 

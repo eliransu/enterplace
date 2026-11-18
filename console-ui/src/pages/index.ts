@@ -10,6 +10,7 @@ import { Requests } from "./Requests";
 import { Spend } from "./Spend";
 import { Audit } from "./Audit";
 import { Start } from "./Start";
+import { Prices } from "./Prices";
 
 export type PageProps = { me: Me | null; query: URLSearchParams };
 
@@ -26,11 +27,12 @@ export const PAGES: { route: string; label: string; page: ComponentType<PageProp
   { route: "/providers", label: "Models and providers", page: Providers, policy: true },
   { route: "/mcp", label: "MCP servers", page: McpServers, policy: true },
   { route: "/policy", label: "Policy basics", page: PolicyBasics, policy: true },
+  { route: "/prices", label: "Prices", page: Prices },
   { route: "/requests", label: "Requests", page: Requests },
 ];
 
 // The pages the console still renders on the server, linked as they are, by sidebar group.
 export const SERVER_PAGES: [string, [string, string][]][] = [
-  ["Access", [["/console/teams", "Teams"], ["/console/policy", "Raw policy"], ["/console/models", "Prices"]]],
+  ["Access", [["/console/teams", "Teams"], ["/console/policy", "Raw policy"]]],
   ["Tools", [["/console/mcp/tools", "MCP tools"], ["/console/mcp/approvals", "MCP approvals"]]],
 ];

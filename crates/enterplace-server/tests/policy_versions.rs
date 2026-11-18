@@ -495,34 +495,28 @@ async fn the_console_adds_a_model_edits_a_key_and_shows_teams_and_versions() -> 
         .ok_or("no cookie")?
         .to_string();
 
-    // Models: add one to the provider with a price and an alias. It is a new live version.
-    let (status, _, page) = send(form("GET", "/console/models", &cookie, "")?).await?;
+    // Prices: add a model to the provider with a price and an alias. It is a new live version.
+    let (status, _, page) = send(form("GET", "/console/api/prices", &cookie, "")?).await?;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert!(
-        page.contains("mock") && page.contains("Add a model"),
+        page.contains("mock") && page.contains(r#""editable":true"#),
         "{page}"
     );
-    let (status, headers, page) = send(form(
+    let (status, _, page) = send(form(
         "POST",
-        "/console/models/add",
+        "/console/api/prices/add",
         &cookie,
         "provider=mock&model=m9&input=1.5&output=6&aliases=fast&base=1",
     )?)
     .await?;
-    assert!(status.is_redirection(), "{status}: {page}");
-    assert!(
-        headers
-            .get(header::LOCATION)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default()
-            .contains("version=2")
-    );
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(page.contains(r#""version":2"#), "{page}");
     let live = enterplace_core::config::policy_text(&gw_dir.join("enterplace.policy.yaml"))?;
     assert!(
         live.contains("m9") && live.contains("fast") && live.contains("input: 1.5"),
         "{live}"
     );
-    let (_, _, page) = send(form("GET", "/console/models", &cookie, "")?).await?;
+    let (_, _, page) = send(form("GET", "/console/api/prices", &cookie, "")?).await?;
     assert!(
         page.contains("m9") && page.contains("fast") && page.contains("1.50"),
         "{page}"

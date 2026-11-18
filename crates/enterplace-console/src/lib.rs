@@ -15,6 +15,7 @@ pub mod html;
 mod insights;
 mod pages;
 mod people;
+mod prices;
 mod requests;
 mod saml;
 mod spend;
@@ -583,6 +584,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .merge(edit::routes())
         .merge(api::routes())
         .merge(people::routes())
+        .merge(prices::routes())
         .merge(credentials::routes())
         .merge(analytics::routes())
         .merge(requests::routes())

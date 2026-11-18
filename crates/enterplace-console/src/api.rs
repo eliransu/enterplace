@@ -371,7 +371,7 @@ async fn commit(
     }
 }
 
-fn refused(err: &Refused) -> Fail {
+pub(crate) fn refused(err: &Refused) -> Fail {
     let status = match err {
         Refused::Invalid(_) => StatusCode::BAD_REQUEST,
         Refused::ReadOnly(_) | Refused::Forbidden(_) => StatusCode::FORBIDDEN,

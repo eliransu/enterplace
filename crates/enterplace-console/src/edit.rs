@@ -1,5 +1,5 @@
-//! Editing the policy in the console: Models, Teams, and the policy's versions (the editor, its diff, approval, a dry
-//! run, rollback, export and import). A key's fields moved to the console app's People page (`people.rs`).
+//! Editing the policy in the console: Teams, and the policy's versions (the editor, its diff, approval, a dry
+//! run, rollback, export and import). A key's fields moved to the console app's People page (`people.rs`), prices to its Prices page (`prices.rs`).
 //!
 //! The policy changes only when it is kept in the store (`store.policy_from: store`): each save is a new version,
 //! checked as `enterplace check` checks a file, recorded in the audit chain first, and live on every gateway within
@@ -19,10 +19,9 @@ use axum::{
     routing::{get, post},
 };
 use enterplace_core::{
-    config::{self, Loaded},
+    config,
     policy::{Permission, Who},
     store::{self, PolicyVersion},
-    usage,
     versions::{self, DryRun, Refused},
 };
 use serde_json::json;
@@ -31,10 +30,7 @@ use crate::{
     Act, Admin, Console, Form, NOT_RECORDED,
     figures::{money, time_full, time_list},
     foreign,
-    html::{
-        Field, button, close_link, code, dialog, empty, enc, esc, facts, field, head, icon, link,
-        motif, tag,
-    },
+    html::{Field, button, code, empty, esc, facts, field, head, link, motif, tag},
     page,
     pages::{self, PolicySource, alert, tool_page},
     read_only, record, redirect, same_origin,
@@ -42,8 +38,6 @@ use crate::{
 
 pub(crate) fn routes() -> Router<Console> {
     Router::new()
-        .route("/models", get(models_page))
-        .route("/models/{action}", post(models_change))
         .route("/teams", get(teams_page))
         .route("/policy/versions", get(versions_page))
         .route("/policy/versions/{id}/{action}", post(version_action))
@@ -70,13 +64,6 @@ pub(crate) fn live(console: &Console) -> Option<PolicyVersion> {
 /// The version number a form says it started from.
 fn base_of(form: &Form) -> Option<i64> {
     form.get("base").parse().ok()
-}
-
-fn base_field(live: Option<&PolicyVersion>) -> String {
-    format!(
-        r#"<input type="hidden" name="base" value="{}">"#,
-        live.map_or_else(|| "none".to_string(), |v| v.id.to_string())
-    )
 }
 
 /// What the policy page shows in its head and above the policy.
@@ -200,367 +187,6 @@ fn problems(err: &Refused) -> String {
         other => vec![esc(&sentence(&other.message()))],
     };
     alert(&lines.join("<br>"))
-}
-
-// ---------------------------------------------------------------- models
-
-async fn models_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let query = Form::of(&uri);
-    page(StatusCode::OK, models_body(&console, &admin, &query, ""))
-}
-
-fn models_body(console: &Console, admin: &Admin, query: &Form, error: &str) -> String {
-    let title = "Models";
-    let here = "/console/models";
-    let c = console.config();
-    let lead = "Each model, its provider and its price.";
-    let loaded = match config::load(&c.policy, Some(&c.keys)) {
-        Ok(loaded) => loaded,
-        Err(problems) => {
-            let failed = empty(
-                &motif(&["", "flame"], &["empty"], (2, 1), true, true),
-                "The policy did not load",
-                &esc(&problems.join(" ")),
-                &link("Open the policy", "", "/console/policy", false),
-            );
-            return tool_page(
-                title,
-                &admin.label(),
-                here,
-                query,
-                &format!("{}\n{failed}", head(title, lead, "")),
-                "",
-            );
-        }
-    };
-    let live = live(console);
-    let editable = live.is_some() && edits_policy(admin);
-    let mut add = link(
-        "Providers and models",
-        "quiet",
-        "/console/app/#/providers",
-        false,
-    );
-    if editable {
-        add.push_str(&link("Add a model", "", "/console/models?add=1", false));
-    }
-    // A plain line, not a banner: read only is how a file-kept policy works, nothing went wrong.
-    let banner = if live.is_none() {
-        format!(
-            r#"<p class="t-small g-muted" style="margin: 0">Read only: prices come from <span class="t-mono">{}</span>. <a class="g-link t-small" href="{}/operations/console-editing/">How to edit here</a></p>"#,
-            esc(&c.policy.file_name().map_or_else(
-                || c.policy.display().to_string(),
-                |n| n.to_string_lossy().into_owned()
-            )),
-            crate::start::DOCS
-        )
-    } else {
-        String::new()
-    };
-    let prices = loaded.policy.prices();
-    let mut rows = String::new();
-    for provider in &loaded.providers {
-        for model in &provider.models {
-            let (price, source) = match (prices.get(model), usage::price_for(model, prices)) {
-                (Some(p), _) => (
-                    format!("{} / {}", money(p.input), money(p.output)),
-                    "policy",
-                ),
-                (None, Some(p)) => (
-                    format!("{} / {}", money(p.input), money(p.output)),
-                    "built in",
-                ),
-                (None, None) => ("no price".into(), "spend is not counted"),
-            };
-            let aliases: Vec<&str> = loaded
-                .aliases
-                .iter()
-                .filter(|a| {
-                    a.deployments
-                        .iter()
-                        .any(|d| d.provider == provider.name && d.model == *model)
-                })
-                .map(|a| a.name.as_str())
-                .collect();
-            // Read only, the column has nothing to offer and is left out.
-            let change = if editable {
-                format!(
-                    r#"<td><span class="g-head__actions">{}</span></td>"#,
-                    link(
-                        "Price",
-                        "quiet",
-                        &format!("{here}?price={}", enc(model)),
-                        true,
-                    )
-                )
-            } else {
-                String::new()
-            };
-            let _ = write!(
-                rows,
-                r#"<tr><td>{}<span class="g-table__sub">{}</span></td><td class="g-table__num">{price}<span class="g-table__sub">{source}</span></td><td class="g-table__wide">{}</td>{change}</tr>"#,
-                esc(model),
-                esc(&format!("{} ({})", provider.name, provider.kind.word())),
-                if aliases.is_empty() {
-                    "none".to_string()
-                } else {
-                    esc(&aliases.join(", "))
-                },
-            );
-        }
-    }
-    let table = if rows.is_empty() {
-        empty(
-            &motif(&["", ""], &["empty"], (2, 1), true, true),
-            "No models yet",
-            "Add a provider in the policy editor, then add its models here.",
-            &add,
-        )
-    } else {
-        let (change, form_note) = if editable {
-            (
-                "<th>Change</th>",
-                " A form edit saves the policy without its comments: the editor keeps them.",
-            )
-        } else {
-            ("", "")
-        };
-        format!(
-            r#"<div class="g-panel g-stack"><div class="g-table-wrap"><table class="g-table g-table--stack g-table--prose t-mono-sm">
-<thead class="t-tag"><tr><th>Model</th><th>USD per 1M tokens, in / out</th><th>Aliases</th>{change}</tr></thead>
-<tbody>{rows}</tbody></table></div>
-<p class="t-small g-muted" style="margin: 0">A price set in the policy is used over the built-in one.{form_note}</p></div>"#
-        )
-    };
-    let overlay = if editable {
-        model_dialog(query, &loaded, live.as_ref(), error)
-    } else {
-        String::new()
-    };
-    let main = format!("{}\n{banner}\n{table}", head(title, lead, &add));
-    tool_page(title, &admin.label(), here, query, &main, &overlay)
-}
-
-fn number_field(id: &str, name: &str, label: &str, value: &str, hint: &str) -> String {
-    field(&Field {
-        id,
-        name,
-        label,
-        value,
-        mono: true,
-        extra: r#" type="number" min="0" step="any" inputmode="decimal" required aria-required="true""#,
-        hint,
-        error: "",
-    })
-}
-
-fn model_dialog(
-    query: &Form,
-    loaded: &Loaded,
-    live: Option<&PolicyVersion>,
-    error: &str,
-) -> String {
-    let cancel = close_link("Cancel", "quiet", "/console/models");
-    let error = if error.is_empty() {
-        String::new()
-    } else {
-        format!(
-            r#"<p class="g-field__error t-small" role="alert" style="margin: 0">{}</p>"#,
-            esc(error)
-        )
-    };
-    let base = base_field(live);
-    if query.get("add") == "1" {
-        let options: String = loaded
-            .providers
-            .iter()
-            .map(|p| {
-                let selected = if query.get("provider") == p.name {
-                    " selected"
-                } else {
-                    ""
-                };
-                format!(
-                    r#"<option value="{0}"{selected}>{0}</option>"#,
-                    esc(&p.name)
-                )
-            })
-            .collect();
-        let fields = format!(
-            r#"<div class="g-field"><label class="g-field__label t-tag g-caps" for="model-provider">Provider</label><div class="g-select-wrap"><select class="g-input g-select t-body" id="model-provider" name="provider">{options}</select>{}</div></div>"#,
-            icon("down")
-        ) + &field(&Field {
-            id: "model-name",
-            name: "model",
-            label: "Model",
-            value: query.get("model"),
-            mono: true,
-            extra: r#" required aria-required="true" autocomplete="off" autofocus placeholder="gpt-4o-mini""#,
-            hint: "The name callers send, as the provider knows it.",
-            error: "",
-        }) + &number_field(
-            "model-input",
-            "input",
-            "Input, USD per 1M tokens",
-            query.get("input"),
-            "",
-        ) + &number_field(
-            "model-output",
-            "output",
-            "Output, USD per 1M tokens",
-            query.get("output"),
-            "",
-        ) + &field(&Field {
-            id: "model-aliases",
-            name: "aliases",
-            label: "Aliases, optional",
-            value: query.get("aliases"),
-            mono: true,
-            extra: r#" autocomplete="off" placeholder="fast, default""#,
-            hint: "Other names callers may send for this model, separated by commas.",
-            error: "",
-        });
-        return dialog(
-            "add-model-title",
-            "Add a model",
-            "Saved as a new policy version. It is checked as enterplace check checks a file and every gateway serves it within 2 seconds, or after a second admin approves it.",
-            &format!(
-                r#"<form class="g-stack" style="gap: var(--space-6)" method="post" action="/console/models/add">{base}{fields}{error}<div class="g-dialog__actions">{cancel}{}</div></form>"#,
-                button("Save version", "", "submit", "")
-            ),
-        );
-    }
-    let model = query.get("price");
-    if model.is_empty() {
-        return String::new();
-    }
-    let price = loaded
-        .policy
-        .prices()
-        .get(model)
-        .cloned()
-        .or_else(|| usage::price_for(model, loaded.policy.prices()));
-    let (input, output) = price.map_or((String::new(), String::new()), |p| {
-        (p.input.to_string(), p.output.to_string())
-    });
-    dialog(
-        "price-title",
-        "Change the price",
-        &format!(
-            "What <span class=\"t-mono\">{}</span> costs, for budgets and the spend page. Saved as a new policy version.",
-            esc(model)
-        ),
-        &format!(
-            r#"<form class="g-stack" style="gap: var(--space-6)" method="post" action="/console/models/price">{base}<input type="hidden" name="model" value="{}">{}{}{error}<div class="g-dialog__actions">{cancel}{}</div></form>"#,
-            esc(model),
-            number_field(
-                "price-input",
-                "input",
-                "Input, USD per 1M tokens",
-                &input,
-                ""
-            ),
-            number_field(
-                "price-output",
-                "output",
-                "Output, USD per 1M tokens",
-                &output,
-                ""
-            ),
-            button("Save version", "", "submit", "")
-        ),
-    )
-}
-
-async fn models_change(
-    State(console): State<Console>,
-    Path(action): Path<String>,
-    headers: HeaderMap,
-    body: String,
-) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let form = Form::parse(&body);
-    let (act, back): (&'static str, String) = match action.as_str() {
-        "add" => ("add_model", format!("add=1&{body}")),
-        "price" => ("price_model", format!("price={}", enc(form.get("model")))),
-        _ => return redirect("/console/models"),
-    };
-    let refuse = |error: String| {
-        page(
-            StatusCode::BAD_REQUEST,
-            models_body(&console, &admin, &Form::parse(&back), &error),
-        )
-    };
-    if !edits_policy(&admin) {
-        read_only(&console, &admin, act).await;
-        return refuse("You are signed in read only: ask an admin to change models.".into());
-    }
-    let Some(live) = live(&console) else {
-        return refuse(sentence(&versions::read_only_message(
-            &console.config().policy,
-        )));
-    };
-    let price = |input: &str, output: &str| -> Result<(f64, f64), String> {
-        match (input.trim().parse::<f64>(), output.trim().parse::<f64>()) {
-            (Ok(i), Ok(o)) if i.is_finite() && o.is_finite() && i >= 0.0 && o >= 0.0 => Ok((i, o)),
-            _ => Err("A price is a number of US dollars per million tokens, 0 or more, for example 0.15 and 0.60.".into()),
-        }
-    };
-    let model = form.get("model").trim().to_string();
-    let edited = price(form.get("input"), form.get("output")).and_then(|p| {
-        if !config::valid_name(&model) {
-            return Err("A model name uses letters, digits, '.', '-', '_' and '@', for example gpt-4o-mini.".into());
-        }
-        if act == "add_model" {
-            let aliases: Vec<String> = form
-                .get("aliases")
-                .split(',')
-                .map(|a| a.trim().to_string())
-                .filter(|a| !a.is_empty())
-                .collect();
-            if let Some(bad) = aliases.iter().find(|a| !config::valid_name(a)) {
-                return Err(format!("The alias \"{bad}\" uses a character a model name cannot. Use letters, digits, '.', '-', '_' and '@'."));
-            }
-            versions::add_model(&live.text, form.get("provider"), &model, Some(p), &aliases).map_err(|e| sentence(&e))
-        } else {
-            versions::set_price(&live.text, &model, p).map_err(|e| sentence(&e))
-        }
-    });
-    let text = match edited {
-        Ok(text) => text,
-        Err(error) => {
-            let _ = record(
-                &console,
-                &Act {
-                    action: act,
-                    by: Some((&admin.name, &admin.team)),
-                    key: None,
-                    target: json!({ "model": model }),
-                },
-                Some("invalid_request"),
-                None,
-            )
-            .await;
-            return refuse(error);
-        }
-    };
-    let note = if act == "add_model" {
-        format!("Add model {model} to provider {}", form.get("provider"))
-    } else {
-        format!("Change the price of {model}")
-    };
-    match save_version(&console, &admin, act, text, base_of(&form), note).await {
-        Ok(v) => saved(&v),
-        Err(err) => refuse(sentence(&err.message())),
-    }
 }
 
 // ---------------------------------------------------------------- teams

@@ -3092,14 +3092,39 @@ async fn a_file_kept_policy_offers_nothing_that_edits_it() -> TestResult {
         ),
     )?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, models) = send(&s.app, get("/console/models", &cookie)?).await?;
+    let (_, _, prices) = call(
+        &s.app,
+        "GET",
+        "/console/api/prices",
+        &cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
+    let text = prices.to_string();
     assert!(
-        models.contains("Read only: prices come from")
-            && models.contains("How to edit here")
-            && !models.contains("policy_from")
-            && !models.contains("<th>Change</th>")
-            && !models.contains("A form edit"),
-        "{models}"
+        prices["file"] == "enterplace.policy.yaml"
+            && prices["docs"]
+                .as_str()
+                .unwrap_or("")
+                .ends_with("/operations/console-editing/")
+            && prices["editable"] == false
+            && !text.contains("policy_from")
+            && !text.contains("A form edit"),
+        "{prices}"
+    );
+    // A change says why it cannot be made here and changes nothing.
+    let (status, _, refused) = call(
+        &s.app,
+        "POST",
+        "/console/api/prices/price",
+        &cookie,
+        serde_json::json!({ "model": "gpt-4o", "input": "1", "output": "1" }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert!(
+        !refused["error"].as_str().unwrap_or("").is_empty(),
+        "{refused}"
     );
     let (_, _, policy) = send(&s.app, get("/console/policy", &cookie)?).await?;
     assert!(

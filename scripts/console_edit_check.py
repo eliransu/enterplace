@@ -110,23 +110,28 @@ audit: {{ path: enterplace-audit.jsonl }}
         chrome.key("Enter")
         chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/start')", "Start here after sign-in")
 
-        # Models: add one through the dialog. Approval is on, so it waits; the second admin approves it.
+        # Prices: add a model through the app's dialog. Approval is on, so it waits; the second admin approves it.
+        # The old address still opens the dialog.
         chrome.go(f"{base}/console/models?add=1")
-        chrome.js("""(() => { const f = document.querySelector('form[action="/console/models/add"]');
-            f.model.value = 'local-fast'; f.input.value = '0.15'; f.output.value = '0.6'; f.aliases.value = 'fast';
-            f.submit(); })()""")
-        chrome.wait("location.pathname === '/console/policy/versions' && document.readyState === 'complete'", "the new version")
-        check("waiting for approval" in chrome.js("document.body.textContent").lower(), "a model added with approval on waits for a second admin")
+        chrome.wait("location.hash.startsWith('#/prices?add=1') && document.getElementById('model-name')", "the Add a model dialog")
+        chrome.js("""(() => { const set = (id, v) => { const el = document.getElementById(id);
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v);
+            el.dispatchEvent(new Event('input', { bubbles: true })); };
+            set('model-name', 'local-fast'); set('model-input', '0.15'); set('model-output', '0.6'); set('model-aliases', 'fast');
+            [...document.querySelectorAll('[role="dialog"] button')].find(b => b.textContent === 'Save version').click(); })()""")
+        chrome.wait("document.body.textContent.includes('waits for a second admin')", "the new version waits for approval")
         status, body = api(base, second, "POST", "/admin/policy/versions/2/approve")
         check(status == 200, f"the second admin approves version 2 ({status} {body[:200]})")
         time.sleep(1.5)
-        chrome.go(f"{base}/console/models")
-        check("local-fast" in chrome.js("document.body.textContent"), "the approved model is listed")
+        chrome.go(f"{base}/console/app/#/prices")
+        chrome.wait("document.body.textContent.includes('local-fast')", "the approved model is listed")
         chrome.shot(out / "models.png")
-        chrome.go(f"{base}/console/models?price=local-large")
+        chrome.go(f"{base}/console/app/#/prices?price=local-large")
+        chrome.wait("document.getElementById('price-input')", "the price dialog")
         chrome.shot(out / "models-price-dialog.png", full=False)
         chrome.size(390, 844)
-        chrome.go(f"{base}/console/models")
+        chrome.go(f"{base}/console/app/#/prices")
+        chrome.wait("document.body.textContent.includes('local-fast')", "the Prices page on a phone")
         chrome.shot(out / "models-phone.png")
         chrome.size(1440)
 
