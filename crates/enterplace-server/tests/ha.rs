@@ -634,14 +634,19 @@ async fn the_admin_api_lists_every_gateway_on_the_store() -> TestResult {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/console/policy")
+                .uri("/console/api/policy/raw")
                 .header(header::HOST, "enterplace.test")
                 .header(header::COOKIE, &cookie)
                 .body(Body::empty())?,
         )
         .await?;
-    let html = String::from_utf8(page.into_body().collect().await?.to_bytes().to_vec())?;
-    assert!(html.contains(">Gateways</h2>"), "{html}");
-    assert_eq!(html.matches(">Healthy</span>").count(), 2, "{html}");
+    let body = String::from_utf8(page.into_body().collect().await?.to_bytes().to_vec())?;
+    let raw: serde_json::Value = serde_json::from_str(&body)?;
+    let replicas = raw["replicas"].as_array().ok_or(body.clone())?;
+    assert_eq!(
+        replicas.iter().filter(|r| r["healthy"] == true).count(),
+        2,
+        "{body}"
+    );
     Ok(())
 }

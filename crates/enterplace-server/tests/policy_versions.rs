@@ -548,49 +548,83 @@ async fn the_console_adds_a_model_edits_a_key_and_shows_teams_and_versions() -> 
         "{page}"
     );
 
-    // Policy versions: the history, a diff, a dry run, and an edit saved from the editor.
-    let (status, _, page) = send(form(
+    // Policy versions: the history, a diff, a dry run, and an edit saved from the editor. The old addresses point
+    // at the app.
+    let (status, headers, _) = send(form(
         "GET",
         "/console/policy/versions?version=2",
         &cookie,
         "",
     )?)
     .await?;
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        page.contains("Version 2")
-            && page.contains("g-code__line--add")
-            && page.contains("Dry run"),
-        "{page}"
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        headers.get(header::LOCATION).and_then(|v| v.to_str().ok()),
+        Some("/console/app/#/policy/versions?version=2")
     );
-    // The live version has nothing to roll back to; an earlier one does.
-    assert!(!page.contains("Roll back to this version"), "{page}");
-    let (_, _, page) = send(form(
+    let (status, _, page) = send(form(
         "GET",
-        "/console/policy/versions?version=1",
+        "/console/api/policy/versions?version=2",
         &cookie,
         "",
     )?)
     .await?;
-    assert!(page.contains("Roll back to this version"), "{page}");
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let versions: serde_json::Value = serde_json::from_str(&page)?;
+    let detail = &versions["detail"];
+    assert!(
+        detail["id"] == 2
+            && detail["diff"]
+                .as_array()
+                .is_some_and(|d| d.iter().any(|l| l["kind"] == "add"))
+            && detail["actions"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|a| a == "dry_run")),
+        "{versions}"
+    );
+    // The live version has nothing to roll back to; an earlier one does.
+    assert!(
+        !detail["actions"].to_string().contains("rollback"),
+        "{versions}"
+    );
+    let (_, _, page) = send(form(
+        "GET",
+        "/console/api/policy/versions?version=1",
+        &cookie,
+        "",
+    )?)
+    .await?;
+    assert!(page.contains(r#""rollback""#), "{page}");
+    let (status, _, page) = send(form("GET", "/console/api/policy/editor", &cookie, "")?).await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(page.contains(r#""base":2"#), "{page}");
     let edited = live.replace("models: [m, m9]", "models: [m]");
     let body = format!(
         "text={}&base=2&note=narrow",
         enterplace_console::html::enc(&edited)
     );
-    let (status, _, page) = send(form("POST", "/console/policy/dry-run", &cookie, &body)?).await?;
+    let (status, _, page) =
+        send(form("POST", "/console/api/policy/dry-run", &cookie, &body)?).await?;
     assert_eq!(status, StatusCode::OK, "{page}");
-    assert!(page.contains("Dry run"), "{page}");
-    let (status, _, page) = send(form("POST", "/console/policy/save", &cookie, &body)?).await?;
-    assert!(status.is_redirection(), "{status}: {page}");
+    assert!(
+        page.contains("Dry run done") && page.contains("Now refused"),
+        "{page}"
+    );
+    let (status, _, page) = send(form("POST", "/console/api/policy/save", &cookie, &body)?).await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(page.contains(r#""version":3"#), "{page}");
+    // Saved again on the same base: the version it started from is no longer live.
+    let (status, _, page) = send(form("POST", "/console/api/policy/save", &cookie, &body)?).await?;
+    assert_eq!(status, StatusCode::CONFLICT, "{page}");
     let (status, _, page) = send(form(
         "POST",
-        "/console/policy/versions/1/rollback",
+        "/console/api/policy/versions/1/rollback",
         &cookie,
         "",
     )?)
     .await?;
-    assert!(status.is_redirection(), "{status}: {page}");
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(page.contains("is live"), "{page}");
     let live = enterplace_core::config::policy_text(&gw_dir.join("enterplace.policy.yaml"))?;
     assert_eq!(live, policy(port, "store"));
     let (_, headers, export) = send(form("GET", "/console/policy/export", &cookie, "")?).await?;

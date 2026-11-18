@@ -841,7 +841,7 @@ async fn without_the_features_the_page_and_api_say_why_and_nothing_is_made() -> 
             .await?;
         assert_eq!(api.status, StatusCode::FORBIDDEN);
         assert!(api.text.contains("license_required"));
-        let audit = owner.go(&gw.app, "GET", "/console/policy", &[]).await?;
+        let audit = owner.go(&gw.app, "GET", "/console/teams", &[]).await?;
         assert!(!audit.text.contains("/console/siem"), "no nav entry");
         // The gateway's own request index names its replica in the same `.replica` file the export uses, so that
         // file says nothing about the export: its tables, below, do.

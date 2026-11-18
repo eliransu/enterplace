@@ -639,20 +639,29 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
         notes.contains("Claude desktop app") && notes.contains("Run claude in a terminal"),
         "{notes}"
     );
-    let pages = [
-        (
-            "/console/teams",
-            "No teams yet",
-            "/console/start?track=coding#step-2",
-            "/governance/teams/",
-        ),
-        (
-            "/console/policy",
-            "One rule lets everyone in",
-            "/console/start?track=limit#step-5",
-            "/governance/policy/",
-        ),
-    ];
+    let pages = [(
+        "/console/teams",
+        "No teams yet",
+        "/console/start?track=coding#step-2",
+        "/governance/teams/",
+    )];
+    // The raw policy is in the app: its API carries the first-run state, its button naming the budget step.
+    let request = Request::get("/console/api/policy/raw")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())?;
+    let (_, _, raw) = send(&s.app, request).await?;
+    let raw: serde_json::Value = serde_json::from_str(&raw)?;
+    assert_eq!(raw["next"]["title"], "One rule lets everyone in", "{raw}");
+    assert_eq!(
+        raw["next"]["action"]["href"],
+        "/console/start?track=limit#step-5"
+    );
+    assert_eq!(raw["next"]["action"]["label"], "Add a budget");
+    assert_eq!(
+        raw["next"]["docs"],
+        "https://docs.enterplace.dev/governance/policy/"
+    );
     // The audit log is in the app too, with the same empty state while only setup records are in the chain.
     let request = Request::get("/console/api/audit")
         .header(header::HOST, HOST)

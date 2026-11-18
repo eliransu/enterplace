@@ -542,7 +542,7 @@ async fn an_rs256_admin_signs_in_is_recorded_and_signs_out() -> TestResult {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     send(&s.app, "GET", "/console/sign-out", &cookie, "").await?;
-    let (status, _, _) = send(&s.app, "GET", "/console/policy", &cookie, "").await?;
+    let (status, _, _) = send(&s.app, "GET", "/console/teams", &cookie, "").await?;
     assert_eq!(status, StatusCode::SEE_OTHER);
 
     let records = admin_records(&s)?;
@@ -574,7 +574,7 @@ async fn an_es256_viewer_signs_in_read_only_and_cannot_issue_a_key() -> TestResu
         "enterplace_console={}",
         set_cookie(&headers, "enterplace_console")
     );
-    let (_, _, page) = send(&s.app, "GET", "/console/policy", &cookie, "").await?;
+    let (_, _, page) = send(&s.app, "GET", "/console/teams", &cookie, "").await?;
     // The name on one line and the role on the next.
     assert!(
         page.contains(r#"<span class="t-mono g-muted">guest@partner.org</span><span class="t-small g-muted">read only</span>"#),
@@ -905,7 +905,7 @@ async fn a_read_only_person_cannot_revoke_and_a_person_removed_from_the_policy_i
     );
 
     // The email leaves the policy: the next page is the sign-in page, with no restart.
-    let (status, _, _) = send(&s.app, "GET", "/console/policy", &cookie, "").await?;
+    let (status, _, _) = send(&s.app, "GET", "/console/teams", &cookie, "").await?;
     assert_eq!(status, StatusCode::OK);
     let policy = s.dir.join("enterplace.policy.yaml");
     let text = std::fs::read_to_string(&policy)?;
@@ -916,11 +916,11 @@ async fn a_read_only_person_cannot_revoke_and_a_person_removed_from_the_policy_i
             "allowed_emails: [other@partner.org]",
         ),
     )?;
-    let (status, headers, _) = send(&s.app, "GET", "/console/policy", &cookie, "").await?;
+    let (status, headers, _) = send(&s.app, "GET", "/console/teams", &cookie, "").await?;
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(
         headers.get(header::LOCATION).and_then(|v| v.to_str().ok()),
-        Some("/console/sign-in?next=%2Fconsole%2Fpolicy")
+        Some("/console/sign-in?next=%2Fconsole%2Fteams")
     );
     Ok(())
 }

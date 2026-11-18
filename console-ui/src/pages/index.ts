@@ -12,13 +12,15 @@ import { Audit } from "./Audit";
 import { Start } from "./Start";
 import { Prices } from "./Prices";
 import { McpApprovals, McpSessions, McpTools } from "./Mcp";
+import { PolicyEditor, PolicyVersions, RawPolicy } from "./RawPolicy";
 
 export type PageProps = { me: Me | null; query: URLSearchParams };
 
 // Every page of the app: its # route, its label in the sidebar, and its component. A ported page adds one line here
 // and takes its line out of SERVER_PAGES below.
 // `policy`: the page edits the policy, so it says where a change is saved and whether the role may make one.
-export const PAGES: { route: string; label: string; page: ComponentType<PageProps>; policy?: boolean }[] = [
+// `hidden`: reached from another page's actions, not from the sidebar.
+export const PAGES: { route: string; label: string; page: ComponentType<PageProps>; policy?: boolean; hidden?: boolean }[] = [
   { route: "/start", label: "Start here", page: Start },
   { route: "/people", label: "People", page: People },
   { route: "/credentials", label: "Credentials", page: Credentials },
@@ -31,11 +33,14 @@ export const PAGES: { route: string; label: string; page: ComponentType<PageProp
   { route: "/mcp/approvals", label: "MCP approvals", page: McpApprovals },
   { route: "/mcp/sessions", label: "MCP sessions", page: McpSessions },
   { route: "/policy", label: "Policy basics", page: PolicyBasics, policy: true },
+  { route: "/policy/raw", label: "Raw policy", page: RawPolicy },
+  { route: "/policy/versions", label: "Policy versions", page: PolicyVersions, hidden: true },
+  { route: "/policy/edit", label: "Edit the policy", page: PolicyEditor, hidden: true },
   { route: "/prices", label: "Prices", page: Prices },
   { route: "/requests", label: "Requests", page: Requests },
 ];
 
 // The pages the console still renders on the server, linked as they are, by sidebar group.
 export const SERVER_PAGES: [string, [string, string][]][] = [
-  ["Access", [["/console/teams", "Teams"], ["/console/policy", "Raw policy"]]],
+  ["Access", [["/console/teams", "Teams"]]],
 ];

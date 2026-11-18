@@ -762,7 +762,7 @@ async fn without_the_feature_the_page_says_why_and_a_viewer_changes_nothing() ->
     let page = owner.go(&gw.app, "GET", "/console/alerts", &[]).await?;
     assert_eq!(page.status, StatusCode::FORBIDDEN);
     assert!(page.text.contains("license_required"), "{}", page.text);
-    let audit = owner.go(&gw.app, "GET", "/console/policy", &[]).await?;
+    let audit = owner.go(&gw.app, "GET", "/console/teams", &[]).await?;
     assert!(!audit.text.contains("/console/alerts"), "no nav entry");
     Ok(())
 }

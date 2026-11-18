@@ -145,23 +145,29 @@ audit: {{ path: enterplace-audit.jsonl }}
         chrome.wait("location.hash.includes('edit=') && document.querySelector('[role=\"dialog\"]')", "the key editor")
         chrome.shot(out / "key-edit.png")
 
-        # A draft that narrows everyone's models: saved for approval, then dry-run from the editor.
+        # A draft that narrows everyone's models: dry-run from the editor, then saved for approval. The old address
+        # opens the app's editor.
         chrome.go(f"{base}/console/policy/edit")
-        chrome.js("""(() => { const t = document.getElementById('policy-text');
-            t.value = t.value.replace('principals: { any: true }\\n    models: [local-model]', 'principals: { any: true }\\n    models: []');
-            document.getElementById('policy-note').value = 'everyone else gets no model'; })()""")
-        chrome.js("document.querySelector('button[formaction=\"/console/policy/dry-run\"]').click()")
-        chrome.wait("document.body.innerText.includes('Dry run') && document.querySelector('.g-tag')", "the dry run")
+        chrome.wait("location.hash.startsWith('#/policy/edit') && document.getElementById('policy-text')", "the editor")
+        chrome.js("""(() => { const set = (el, v, proto) => { Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v);
+            el.dispatchEvent(new Event('input', { bubbles: true })); };
+            const t = document.getElementById('policy-text');
+            set(t, t.value.replace('principals: { any: true }\\n    models: [local-model]', 'principals: { any: true }\\n    models: []'), HTMLTextAreaElement.prototype);
+            set(document.getElementById('policy-note'), 'everyone else gets no model', HTMLInputElement.prototype); })()""")
+        chrome.js("[...document.querySelectorAll('main button')].find(b => b.textContent === 'Dry run').click()")
+        chrome.wait("document.body.textContent.includes('Dry run done')", "the dry run")
         check("every gateway on the store" in chrome.js("document.body.textContent"),
               "the dry run replays every gateway's requests from the store")
         chrome.shot(out / "policy-edit-dry-run.png")
-        chrome.js("document.querySelector('form[action=\"/console/policy/save\"]').submit()")
-        chrome.wait("location.pathname === '/console/policy/versions' && document.readyState === 'complete'", "the saved draft")
+        chrome.js("[...document.querySelectorAll('main button')].find(b => b.textContent === 'Save for approval').click()")
+        chrome.wait("location.hash.startsWith('#/policy/versions?version=') && document.body.textContent.includes('Waiting for approval')", "the saved draft")
         chrome.shot(out / "policy-version-pending.png")
 
         chrome.go(f"{base}/console/policy")
+        chrome.wait("location.hash.startsWith('#/policy/raw') && document.getElementById('line-1')", "the raw policy")
         chrome.shot(out / "policy.png")
         chrome.go(f"{base}/console/policy/versions?version=2")
+        chrome.wait("location.hash === '#/policy/versions?version=2' && document.body.textContent.includes('Changes from')", "version 2")
         chrome.shot(out / "policy-versions.png")
         print(f"console edit check passed; screenshots in {out}")
     except AssertionError as failed:

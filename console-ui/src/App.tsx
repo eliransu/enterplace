@@ -40,7 +40,7 @@ export function App() {
           <span className="t-sm">Enterplace</span>
         </a>
         {/* Start here leads, as on the server-rendered nav; the pages after it are under Manage. */}
-        {PAGES.map((p, i) => (
+        {PAGES.filter((p) => !p.hidden).map((p, i) => (
           <div key={p.route} className="contents">
             {i === 1 ? <span className="t-tag px-4 pt-4 uppercase text-muted-foreground">Manage</span> : null}
             <a href={`#${p.route}`} aria-current={current === p ? "page" : undefined} className={cn(item, current === p && "bg-secondary")}>

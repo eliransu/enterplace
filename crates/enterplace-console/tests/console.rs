@@ -451,7 +451,7 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
         // People and the audit log moved to the app: their old addresses only point there, and the app needs the
         // session.
         "/console/app/",
-        "/console/policy",
+        "/console/teams",
     ] {
         for cookie in ["", "enterplace_console=not-a-session"] {
             let (status, headers, page) = send(&s.app, get(path, cookie)?).await?;
@@ -555,7 +555,7 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
     }
 
     let cookie = sign_in(&s.app).await?;
-    let (status, headers, page) = send(&s.app, get("/console/policy", &cookie)?).await?;
+    let (status, headers, page) = send(&s.app, get("/console/teams", &cookie)?).await?;
     assert_eq!(status, StatusCode::OK);
     assert!(
         page.contains(r#"g-muted">noa.bar</span><span class="t-small g-muted">admin</span>"#)
@@ -587,7 +587,7 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
             .is_some_and(|c| c.contains("Max-Age=0"))
     );
     assert_eq!(
-        send(&s.app, get("/console/policy", &cookie)?).await?.0,
+        send(&s.app, get("/console/teams", &cookie)?).await?.0,
         StatusCode::SEE_OTHER
     );
 
@@ -595,12 +595,12 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
     let cookie = sign_in(&s.app).await?;
     std::fs::write(s.keys(), keys_text().replace("    admin: true\n", ""))?;
     assert_eq!(
-        send(&s.app, get("/console/policy", &cookie)?).await?.0,
+        send(&s.app, get("/console/teams", &cookie)?).await?.0,
         StatusCode::SEE_OTHER
     );
     std::fs::write(s.keys(), keys_text())?;
     assert_eq!(
-        send(&s.app, get("/console/policy", &cookie)?).await?.0,
+        send(&s.app, get("/console/teams", &cookie)?).await?.0,
         StatusCode::SEE_OTHER,
         "a dropped session came back"
     );
@@ -755,30 +755,67 @@ async fn people_policy_and_spend_render_from_the_files() -> TestResult {
         (Some(2), Some("never"))
     );
 
-    let (_, _, policy) = send(&s.app, get("/console/policy?line=10", &cookie)?).await?;
+    // The raw policy moved to the app: the old address keeps the line it asked for.
+    let (status, headers, _) = send(&s.app, get("/console/policy?line=10", &cookie)?).await?;
+    assert_eq!(
+        (status, location(&headers)),
+        (StatusCode::SEE_OTHER, "/console/app/#/policy/raw?line=10")
+    );
+    let (status, _, policy) = call(
+        &s.app,
+        "GET",
+        "/console/api/policy/raw",
+        &cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{policy}");
     assert!(
-        policy.contains(r#"<span class="g-code__n">15</span>"#)
-            && policy.contains("g-code__line--hit")
+        policy["lines"].as_array().is_some_and(|l| l.len() >= 15) && policy["lines"][14]["n"] == 15,
+        "{policy}"
+    );
+    let rules = policy["rules"].to_string();
+    assert!(
+        rules.contains("payments-team")
+            && rules.contains("Team payments may use gpt-4o-mini")
+            && rules.contains("Everyone else may use every model"),
+        "{rules}"
     );
     assert!(
-        policy.contains("payments-team")
-            && policy.contains("Team payments may use gpt-4o-mini")
-            && policy.contains("Everyone else may use every model")
-    );
-    assert!(
-        policy.contains("openai at https://api.openai.com")
-            && !policy.contains("OPENAI_API_KEY=")
-            && policy.contains("Read only")
+        policy["providers"]
+            .to_string()
+            .contains("openai at https://api.openai.com")
+            && !policy.to_string().contains("OPENAI_API_KEY=")
+            && policy["tag"] == "Read only"
+            && policy["edit"] == false,
+        "{policy}"
     );
 
     std::fs::write(
         s.dir.join("enterplace.policy.yaml"),
         POLICY.replace("    models: [gpt-4o-mini]\n", "    modles: [gpt-4o-mini]\n"),
     )?;
-    let (_, _, broken) = send(&s.app, get("/console/policy", &cookie)?).await?;
+    let (_, _, broken) = call(
+        &s.app,
+        "GET",
+        "/console/api/policy/raw",
+        &cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
+    // The problem is placed under its line.
     assert!(
-        broken.contains("g-code__line--error")
-            && broken.contains("Did you mean &quot;models&quot;?"),
+        broken["lines"]
+            .as_array()
+            .is_some_and(|lines| lines.iter().any(|l| l["problems"]
+                .to_string()
+                .contains(r#"Did you mean \"models\"?"#))),
+        "{broken}"
+    );
+    assert!(
+        broken["lead"]
+            .as_str()
+            .is_some_and(|l| l.starts_with("enterplace check refuses this file")),
         "{broken}"
     );
 
@@ -2283,7 +2320,7 @@ async fn a_killed_sheet_tells_the_story_of_the_switch_that_stopped_it_and_whethe
         "{sheet2}"
     );
     // UX m26. The first Tab stop of a server-rendered page skips the nav.
-    let (_, _, shell) = send(&s.app, get("/console/policy", &cookie)?).await?;
+    let (_, _, shell) = send(&s.app, get("/console/teams", &cookie)?).await?;
     let skip = shell.find(r##"href="#main">Skip to the page"##);
     assert!(
         skip.is_some()
@@ -2738,7 +2775,7 @@ async fn every_page_says_when_observe_mode_lets_everything_through() -> TestResu
     )
     .await?;
     assert_eq!(me["observe"], true);
-    for path in ["/console/policy", "/console/teams"] {
+    for path in ["/console/teams"] {
         let (status, _, page) = send(&s.app, get(path, &cookie)?).await?;
         assert_eq!(status, StatusCode::OK, "{path}");
         assert_eq!(
@@ -3126,11 +3163,19 @@ async fn a_file_kept_policy_offers_nothing_that_edits_it() -> TestResult {
         !refused["error"].as_str().unwrap_or("").is_empty(),
         "{refused}"
     );
-    let (_, _, policy) = send(&s.app, get("/console/policy", &cookie)?).await?;
+    let (_, _, policy) = call(
+        &s.app,
+        "GET",
+        "/console/api/policy/raw",
+        &cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
     assert!(
-        policy.contains(">Add a budget</a>")
-            && !policy.contains("Edit the policy")
-            && !policy.contains("Export YAML"),
+        policy["next"]["action"]["label"] == "Add a budget"
+            && policy["next"]["act"] == true
+            && policy["edit"] == false
+            && policy["store"] == false,
         "{policy}"
     );
     Ok(())

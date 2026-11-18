@@ -46,7 +46,7 @@ The same page rotates the key: **Rotate the key** makes a new key with the same 
 
 ## Edit the policy
 
-**Policy**, then **Edit**, opens the YAML of the live version. Change anything, or load a YAML file to import it, add a note for the history, and:
+**Raw policy** (`/console/app/#/policy/raw`), then **Edit** (`#/policy/edit`, formerly `/console/policy/edit`), opens the YAML of the live version. Change anything, or load a YAML file to import it, add a note for the history, and:
 
 - **Dry run** checks the draft and replays the last hours of requests (24 by default, up to 720) against it.
 - **Save version** checks the draft and saves it. A draft `enterplace check` refuses comes back with every problem; nothing is saved.
@@ -79,7 +79,7 @@ With a [store](/operations/store/), a dry run on any gateway replays the request
 
 ## Versions and rollback
 
-**Policy**, then **Versions**, lists every version with its state (Live, Waiting for approval, Earlier, Rejected), who saved it and who approved it. Open one to see its diff from the version it was drafted on. **Roll back to this version** saves its text as a new version: the history keeps both, and with approval on it waits for a second admin like any change.
+**Raw policy**, then **Versions** (`#/policy/versions`, formerly `/console/policy/versions`), lists every version with its state (Live, Waiting for approval, Earlier, Rejected), who saved it and who approved it. Open one to see its diff from the version it was drafted on. **Roll back to this version** saves its text as a new version: the history keeps both, and with approval on it waits for a second admin like any change.
 
 ## GitOps
 

@@ -1101,7 +1101,7 @@ async fn without_the_feature_scim_answers_license_required() -> Result<(), Error
         };
         let gw = gateway(&test, &url, &status)?;
         let mut admin = Browser::admin(&gw.app).await?;
-        let audit = admin.go(&gw.app, "GET", "/console/policy", &[]).await?;
+        let audit = admin.go(&gw.app, "GET", "/console/teams", &[]).await?;
         assert!(
             !audit.text.contains(r#"href="/console/scim""#),
             "{name}: nav entry"

@@ -16,6 +16,7 @@ mod insights;
 mod pages;
 mod people;
 mod prices;
+mod raw_policy;
 mod requests;
 mod saml;
 mod spend;
@@ -581,10 +582,10 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
                 )
             }),
         )
-        .route("/policy", get(policy_page))
         .merge(edit::routes())
         .merge(api::routes())
         .merge(people::routes())
+        .merge(raw_policy::routes())
         .merge(prices::routes())
         .merge(credentials::routes())
         .merge(analytics::routes())
@@ -2791,49 +2792,6 @@ async fn revoked(console: &Console, admin: &Admin, entry: &config::KeyEntry) -> 
     };
     let _ = record(console, &act, Some("keys_file"), Some(&error)).await;
     Err(error)
-}
-
-async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let config = console.config();
-    let text = config::policy_text(&config.policy).map(Some);
-    let loaded = config::load(&config.policy, Some(&config.keys));
-    let mut source = edit::policy_source(&console, &admin);
-    if let Some(store) = console
-        .store()
-        .filter(|_| admin.may(Permission::SeeRecords))
-    {
-        // A store that cannot be read leaves the panel out: the policy is still worth showing.
-        source.replicas = store.replicas().await.unwrap_or_default();
-    }
-    // The policy first start writes, one rule that lets everyone in: the page says what to add next.
-    let first = loaded.as_ref().is_ok_and(|l| {
-        let rules = l.policy.rule_list();
-        rules.len() == 1
-            && rules[0].guardrails.is_empty()
-            && rules[0].limits.budgets.is_empty()
-            && l.policy.scope_limits().is_empty()
-            && l.policy_text.contains(r#"models: ["*"]"#)
-    });
-    if first && let Some(mut next) = start::empty_for("Policy", &base()) {
-        // The button opens the budget step: it says so, and never reads as an editor on a read-only page.
-        next.action.0 = "Add a budget";
-        source.banner.push_str(&start::empty_state(
-            &next,
-            admin.may(Permission::EditPolicy),
-        ));
-    }
-    let body = pages::policy(
-        &admin.label(),
-        &Form::of(&uri),
-        &config.policy,
-        &text,
-        &loaded,
-        &source,
-    );
-    page(StatusCode::OK, body)
 }
 
 /// Static files are served without a session: the sign-in page needs them.

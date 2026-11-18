@@ -1,20 +1,10 @@
 //! The pages, each built from the markup of its approved screen in design-screens/build.py.
 
-use std::{collections::HashMap, fmt::Write as _, path::Path};
-
-use enterplace_core::{
-    config::Loaded,
-    kill::Kill,
-    policy::{Models, Who},
-};
+use enterplace_core::kill::Kill;
 
 use crate::{
     Form,
-    figures::money,
-    html::{
-        Field, button, code, document, empty, enc, esc, field, head, link, motif, row, shell, tag,
-        yaml_line,
-    },
+    html::{Field, button, document, empty, enc, esc, field, link, motif, shell},
 };
 
 /// Today's date in UTC, as audit records write it: "2026-11-12".
@@ -298,15 +288,6 @@ pub(crate) fn day_words(date: &str, short: bool) -> String {
     }
 }
 
-/// The lines that differ between two versions of the policy, with one line around each change.
-// ponytail: a longest-common-subsequence table, lines squared. Policy files are a few hundred lines at most.
-pub(crate) fn diff(old: &str, new: &str) -> Vec<(usize, String, &'static str)> {
-    enterplace_core::versions::diff(old, new)
-        .into_iter()
-        .map(|(n, line, kind)| (n, yaml_line(&line), kind))
-        .collect()
-}
-
 // ---------------------------------------------------------------- people and workloads
 
 /// How to point the OpenAI SDKs, Codex, Gemini CLI and Claude Code at the gateway at `base` with `key`, ready to paste.
@@ -327,262 +308,6 @@ pub(crate) fn tool_lines(base: &str, key: &str) -> Vec<String> {
         format!("export ANTHROPIC_BASE_URL={base}"),
         format!("export ANTHROPIC_API_KEY={key}"),
     ]
-}
-
-// ---------------------------------------------------------------- policy
-
-/// Where the policy page's policy comes from: the file, or a live version in the store.
-pub struct PolicySource {
-    /// The live version's number, when the policy is kept in the store.
-    pub version: Option<i64>,
-    /// Links in the page head: edit, versions, export.
-    pub actions: String,
-    /// A warning above the policy, as markup: the file differs from the live version.
-    pub banner: String,
-    /// The gateways on the store, as their heartbeats say. Empty without a store, or for a role that does not see
-    /// records.
-    pub replicas: Vec<enterplace_core::store::Replica>,
-}
-
-pub fn policy(
-    admin: &str,
-    query: &Form,
-    path: &Path,
-    text: &Result<Option<String>, String>,
-    loaded: &Result<Loaded, Vec<String>>,
-    source: &PolicySource,
-) -> String {
-    let title = "Policy";
-    let file = esc(&path.file_name().map_or_else(
-        || path.display().to_string(),
-        |n| n.to_string_lossy().into_owned(),
-    ));
-    let text = match text {
-        Ok(Some(text)) => text,
-        Ok(None) | Err(_) => {
-            let why = match text {
-                Err(err) => esc(err),
-                _ => format!("There is no file at {}.", esc(&path.display().to_string())),
-            };
-            let failed = empty(
-                &motif(&["", "flame"], &["empty"], (2, 1), true, true),
-                "The policy file did not load",
-                &why,
-                &link("Try again", "", "/console/policy", false),
-            );
-            let main = format!(
-                "{}\n{failed}",
-                head(title, "One file decides every request.", "")
-            );
-            return tool_page(title, admin, "/console/policy", query, &main, "");
-        }
-    };
-    // Problems on a line of the policy file go under that line, as the PolicyError screen shows. Others are listed above.
-    let prefix = format!("{}:", path.display());
-    let mut on_line: HashMap<usize, Vec<String>> = HashMap::new();
-    let mut elsewhere = Vec::new();
-    if let Err(problems) = loaded {
-        for problem in problems {
-            let placed = problem.strip_prefix(&prefix).and_then(|rest| {
-                let (n, msg) = rest.split_once(": ")?;
-                Some((n.parse::<usize>().ok()?, msg.to_string()))
-            });
-            match placed {
-                Some((n, msg)) => on_line.entry(n).or_default().push(msg),
-                None => elsewhere.push(problem.clone()),
-            }
-        }
-    }
-    let hit: usize = query.get("line").parse().unwrap_or(0);
-    let mut lines = Vec::new();
-    for (i, line) in text.lines().enumerate() {
-        let n = i + 1;
-        let kind = if on_line.contains_key(&n) {
-            "error"
-        } else if n == hit {
-            "hit"
-        } else {
-            ""
-        };
-        lines.push((n, yaml_line(line), kind));
-        for msg in on_line.get(&n).into_iter().flatten() {
-            lines.push((
-                0,
-                format!("Line {n}: {}", esc(msg).replace('\n', "<br>")),
-                "note",
-            ));
-        }
-    }
-    let (lead, side) = match loaded {
-        Ok(loaded) => {
-            let providers: String = loaded
-                .providers
-                .iter()
-                .map(|p| {
-                    row(
-                        &esc(&p.name),
-                        &format!(
-                            "{} at {}. Serves {}.",
-                            p.kind.word(),
-                            esc(&p.url),
-                            esc(&p.models.join(", "))
-                        ),
-                        "",
-                        true,
-                    )
-                })
-                .collect();
-            let rules: String = loaded
-                .policy
-                .rule_list()
-                .iter()
-                .map(|r| {
-                    let who = match &r.who {
-                        Who::Team(team) => format!("Team {}", esc(team)),
-                        Who::Name(name) => esc(name),
-                        Who::Tag(tag) => format!("Keys tagged {}", esc(tag)),
-                        Who::Any => "Everyone else".into(),
-                    };
-                    let models = match &r.models {
-                        Models::Any => "every model".to_string(),
-                        Models::Only(m) if m.is_empty() => "no model".to_string(),
-                        Models::Only(m) => esc(&m.join(", ")),
-                    };
-                    // What else the rule does: its guardrails, budget and rate limit, each in a sentence.
-                    let mut meta = format!("{who} may use {models}.");
-                    if !r.guardrails.is_empty() {
-                        // A guardrail name is an identifier: it never breaks at its dash.
-                        let names: Vec<String> = r
-                            .guardrails
-                            .iter()
-                            .map(|g| {
-                                format!(
-                                    r#"<span class="t-mono" style="white-space: nowrap">{}</span>"#,
-                                    esc(&g.name)
-                                )
-                            })
-                            .collect();
-                        let _ = write!(meta, " Guardrails: {}.", names.join(", "));
-                    }
-                    if let Some(b) = r.limits.budget() {
-                        let _ = write!(meta, " Budget {} a {}.", money(b.usd), b.per.word());
-                    }
-                    if let Some(rpm) = r.limits.rpm {
-                        let _ = write!(meta, " {rpm} requests a minute each.");
-                    }
-                    row(
-                        &esc(&r.name),
-                        &meta,
-                        &link(
-                            &format!("Line {}", r.line),
-                            "quiet",
-                            &format!("/console/policy?line={0}#line-{0}", r.line),
-                            true,
-                        ),
-                        true,
-                    )
-                })
-                .collect();
-            (
-                match source.version {
-                    Some(v) => format!(
-                        "Version {v} in the store decides every request: {} and {}, read in order, the first that names the caller decides. Edit it here: each save is a new version, checked as <span class=\"t-mono\">enterplace check</span> checks a file.",
-                        enterplace_core::count(loaded.policy.rules(), "rule"),
-                        enterplace_core::count(loaded.providers.len(), "provider")
-                    ),
-                    None => format!(
-                        "One file decides every request: {} and {}, read in order, the first that names the caller decides. Read only here: change the file and run <span class=\"t-mono\">enterplace check</span>.",
-                        enterplace_core::count(loaded.policy.rules(), "rule"),
-                        enterplace_core::count(loaded.providers.len(), "provider")
-                    ),
-                },
-                format!(
-                    r#"<aside class="g-stack" aria-label="About this file">
-<div class="g-panel g-stack"><h2 class="t-md" style="margin: 0">Rules</h2><div class="g-list">{rules}</div></div>
-<div class="g-panel g-stack"><h2 class="t-md" style="margin: 0">Providers</h2><div class="g-list">{providers}</div><p class="t-small g-muted" style="margin: 0">A provider key stays in its environment variable and is never shown here.</p></div>
-{}
-</aside>"#,
-                    gateways(&source.replicas)
-                ),
-            )
-        }
-        Err(problems) => (
-            format!(
-                "<span class=\"t-mono\">enterplace check</span> refuses this file: {}, each on its line below. A running gateway keeps the version it loaded.",
-                enterplace_core::count(problems.len(), "problem")
-            ),
-            String::new(),
-        ),
-    };
-    let banner = if elsewhere.is_empty() {
-        source.banner.clone()
-    } else {
-        format!(
-            r#"<div class="g-banner" role="alert" style="border-color: var(--flame)"><span class="t-body">{}</span></div>"#,
-            elsewhere
-                .iter()
-                .map(|p| esc(p))
-                .collect::<Vec<_>>()
-                .join("<br>")
-        )
-    };
-    let main = format!(
-        r#"{}
-{banner}
-<div class="g-split">
-<div class="g-panel g-stack g-split__wide">
-<div class="g-pager"><span class="t-mono-lg">{file}</span>{}</div>
-{}
-<p class="t-small g-muted" style="margin: 0">{}</p>
-</div>
-{side}
-</div>"#,
-        head(title, &lead, &source.actions),
-        match source.version {
-            Some(v) => tag("allow", &format!("Version {v}, live"), ""),
-            None => tag("", "Read only", ""),
-        },
-        code(&lines),
-        match source.version {
-            Some(v) => format!("Live version {v} in the store, when this page was opened."),
-            None => format!(
-                "Read from {} when this page was opened.",
-                esc(&path.display().to_string())
-            ),
-        }
-    );
-    tool_page(title, admin, "/console/policy", query, &main, "")
-}
-
-/// The policy page's Gateways panel: every gateway on the store, so an admin sees which run and which went quiet.
-fn gateways(replicas: &[enterplace_core::store::Replica]) -> String {
-    if replicas.is_empty() {
-        return String::new();
-    }
-    let rows: String = replicas
-        .iter()
-        .map(|r| {
-            row(
-                &esc(&r.host),
-                &format!(
-                    "Version {}, schema {}. Started {}, last heartbeat {}.",
-                    esc(&r.version),
-                    esc(&r.schema),
-                    esc(&r.started),
-                    esc(&r.seen)
-                ),
-                &if r.healthy {
-                    tag("allow", "Healthy", "")
-                } else {
-                    tag("refused", "Silent", "")
-                },
-                true,
-            )
-        })
-        .collect();
-    format!(
-        r#"<div class="g-panel g-stack"><h2 class="t-md" style="margin: 0">Gateways</h2><div class="g-list">{rows}</div><p class="t-small g-muted" style="margin: 0">A gateway is silent when it wrote no heartbeat to the store in 10 seconds.</p></div>"#
-    )
 }
 
 /// Month names, shared with the Spend API.
@@ -788,7 +513,7 @@ mod tests {
 
     #[test]
     fn a_diff_shows_the_removed_line_before_the_added_one() {
-        let kinds: Vec<&str> = diff("a\nb\nc\n", "a\nB\nc\n")
+        let kinds: Vec<&str> = enterplace_core::versions::diff("a\nb\nc\n", "a\nB\nc\n")
             .into_iter()
             .map(|(_, _, kind)| kind)
             .collect();
