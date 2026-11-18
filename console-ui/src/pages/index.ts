@@ -7,6 +7,7 @@ import { People } from "./People";
 import { Credentials } from "./Credentials";
 import { Analytics } from "./Analytics";
 import { Requests } from "./Requests";
+import { Spend } from "./Spend";
 
 export type PageProps = { me: Me | null; query: URLSearchParams };
 
@@ -17,6 +18,7 @@ export const PAGES: { route: string; label: string; page: ComponentType<PageProp
   { route: "/people", label: "People", page: People },
   { route: "/credentials", label: "Credentials", page: Credentials },
   { route: "/analytics", label: "Analytics", page: Analytics },
+  { route: "/spend", label: "Spend", page: Spend },
   { route: "/providers", label: "Models and providers", page: Providers, policy: true },
   { route: "/mcp", label: "MCP servers", page: McpServers, policy: true },
   { route: "/policy", label: "Policy basics", page: PolicyBasics, policy: true },
@@ -26,7 +28,7 @@ export const PAGES: { route: string; label: string; page: ComponentType<PageProp
 // The pages the console still renders on the server, linked as they are, by sidebar group.
 export const SERVER_PAGES: [string, [string, string][]][] = [
   ["", [["/console/start", "Start here"]]],
-  ["Activity", [["/console/audit", "Audit log"], ["/console/spend", "Spend"]]],
+  ["Activity", [["/console/audit", "Audit log"]]],
   ["Access", [["/console/teams", "Teams"], ["/console/policy", "Raw policy"], ["/console/models", "Prices"]]],
   ["Tools", [["/console/mcp/tools", "MCP tools"], ["/console/mcp/approvals", "MCP approvals"]]],
 ];

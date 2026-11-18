@@ -16,6 +16,7 @@ mod pages;
 mod people;
 mod requests;
 mod saml;
+mod spend;
 mod sso;
 mod start;
 pub use start::{empty_page, origin as gateway_origin};
@@ -586,8 +587,8 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .merge(credentials::routes())
         .merge(analytics::routes())
         .merge(requests::routes())
+        .merge(spend::routes())
         .merge(start::routes())
-        .route("/spend", get(spend_page))
         .route("/live.json", get(live_json))
         .route("/kills/restore", post(restore_traffic))
         .route("/assets/{file}", get(asset))
@@ -2936,28 +2937,6 @@ async fn policy_page(State(console): State<Console>, headers: HeaderMap, uri: Ur
         &source,
     );
     page(StatusCode::OK, body)
-}
-
-async fn spend_page(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    if !admin.may(Permission::SeeSpend) {
-        return not_permitted(&admin, Permission::SeeSpend);
-    }
-    let config = console.config();
-    // ponytail: the whole audit log is read on every request, as the audit page does.
-    let log = records_for(&admin, &config.audit);
-    let loaded = config::load(&config.policy, Some(&config.keys));
-    page(
-        StatusCode::OK,
-        pages::spend(&pages::SpendView {
-            admin: &admin.label(),
-            query: &Form::of(&uri),
-            log: &log,
-            loaded: &loaded,
-        }),
-    )
 }
 
 /// Static files are served without a session: the sign-in page needs them.

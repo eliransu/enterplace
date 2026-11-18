@@ -493,12 +493,6 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
     );
     let pages = [
         (
-            "/console/spend",
-            "No spend and no budgets yet",
-            "/console/start?track=limit#step-5",
-            "/governance/budgets-and-rate-limits/",
-        ),
-        (
             "/console/teams",
             "No teams yet",
             "/console/start?track=coding#step-2",
@@ -552,6 +546,23 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
         analytics["empty"]["docs"],
         "https://docs.enterplace.dev/operations/request-log/"
     );
+    // Spend is in the app too: its API carries the same empty state, with the policy lines that add a budget.
+    let request = Request::get("/console/api/spend")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())?;
+    let (_, _, spend) = send(&s.app, request).await?;
+    let spend: serde_json::Value = serde_json::from_str(&spend)?;
+    assert_eq!(spend["empty"]["title"], "No spend and no budgets yet");
+    assert_eq!(
+        spend["empty"]["action"]["href"],
+        "/console/start?track=limit#step-5"
+    );
+    assert_eq!(
+        spend["empty"]["docs"],
+        "https://docs.enterplace.dev/governance/budgets-and-rate-limits/"
+    );
+    assert_eq!(spend["empty"]["lines"][0], "limits:");
     for (path, title, action, docs) in pages {
         let (status, _, page) = send(&s.app, get(path, &cookie)?).await?;
         assert_eq!(status, StatusCode::OK, "{path}");

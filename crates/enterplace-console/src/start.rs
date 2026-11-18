@@ -3311,6 +3311,12 @@ async fn first_key(
 // ---------------------------------------------------------------- empty pages
 
 /// What fills a console page, the one action that does it (the Start here step), and its docs page.
+/// The two policy lines that add a first budget, as the Spend empty state shows them on either console.
+pub(crate) const BUDGET_LINES: [&str; 2] = [
+    "limits:",
+    r#"  - { team: "*", budget: { usd: 500, per: month } }"#,
+];
+
 pub(crate) struct Empty {
     pub title: &'static str,
     pub body: String,
@@ -3374,8 +3380,8 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
             action: ("Add a budget", "/console/start?track=limit#step-5"),
             docs: "/governance/budgets-and-rate-limits/",
             extra: code(&[
-                (1, crate::html::yaml_line("limits:"), "add"),
-                (2, crate::html::yaml_line(r#"  - { team: "*", budget: { usd: 500, per: month } }"#), "add"),
+                (1, crate::html::yaml_line(BUDGET_LINES[0]), "add"),
+                (2, crate::html::yaml_line(BUDGET_LINES[1]), "add"),
             ]),
         },
         "People and workloads" => Empty {

@@ -181,6 +181,23 @@ async fn call(
     ))
 }
 
+/// The Spend page, as the app reads it.
+async fn spend(
+    app: &Router,
+    cookie: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let (status, _, spend) = call(
+        app,
+        "GET",
+        "/console/api/spend",
+        cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{spend}");
+    Ok(spend)
+}
+
 /// The People page's keys, as the app reads them.
 async fn people(
     app: &Router,
@@ -342,7 +359,6 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
         // People moved to the app: its old address only points there, and the app needs the session.
         "/console/app/",
         "/console/policy",
-        "/console/spend",
         "/console/audit?record=01AAAAAAAAAAAAAAAAAAAAAAA1",
     ] {
         for cookie in ["", "enterplace_console=not-a-session"] {
@@ -363,6 +379,25 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
         assert_eq!(
             (status, location(&headers)),
             (StatusCode::SEE_OTHER, "/console/sign-in"),
+            "{path}"
+        );
+    }
+    // Spend moved to the app: its API refuses without a session, and the old address only points at the app.
+    let (status, _, refused) = call(
+        &s.app,
+        "GET",
+        "/console/api/spend",
+        "enterplace_console=forged",
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{refused}");
+    assert!(!refused.to_string().contains("maya.cohen"), "{refused}");
+    for path in ["/console/spend", "/console/spend?menu=1"] {
+        let (status, headers, _) = send(&s.app, get(path, "")?).await?;
+        assert_eq!(
+            (status, location(&headers)),
+            (StatusCode::SEE_OTHER, "/console/app/#/spend"),
             "{path}"
         );
     }
@@ -605,15 +640,22 @@ async fn people_policy_and_spend_render_from_the_files() -> TestResult {
     );
 
     // With the policy broken, spend is still shown from the log, and the budgets say why they are missing.
-    let (_, _, spend) = send(&s.app, get("/console/spend", &cookie)?).await?;
-    assert!(
-        spend.contains("The policy file has problems")
-            && spend.contains("Stopped before sending")
-            && spend.contains(r#"aria-current="page">Spend"#),
+    let spend = spend(&s.app, &cookie).await?;
+    assert_eq!(
+        spend["budgets"]["problem"]["title"], "The policy file has problems",
         "{spend}"
     );
-    let (_, _, menu) = send(&s.app, get("/console/spend?menu=1", &cookie)?).await?;
-    assert!(menu.contains("g-menu-sheet"));
+    assert!(
+        spend["budgets"]["problem"]["body"]
+            .as_str()
+            .is_some_and(|b| b.contains("Open the policy to fix them")),
+        "{spend}"
+    );
+    // The models table is still shown, with its row of requests stopped before sending.
+    assert!(
+        spend["stopped"].is_string() && spend["models"].is_array(),
+        "{spend}"
+    );
     Ok(())
 }
 
@@ -1044,27 +1086,55 @@ async fn spend_shows_this_months_usage_against_the_budgets() -> TestResult {
         0.0,
     ))?;
     let cookie = sign_in(&s.app).await?;
-    let (status, _, page) = send(&s.app, get("/console/spend", &cookie)?).await?;
-    assert_eq!(status, StatusCode::OK);
-    for expected in [
-        "$1.10 spent in",
-        "payments spent its $1.00 on",
-        "Edit the payments budget in the policy",
-        "/console/policy?line=10",
-        r#"data-state="over""#,
-        "$1.10 of $1.00",
-        "g-chart__pace",
-        "g-chart__mark",
-        "<td>gpt-4o-mini</td><td class=\"g-table__num\">$1.10</td>",
-        "/console/audit?q=maya.cohen",
-        // The model is an identifier: it never breaks at its dash.
-        r#"Sent 2 requests, $1.10, most of it on <span class="t-mono" style="white-space: nowrap">gpt-4o-mini</span>."#,
-        "1 answer reported no usage or had no price",
-        // The two refused requests of the setup.
-        r#"<td class="g-table__num g-table__wide">2</td><td class="g-table__num g-table__wide">0</td>"#,
-    ] {
-        assert!(page.contains(expected), "missing {expected}: {page}");
-    }
+    let page = spend(&s.app, &cookie).await?;
+    let lead = page["lead"].as_str().unwrap_or("");
+    assert!(
+        lead.starts_with("$1.10 spent in") && lead.contains("Team payments spent its $1.00 on"),
+        "{page}"
+    );
+    assert_eq!(
+        page["action"],
+        serde_json::json!({ "label": "Edit the payments budget in the policy", "href": "/console/policy?line=10" })
+    );
+    let meter = page["budgets"]["meters"]
+        .as_array()
+        .and_then(|m| m.iter().find(|m| m["label"] == "payments"))
+        .ok_or("no payments meter")?;
+    assert_eq!(
+        (meter["text"].as_str(), meter["over"].as_bool()),
+        (Some("$1.10 of $1.00"), Some(true)),
+        "{meter}"
+    );
+    // The pace line and the day the budget ran out, on the chart.
+    let chart = &page["chart"];
+    assert!(chart["pace"].as_f64().is_some_and(|p| p > 0.0), "{chart}");
+    let mark = chart["mark"].as_u64().ok_or("no mark")?;
+    assert!(
+        chart["days"]
+            .as_array()
+            .is_some_and(|d| d.iter().any(|d| d["mark"] == true && d["day"] == mark)),
+        "{chart}"
+    );
+    let model = &page["models"][0];
+    assert_eq!(
+        (model["model"].as_str(), model["usd"].as_str()),
+        (Some("gpt-4o-mini"), Some("$1.10"))
+    );
+    let top = &page["spenders"][0];
+    assert_eq!(top["href"], "/console/audit?q=maya.cohen");
+    // The model is an identifier: the app keeps it whole, apart from the sentence.
+    assert_eq!(
+        (top["sent"].as_str(), top["mostly"].as_str()),
+        (Some("Sent 2 requests, $1.10"), Some("gpt-4o-mini"))
+    );
+    assert!(
+        page["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("1 answer reported no usage or had no price")),
+        "{page}"
+    );
+    // The two refused requests of the setup.
+    assert_eq!(page["stopped"], "2");
     // Usage records belong to this page, not to the list of decisions.
     let (_, _, audit) = send(&s.app, get("/console/audit", &cookie)?).await?;
     // The three requests of the setup and the sign-in's admin record; none of the three usage records.
@@ -1806,9 +1876,11 @@ async fn spend_lists_key_budgets_with_the_team_ones() -> TestResult {
     let s = setup("spend-keys")?;
     limited(&s)?;
     let cookie = sign_in(&s.app).await?;
-    let (_, _, page) = send(&s.app, get("/console/spend", &cookie)?).await?;
+    let page = spend(&s.app, &cookie).await?;
     assert!(
-        page.contains("maya.cohen&#39;s key") && page.contains("$0.82 of $1.00 today"),
+        page["budgets"]["meters"].as_array().is_some_and(|m| m
+            .iter()
+            .any(|m| m["label"] == "maya.cohen's key" && m["text"] == "$0.82 of $1.00 today")),
         "{page}"
     );
     Ok(())
@@ -2379,11 +2451,16 @@ async fn an_answer_guardrail_shows_on_its_request_and_the_price_source_shows() -
         );
     }
 
-    let (_, _, spend) = send(&s.app, get("/console/spend", &cookie)?).await?;
+    let spend = spend(&s.app, &cookie).await?;
+    let model = &spend["models"][0];
     assert!(
-        spend.contains("priced from the LiteLLM table")
-            && spend.contains("Prices this month came from the LiteLLM table")
-            && spend.contains(r#"<td class="g-table__num">$0.0035</td>"#),
+        model["priced"]
+            .as_str()
+            .is_some_and(|p| p.contains("priced from the LiteLLM table"))
+            && spend["note"]
+                .as_str()
+                .is_some_and(|n| n.contains("Prices this month came from the LiteLLM table"))
+            && model["usd"] == "$0.0035",
         "{spend}"
     );
     Ok(())
@@ -2422,8 +2499,7 @@ async fn a_custom_role_sees_only_the_pages_it_may_and_an_org_role_only_its_keys(
     .await?;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let fin = cookie_of(&headers);
-    let (status, _, _) = send(&s.app, get("/console/spend", &fin)?).await?;
-    assert_eq!(status, StatusCode::OK);
+    spend(&s.app, &fin).await?;
     let (status, _, body) = call(
         &s.app,
         "GET",
@@ -2835,12 +2911,17 @@ async fn spend_at_zero_is_one_empty_state() -> TestResult {
     let mut demo = usage_record("maya.cohen", "deadbeef", 0.0);
     demo.insert("model".into(), "enterplace-demo".into());
     s.log.append_record(&demo)?;
-    let (_, _, spend) = send(&s.app, get("/console/spend", &cookie)?).await?;
+    let spend = spend(&s.app, &cookie).await?;
+    assert_eq!(
+        (
+            spend["empty"]["title"].as_str(),
+            spend["empty"]["body"].as_str()
+        ),
+        (Some("No spend yet"), Some("Demo requests are free."))
+    );
+    // One empty state: no chart, no people ranked at $0 and no models table.
     assert!(
-        spend.contains("No spend yet")
-            && spend.contains("Demo requests are free.")
-            && !spend.contains("Who spent most")
-            && !spend.contains("Stopped before sending"),
+        spend["chart"].is_null() && spend["spenders"].is_null() && spend["stopped"].is_null(),
         "{spend}"
     );
     Ok(())
