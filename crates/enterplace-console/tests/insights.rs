@@ -353,41 +353,100 @@ async fn a_budget_is_forecast_over_its_own_period_and_time_zone() -> TestResult 
         ),
     )?;
     let cookie = sign_in(&s.app, NOA).await?;
-    let (status, _, page) = send(&s.app, get("/console/analytics", &cookie)?).await?;
+    let (status, page) = analytics(&s.app, "", &cookie).await?;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        page.contains("team payments")
-            && page.contains("$4.00 of $10.00 per week (America/New_York)"),
-        "{page}"
+    assert_eq!(page["forecasts"][0]["label"], "team payments", "{page}");
+    assert_eq!(
+        page["forecasts"][0]["text"],
+        "$4.00 of $10.00 per week (America/New_York)"
     );
     Ok(())
+}
+
+/// The console app's Analytics answer for a query, as JSON.
+async fn analytics(app: &Router, query: &str, cookie: &str) -> Result<(StatusCode, Value), Error> {
+    let (status, _, body) =
+        send(app, get(&format!("/console/api/analytics{query}"), cookie)?).await?;
+    Ok((status, serde_json::from_str(&body)?))
 }
 
 #[tokio::test]
 async fn analytics_show_totals_percentiles_rankings_and_forecasts() -> TestResult {
     let s = setup("analytics")?;
     let cookie = sign_in(&s.app, NOA).await?;
-    let (status, _, page) = send(&s.app, get("/console/analytics?by=team", &cookie)?).await?;
+    let (status, page) = analytics(&s.app, "?by=team", &cookie).await?;
     assert_eq!(status, StatusCode::OK);
     // Three figures at the top; latency is in its chart and the ranking.
-    assert_eq!(page.matches(r#"<div class="g-stat">"#).count(), 3, "{page}");
-    assert!(page.contains("Latency p95"), "{page}");
-    assert!(page.contains("$4.01"), "the cost of both answers");
-    assert!(page.contains("By team, most costly first"));
-    let payments = page.find(">payments<").ok_or("no payments row")?;
-    let search = page.find(">search<").ok_or("no search row")?;
-    assert!(payments < search, "the costlier team ranks first");
+    let stats = page["stats"].as_array().ok_or("no stats")?;
+    assert_eq!(stats.len(), 3, "{page}");
     assert!(
-        page.contains("Budget forecasts")
-            && page.contains("team payments")
-            && page.contains("$4.00 of $10.00 per month")
+        page["metrics"]
+            .as_array()
+            .is_some_and(|m| m.iter().any(|m| m["label"] == "Latency p95")),
+        "{page}"
     );
-    let (_, _, page) = send(
-        &s.app,
-        get("/console/analytics?by=agent&window=24h", &cookie)?,
-    )
-    .await?;
-    assert!(page.contains(">claude-code<") && page.contains("per hour"));
+    assert_eq!(stats[1]["figure"], "$4.01", "the cost of both answers");
+    assert_eq!(page["ranking_title"], "By team, most costly first");
+    assert_eq!(
+        page["ranking"][0]["value"], "payments",
+        "the costlier team ranks first"
+    );
+    assert_eq!(page["ranking"][1]["value"], "search");
+    assert_eq!(
+        page["ranking"][0]["href"],
+        "/console/requests?team=payments"
+    );
+    assert_eq!(page["ranking"][1]["p95"], "2,400 ms");
+    assert_eq!(page["forecasts"][0]["label"], "team payments");
+    assert_eq!(page["forecasts"][0]["text"], "$4.00 of $10.00 per month");
+    let (_, page) = analytics(&s.app, "?by=agent&window=24h", &cookie).await?;
+    assert_eq!(page["ranking"][0]["value"], "claude-code", "{page}");
+    assert_eq!(page["chart_title"], "Requests, per hour");
+
+    // A filter that does not parse names the fix; a role without see_spend is refused.
+    let (status, page) = analytics(&s.app, "?min_ms=fast", &cookie).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        page["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("Write milliseconds as a whole number")),
+        "{page}"
+    );
+    let (status, _) = analytics(&s.app, "", "").await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_old_analytics_address_opens_the_app_with_its_query() -> TestResult {
+    let s = setup("analytics-moved")?;
+    let (status, _, _) = send(&s.app, get("/console/analytics", "")?).await?;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let response = s
+        .app
+        .clone()
+        .oneshot(get("/console/analytics?by=team&window=24h", "")?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|v| v.to_str().ok()),
+        Some("/console/app/#/analytics?by=team&window=24h")
+    );
+    let response = s
+        .app
+        .clone()
+        .oneshot(get("/console/analytics", "")?)
+        .await?;
+    assert_eq!(
+        response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|v| v.to_str().ok()),
+        Some("/console/app/#/analytics")
+    );
     Ok(())
 }
 
@@ -493,36 +552,41 @@ async fn the_request_sheet_says_who_what_and_how_and_folds_its_proof() -> TestRe
 async fn analytics_draw_one_chart_with_a_metric_switch_and_four_tabs_up_front() -> TestResult {
     let s = setup("analytics-tabs")?;
     let cookie = sign_in(&s.app, NOA).await?;
-    let (_, _, page) = send(&s.app, get("/console/analytics", &cookie)?).await?;
-    assert_eq!(page.matches(r#"<div class="g-chart""#).count(), 1, "{page}");
+    let (_, page) = analytics(&s.app, "", &cookie).await?;
+    let points = page["chart"]["points"].as_array().ok_or("no chart")?;
+    let names: Vec<&str> = page["metrics"]
+        .as_array()
+        .ok_or("no metrics")?
+        .iter()
+        .filter_map(|m| m["name"].as_str())
+        .collect();
     assert!(
-        page.contains("metric=cost") && page.contains("metric=tokens"),
+        names.contains(&"cost") && names.contains(&"tokens"),
         "{page}"
     );
-    // Bars are capped and muted, and today's is lime.
-    assert!(page.contains("max-width: var(--space-6)") && page.contains("background: var(--lime)"));
-    assert_eq!(
-        page.matches("background: var(--lime)").count(),
-        1,
-        "only today is lime"
-    );
-    let (_, _, cost) = send(&s.app, get("/console/analytics?metric=cost", &cookie)?).await?;
-    assert!(cost.contains("Cost, USD, per day"), "{cost}");
+    // One bar a day of the window, and only today's is marked to stand out.
+    assert!(points.len() >= 7, "{page}");
+    assert_eq!(points.iter().filter(|p| p["now"] == true).count(), 1);
+    assert_eq!(points.last().map(|p| &p["now"]), Some(&Value::Bool(true)));
+    assert_eq!(page["chart"]["top"], "3", "{page}");
+    let (_, cost) = analytics(&s.app, "?metric=cost", &cookie).await?;
+    assert_eq!(cost["chart_title"], "Cost, USD, per day", "{cost}");
 
-    let more = page.find(">More</summary>").ok_or("no More")?;
-    for label in ["Team", "Person", "Model", "Provider"] {
-        let at = page
-            .find(&format!(">{label}</a>"))
-            .ok_or(format!("no {label} tab"))?;
-        assert!(at < more, "{label} is up front");
-    }
+    let label = |list: &Value| -> Vec<String> {
+        list.as_array()
+            .map(|l| {
+                l.iter()
+                    .filter_map(|t| t["label"].as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(label(&page["bys"]), ["Team", "Person", "Model", "Provider"]);
     // The local chain has requests with keys' coding agent but none with a customer: that tab is not shown.
+    let more = label(&page["more"]);
+    assert!(more.iter().any(|l| l == "Coding agent"), "{page}");
     assert!(
-        page.find(">Coding agent</a>").is_some_and(|at| at > more),
-        "{page}"
-    );
-    assert!(
-        !page.contains(">Customer</a>") && !page.contains(">Organization</a>"),
+        !more.iter().any(|l| l == "Customer" || l == "Organization"),
         "{page}"
     );
     Ok(())

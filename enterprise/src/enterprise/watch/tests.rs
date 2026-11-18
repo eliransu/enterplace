@@ -1044,7 +1044,7 @@ async fn watched_requests_are_in_usage_the_request_log_analytics_and_coverage() 
         tools.text
     );
 
-    // The console's Requests and Analytics pages, as they are, filtered by the new dimension.
+    // The console's Requests page and the Analytics API, filtered and ranked by the new dimension.
     let mut owner = Browser::admin(&gw.app).await?;
     let requests = owner
         .go(&gw.app, "GET", "/console/requests?source=watch", &[])
@@ -1056,10 +1056,14 @@ async fn watched_requests_are_in_usage_the_request_log_analytics_and_coverage() 
         requests.text
     );
     let analytics = owner
-        .go(&gw.app, "GET", "/console/analytics?by=source", &[])
+        .go(&gw.app, "GET", "/console/api/analytics?by=source", &[])
         .await?;
     assert_eq!(analytics.status, StatusCode::OK);
-    assert!(analytics.text.contains("watch"), "{}", analytics.text);
+    assert!(
+        analytics.text.contains(r#""value":"watch""#),
+        "{}",
+        analytics.text
+    );
 
     // `enterplace audit coverage` reads the chain: the watched person beside the routed one.
     gw.log.flush();

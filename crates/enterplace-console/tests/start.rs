@@ -478,12 +478,6 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
             "/integrations/coding-tools/",
         ),
         (
-            "/console/analytics",
-            "Nothing to rank yet",
-            "/console/start?track=coding#step-2",
-            "/operations/request-log/",
-        ),
-        (
             "/console/spend",
             "No spend and no budgets yet",
             "/console/start?track=limit#step-5",
@@ -523,6 +517,25 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
     assert_eq!(
         people["empty"]["docs"],
         "https://docs.enterplace.dev/governance/keys/"
+    );
+    // Analytics is in the app too: nothing at all is the empty state, not a chart of zeros.
+    let request = Request::get("/console/api/analytics")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())?;
+    let (_, _, analytics) = send(&s.app, request).await?;
+    let analytics: serde_json::Value = serde_json::from_str(&analytics)?;
+    assert_eq!(
+        analytics["empty"]["title"], "Nothing to rank yet",
+        "{analytics}"
+    );
+    assert_eq!(
+        analytics["empty"]["action"]["href"],
+        "/console/start?track=coding#step-2"
+    );
+    assert_eq!(
+        analytics["empty"]["docs"],
+        "https://docs.enterplace.dev/operations/request-log/"
     );
     for (path, title, action, docs) in pages {
         let (status, _, page) = send(&s.app, get(path, &cookie)?).await?;

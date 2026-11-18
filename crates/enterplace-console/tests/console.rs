@@ -2453,6 +2453,32 @@ async fn a_custom_role_sees_only_the_pages_it_may_and_an_org_role_only_its_keys(
     )
     .await?;
     let keeper = cookie_of(&headers);
+    // Analytics needs see_spend: finance has it, the keeper role does not.
+    let (status, _, body) = call(
+        &s.app,
+        "GET",
+        "/console/api/analytics",
+        &fin,
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = call(
+        &s.app,
+        "GET",
+        "/console/api/analytics",
+        &keeper,
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("does not have the see_spend permission"),
+        "{body}"
+    );
     let body = people(&s.app, &keeper).await?.to_string();
     assert!(
         body.contains("acme-bot") && !body.contains("maya.cohen"),
