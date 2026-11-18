@@ -22,6 +22,7 @@ mod saml;
 mod spend;
 mod sso;
 mod start;
+mod teams;
 pub use api::{Answer, Fail, answer, bad, body_of, ok, signed_in, text};
 pub use start::{empty_json, empty_page, origin as gateway_origin};
 
@@ -585,6 +586,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .merge(edit::routes())
         .merge(api::routes())
         .merge(people::routes())
+        .merge(teams::routes())
         .merge(raw_policy::routes())
         .merge(prices::routes())
         .merge(credentials::routes())

@@ -451,7 +451,6 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
         // People and the audit log moved to the app: their old addresses only point there, and the app needs the
         // session.
         "/console/app/",
-        "/console/teams",
     ] {
         for cookie in ["", "enterplace_console=not-a-session"] {
             let (status, headers, page) = send(&s.app, get(path, cookie)?).await?;
@@ -555,13 +554,18 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
     }
 
     let cookie = sign_in(&s.app).await?;
-    let (status, headers, page) = send(&s.app, get("/console/teams", &cookie)?).await?;
+    let (status, _, me) = call(
+        &s.app,
+        "GET",
+        "/console/api/me",
+        &cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        page.contains(r#"g-muted">noa.bar</span><span class="t-small g-muted">admin</span>"#)
-            && page.contains("Checking requests")
-            && page.contains(r#"data-live="checking""#)
-    );
+    assert!(me["name"] == "noa.bar" && me["role"] == "admin", "{me}");
+    let (status, headers, _) = send(&s.app, get("/console/app/", &cookie)?).await?;
+    assert_eq!(status, StatusCode::OK);
     let csp = headers
         .get(header::CONTENT_SECURITY_POLICY)
         .and_then(|v| v.to_str().ok())
@@ -587,7 +591,7 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
             .is_some_and(|c| c.contains("Max-Age=0"))
     );
     assert_eq!(
-        send(&s.app, get("/console/teams", &cookie)?).await?.0,
+        send(&s.app, get("/console/app/", &cookie)?).await?.0,
         StatusCode::SEE_OTHER
     );
 
@@ -595,12 +599,12 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
     let cookie = sign_in(&s.app).await?;
     std::fs::write(s.keys(), keys_text().replace("    admin: true\n", ""))?;
     assert_eq!(
-        send(&s.app, get("/console/teams", &cookie)?).await?.0,
+        send(&s.app, get("/console/app/", &cookie)?).await?.0,
         StatusCode::SEE_OTHER
     );
     std::fs::write(s.keys(), keys_text())?;
     assert_eq!(
-        send(&s.app, get("/console/teams", &cookie)?).await?.0,
+        send(&s.app, get("/console/app/", &cookie)?).await?.0,
         StatusCode::SEE_OTHER,
         "a dropped session came back"
     );
@@ -2319,15 +2323,6 @@ async fn a_killed_sheet_tells_the_story_of_the_switch_that_stopped_it_and_whethe
             && !sheet2.to_string().contains("model gpt-4o"),
         "{sheet2}"
     );
-    // UX m26. The first Tab stop of a server-rendered page skips the nav.
-    let (_, _, shell) = send(&s.app, get("/console/teams", &cookie)?).await?;
-    let skip = shell.find(r##"href="#main">Skip to the page"##);
-    assert!(
-        skip.is_some()
-            && skip < shell.find(r#"class="g-nav__brand""#)
-            && shell.contains(r#"<main class="g-shell__main" id="main""#),
-        "{shell}"
-    );
     // m12-4. Kill switch records read in words.
     let list = page_text(&s.app, &cookie, "").await?;
     assert!(
@@ -2775,15 +2770,6 @@ async fn every_page_says_when_observe_mode_lets_everything_through() -> TestResu
     )
     .await?;
     assert_eq!(me["observe"], true);
-    for path in ["/console/teams"] {
-        let (status, _, page) = send(&s.app, get(path, &cookie)?).await?;
-        assert_eq!(status, StatusCode::OK, "{path}");
-        assert_eq!(
-            page.matches("Observe mode: rules only record.").count(),
-            1,
-            "{path}: {page}"
-        );
-    }
     Ok(())
 }
 
@@ -3177,6 +3163,127 @@ async fn a_file_kept_policy_offers_nothing_that_edits_it() -> TestResult {
             && policy["edit"] == false
             && policy["store"] == false,
         "{policy}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn teams_list_each_team_with_its_people_rule_owner_and_budget() -> TestResult {
+    let s = setup("teams")?;
+    // The old address points at the app, keeping its query, and needs no session: the app asks for one.
+    let (status, headers, _) = send(&s.app, get("/console/teams?q=pay", "")?).await?;
+    assert_eq!(
+        (status, location(&headers)),
+        (StatusCode::SEE_OTHER, "/console/app/#/teams?q=pay")
+    );
+    let (status, _, _) = call(
+        &s.app,
+        "GET",
+        "/console/api/teams",
+        "",
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let cookie = sign_in(&s.app).await?;
+    let (status, _, page) = call(
+        &s.app,
+        "GET",
+        "/console/api/teams",
+        &cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page["issue"] == true && page["empty"].is_null(), "{page}");
+    let teams = page["teams"].as_array().cloned().unwrap_or_default();
+    let names: Vec<&str> = teams.iter().filter_map(|t| t["name"].as_str()).collect();
+    assert_eq!(names, ["payments", "platform"], "{page}");
+    // The first rule naming the team decides for it; a team no rule names falls to the one for everyone.
+    assert_eq!(
+        teams[0],
+        serde_json::json!({
+            "name": "payments", "keys": "1 key", "owner": null,
+            "people": [{ "name": "maya.cohen", "admin": false }],
+            "rule": "payments-team", "budget": "none",
+        })
+    );
+    assert!(
+        teams[1]["rule"] == "everyone-else (everyone)"
+            && teams[1]["people"] == serde_json::json!([{ "name": "noa.bar", "admin": true }]),
+        "{page}"
+    );
+
+    // A team the policy lists shows before its first key, with its owner; a team's budget is its rule's.
+    std::fs::write(
+        s.dir.join("enterplace.policy.yaml"),
+        POLICY.replace(
+            "    models: [gpt-4o-mini]\n",
+            "    models: [gpt-4o-mini]\n    budget: { usd: 1, per: month }\n",
+        ) + "teams:\n  - name: web\n    owner: dana@example.com\n",
+    )?;
+    let (_, _, page) = call(
+        &s.app,
+        "GET",
+        "/console/api/teams",
+        &cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
+    let teams = page["teams"].as_array().cloned().unwrap_or_default();
+    let web = teams
+        .iter()
+        .find(|t| t["name"] == "web")
+        .ok_or("no web team")?;
+    assert!(
+        web["keys"] == "0 keys"
+            && web["owner"] == "dana@example.com"
+            && web["rule"] == "everyone-else (everyone)",
+        "{page}"
+    );
+    assert_eq!(teams[0]["budget"], "$1.00 a month", "{page}");
+
+    // Only admin keys: no team yet, and the way to make one.
+    std::fs::write(s.dir.join("enterplace.policy.yaml"), POLICY)?;
+    std::fs::write(
+        s.keys(),
+        format!(
+            "keys:\n  - name: noa.bar\n    team: platform\n    sha256: {}\n    admin: true\n",
+            sha256_hex(ADMIN_KEY.as_bytes())
+        ),
+    )?;
+    let (_, _, page) = call(
+        &s.app,
+        "GET",
+        "/console/api/teams",
+        &cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert!(
+        page["empty"]["title"] == "No teams yet"
+            && page["empty"]["action"]["label"] == "Make a person token with a team"
+            && page["teams"] == serde_json::json!([]),
+        "{page}"
+    );
+
+    // A policy that does not load says why.
+    std::fs::write(s.dir.join("enterplace.policy.yaml"), "version: [")?;
+    let (status, _, page) = call(
+        &s.app,
+        "GET",
+        "/console/api/teams",
+        &cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        page["error"]
+            .as_str()
+            .is_some_and(|e| e.starts_with("The policy did not load:")),
+        "{page}"
     );
     Ok(())
 }

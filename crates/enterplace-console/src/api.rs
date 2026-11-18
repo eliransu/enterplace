@@ -446,6 +446,8 @@ async fn me(State(console): State<Console>, headers: HeaderMap) -> Response {
                 "credentials": admin.may(Permission::Credentials) && !admin.confined(),
                 "source": if edit::live(&console).is_some() { "store" } else { "file" },
                 "policy": console.config().policy.display().to_string(),
+                // The pages an embedding binary adds (Members, Alerts and the like), server rendered, for the app's nav.
+                "tools": crate::html::EXTRA.try_with(|e| e.nav.iter().map(|(href, label)| json!({ "href": href, "label": label })).collect::<Vec<Value>>()).unwrap_or_default(),
             // Every page says so, as the server-rendered pages do: nothing the policy refuses is stopped.
             "observe": config::load(&console.config().policy, Some(&console.config().keys))
                 .is_ok_and(|l| l.policy.mode() == enterplace_core::policy::Mode::Observe),

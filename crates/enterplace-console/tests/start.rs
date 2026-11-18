@@ -639,12 +639,6 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
         notes.contains("Claude desktop app") && notes.contains("Run claude in a terminal"),
         "{notes}"
     );
-    let pages = [(
-        "/console/teams",
-        "No teams yet",
-        "/console/start?track=coding#step-2",
-        "/governance/teams/",
-    )];
     // The raw policy is in the app: its API carries the first-run state, its button naming the budget step.
     let request = Request::get("/console/api/policy/raw")
         .header(header::HOST, HOST)
@@ -730,19 +724,22 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
         "https://docs.enterplace.dev/governance/budgets-and-rate-limits/"
     );
     assert_eq!(spend["empty"]["lines"][0], "limits:");
-    for (path, title, action, docs) in pages {
-        let (status, _, page) = send(&s.app, get(path, &cookie)?).await?;
-        assert_eq!(status, StatusCode::OK, "{path}");
-        assert!(page.contains(title), "{path}: {page}");
-        assert!(
-            page.contains(&format!(r#"class="g-btn t-body" href="{action}""#)),
-            "{path}: action"
-        );
-        assert!(
-            page.contains(&format!("https://docs.enterplace.dev{docs}")),
-            "{path}: docs"
-        );
-    }
+    // Teams is in the app: only admin keys so far is no team yet.
+    let request = Request::get("/console/api/teams")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())?;
+    let (_, _, teams) = send(&s.app, request).await?;
+    let teams: serde_json::Value = serde_json::from_str(&teams)?;
+    assert_eq!(teams["empty"]["title"], "No teams yet", "{teams}");
+    assert_eq!(
+        teams["empty"]["action"]["href"],
+        "/console/start?track=coding#step-2"
+    );
+    assert_eq!(
+        teams["empty"]["docs"],
+        "https://docs.enterplace.dev/governance/teams/"
+    );
     Ok(())
 }
 
@@ -806,11 +803,17 @@ async fn a_role_sees_only_the_actions_it_may_take() -> TestResult {
     let (status, _, _) = send(&s.app, api_get("start", "")?).await?;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     // Empty pages offer it the docs, not the action.
-    let (_, _, page) = send(&s.app, get("/console/teams", &viewer)?).await?;
+    let request = Request::get("/console/api/teams")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &viewer)
+        .body(Body::empty())?;
+    let (_, _, teams) = send(&s.app, request).await?;
+    let teams: serde_json::Value = serde_json::from_str(&teams)?;
     assert!(
-        page.contains("No teams yet")
-            && !page.contains(r#"href="/console/start?track=coding#step-2""#),
-        "{page}"
+        teams["empty"]["title"] == "No teams yet"
+            && teams["empty"].get("action").is_none()
+            && teams["issue"] == false,
+        "{teams}"
     );
     Ok(())
 }

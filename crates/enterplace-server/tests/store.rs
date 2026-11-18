@@ -1694,7 +1694,7 @@ async fn console_page(gw: &Governed, cookie: &str) -> Result<StatusCode, Error> 
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/console/teams")
+                .uri("/console/app/")
                 .header(header::HOST, "enterplace.test")
                 .header(header::COOKIE, cookie)
                 .body(Body::empty())?,

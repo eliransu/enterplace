@@ -188,10 +188,39 @@ async fn extension_pages_share_the_session_and_appear_in_the_nav() -> TestResult
         page.contains(r#"href="/console/report" aria-current="page">Report"#),
         "{page}"
     );
-    let (_, _, teams) = send(&s.app, get_page("/console/teams", &cookie)?).await?;
+    // The extension's page is in the console's shell: who is signed in, the live strip, and a first Tab stop that
+    // skips the nav (UX m26).
     assert!(
-        teams.contains(r#"href="/console/report">Report"#),
-        "{teams}"
+        page.contains(r#"g-muted">noa</span><span class="t-small g-muted">admin</span>"#)
+            && page.contains("Checking requests")
+            && page.contains(r#"data-live="checking""#),
+        "{page}"
+    );
+    let skip = page.find(r##"href="#main">Skip to the page"##);
+    assert!(
+        skip.is_some()
+            && skip < page.find(r#"class="g-nav__brand""#)
+            && page.contains(r#"<main class="g-shell__main" id="main""#),
+        "{page}"
+    );
+    // The app's nav links the extension's pages too.
+    let (_, _, me) = send(&s.app, get_page("/console/api/me", &cookie)?).await?;
+    let me: serde_json::Value = serde_json::from_str(&me)?;
+    assert_eq!(
+        me["tools"],
+        serde_json::json!([{ "href": "/console/report", "label": "Report" }])
+    );
+    // In observe mode the shell says so in one line, once.
+    let policy = s.dir.join("enterplace.policy.yaml");
+    std::fs::write(
+        &policy,
+        format!("mode: observe\n{}", std::fs::read_to_string(&policy)?),
+    )?;
+    let (_, _, page) = send(&s.app, get_page("/console/report", &cookie)?).await?;
+    assert_eq!(
+        page.matches("Observe mode: rules only record.").count(),
+        1,
+        "{page}"
     );
     Ok(())
 }
@@ -218,7 +247,7 @@ async fn an_account_session_is_checked_on_every_request_and_recorded() -> TestRe
     assert_eq!(status, StatusCode::FORBIDDEN, "a viewer issued a key");
     // The extension stops vouching for the account: its session ends at once.
     s.allowed.store(false, Ordering::SeqCst);
-    let (status, _, _) = send(&s.app, get_page("/console/teams", &cookie)?).await?;
+    let (status, _, _) = send(&s.app, get_page("/console/app/", &cookie)?).await?;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let log = std::fs::read_to_string(s.dir.join("enterplace-audit.jsonl"))?;
     let sign_in = log

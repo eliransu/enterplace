@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import { api, type Me } from "@/lib/api";
-import { PAGES, SERVER_PAGES } from "@/pages";
+import { PAGES } from "@/pages";
 
 /// The # route and its query: `#/people?issue=1` is the People page with its Issue dialog open.
 function useHash() {
@@ -48,16 +48,17 @@ export function App() {
             </a>
           </div>
         ))}
-        {SERVER_PAGES.map(([group, links]) => (
-          <div key={group} className="grid gap-1">
-            {group ? <span className="t-tag px-4 pt-4 uppercase text-muted-foreground">{group}</span> : null}
-            {links.map(([href, label]) => (
-              <a key={href} href={href} className={item}>
-                {label}
+        {/* The pages an embedding binary adds are still server rendered: linked as they are. */}
+        {me?.tools.length ? (
+          <div className="grid gap-1">
+            <span className="t-tag px-4 pt-4 uppercase text-muted-foreground">Tools</span>
+            {me.tools.map((t) => (
+              <a key={t.href} href={t.href} className={item}>
+                {t.label}
               </a>
             ))}
           </div>
-        ))}
+        ) : null}
         {me ? (
           <div className="t-small grid gap-1 px-4 pt-6 text-muted-foreground">
             <span className="t-mono">{me.name}</span>

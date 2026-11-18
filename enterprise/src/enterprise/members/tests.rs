@@ -186,7 +186,7 @@ async fn invite_accept_roles_and_the_last_owner() -> Result<(), Error> {
         list.text
             .contains(r#"href="/console/members" aria-current="page">Members"#)
     );
-    let audit = second.go(&gw.app, "GET", "/console/teams", &[]).await?;
+    let audit = second.go(&gw.app, "GET", "/console/api/me", &[]).await?;
     assert_eq!(audit.status, StatusCode::OK);
     assert!(audit.text.contains("second@example.com") && audit.text.contains("viewer"));
 
@@ -227,7 +227,7 @@ async fn invite_accept_roles_and_the_last_owner() -> Result<(), Error> {
         .unwrap_or("");
     assert!(row.contains(r#"<option value="admin" selected"#), "{row}");
     // The session follows the role at once: no sign-in again.
-    let audit = second.go(&gw.app, "GET", "/console/teams", &[]).await?;
+    let audit = second.go(&gw.app, "GET", "/console/api/me", &[]).await?;
     assert!(audit.text.contains("admin"));
     // An admin cannot make an owner.
     let refused = second
@@ -426,7 +426,7 @@ async fn invited_people_sign_in_with_their_password() -> Result<(), Error> {
     assert_eq!(signed.status, StatusCode::SEE_OTHER);
     assert_eq!(signed.location, "/console/start");
     // A viewer may look and may not issue keys.
-    let audit = ada.go(&gw.app, "GET", "/console/teams", &[]).await?;
+    let audit = ada.go(&gw.app, "GET", "/console/api/me", &[]).await?;
     assert_eq!(audit.status, StatusCode::OK);
     let issue = ada
         .go(
@@ -537,9 +537,9 @@ async fn without_the_feature_the_console_keeps_admin_keys_only() -> Result<(), E
             .await?;
         assert!(!signin.text.contains("/console/sign-in/password"), "{name}");
         let mut admin = Browser::admin(&gw.app).await?;
-        let audit = admin.go(&gw.app, "GET", "/console/teams", &[]).await?;
+        let audit = admin.go(&gw.app, "GET", "/console/api/me", &[]).await?;
         assert!(
-            !audit.text.contains(r#"href="/console/members""#),
+            !audit.text.contains(r#""href":"/console/members""#),
             "{name}: nav entry"
         );
         let members = admin.go(&gw.app, "GET", "/console/members", &[]).await?;

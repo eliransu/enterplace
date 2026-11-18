@@ -29,4 +29,4 @@ export const api = {
 
 export const part = encodeURIComponent;
 
-export type Me = { name: string; role: string; edit_policy: boolean; credentials: boolean; source: "file" | "store"; policy: string; observe: boolean };
+export type Me = { name: string; role: string; edit_policy: boolean; credentials: boolean; source: "file" | "store"; policy: string; observe: boolean; tools: { href: string; label: string }[] };

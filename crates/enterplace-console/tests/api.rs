@@ -819,10 +819,10 @@ async fn signing_in_returns_to_the_page_the_person_was_going_to() -> TestResult 
         location(&headers),
         "/console/sign-in?next=%2Fconsole%2Fapp%2F"
     );
-    let (_, headers) = raw(&s, "GET", "/console/teams?q=pay", "", "").await?;
+    let (_, headers) = raw(&s, "GET", "/console/app/?q=pay", "", "").await?;
     assert_eq!(
         location(&headers),
-        "/console/sign-in?next=%2Fconsole%2Fteams%3Fq%3Dpay"
+        "/console/sign-in?next=%2Fconsole%2Fapp%2F%3Fq%3Dpay"
     );
     // The sign-in page keeps it; the app's # route is added by the page's script, as here.
     let (status, headers) = raw(

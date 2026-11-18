@@ -347,13 +347,13 @@ async fn a_signed_assertion_signs_in_with_the_role_and_team_its_groups_give() ->
     let (status, _, page) = send(
         &s.app,
         "GET",
-        "/console/teams",
+        "/console/api/me",
         &format!("enterplace_console={session}"),
         "",
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert!(page.contains("dana@example.com"), "{page}");
+    assert!(page.contains(r#""name":"dana@example.com""#), "{page}");
     let signed_in = admin_records(&s)?.pop().ok_or("no record")?;
     assert_eq!(signed_in["verdict"], "allow");
     assert_eq!(signed_in["person"], "dana@example.com");

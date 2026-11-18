@@ -135,8 +135,9 @@ audit: {{ path: enterplace-audit.jsonl }}
         chrome.shot(out / "models-phone.png")
         chrome.size(1440)
 
+        # The old address opens the app's Teams page.
         chrome.go(f"{base}/console/teams")
-        check("maya.cohen" in chrome.js("document.body.textContent"), "teams list the people")
+        chrome.wait("location.hash.startsWith('#/teams') && document.body.textContent.includes('maya.cohen')", "teams list the people")
         chrome.shot(out / "teams.png")
 
         chrome.go(f"{base}/console/app/#/people")

@@ -11,13 +11,13 @@ import { Spend } from "./Spend";
 import { Audit } from "./Audit";
 import { Start } from "./Start";
 import { Prices } from "./Prices";
+import { Teams } from "./Teams";
 import { McpApprovals, McpSessions, McpTools } from "./Mcp";
 import { PolicyEditor, PolicyVersions, RawPolicy } from "./RawPolicy";
 
 export type PageProps = { me: Me | null; query: URLSearchParams };
 
-// Every page of the app: its # route, its label in the sidebar, and its component. A ported page adds one line here
-// and takes its line out of SERVER_PAGES below.
+// Every page of the app: its # route, its label in the sidebar, and its component.
 // `policy`: the page edits the policy, so it says where a change is saved and whether the role may make one.
 // `hidden`: reached from another page's actions, not from the sidebar.
 export const PAGES: { route: string; label: string; page: ComponentType<PageProps>; policy?: boolean; hidden?: boolean }[] = [
@@ -38,9 +38,6 @@ export const PAGES: { route: string; label: string; page: ComponentType<PageProp
   { route: "/policy/edit", label: "Edit the policy", page: PolicyEditor, hidden: true },
   { route: "/prices", label: "Prices", page: Prices },
   { route: "/requests", label: "Requests", page: Requests },
+  { route: "/teams", label: "Teams", page: Teams },
 ];
 
-// The pages the console still renders on the server, linked as they are, by sidebar group.
-export const SERVER_PAGES: [string, [string, string][]][] = [
-  ["Access", [["/console/teams", "Teams"]]],
-];

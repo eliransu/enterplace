@@ -538,13 +538,13 @@ async fn the_console_adds_a_model_edits_a_key_and_shows_teams_and_versions() -> 
     assert!(keys.contains("tpm: 5000") && keys.contains(&maya), "{keys}");
 
     // Teams and people, with their roles.
-    let (status, _, page) = send(form("GET", "/console/teams", &cookie, "")?).await?;
+    let (status, _, page) = send(form("GET", "/console/api/teams", &cookie, "")?).await?;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        page.contains("payments")
-            && page.contains("maya.cohen")
-            && page.contains("ops")
-            && page.contains("Admin"),
+        page.contains(r#""name":"payments""#)
+            && page.contains(r#""name":"maya.cohen""#)
+            && page.contains(r#""name":"ops""#)
+            && page.contains(r#""admin":true"#),
         "{page}"
     );
 

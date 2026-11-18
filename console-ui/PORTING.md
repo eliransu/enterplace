@@ -37,7 +37,7 @@ page deleted, and every test of the old page moved to the API.
 | File | Line |
 | --- | --- |
 | `crates/enterplace-console/src/lib.rs` | `mod <page>;` beside `mod people;`, and `.merge(<page>::routes())` after `.merge(people::routes())`. Delete the old `.route(...)` lines of the page. |
-| `console-ui/src/pages/index.ts` | one entry in `PAGES` (`{ route: "/<page>", label: "...", page: <Page> }`), and take the page's line out of `SERVER_PAGES`. |
+| `console-ui/src/pages/index.ts` | one entry in `PAGES` (`{ route: "/<page>", label: "...", page: <Page> }`). |
 | `crates/enterplace-console/app/` | rebuilt by `npm run build` in `console-ui/` and committed. Do not hand-merge it: on a rebase conflict, take either side and run the build again. |
 
 Old code is deleted from where it lives (`pages.rs`, `lib.rs`, `edit.rs`, `insights.rs`, `start.rs`); that is the
