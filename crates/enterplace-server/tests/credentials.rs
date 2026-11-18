@@ -328,32 +328,103 @@ async fn a_credential_added_on_one_gateway_is_used_rotated_and_removed_on_anothe
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert!(body.contains("credential_in_use"), "{body}");
 
-    // Added and removed in the console of the second gateway.
+    // Added and removed in the console app of the second gateway. Its answers never hold the value.
     let cookie = sign_in(&two.router).await?;
-    let (status, _, page) = console(
+    let (status, headers, _) = console(
         &two.router,
-        "POST",
-        "/console/credentials/add",
-        &cookie,
-        &format!("name=spare&provider=anthropic&value={SPARE}"),
+        "GET",
+        "/console/credentials?rotate=spare",
+        "",
+        "",
     )
     .await?;
-    assert!(status.is_success() || status.is_redirection(), "{page}");
-    no_secret(&page, "the page after adding");
-    let (status, _, page) =
-        console(&two.router, "GET", "/console/credentials", &cookie, "").await?;
-    assert_eq!(status, StatusCode::OK);
-    assert!(page.contains("openai-prod") && page.contains("spare") && page.contains("...3333"));
-    no_secret(&page, "the credentials page");
-    let (status, _, page) = console(
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        headers.get(header::LOCATION).and_then(|v| v.to_str().ok()),
+        Some("/console/app/#/credentials?rotate=spare")
+    );
+    let (status, _, body) = console(
         &two.router,
         "POST",
-        "/console/credentials/remove",
+        "/console/api/credentials/add",
+        &cookie,
+        &json!({"name": "spare", "provider": "anthropic", "value": SPARE}).to_string(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("Credential spare is added"), "{body}");
+    no_secret(&body, "the add answer of the console");
+    // The same name again is refused with the fix, and nothing is overwritten.
+    let (status, _, body) = console(
+        &two.router,
+        "POST",
+        "/console/api/credentials/add",
+        &cookie,
+        &json!({"name": "spare", "provider": "anthropic", "value": FIRST}).to_string(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("Rotate it, or choose another name"), "{body}");
+    no_secret(&body, "a refused add");
+    let (status, _, body) =
+        console(&two.router, "GET", "/console/api/credentials", &cookie, "").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    no_secret(&body, "the credentials list");
+    let page: Value = serde_json::from_str(&body)?;
+    assert_eq!(page["may_change"], true, "{body}");
+    let rows = page["credentials"].as_array().cloned().unwrap_or_default();
+    let row = |name: &str| rows.iter().find(|c| c["name"] == name).cloned();
+    let prod = row("openai-prod").ok_or("openai-prod is not listed")?;
+    assert_eq!(prod["used_by"], "mock", "{body}");
+    assert!(
+        prod["rotated"].as_str().unwrap_or("").ends_with("by admin"),
+        "{body}"
+    );
+    let spare = row("spare").ok_or("spare is not listed")?;
+    assert_eq!(spare["fingerprint"], "...3333", "{body}");
+    assert_eq!(spare["provider"], "anthropic", "{body}");
+    assert_eq!(spare["used_by"], "not named", "{body}");
+    assert_eq!(spare["rotated"], "never", "{body}");
+    // A credential the policy names is not removed from under it, and a removal must name what goes.
+    let (status, _, body) = console(
+        &two.router,
+        "POST",
+        "/console/api/credentials/remove",
+        &cookie,
+        "name=openai-prod&confirm=openai-prod",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("Provider mock in the policy"), "{body}");
+    let (status, _, body) = console(
+        &two.router,
+        "POST",
+        "/console/api/credentials/remove",
+        &cookie,
+        "name=spare&confirm=spar",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("Type spare exactly"), "{body}");
+    let (status, _, body) = console(
+        &two.router,
+        "POST",
+        "/console/api/credentials/remove",
         &cookie,
         "name=spare&confirm=spare",
     )
     .await?;
-    assert!(status.is_success() || status.is_redirection(), "{page}");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // A change from another site is refused before anything is read.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/console/api/credentials/remove")
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, "http://elsewhere.example")
+        .header(header::COOKIE, &cookie)
+        .body(Body::from("name=openai-prod&confirm=openai-prod"))?;
+    let response = two.router.clone().oneshot(request).await?;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let (_, body) = call(&one.router, "GET", "/admin/credentials", ADMIN, None).await?;
     let names: Vec<Value> = serde_json::from_str::<Value>(&body)?["credentials"]
         .as_array()
@@ -410,7 +481,7 @@ async fn a_credential_added_on_one_gateway_is_used_rotated_and_removed_on_anothe
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn without_a_store_the_console_points_to_key_env() -> TestResult {
+async fn without_a_store_the_console_app_points_to_key_env() -> TestResult {
     let (_, port) = provider().await?;
     let dir = dir("no-store")?;
     let policy = dir.join("enterplace.policy.yaml");
@@ -424,9 +495,34 @@ async fn without_a_store_the_console_points_to_key_env() -> TestResult {
     )?;
     let gw = enterplace_server::governed(&policy, None, &|_| Some("env-provider-key".into()))?;
     let cookie = sign_in(&gw.router).await?;
-    let (status, _, page) = console(&gw.router, "GET", "/console/credentials", &cookie, "").await?;
-    assert_eq!(status, StatusCode::OK);
-    assert!(page.contains("store") && page.contains("key_env"), "{page}");
+    let (status, _, body) =
+        console(&gw.router, "GET", "/console/api/credentials", &cookie, "").await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let page: Value = serde_json::from_str(&body)?;
+    assert_eq!(page["off"]["title"], "Credentials need the store", "{body}");
+    assert!(
+        page["off"]["body"]
+            .as_str()
+            .unwrap_or("")
+            .contains("key_env"),
+        "{body}"
+    );
+    assert!(page.get("credentials").is_none(), "{body}");
+    // An add says why it cannot be kept, and how to turn credentials on.
+    let (status, _, body) = console(
+        &gw.router,
+        "POST",
+        "/console/api/credentials/add",
+        &cookie,
+        &json!({"name": "spare", "provider": "openai", "value": SPARE}).to_string(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body.contains("ENTERPLACE_MASTER_KEY") && body.contains("key_env"),
+        "{body}"
+    );
+    no_secret(&body, "a refused add");
     let (status, body) = call(&gw.router, "GET", "/admin/credentials", ADMIN, None).await?;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert!(
