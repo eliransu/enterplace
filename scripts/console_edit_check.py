@@ -108,7 +108,7 @@ audit: {{ path: enterplace-audit.jsonl }}
         chrome.js("document.getElementById('key').focus()")
         chrome.type(admin)
         chrome.key("Enter")
-        chrome.wait("location.pathname === '/console/start'", "Start here after sign-in")
+        chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/start')", "Start here after sign-in")
 
         # Models: add one through the dialog. Approval is on, so it waits; the second admin approves it.
         chrome.go(f"{base}/console/models?add=1")

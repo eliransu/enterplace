@@ -3,10 +3,10 @@
 Usage: python3 scripts/onboarding_check.py [--enterplace target/debug/enterplace] [--out DIR]
 
 An empty install: one admin key, a policy in observe mode, the provider pointed at a mock on this machine. The check
-signs in, sees the welcome, screenshots every empty page, picks coding agents, makes a key on the checklist, sends a
-real request with that key through the gateway mid-flow and waits, without reloading, for the step to turn done on
-its own. Then it adds a second person, asks for the five steps and screenshots each state, at 1440 wide and 390 wide,
-light and dark. Uses browser_check.py's Chrome driver, the standard library only. Exits 1 on the first check that fails.
+signs in, sees the welcome, screenshots every empty page, picks coding agents, makes a key for the first request in
+the console app, sends a real request with that key through the gateway mid-flow and waits, without reloading, for
+the step to turn done on its own. Then it adds two people, asks for the five steps and screenshots each state, at
+1440 wide and 390 wide, light and dark. Uses browser_check.py's Chrome driver, the standard library only. Exits 1 on the first check that fails.
 """
 import argparse, hashlib, http.server, json, pathlib, secrets, socket, sys, tempfile, threading, time, urllib.error, urllib.request
 
@@ -111,23 +111,25 @@ audit: {{ path: enterplace-audit.jsonl }}
         chrome.js("document.getElementById('key').focus()")
         chrome.type(admin)
         chrome.key("Enter")
-        chrome.wait("location.pathname === '/console/start' && document.readyState === 'complete'", "Start here after sign-in")
+        # Start here is a page of the console app: sign-in lands on its route.
+        chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/start') && !!document.querySelector('[data-start-button]')",
+                    "Start here after sign-in")
         text = chrome.js("document.body.innerText")
-        check("What do you want to start with?" in text and not chrome.js("!!document.querySelector('.g-nav--side')"),
+        check("What do you want to start with?" in text and chrome.js("!!document.querySelector('[data-welcome]') && getComputedStyle(document.querySelector('nav[aria-label=Console]')).display === 'none'"),
               "an empty install opens on the welcome, with no nav")
         check(f"Running at {base}" in text, "the welcome names the gateway's address")
         chrome.js("document.querySelector('input[value=apps]').click()")
-        check(chrome.js("document.querySelector('[data-start-button]').textContent") == "Start with our apps",
-              "the button follows the choice")
+        chrome.wait("document.querySelector('[data-start-button]').textContent === 'Start with our apps'", "the button following the choice")
         chrome.js("document.querySelector('input[value=coding]').click()")
         shots("1-welcome", dark=True)
 
         for path, title in [("requests", "No requests yet"), ("analytics", "Nothing to rank yet"), ("spend", "No spend and no budgets yet"),
                             ("people", "Only your admin key so far"), ("teams", "No teams yet"), ("policy", "One rule lets everyone in"),
                             ("mcp/approvals", "No MCP servers yet"), ("audit", "Only setup records so far")]:
-            # People, Analytics and Requests moved to the console app: the old address lands there, and the page fills
-            # in after its first read.
-            chrome.go(f"{base}/console/{path}", f"{base}/console/app/#/{path}" if path in ("people", "analytics", "requests") else "")
+            # The pages that moved to the console app: the old address lands there, and the page fills in after its
+            # first read.
+            moved = path in ("people", "analytics", "requests", "spend", "audit")
+            chrome.go(f"{base}/console/{path}", f"{base}/console/app/#/{path}" if moved else "")
             chrome.wait(f"document.body.innerText.includes({title!r})", f"the {path} page")
             check(title in chrome.js("document.body.innerText") and chrome.js("!!document.querySelector('.g-empty a.g-btn[href^=\"/console/start\"], main a[href^=\"/console/start\"]')"),
                   f"{path} says what fills it and opens the Start here step")
@@ -138,37 +140,52 @@ audit: {{ path: enterplace-audit.jsonl }}
         chrome.shot(out / "4-empty-people-phone.png")
         chrome.size(1440)
 
-        chrome.go(f"{base}/console/start")
+        chrome.go(f"{base}/console/start", f"{base}/console/app/#/start")
+        chrome.wait("!!document.querySelector('[data-start-button]')", "the pick")
         chrome.js("document.querySelector('[data-start-button]').click()")
-        chrome.wait("document.querySelector('.g-check')", "the coding agents checklist")
-        check("Coding agents: 0 of 4 done" in chrome.js("document.body.innerText"), "the choice opens its checklist")
+        chrome.wait("document.querySelector('[data-checklist]')", "the coding agents checklist")
+        # API keys are the default way to pay; the policy has a provider, so Connect a model is done.
+        check("Coding agents: 1 of 6 done" in chrome.js("document.body.innerText"), "the choice opens its checklist")
         shots("2-checklist-nothing", dark=True)
 
-        chrome.js("""(() => { const f = document.querySelector('form[action="/console/start/key"]');
-            f.name.value = 'sarah.miller'; f.team.value = 'platform'; f.submit(); })()""")
-        chrome.wait("document.querySelector('[data-state=listening]')", "the step that listens for the first request")
-        lines = chrome.js("document.getElementById('lines-coding').textContent")
-        key = next((w.split("=", 1)[1] for w in lines.split() if w.startswith("ANTHROPIC_API_KEY=")), "")
-        check(key.startswith("enterplace_") and f"ANTHROPIC_BASE_URL={base}" in lines, "the key made is in the lines to paste, with the gateway's address")
+        # The first request: a key made for it goes into the lines, shown once.
+        click = "(label => [...document.querySelectorAll('main button')].find(b => b.textContent === label).click())"
+        chrome.js(f"{click}('Make a key for this request')")
+        chrome.wait("/Bearer enterplace_/.test(document.getElementById('lines-first')?.textContent ?? '')", "the key in the first request's lines")
+        lines = chrome.js("document.getElementById('lines-first').textContent")
+        first = lines.split("Bearer ", 1)[1].split('"', 1)[0]
+        check(first.startswith("enterplace_") and f"curl {base}/v1/chat/completions" in lines, "the key made is in the lines to paste, with the gateway's address")
+        check(chrome.js("document.querySelector('[data-state=listening]')?.textContent.includes('Waiting for the first request')"),
+              "the step listens for the first request")
         shots("2-checklist-waiting", phone=False)
 
-        # A real request through the gateway, mid-flow: the page's script sees it and the step turns done by itself.
-        check(ask(base, key) == 200, "a request with the new key goes through the gateway")
+        # A real request through the gateway, mid-flow: the page's poll sees it and the step turns done by itself.
+        check(ask(base, first) == 200, "a request with the new key goes through the gateway")
         chrome.wait("document.body.innerText.includes('Your first requests arrived')", "step 2 turning done without a reload", seconds=15)
         text = chrome.js("document.body.innerText")
         check("Your first requests arrived" in text and "in the last 10 minutes" in text, "the first requests show on Start here")
         shots("3-first-data", dark=True)
 
-        chrome.js("""(() => { const f = document.querySelector('form[action="/console/start/key"]');
-            f.name.value = 'mike.johnson'; f.team.value = 'payments'; f.submit(); })()""")
-        chrome.wait("document.querySelector('#made-key')", "the second key")
-        second = chrome.js("document.getElementById('made-key').textContent")
+        def person(name: str, team: str) -> str:
+            chrome.wait("!!document.querySelector('form[data-action=key]')", f"the key form for {name}")
+            chrome.js(f"""(() => {{ const f = document.querySelector('form[data-action=key]');
+                f.querySelector('[name=name]').value = {name!r}; f.querySelector('[name=team]').value = {team!r}; f.requestSubmit(); }})()""")
+            chrome.wait(f"document.body.innerText.includes('made for {name}') && !!document.querySelector('#made-key')", f"the key of {name}")
+            key = chrome.js("document.getElementById('made-key').textContent")
+            check(key.startswith("enterplace_"), f"the key of {name} is shown once")
+            return key
+
+        sarah = person("sarah.miller", "platform")
+        check(sarah in chrome.js("document.getElementById('lines-coding').textContent"), "the key made is in the coding agent's lines")
+        check(ask(base, sarah) == 200, "the first person's request goes through")
+        chrome.wait("document.body.innerText.includes('Add a second person') && document.querySelector('[data-state=now]')?.textContent.includes('Add a second person')",
+                    "the first person's step turning done without a reload", seconds=15)
+        second = person("mike.johnson", "payments")
         check(ask(base, second) == 200, "the second person's request goes through")
-        chrome.go(f"{base}/console/start")
-        chrome.wait("document.body.innerText.includes('Show the five steps')", "the checklist complete")
+        chrome.wait("!!document.querySelector('[data-five-steps]')", "the checklist complete", seconds=15)
         shots("2-checklist-done", phone=False)
-        chrome.js("document.querySelector('form[action=\"/console/start/pick\"] button').click()")
-        chrome.wait("document.querySelector('.g-setup')", "the five steps")
+        chrome.js("document.querySelector('[data-five-steps]').click()")
+        chrome.wait("document.querySelector('[data-stages]')", "the five steps")
         text = chrome.js("document.body.innerText")
         check(all(w in text for w in ["See", "Know", "Limit", "Protect", "Prove", "Also start with"]), "the five steps take the page")
         shots("5-five-steps", dark=True)

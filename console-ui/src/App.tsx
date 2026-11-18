@@ -7,7 +7,7 @@ import { PAGES, SERVER_PAGES } from "@/pages";
 /// The # route and its query: `#/people?issue=1` is the People page with its Issue dialog open.
 function useHash() {
   const read = () => {
-    const [route, query = ""] = (window.location.hash.slice(1) || "/providers").split("?");
+    const [route, query = ""] = (window.location.hash.slice(1) || "/start").split("?");
     return { route, query: new URLSearchParams(query) };
   };
   const [hash, setHash] = useState(read);
@@ -23,7 +23,7 @@ const item = "t-body flex min-h-11 items-center rounded-small px-4 no-underline 
 
 export function App() {
   const { route, query } = useHash();
-  const current = PAGES.find((p) => p.route === route) ?? PAGES[1];
+  const current = PAGES.find((p) => p.route === route) ?? PAGES[0];
   const [me, setMe] = useState<Me | null>(null);
   useEffect(() => {
     api.get<Me>("me").then(setMe).catch(() => setMe(null));
@@ -31,7 +31,7 @@ export function App() {
   return (
     <div className="grid min-h-screen md:grid-cols-[var(--nav)_1fr]">
       <nav aria-label="Console" className="grid content-start gap-1 border-b border-border p-4 md:border-r md:border-b-0">
-        <a href="/console/start" className="flex min-h-11 items-center gap-2 px-4 no-underline text-foreground">
+        <a href="#/start" className="flex min-h-11 items-center gap-2 px-4 no-underline text-foreground">
           {/* The Enterplace mark, as the console's g-mark draws it: a dot and a bar. */}
           <span aria-hidden="true" className="inline-flex flex-none items-center gap-1">
             <span className="size-3 rounded-pill bg-foreground" />
@@ -39,11 +39,14 @@ export function App() {
           </span>
           <span className="t-sm">Enterplace</span>
         </a>
-        <span className="t-tag px-4 pt-4 uppercase text-muted-foreground">Manage</span>
-        {PAGES.map((p) => (
-          <a key={p.route} href={`#${p.route}`} aria-current={current === p ? "page" : undefined} className={cn(item, current === p && "bg-secondary")}>
-            {p.label}
-          </a>
+        {/* Start here leads, as on the server-rendered nav; the pages after it are under Manage. */}
+        {PAGES.map((p, i) => (
+          <div key={p.route} className="contents">
+            {i === 1 ? <span className="t-tag px-4 pt-4 uppercase text-muted-foreground">Manage</span> : null}
+            <a href={`#${p.route}`} aria-current={current === p ? "page" : undefined} className={cn(item, current === p && "bg-secondary")}>
+              {p.label}
+            </a>
+          </div>
         ))}
         {SERVER_PAGES.map(([group, links]) => (
           <div key={group} className="grid gap-1">
@@ -68,7 +71,7 @@ export function App() {
       <main className="grid max-w-wide content-start gap-8 p-6 md:p-10">
         {me?.observe ? (
           <p className="t-small m-0 text-muted-foreground">
-            Observe mode: rules only record. <a href="/console/start?track=limit">Turn on enforcement</a>
+            Observe mode: rules only record. <a href="#/start?track=limit">Turn on enforcement</a>
           </p>
         ) : null}
         {current.policy && me && !me.edit_policy ? (

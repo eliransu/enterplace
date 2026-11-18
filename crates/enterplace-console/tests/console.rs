@@ -2738,7 +2738,7 @@ async fn every_page_says_when_observe_mode_lets_everything_through() -> TestResu
     )
     .await?;
     assert_eq!(me["observe"], true);
-    for path in ["/console/policy", "/console/start"] {
+    for path in ["/console/policy", "/console/teams"] {
         let (status, _, page) = send(&s.app, get(path, &cookie)?).await?;
         assert_eq!(status, StatusCode::OK, "{path}");
         assert_eq!(

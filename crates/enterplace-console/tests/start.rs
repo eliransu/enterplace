@@ -1,5 +1,6 @@
-//! Start here, the console home: the welcome on an empty install, the kept choice, each choice's checklist, a
-//! request turning its step done through state.json, the empty pages, and roles that see only what they may do.
+//! Start here, the console home, through the console app's JSON API: the welcome on an empty install, the kept
+//! choice, each choice's checklist, a key shown once, a request turning its step done as the app polls, the empty
+//! pages, and roles that see only what they may do.
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -14,6 +15,7 @@ use enterplace_core::{
     id::sha256_hex,
 };
 use http_body_util::BodyExt;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -142,9 +144,130 @@ fn request(s: &Setup, id: &str, person: &str, team: &str) -> TestResult {
     Ok(())
 }
 
-fn signature(json: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let value: serde_json::Value = serde_json::from_str(json)?;
-    Ok(value["signature"].as_str().unwrap_or("").to_string())
+fn api_get(path: &str, cookie: &str) -> Result<Request<Body>, axum::http::Error> {
+    get(&format!("/console/api/{path}"), cookie)
+}
+
+fn api_post(path: &str, cookie: &str, body: Value) -> Result<Request<Body>, axum::http::Error> {
+    Request::post(format!("/console/api/{path}"))
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("http://{HOST}"))
+        .header(header::COOKIE, cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+}
+
+/// Start here as the app reads it, for the view `query` asks for.
+async fn start(
+    app: &Router,
+    cookie: &str,
+    query: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let (status, _, body) = send(app, api_get(&format!("start?{query}"), cookie)?).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    Ok(serde_json::from_str(&body)?)
+}
+
+/// A change on Start here: its status and its answer.
+async fn change(
+    app: &Router,
+    cookie: &str,
+    path: &str,
+    body: Value,
+) -> Result<(StatusCode, Value), Box<dyn std::error::Error>> {
+    let (status, _, text) = send(app, api_post(&format!("start/{path}"), cookie, body)?).await?;
+    Ok((status, serde_json::from_str(&text)?))
+}
+
+/// Every block anywhere in `v` whose `type` is `kind`.
+fn blocks<'a>(v: &'a Value, kind: &str, out: &mut Vec<&'a Value>) {
+    match v {
+        Value::Object(map) => {
+            if map.get("type").and_then(Value::as_str) == Some(kind) {
+                out.push(v);
+            }
+            for item in map.values() {
+                blocks(item, kind, out);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                blocks(item, kind, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The lines block `id`, as Copy copies it.
+fn lines(state: &Value, id: &str) -> String {
+    let mut found = Vec::new();
+    blocks(state, "lines", &mut found);
+    found
+        .iter()
+        .find(|b| b["id"] == id)
+        .and_then(|b| b["lines"].as_array())
+        .map(|l| {
+            l.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a form or a button posts to `action`.
+fn posts(state: &Value, action: &str) -> bool {
+    let mut found = Vec::new();
+    blocks(state, "form", &mut found);
+    blocks(state, "button", &mut found);
+    found.iter().any(|b| b["action"] == action)
+}
+
+fn states(state: &Value) -> Vec<String> {
+    state["states"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn step<'a>(state: &'a Value, title: &str) -> &'a Value {
+    state["steps"]
+        .as_array()
+        .and_then(|s| s.iter().find(|s| s["title"] == title))
+        .unwrap_or(&Value::Null)
+}
+
+#[tokio::test]
+async fn the_old_addresses_land_on_the_app_route() -> TestResult {
+    let s = setup("moved")?;
+    // No session needed: the app asks for one, and sign-in comes back to the app route.
+    for (path, to) in [
+        ("/console/start", "/console/app/#/start"),
+        (
+            "/console/start?track=coding&pay=subscriptions&setup=mdm",
+            "/console/app/#/start?track=coding&pay=subscriptions&setup=mdm",
+        ),
+        ("/console/start?pick=1", "/console/app/#/start?pick=1"),
+        (
+            "/console/start/state.json?pay=api",
+            "/console/api/start?pay=api",
+        ),
+    ] {
+        let (status, headers, _) = send(&s.app, get(path, "")?).await?;
+        assert_eq!((status, location(&headers)), (StatusCode::SEE_OTHER, to));
+    }
+    // The old form routes are gone: the app posts to the API.
+    let cookie = sign_in(&s.app, ADMIN_KEY).await?;
+    let (status, _, _) = send(&s.app, post("/console/start/pick", &cookie, "choice=apps")?).await?;
+    assert_ne!(status, StatusCode::SEE_OTHER);
+    assert!(!s.dir.join("enterplace-start.json").exists());
+    Ok(())
 }
 
 #[tokio::test]
@@ -154,30 +277,34 @@ async fn an_empty_install_opens_on_the_welcome_and_the_choice_is_kept() -> TestR
     // The brand and the root open Start here.
     let (_, headers, _) = send(&s.app, get("/console", &cookie)?).await?;
     assert_eq!(location(&headers), "/console/start");
-    let (status, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
-    assert_eq!(status, StatusCode::OK);
+    let state = start(&s.app, &cookie, "").await?;
+    assert_eq!(state["view"], "welcome", "{state}");
+    assert_eq!(state["base"], BASE);
+    assert_eq!(state["may_choose"], true);
+    let tracks = state["tracks"].to_string();
     for part in [
-        "What do you want to start with?",
-        "g-pick",
         "Coding agents",
         "Our own apps and agents",
         "MCP tools",
         "A spend limit for the team",
         "Claude Team seats we can only watch",
-        "Start with coding agents",
-        "Skip and open the console",
-        &format!("Running at {BASE}"),
+        "coding agents",
     ] {
-        assert!(page.contains(part), "{part}: {page}");
+        assert!(tracks.contains(part), "{part}: {tracks}");
     }
-    assert!(!page.contains("g-nav--side"), "the welcome has no nav");
+    // The signed-in person's own token, as the start link makes it, leaves the install empty.
+    let (status, _) = change(
+        &s.app,
+        &cookie,
+        "key",
+        json!({ "kind": "person_token", "name": "noa.bar", "team": "platform" }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(start(&s.app, &cookie, "").await?["view"], "welcome");
 
-    let (status, headers, _) =
-        send(&s.app, post("/console/start/pick", &cookie, "choice=apps")?).await?;
-    assert_eq!(
-        (status, location(&headers)),
-        (StatusCode::SEE_OTHER, "/console/start")
-    );
+    let (status, answer) = change(&s.app, &cookie, "pick", json!({ "choice": "apps" })).await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
     let kept = std::fs::read_to_string(s.dir.join("enterplace-start.json"))?;
     assert!(kept.contains(r#""choice":"apps""#), "{kept}");
     let audit = std::fs::read_to_string(s.dir.join("enterplace-audit.jsonl"))?;
@@ -185,25 +312,23 @@ async fn an_empty_install_opens_on_the_welcome_and_the_choice_is_kept() -> TestR
         audit.contains(r#""action":"start_choice""#),
         "the choice is recorded"
     );
-    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
-    assert!(
-        page.contains("Our own apps and agents: 1 of 5 done"),
-        "{page}"
-    );
-    assert!(
-        page.contains(r#"aria-current="page">Start here"#),
-        "Start here is first in the nav"
-    );
+    let state = start(&s.app, &cookie, "").await?;
+    assert_eq!(state["lead"], "Our own apps and agents: 1 of 5 done.");
 
-    // Changed later, and skipped: the console opens on Start here with the pick in the shell.
-    let (_, _, page) = send(&s.app, get("/console/start?pick=1", &cookie)?).await?;
-    assert!(
-        page.contains("g-nav--side") && page.contains("g-pick"),
-        "{page}"
-    );
-    let (_, _, _) = send(&s.app, post("/console/start/pick", &cookie, "skip=1")?).await?;
+    // Changed later, and skipped: Start here shows the pick in the console.
+    let state = start(&s.app, &cookie, "pick=1").await?;
+    assert_eq!(state["view"], "pick", "{state}");
+    let (status, _) = change(&s.app, &cookie, "pick", json!({ "skip": "1" })).await?;
+    assert_eq!(status, StatusCode::OK);
     let kept = std::fs::read_to_string(s.dir.join("enterplace-start.json"))?;
     assert!(kept.contains(r#""skipped":true"#), "{kept}");
+    // Nothing picked: the answer names the choices.
+    let (status, answer) = change(&s.app, &cookie, "pick", json!({ "choice": "nope" })).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        answer["error"].to_string().contains("coding, apps"),
+        "{answer}"
+    );
     Ok(())
 }
 
@@ -218,14 +343,10 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
         (
             "coding",
             &[
-                "How does your team pay for its coding agents?",
-                "Claude subscriptions, for Claude Code",
-                "API keys, any coding agent",
                 "Make a key for the first person",
                 "Point your coding agent at Enterplace and send one prompt",
                 "Add a second person",
                 "Let people make their own keys",
-                "Copy for your agent",
             ],
         ),
         (
@@ -266,71 +387,82 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
         ),
     ];
     for (choice, parts) in expect {
-        send(
-            &s.app,
-            post("/console/start/pick", &cookie, &format!("choice={choice}"))?,
-        )
-        .await?;
-        let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+        change(&s.app, &cookie, "pick", json!({ "choice": choice })).await?;
+        let state = start(&s.app, &cookie, "").await?;
+        let text = state.to_string();
         for part in parts {
-            assert!(
-                page.contains(&enterplace_console::html::esc(part)),
-                "{choice}: {part}"
-            );
+            assert!(text.contains(part), "{choice}: {part}");
         }
-        // The step in front holds what to do and nothing more: no "Turns done when" and "Then you see" blocks.
-        assert!(page.contains(r#"data-state="now""#), "{choice}");
+        // The step in front holds what to do, and its prompt for a coding agent.
+        assert!(states(&state).contains(&"now".to_string()), "{choice}");
+        let open = state["steps"]
+            .as_array()
+            .and_then(|s| s.iter().find(|s| s["state"] == "now"))
+            .ok_or("no current step")?;
+        assert!(!open["agent"].as_str().unwrap_or("").is_empty(), "{choice}");
         for gone in [
             "Turns done when",
             "Then you see",
             "Paste it into Claude Code",
         ] {
-            assert!(!page.contains(gone), "{choice}: {gone}");
+            assert!(!text.contains(gone), "{choice}: {gone}");
         }
     }
+    // Coding agents asks how the team pays, API keys first.
+    let state = start(&s.app, &cookie, "track=coding").await?;
+    assert_eq!(state["pay"], "api");
     // A policy kept in the file: the lines come with Copy and the file's path, no draft button.
-    let (_, _, page) = send(&s.app, get("/console/start?track=mcp", &cookie)?).await?;
+    let state = start(&s.app, &cookie, "track=mcp").await?;
+    let mut policy = Vec::new();
+    blocks(&state, "policy", &mut policy);
     assert!(
-        page.contains("enterplace.policy.yaml") && !page.contains("/console/policy/edit?add="),
-        "{page}"
+        policy.iter().all(|b| b["way"]["kind"] == "copy"
+            && b["way"]["path"]
+                .as_str()
+                .is_some_and(|p| p.ends_with("enterplace.policy.yaml"))),
+        "{state}"
     );
-    // Tabs pick the tool's lines by address.
-    send(
+    assert!(!state.to_string().contains("/console/policy/edit?add="));
+    // Tabs pick the tool's lines by the route's query.
+    change(
         &s.app,
-        post(
-            "/console/start/key",
-            &cookie,
-            "kind=person&name=sarah.miller&team=platform&pay=api",
-        )?,
+        &cookie,
+        "key",
+        json!({ "kind": "person", "name": "sarah.miller", "team": "platform", "pay": "api" }),
     )
     .await?;
-    let (_, _, page) = send(&s.app, get("/console/start?track=coding&pay=api", &cookie)?).await?;
+    let state = start(&s.app, &cookie, "track=coding&pay=api").await?;
     assert!(
-        page.contains(&format!("export ANTHROPIC_BASE_URL={BASE}")),
-        "{page}"
+        lines(&state, "lines-coding").contains(&format!("export ANTHROPIC_BASE_URL={BASE}")),
+        "{state}"
     );
-    let (_, _, page) = send(
-        &s.app,
-        get("/console/start?track=coding&pay=api&tool=codex", &cookie)?,
-    )
-    .await?;
+    let state = start(&s.app, &cookie, "track=coding&pay=api&tool=codex").await?;
     assert!(
-        page.contains(&format!("base_url = &quot;{BASE}/v1&quot;")),
-        "{page}"
+        lines(&state, "lines-coding").contains(&format!("base_url = \"{BASE}/v1\"")),
+        "{state}"
     );
     // Gemini CLI has its own lines, and the tabs keep the API key answer instead of falling back to subscriptions.
-    let (_, _, page) = send(
-        &s.app,
-        get("/console/start?track=coding&pay=api&tool=gemini", &cookie)?,
-    )
-    .await?;
+    let state = start(&s.app, &cookie, "track=coding&pay=api&tool=gemini").await?;
     assert!(
-        page.contains(&format!("export GOOGLE_GEMINI_BASE_URL={BASE}"))
-            && page.contains("/console/start?pay=api&amp;tool=codex#step-4"),
-        "{page}"
+        lines(&state, "lines-coding").contains(&format!("export GOOGLE_GEMINI_BASE_URL={BASE}")),
+        "{state}"
     );
-    let (_, _, page) = send(&s.app, get("/console/start?track=apps", &cookie)?).await?;
-    assert!(page.contains("Showing Our own apps and agents"), "{page}");
+    let mut found = Vec::new();
+    blocks(&state, "lines", &mut found);
+    let tabs = &found
+        .iter()
+        .find(|b| b["id"] == "lines-coding")
+        .ok_or("no lines")?["tabs"];
+    assert_eq!(tabs["param"], "tool");
+    assert_eq!(tabs["keep"]["pay"], "api");
+    assert_eq!(tabs["selected"], "gemini");
+    let state = start(&s.app, &cookie, "track=apps").await?;
+    assert!(
+        state["viewing"]
+            .as_str()
+            .is_some_and(|v| v.contains("Showing Our own apps and agents")),
+        "{state}"
+    );
     Ok(())
 }
 
@@ -338,96 +470,113 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
 async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_done() -> TestResult {
     let s = setup("live")?;
     let cookie = sign_in(&s.app, ADMIN_KEY).await?;
-    send(
-        &s.app,
-        post("/console/start/pick", &cookie, "choice=coding")?,
-    )
-    .await?;
+    change(&s.app, &cookie, "pick", json!({ "choice": "coding" })).await?;
     // Connect a model is done (the policy has a provider); Send your first request listens.
-    let (_, _, before) = send(&s.app, get("/console/start/state.json?pay=api", &cookie)?).await?;
-    assert!(
-        before.contains(r#""steps":["done","listening","ahead","ahead","ahead","ahead"]"#),
-        "{before}"
+    let before = start(&s.app, &cookie, "pay=api").await?;
+    assert_eq!(
+        states(&before),
+        ["done", "listening", "ahead", "ahead", "ahead", "ahead"]
     );
     request(&s, "01START0000000000000000000", "noa.bar", "platform")?;
-    let (_, _, before) = send(&s.app, get("/console/start/state.json?pay=api", &cookie)?).await?;
-    assert!(
-        before.contains(r#""steps":["done","done","now","ahead","ahead","ahead"]"#),
-        "{before}"
+    let before = start(&s.app, &cookie, "pay=api").await?;
+    assert_eq!(
+        states(&before),
+        ["done", "done", "now", "ahead", "ahead", "ahead"]
     );
 
-    let (status, _, page) = send(
+    let (status, made) = change(
         &s.app,
-        post(
-            "/console/start/key",
-            &cookie,
-            "kind=person&name=sarah.miller&team=platform&pay=api",
-        )?,
+        &cookie,
+        "key",
+        json!({ "kind": "person", "name": "sarah.miller", "team": "platform", "pay": "api" }),
     )
     .await?;
-    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(status, StatusCode::OK, "{made}");
     let keys = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
     assert!(keys.contains("name: sarah.miller"), "{keys}");
-    // The key is in the lines to paste, once; the step that waits for traffic listens and the page polls.
+    // The key is in the lines to paste, once, and in the banner; the step that waits for traffic listens.
+    let shown = &made["state"];
+    assert_eq!(made["query"], "track=coding&pay=api");
     assert!(
-        page.contains("export ANTHROPIC_API_KEY=enterplace_"),
-        "{page}"
+        lines(shown, "lines-coding").contains("export ANTHROPIC_API_KEY=enterplace_"),
+        "{shown}"
     );
     assert!(
-        page.contains(r#"data-state="listening""#) && page.contains("data-start-poll"),
-        "{page}"
+        shown["made"]["key"]
+            .as_str()
+            .is_some_and(|k| k.starts_with("enterplace_"))
     );
-    assert!(
-        page.contains("Waiting for the first request from sarah.miller"),
-        "{page}"
+    let listening = step(
+        shown,
+        "Point your coding agent at Enterplace and send one prompt",
     );
-    // The page polls; without a script the step's Check now link does the same.
-    assert!(
-        page.contains(r#"<noscript><a class="g-link t-small" href="/console/start">Check now"#),
-        "works without the script: {page}"
+    assert_eq!(listening["state"], "listening");
+    assert_eq!(
+        listening["listen"],
+        "Waiting for the first request from sarah.miller."
     );
-    let (_, _, later) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
+    assert_eq!(listening["open"]["href"], "/console/requests");
+    let later = start(&s.app, &cookie, "track=coding&pay=api").await?;
     assert!(
-        !later.contains("export ANTHROPIC_API_KEY=enterplace_"),
+        !later
+            .to_string()
+            .contains("export ANTHROPIC_API_KEY=enterplace_"),
         "shown once"
     );
-    assert!(later.contains("&lt;key of sarah.miller&gt;"), "{later}");
-
-    let (_, _, waiting) = send(&s.app, get("/console/start/state.json?pay=api", &cookie)?).await?;
+    assert!(later["made"].is_null());
     assert!(
-        waiting.contains(r#""steps":["done","done","done","listening","ahead","ahead"]"#),
-        "{waiting}"
+        lines(&later, "lines-coding").contains("<key of sarah.miller>"),
+        "{later}"
+    );
+    // The view held with the key and the one polled agree until a step changes.
+    assert_eq!(later["signature"], shown["signature"]);
+
+    let waiting = start(&s.app, &cookie, "pay=api").await?;
+    assert_eq!(
+        states(&waiting),
+        ["done", "done", "done", "listening", "ahead", "ahead"]
     );
     request(&s, "01START0000000000000000001", "sarah.miller", "platform")?;
-    let (_, _, arrived) = send(&s.app, get("/console/start/state.json?pay=api", &cookie)?).await?;
-    assert!(
-        arrived.contains(r#""steps":["done","done","done","done","now","ahead"]"#),
-        "{arrived}"
+    let arrived = start(&s.app, &cookie, "pay=api").await?;
+    assert_eq!(
+        states(&arrived),
+        ["done", "done", "done", "done", "now", "ahead"]
     );
     assert_ne!(
-        signature(&waiting)?,
-        signature(&arrived)?,
-        "the page reloads"
+        waiting["signature"], arrived["signature"],
+        "the app shows the new state"
+    );
+    assert!(
+        step(
+            &arrived,
+            "Point your coding agent at Enterplace and send one prompt"
+        )["done_text"]
+            .as_str()
+            .is_some_and(|t| t.contains("`sarah.miller`") && t.contains("claude-code, ")),
+        "{arrived}"
     );
 
     // The first data on Start here, with the next step under it.
-    let (_, _, page) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
     // The live strip: tools, the gate, providers, a count of the last 10 minutes and the newest requests.
-    for part in [
-        "Your first requests arrived",
-        r#"aria-label="Live traffic""#,
-        "in the last 10 minutes",
-        r#"<span class="t-mono-sm">claude-code</span>"#,
-        r#"<span class="t-mono-sm">anthropic</span>"#,
-        "claude-sonnet-5-5",
-        r#"class="g-flowing__disc" data-outcome="pass""#,
-        "Your steps",
-        "Add a second person",
-    ] {
-        assert!(page.contains(part), "{part}: {page}");
-    }
-    // Only the newest request's disc moves: the page redraws when one arrives, and each new one crosses once.
-    assert_eq!(page.matches("g-flowing__disc--new").count(), 1, "{page}");
+    assert!(
+        arrived["lead"]
+            .as_str()
+            .is_some_and(|l| l.starts_with("Your first requests arrived")),
+        "{arrived}"
+    );
+    let live = &arrived["live"];
+    assert!(
+        live["count"]
+            .as_str()
+            .is_some_and(|c| c.contains("in the last 10 minutes")),
+        "{live}"
+    );
+    assert_eq!(live["tools"][0], "claude-code");
+    assert_eq!(live["providers"][0], "anthropic");
+    assert_eq!(live["rows"][0]["model"], "claude-sonnet-5-5");
+    assert_eq!(live["rows"][0]["refused"], false);
+    assert_eq!(live["rows"][0]["id"], "01START0000000000000000001");
+    assert!(step(&arrived, "Add a second person")["state"] == "now");
 
     // A second person, then the five steps once the required steps are done.
     let made = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
@@ -439,23 +588,22 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
         ),
     )?;
     request(&s, "01START0000000000000000002", "mike.johnson", "payments")?;
-    let (_, _, page) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
-    assert!(page.contains("Show the five steps"), "{page}");
-    send(&s.app, post("/console/start/pick", &cookie, "steps=1")?).await?;
-    let (_, _, page) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
-    for part in [
-        "g-setup",
-        "See",
-        "Know",
-        "Limit",
-        "Protect",
-        "Prove",
-        "Step 3 of 5",
-        "Also start with",
-        "Show the steps",
-    ] {
-        assert!(page.contains(part), "{part}: {page}");
-    }
+    let state = start(&s.app, &cookie, "pay=api").await?;
+    assert_eq!(state["banner"], true, "{state}");
+    assert_eq!(state["complete"], true);
+    change(&s.app, &cookie, "pick", json!({ "steps": "1" })).await?;
+    let state = start(&s.app, &cookie, "pay=api").await?;
+    assert_eq!(state["view"], "folded", "{state}");
+    let names: Vec<&Value> = state["stages"]["steps"]
+        .as_array()
+        .map(|s| s.iter().map(|s| &s["name"]).collect())
+        .unwrap_or_default();
+    assert_eq!(names, ["See", "Know", "Limit", "Protect", "Prove"]);
+    assert_eq!(state["stages"]["current"]["n"], 3, "Step 3 of 5");
+    assert_eq!(state["others"].as_array().map(Vec::len), Some(4));
+    // Show the steps.
+    let state = start(&s.app, &cookie, "pay=api&view=checklist").await?;
+    assert_eq!(state["view"], "checklist");
     Ok(())
 }
 
@@ -593,41 +741,61 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
 async fn a_role_sees_only_the_actions_it_may_take() -> TestResult {
     let s = setup("roles")?;
     let admin = sign_in(&s.app, ADMIN_KEY).await?;
-    send(
-        &s.app,
-        post("/console/start/pick", &admin, "choice=coding")?,
-    )
-    .await?;
+    change(&s.app, &admin, "pick", json!({ "choice": "coding" })).await?;
     request(&s, "01START0000000000000000000", "noa.bar", "platform")?;
     let viewer = sign_in(&s.app, VIEWER_KEY).await?;
-    send(&s.app, get("/console/start", &viewer)?).await?;
-    let (_, _, page) = send(&s.app, get("/console/start?pay=api", &viewer)?).await?;
-    assert!(page.contains("Make a key for the first person"), "{page}");
+    let state = start(&s.app, &viewer, "pay=api").await?;
+    let text = state.to_string();
+    assert!(text.contains("Make a key for the first person"), "{text}");
+    assert!(!posts(&state, "key"), "no key form: {state}");
+    assert_eq!(state["may_choose"], false, "no Change what to start with");
+    assert!(text.contains("Your role cannot make keys"), "{text}");
+    let state = start(&s.app, &viewer, "pay=subscriptions").await?;
     assert!(
-        !page.contains(r#"action="/console/start/key""#),
-        "no key form: {page}"
+        !posts(&state, "passthrough") && !posts(&state, "key"),
+        "no forms: {state}"
     );
-    assert!(!page.contains("Change what to start with"), "{page}");
-    assert!(page.contains("Your role cannot make keys"), "{page}");
-    let (_, _, page) = send(&s.app, get("/console/start", &viewer)?).await?;
-    assert!(
-        !page.contains(r#"action="/console/start/passthrough""#)
-            && !page.contains(r#"action="/console/start/key""#),
-        "no forms: {page}"
-    );
-    // Its own forms are refused and recorded, whatever it sends.
-    let (status, _, _) = send(
+    // Its own changes are refused and recorded, whatever it sends.
+    let (status, answer) = change(
         &s.app,
-        post("/console/start/key", &viewer, "kind=person&name=x&team=y")?,
+        &viewer,
+        "key",
+        json!({ "kind": "person", "name": "x", "team": "y" }),
     )
     .await?;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+    assert!(
+        answer["error"]
+            .to_string()
+            .contains("Your role cannot make keys")
+    );
     let keys = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
     assert!(!keys.contains("name: x\n"), "{keys}");
-    let (_, headers, _) = send(&s.app, post("/console/start/pick", &viewer, "choice=mcp")?).await?;
-    assert_eq!(location(&headers), "/console/start");
+    let (status, _) = change(&s.app, &viewer, "pick", json!({ "choice": "mcp" })).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = change(&s.app, &viewer, "passthrough", json!({})).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = change(&s.app, &viewer, "demo", json!({})).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
     let kept = std::fs::read_to_string(s.dir.join("enterplace-start.json"))?;
     assert!(kept.contains(r#""choice":"coding""#), "{kept}");
+    let audit = std::fs::read_to_string(s.dir.join("enterplace-audit.jsonl"))?;
+    assert!(
+        audit.contains(r#""action":"issue_key""#) && audit.contains("read_only"),
+        "{audit}"
+    );
+    // A change from another site is refused.
+    let request = Request::post("/console/api/start/pick")
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, "http://evil.example")
+        .header(header::COOKIE, &admin)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"choice":"mcp"}"#))?;
+    let (status, _, _) = send(&s.app, request).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // Not signed in: the app sends the person to sign in.
+    let (status, _, _) = send(&s.app, api_get("start", "")?).await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
     // Empty pages offer it the docs, not the action.
     let (_, _, page) = send(&s.app, get("/console/teams", &viewer)?).await?;
     assert!(
@@ -685,57 +853,72 @@ async fn connect_a_model_seals_the_key_and_adds_the_provider_or_the_demo_model_i
         "version: 1\nmode: observe\nproviders:\n  - name: demo\n    preset: demo\n    models: [enterplace-demo]\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\nroles:\n  - name: viewer\n    permissions: [see_keys]\n",
     )?;
     let cookie = sign_in(&s.app, ADMIN_KEY).await?;
-    send(&s.app, post("/console/start/pick", &cookie, "choice=apps")?).await?;
-    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+    change(&s.app, &cookie, "pick", json!({ "choice": "apps" })).await?;
+    let state = start(&s.app, &cookie, "").await?;
+    let text = state.to_string();
     for part in [
         "Connect a model",
         "Try without a key",
         "Send your first request",
     ] {
-        assert!(page.contains(part), "{part}: {page}");
+        assert!(text.contains(part), "{part}: {text}");
     }
-    // No master key and no store: the page says how to get one, and the form is refused with the same fix.
-    assert!(page.contains("ENTERPLACE_MASTER_KEY"), "{page}");
-    let (status, _, page) = send(
+    assert!(posts(&state, "demo"));
+    // No master key and no store: the page says how to get one, and the change is refused with the same fix.
+    assert!(text.contains("ENTERPLACE_MASTER_KEY"), "{text}");
+    assert!(!posts(&state, "connect"), "{state}");
+    let (status, answer) = change(
         &s.app,
-        post(
-            "/console/start/connect",
-            &cookie,
-            "provider=anthropic&key=sk-ant-test-1234",
-        )?,
+        &cookie,
+        "connect",
+        json!({ "provider": "anthropic", "key": "sk-ant-test-1234" }),
     )
     .await?;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(page.contains("master key"), "{page}");
+    assert!(
+        answer["error"].to_string().contains("master key"),
+        "{answer}"
+    );
 
     // Try without a key: the first request names the demo model.
-    let (_, headers, _) = send(&s.app, post("/console/start/demo", &cookie, "")?).await?;
-    assert_eq!(location(&headers), "/console/start?pay=api#step-2");
-    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
-    assert!(page.contains("Using the demo model"), "{page}");
-    assert!(
-        page.contains("&quot;model&quot;:&quot;enterplace-demo&quot;"),
-        "{page}"
+    let (status, answer) = change(&s.app, &cookie, "demo", json!({})).await?;
+    assert_eq!(
+        (status, &answer["query"]),
+        (StatusCode::OK, &json!("pay=api"))
     );
+    let state = start(&s.app, &cookie, "").await?;
     assert!(
-        page.contains(&format!("curl {BASE}/v1/chat/completions")),
-        "{page}"
+        step(&state, "Connect a model")["done_text"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("Using the demo model")),
+        "{state}"
+    );
+    let first = lines(&state, "lines-first");
+    assert!(
+        first.contains("\"model\":\"enterplace-demo\"")
+            && first.contains(&format!("curl {BASE}/v1/chat/completions")),
+        "{first}"
     );
 
     // A key for the first request: in the lines, shown once, and no person's or app's key.
-    let (status, _, page) = send(&s.app, post("/console/start/first-key", &cookie, "")?).await?;
-    assert_eq!(status, StatusCode::OK, "{page}");
-    assert!(page.contains("Authorization: Bearer enterplace_"), "{page}");
-    let (_, _, page) = send(&s.app, get("/console/start?tool=python", &cookie)?).await?;
+    let (status, made) = change(&s.app, &cookie, "first-key", json!({})).await?;
+    assert_eq!(status, StatusCode::OK, "{made}");
     assert!(
-        page.contains("os.environ[&quot;ENTERPLACE_KEY&quot;]"),
-        "{page}"
+        lines(&made["state"], "lines-first").contains("Authorization: Bearer enterplace_"),
+        "{made}"
     );
-    assert!(page.contains("Make a key for the app"), "{page}");
-    let (_, _, state) = send(&s.app, get("/console/start/state.json", &cookie)?).await?;
+    let state = start(&s.app, &cookie, "tool=python").await?;
     assert!(
-        state.contains(r#""steps":["done","listening","ahead","ahead","ahead"]"#),
+        lines(&state, "lines-first").contains("os.environ[\"ENTERPLACE_KEY\"]"),
         "{state}"
+    );
+    assert!(
+        state.to_string().contains("Make a key for the app"),
+        "{state}"
+    );
+    assert_eq!(
+        states(&state),
+        ["done", "listening", "ahead", "ahead", "ahead"]
     );
 
     // With a place to keep it, the key is sealed and the provider joins the policy, reading that credential.
@@ -745,19 +928,17 @@ async fn connect_a_model_seals_the_key_and_adds_the_provider_or_the_demo_model_i
         enterplace_core::store::credentials_file(&s.dir.join("enterplace.policy.yaml")),
         "[]",
     )?;
-    let (status, headers, page) = send(
+    let (status, answer) = change(
         &s.app,
-        post(
-            "/console/start/connect",
-            &cookie,
-            "provider=anthropic&key=sk-ant-test-1234",
-        )?,
+        &cookie,
+        "connect",
+        json!({ "provider": "anthropic", "key": "sk-ant-test-1234" }),
     )
     .await?;
     assert_eq!(
-        (status, location(&headers)),
-        (StatusCode::SEE_OTHER, "/console/start?pay=api#step-2"),
-        "{page}"
+        (status, &answer["query"]),
+        (StatusCode::OK, &json!("pay=api")),
+        "{answer}"
     );
     assert_eq!(
         vault.credential_value("anthropic").ok().flatten(),
@@ -780,14 +961,20 @@ async fn connect_a_model_seals_the_key_and_adds_the_provider_or_the_demo_model_i
         !audit.contains("sk-ant-test-1234"),
         "the key is in no record"
     );
-    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
     assert!(
-        page.contains("Connected: <span class=\"t-mono\">anthropic</span>"),
-        "{page}"
+        !answer.to_string().contains("sk-ant-test-1234"),
+        "nor in the answer"
+    );
+    let state = start(&s.app, &cookie, "").await?;
+    assert!(
+        step(&state, "Connect a model")["done_text"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("Connected: `anthropic`")),
+        "{state}"
     );
     assert!(
-        page.contains("&quot;model&quot;:&quot;claude-sonnet-5-5&quot;"),
-        "{page}"
+        lines(&state, "lines-first").contains("\"model\":\"claude-sonnet-5-5\""),
+        "{state}"
     );
     Ok(())
 }
@@ -861,101 +1048,61 @@ fn subscribed(s: &Setup, id: &str, person: &str, team: &str) -> TestResult {
 async fn claude_subscriptions_need_no_api_key_and_each_step_copies_for_an_agent() -> TestResult {
     let s = setup("subscriptions")?;
     let cookie = sign_in(&s.app, ADMIN_KEY).await?;
-    send(
-        &s.app,
-        post("/console/start/pick", &cookie, "choice=coding")?,
-    )
-    .await?;
+    change(&s.app, &cookie, "pick", json!({ "choice": "coding" })).await?;
 
     // API keys are the default answer, since every coding agent takes them. Picking subscriptions shows their
     // steps, and the first one turns them on with one click.
-    let (_, _, page) = send(&s.app, get("/console/start", &cookie)?).await?;
+    let state = start(&s.app, &cookie, "").await?;
+    assert_eq!(state["pay"], "api");
+    let state = start(&s.app, &cookie, "pay=subscriptions").await?;
+    assert_eq!(state["pay"], "subscriptions");
+    assert_eq!(state["query"], "track=coding&pay=subscriptions");
+    assert!(posts(&state, "passthrough"), "{state}");
     assert!(
-        page.contains(r#"href="/console/start?track=coding&amp;pay=api" aria-current="true""#),
-        "{page}"
+        !state.to_string().contains("ANTHROPIC_API_KEY="),
+        "no API key anywhere: {state}"
     );
-    let (_, _, page) = send(&s.app, get("/console/start?pay=subscriptions", &cookie)?).await?;
-    assert!(
-        page.contains(
-            r#"href="/console/start?track=coding&amp;pay=subscriptions" aria-current="true""#
-        ),
-        "{page}"
-    );
-    assert!(
-        page.contains(r#"action="/console/start/passthrough""#),
-        "{page}"
-    );
-    assert!(
-        !page.contains("ANTHROPIC_API_KEY="),
-        "no API key anywhere: {page}"
-    );
-    let (_, _, state) = send(
-        &s.app,
-        get("/console/start/state.json?pay=subscriptions", &cookie)?,
-    )
-    .await?;
-    assert!(
-        state.contains(r#""steps":["now","ahead","ahead","ahead"]"#),
-        "{state}"
-    );
-    let (status, headers, _) =
-        send(&s.app, post("/console/start/passthrough", &cookie, "")?).await?;
-    assert_eq!(status, StatusCode::SEE_OTHER);
-    assert_eq!(
-        location(&headers),
-        "/console/start?track=coding&pay=subscriptions#step-2"
-    );
+    assert_eq!(states(&state), ["now", "ahead", "ahead", "ahead"]);
+    let (status, answer) = change(&s.app, &cookie, "passthrough", json!({})).await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["query"], "track=coding&pay=subscriptions");
     let policy = std::fs::read_to_string(s.dir.join("enterplace.policy.yaml"))?;
     assert!(
         policy.contains("auth: passthrough") && policy.contains("identity: optional"),
         "{policy}"
     );
-    let (_, _, state) = send(
-        &s.app,
-        get("/console/start/state.json?pay=subscriptions", &cookie)?,
-    )
-    .await?;
-    assert!(
-        state.contains(r#""steps":["done","listening","ahead","ahead"]"#),
-        "{state}"
-    );
+    let state = start(&s.app, &cookie, "pay=subscriptions").await?;
+    assert_eq!(states(&state), ["done", "listening", "ahead", "ahead"]);
 
     // A person token, not a key: the lines keep Claude Code's own login.
-    let (status, _, page) = send(
+    let (status, made) = change(
         &s.app,
-        post(
-            "/console/start/key",
-            &cookie,
-            "kind=person_token&name=sarah.miller&team=platform",
-        )?,
+        &cookie,
+        "key",
+        json!({ "kind": "person_token", "name": "sarah.miller", "team": "platform" }),
     )
     .await?;
-    assert_eq!(status, StatusCode::OK, "{page}");
-    let token = page
-        .split("x-enterplace-user: ")
-        .nth(1)
-        .and_then(|rest| rest.split(['&', '"', '<', '\n', ' ']).next())
-        .ok_or("no person token in the lines")?
-        .to_string();
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let shown = &made["state"];
+    assert_eq!(made["query"], "track=coding&pay=subscriptions");
+    assert_eq!(shown["made"]["word"], "Person token");
+    let token = shown["made"]["key"].as_str().unwrap_or("").to_string();
     assert!(token.starts_with("enterplace_u_"), "{token}");
+    let pasted = lines(shown, "lines-subscription");
     assert!(
-        page.contains(&format!("export ANTHROPIC_BASE_URL={BASE}"))
-            && page.contains(&format!(
-                "export ANTHROPIC_CUSTOM_HEADERS=&quot;x-enterplace-user: {token}&quot;"
-            )),
-        "{page}"
+        pasted.contains(&format!("export ANTHROPIC_BASE_URL={BASE}"))
+            && pasted.contains(&format!(
+                "export ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: {token}\""
+            ))
+            && pasted.contains("keep using your normal Claude login"),
+        "{pasted}"
     );
-    assert!(
-        page.contains("keep using your normal Claude login"),
-        "{page}"
-    );
-    assert!(!page.contains("ANTHROPIC_API_KEY="), "{page}");
+    assert!(!shown.to_string().contains("ANTHROPIC_API_KEY="), "{shown}");
     // Copy for your agent: the goal, the exact values and the docs as Markdown.
-    let prompt = page
-        .split(r#"<pre id="agent-step-2" hidden>"#)
-        .nth(1)
-        .and_then(|rest| rest.split("</pre>").next())
-        .ok_or("no agent prompt for step 2")?;
+    let prompt = step(shown, "Point Claude Code at Enterplace")["agent"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     for part in [
         BASE,
         token.as_str(),
@@ -966,44 +1113,85 @@ async fn claude_subscriptions_need_no_api_key_and_each_step_copies_for_an_agent(
         assert!(prompt.contains(part), "{part}: {prompt}");
     }
     assert!(!prompt.contains(ADMIN_KEY), "never an admin key");
-    assert!(
-        page.contains(r#"data-copy="agent-step-2" data-agent-prompt"#),
-        "{page}"
-    );
     // Managed settings for an MDM rollout.
-    let (_, _, page) = send(
-        &s.app,
-        get("/console/start?setup=mdm&pay=subscriptions", &cookie)?,
-    )
-    .await?;
+    let state = start(&s.app, &cookie, "setup=mdm&pay=subscriptions").await?;
     assert!(
-        page.contains("&quot;ANTHROPIC_CUSTOM_HEADERS&quot;: &quot;x-enterplace-user:"),
-        "{page}"
+        lines(&state, "lines-subscription")
+            .contains("\"ANTHROPIC_CUSTOM_HEADERS\": \"x-enterplace-user:"),
+        "{state}"
     );
-    assert!(page.contains("managed-settings.json"), "{page}");
+    assert!(
+        state.to_string().contains("managed-settings.json"),
+        "{state}"
+    );
 
     // The step turns done when the first subscription request from that person arrives.
     let keys = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
     assert!(keys.contains(&sha256_hex(token.as_bytes())), "{keys}");
     subscribed(&s, "01SUB00000000000000000000", "sarah.miller", "platform")?;
-    let (_, _, state) = send(
-        &s.app,
-        get("/console/start/state.json?pay=subscriptions", &cookie)?,
-    )
-    .await?;
-    assert!(
-        state.contains(r#""steps":["done","done","now","ahead"]"#),
-        "{state}"
-    );
-    let (_, _, page) = send(&s.app, get("/console/start?pay=subscriptions", &cookie)?).await?;
-    assert!(
-        page.contains("Your steps") && page.contains("Add a second person"),
-        "{page}"
-    );
+    let state = start(&s.app, &cookie, "pay=subscriptions").await?;
+    assert_eq!(states(&state), ["done", "done", "now", "ahead"]);
+    assert!(state["live"].is_object(), "{state}");
+    assert_eq!(step(&state, "Add a second person")["state"], "now");
 
     // Anthropic API keys keep today's steps.
-    let (_, _, page) = send(&s.app, get("/console/start?pay=api", &cookie)?).await?;
-    assert!(page.contains("Let people make their own keys"), "{page}");
+    let state = start(&s.app, &cookie, "pay=api").await?;
+    assert!(
+        state.to_string().contains("Let people make their own keys"),
+        "{state}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_signed_in_person_s_own_token_is_in_the_lines_and_in_the_agent_prompt() -> TestResult {
+    let s = setup("mine")?;
+    let cookie = sign_in(&s.app, ADMIN_KEY).await?;
+    change(&s.app, &cookie, "pick", json!({ "choice": "coding" })).await?;
+    change(&s.app, &cookie, "passthrough", json!({})).await?;
+    // Signed in with a key, nobody made noa.bar a token yet: one button makes it in their own name.
+    let state = start(&s.app, &cookie, "pay=subscriptions").await?;
+    let mut buttons = Vec::new();
+    blocks(&state, "button", &mut buttons);
+    let mine = buttons
+        .iter()
+        .find(|b| b["label"] == "Make my token")
+        .ok_or("no Make my token")?;
+    assert_eq!(mine["action"], "key");
+    assert_eq!(mine["body"]["name"], "noa.bar");
+    // The provider takes unnamed requests: one line, no placeholder to paste.
+    assert!(
+        !lines(&state, "lines-subscription").contains("x-enterplace-user"),
+        "{state}"
+    );
+    let (status, _) = change(&s.app, &cookie, "key", mine["body"].clone()).await?;
+    assert_eq!(status, StatusCode::OK);
+    // Kept for them this run: every later view carries it, in the lines and in Copy for your agent.
+    let state = start(&s.app, &cookie, "pay=subscriptions").await?;
+    let pasted = lines(&state, "lines-subscription");
+    let token = pasted
+        .split("x-enterplace-user: ")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or("no token in the lines")?
+        .to_string();
+    assert!(token.starts_with("enterplace_u_"), "{pasted}");
+    let point = step(&state, "Point Claude Code at Enterplace");
+    assert!(
+        point["agent"].as_str().is_some_and(|a| a.contains(&token)),
+        "{point}"
+    );
+    assert_eq!(
+        point["listen"],
+        "Waiting for the first request from noa.bar."
+    );
+    assert!(
+        state
+            .to_string()
+            .contains("The lines carry your person token, so your requests show as `noa.bar`."),
+        "{state}"
+    );
+
     Ok(())
 }
 
@@ -1016,13 +1204,12 @@ async fn every_agent_prompt_links_a_docs_page_that_exists() -> TestResult {
     let docs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/src/content/docs");
     let mut prompts = 0;
     for track in ["coding", "coding&pay=api", "apps", "mcp", "limit", "watch"] {
-        let (_, _, page) = send(
-            &s.app,
-            get(&format!("/console/start?track={track}"), &cookie)?,
-        )
-        .await?;
-        for part in page.split(r#"<pre id="agent-step-"#).skip(1) {
-            let prompt = part.split("</pre>").next().unwrap_or_default();
+        let state = start(&s.app, &cookie, &format!("track={track}")).await?;
+        for step in state["steps"].as_array().cloned().unwrap_or_default() {
+            let prompt = step["agent"].as_str().unwrap_or("");
+            if prompt.is_empty() {
+                continue;
+            }
             prompts += 1;
             assert!(
                 prompt.contains(BASE),
@@ -1039,15 +1226,15 @@ async fn every_agent_prompt_links_a_docs_page_that_exists() -> TestResult {
             );
         }
     }
-    // Only the current step of each is shown open, with its prompt.
+    // Only the current step of each holds its prompt.
     assert!(prompts >= 6, "{prompts}");
     Ok(())
 }
 
-/// The numbers of "N of M done" in a page's lead line.
-fn done_count(page: &str) -> Option<(usize, usize)> {
-    page.match_indices(" done").find_map(|(end, _)| {
-        let (before, total) = page[..end].rsplit_once(" of ")?;
+/// The numbers of "N of M done" in a lead line.
+fn done_count(lead: &str) -> Option<(usize, usize)> {
+    lead.match_indices(" done").find_map(|(end, _)| {
+        let (before, total) = lead[..end].rsplit_once(" of ")?;
         let total = total.parse().ok()?;
         let done = before.rsplit(' ').next()?.parse().ok()?;
         Some((done, total))
@@ -1068,20 +1255,26 @@ async fn every_track_lists_all_its_steps_and_the_count_matches_them() -> TestRes
         ("limit", "track=limit"),
         ("watch", "track=watch"),
     ] {
-        let (_, _, page) = send(&s.app, get(&format!("/console/start?{query}"), &cookie)?).await?;
-        let (done, total) = done_count(&page).ok_or_else(|| format!("{query}: no count"))?;
-        let items = page.matches(r#"class="g-check__item""#).count();
-        let marked = page.matches(r#"data-state="done""#).count();
-        assert_eq!(items, total, "{query}: every step is listed");
-        assert_eq!(marked, done, "{query}: the done steps are listed");
+        let state = start(&s.app, &cookie, query).await?;
+        let (done, total) = done_count(state["lead"].as_str().unwrap_or(""))
+            .ok_or_else(|| format!("{query}: no count"))?;
+        let list = state["steps"].as_array().cloned().unwrap_or_default();
+        assert_eq!(list.len(), total, "{query}: every step is listed");
+        assert_eq!(
+            list.iter().filter(|s| s["state"] == "done").count(),
+            done,
+            "{query}: the done steps are listed"
+        );
+        let connect = step(&state, "Connect a model");
         if track == "watch" || query.contains("subscriptions") {
-            assert!(!page.contains("Connect a model"), "{query}");
+            assert!(connect.is_null(), "{query}");
         } else {
             // Connect a model never reads Now while the first request reads Done.
-            assert!(page.contains("Send your first request"), "{query}");
-            let connect = page.find("Connect a model").ok_or("no connect step")?;
-            let state = page[..connect].rfind("data-state=\"").ok_or("no state")?;
-            assert!(page[state..].starts_with("data-state=\"done\""), "{query}");
+            assert!(
+                !step(&state, "Send your first request").is_null(),
+                "{query}"
+            );
+            assert_eq!(connect["state"], "done", "{query}");
         }
     }
     Ok(())

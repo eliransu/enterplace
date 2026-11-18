@@ -130,38 +130,6 @@ document.addEventListener("change", function (event) {
   input.files[0].text().then(function (text) { into.value = text; into.focus(); });
 });
 
-// Start here: a listening step polls the checklist's state every 2 seconds while the tab is visible, and opens
-// Start here again when it changes. Without a script the step's Check now link does the same.
-document.addEventListener("DOMContentLoaded", function () {
-  var box = document.querySelector("[data-start-poll]");
-  var start = document.querySelector("[data-start-button]");
-  if (start) {
-    document.querySelectorAll('input[name="choice"]').forEach(function (input) {
-      input.addEventListener("change", function () {
-        var label = input.closest("label").querySelector(".t-body-strong").textContent;
-        start.textContent = "Start with " + (input.getAttribute("data-button") || label);
-      });
-    });
-  }
-  if (!box || !window.fetch) return;
-  var seen = box.getAttribute("data-start-poll");
-  var track = new URLSearchParams(location.search).get("track");
-  // The whole query, so a choice such as how the team pays for Claude Code is kept across the reload.
-  var url = "/console/start/state.json" + location.search;
-  var timer = null;
-  function tick() {
-    if (document.hidden) { timer = null; return; }
-    fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (state) {
-        if (state && state.signature !== seen) { location.href = "/console/start" + location.search; return; }
-        timer = setTimeout(tick, 2000);
-      })
-      .catch(function () { timer = setTimeout(tick, 2000); });
-  }
-  document.addEventListener("visibilitychange", function () { if (!document.hidden && !timer) tick(); });
-  timer = setTimeout(tick, 2000);
-});
-
 // Every console page polls /console/live.json every 2 seconds while the tab is visible. The sidebar's indicator
 // (data-live: checking, live or paused; data-live-last-request: the last record's time in ms, empty when none)
 // follows the poll: paused when the poll fails or the tab is hidden. Requests, Analytics, Audit log and Spend also
@@ -171,8 +139,7 @@ document.addEventListener("DOMContentLoaded", function () {
 document.addEventListener("DOMContentLoaded", function () {
   var main = document.getElementById("main");
   var indicator = document.querySelector("[data-live]");
-  // Start here too: its live strip shows each new request crossing the gate.
-  var swaps = /^\/console\/(requests|analytics|audit|spend|start)\/?$/.test(location.pathname);
+  var swaps = /^\/console\/(requests|analytics|audit|spend)\/?$/.test(location.pathname);
   if (!window.fetch || (!indicator && !(main && swaps && window.DOMParser))) return;
   var seen = null;
   var timer = null;

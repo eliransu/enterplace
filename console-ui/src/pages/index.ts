@@ -9,6 +9,7 @@ import { Analytics } from "./Analytics";
 import { Requests } from "./Requests";
 import { Spend } from "./Spend";
 import { Audit } from "./Audit";
+import { Start } from "./Start";
 
 export type PageProps = { me: Me | null; query: URLSearchParams };
 
@@ -16,6 +17,7 @@ export type PageProps = { me: Me | null; query: URLSearchParams };
 // and takes its line out of SERVER_PAGES below.
 // `policy`: the page edits the policy, so it says where a change is saved and whether the role may make one.
 export const PAGES: { route: string; label: string; page: ComponentType<PageProps>; policy?: boolean }[] = [
+  { route: "/start", label: "Start here", page: Start },
   { route: "/people", label: "People", page: People },
   { route: "/credentials", label: "Credentials", page: Credentials },
   { route: "/analytics", label: "Analytics", page: Analytics },
@@ -29,7 +31,6 @@ export const PAGES: { route: string; label: string; page: ComponentType<PageProp
 
 // The pages the console still renders on the server, linked as they are, by sidebar group.
 export const SERVER_PAGES: [string, [string, string][]][] = [
-  ["", [["/console/start", "Start here"]]],
   ["Access", [["/console/teams", "Teams"], ["/console/policy", "Raw policy"], ["/console/models", "Prices"]]],
   ["Tools", [["/console/mcp/tools", "MCP tools"], ["/console/mcp/approvals", "MCP approvals"]]],
 ];

@@ -10,8 +10,8 @@ Usage: python3 scripts/ftue_check.py [--enterplace target/release/enterplace] [-
    curl the page shows, and waits for the step to turn done by itself and the request to show in Requests.
 4. Runs `enterplace start --no-open` again in a new folder with ENTERPLACE_OPENAI_BASE_URL pointing at a mock OpenAI,
    connects OpenAI in the console with a key, runs the curl, and checks the mock got that key and the request shows.
-5. Claude subscriptions, the default answer of Coding agents: `enterplace start` with ENTERPLACE_ANTHROPIC_BASE_URL at a mock
-   Anthropic, makes a person token on the checklist, checks "Copy for your agent" puts the token, the gateway and a
+5. Claude subscriptions, the other answer of Coding agents: `enterplace start` with ENTERPLACE_ANTHROPIC_BASE_URL at a mock
+   Anthropic, finds the person token the start link made in the lines, checks "Copy for your agent" puts the token, the gateway and a
    docs .md link on the clipboard, sends a request as Claude Code on a subscription login does, and checks the mock
    got that login unchanged, the step turns done, and the login is in no file Enterplace wrote. With --claude and the real
    `claude` CLI installed, Claude Code itself sends one prompt the same way: the mock answers and keeps only header
@@ -152,6 +152,11 @@ def click(chrome: Chrome, selector: str):
     chrome.js(f"document.querySelector({json.dumps(selector)}).click()")
 
 
+def press(chrome: Chrome, label: str):
+    """Clicks the button of Start here (in the console app) that reads `label`."""
+    chrome.js(f"[...document.querySelectorAll('main button')].find(b => b.textContent === {json.dumps(label)}).click()")
+
+
 def run_curl(lines: str, key: str) -> str:
     out = subprocess.run(["sh", "-c", lines], env={"PATH": "/usr/bin:/bin", "ENTERPLACE_KEY": key}, capture_output=True, text=True, timeout=30)
     return out.stdout + out.stderr
@@ -206,18 +211,18 @@ def main():
         try:
             chrome.size(1280)
             chrome.call("Page.navigate", url=link)
-            chrome.wait("location.pathname === '/console/start' && document.readyState === 'complete'", "Start here after the link")
+            chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/start') && !!document.querySelector('[data-start-button], [data-checklist]')", "Start here after the link")
             check("What do you want to start with?" in chrome.js("document.body.innerText"), "the link signed in and the welcome asks what to start with")
             chrome.shot(out / "1-welcome.png")
             mark("signed in")
             click(chrome, "button[data-start-button]")
-            chrome.wait("document.querySelector('#step-1') && document.readyState === 'complete'", "the checklist")
-            check("How does your team pay for Claude Code?" in chrome.js("document.body.innerText"), "Coding agents asks how the team pays")
-            # The Anthropic API keys path: connect a model, then a first request with a key.
-            chrome.go(f"http://127.0.0.1:{gport}/console/start?track=coding&pay=api")
-            check("Connect a model" in chrome.js("document.body.innerText"), "the first step is Connect a model")
+            chrome.wait("document.querySelector('#step-1')", "the checklist")
+            check("How does your team pay for its coding agents?" in chrome.js("document.body.innerText"), "Coding agents asks how the team pays")
+            # The API keys path: connect a model, then a first request with a key.
+            chrome.go(f"http://127.0.0.1:{gport}/console/start?track=coding&pay=api", f"http://127.0.0.1:{gport}/console/app/#/start?track=coding&pay=api")
+            chrome.wait("document.body.innerText.includes('Connect a model')", "the first step is Connect a model")
             chrome.shot(out / "2-connect.png")
-            click(chrome, "form[action='/console/start/demo'] button")
+            press(chrome, "Try without a key")
             chrome.wait("document.querySelector('#step-1[data-state=done]') && document.querySelector('#lines-first')", "Connect a model done with the demo model")
             curl = chrome.js("document.getElementById('lines-first').innerText")
             check("enterplace-demo" in curl and f"http://127.0.0.1:{gport}/v1/chat/completions" in curl, "the curl names the gateway and the demo model")
@@ -249,19 +254,20 @@ def main():
         try:
             chrome.size(1280)
             chrome.call("Page.navigate", url=link)
-            chrome.wait("location.pathname === '/console/start' && document.readyState === 'complete'", "Start here after the link")
+            chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/start') && !!document.querySelector('[data-start-button], [data-checklist]')", "Start here after the link")
             click(chrome, "button[data-start-button]")
-            chrome.wait("document.querySelector('#step-1') && document.readyState === 'complete'", "the checklist")
-            chrome.go(f"http://127.0.0.1:{gport}/console/start?track=coding&pay=api")
-            chrome.wait("document.querySelector('#connect-key')", "the Connect a model form")
-            chrome.js(f"document.getElementById('connect-provider').value = 'openai'; document.getElementById('connect-key').value = {json.dumps(MOCK_KEY)}")
-            click(chrome, "form[action='/console/start/connect'] button[type=submit]")
+            chrome.wait("document.querySelector('#step-1')", "the checklist")
+            chrome.go(f"http://127.0.0.1:{gport}/console/start?track=coding&pay=api", f"http://127.0.0.1:{gport}/console/app/#/start?track=coding&pay=api")
+            chrome.wait("document.querySelector('form[data-action=connect] [name=key]')", "the Connect a model form")
+            # OpenAI is the provider the form starts on.
+            chrome.js(f"document.querySelector('form[data-action=connect] [name=key]').value = {json.dumps(MOCK_KEY)}")
+            chrome.js("document.querySelector('form[data-action=connect]').requestSubmit()")
             chrome.wait("document.querySelector('#step-1[data-state=done]')", "Connect a model done with OpenAI")
             check("Connected:" in chrome.js("document.getElementById('step-1').innerText"), "OpenAI is connected")
             check(MOCK_KEY not in (folder / "enterplace-credentials.json").read_text(), "the provider key is kept sealed")
             # The provider joins on the gateway's next read of the policy, within 2 seconds.
             time.sleep(2.5)
-            chrome.go(f"http://127.0.0.1:{gport}/console/start?track=coding&pay=api")
+            chrome.wait("(document.getElementById('lines-first')?.innerText ?? '').includes('\"model\":\"gpt-5\"')", "the curl of the connected provider")
             curl = chrome.js("document.getElementById('lines-first').innerText")
             check('"model":"gpt-5"' in curl, "the curl names the connected provider's model")
             chrome.shot(out / "6-connected.png")
@@ -293,30 +299,31 @@ def main():
             except RuntimeError:
                 pass  # this Chrome keeps the clipboard closed; the button's text is checked instead
             chrome.call("Page.navigate", url=link)
-            chrome.wait("location.pathname === '/console/start' && document.readyState === 'complete'", "Start here after the link")
+            chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/start') && !!document.querySelector('[data-start-button], [data-checklist]')", "Start here after the link")
             click(chrome, "button[data-start-button]")
-            chrome.wait("document.querySelector('#step-1[data-state=done]')", "Claude subscriptions on after enterplace start")
+            # API keys are the default way to pay; Claude subscriptions are the other answer.
+            chrome.wait("document.querySelector('#step-1')", "the checklist")
+            chrome.go(f"{gateway}/console/start?track=coding&pay=subscriptions", f"{gateway}/console/app/#/start?track=coding&pay=subscriptions")
+            chrome.wait("document.querySelector('#step-1[data-state=done]') && document.querySelector('#lines-subscription')", "Claude subscriptions on after enterplace start")
             text = chrome.js("document.body.innerText")
             check("Claude subscription" in text and "ANTHROPIC_API_KEY=" not in text,
-                  "subscriptions are the default and no API key is asked for")
-            chrome.js("document.getElementById('token-name-sarah.miller').value = 'sarah.miller'; document.getElementById('token-team-sarah.miller').value = 'platform'")
-            click(chrome, "form[action='/console/start/key'] button[type=submit]")
-            chrome.wait("document.querySelector('#lines-subscription') && document.querySelector('#made-key')", "the person token and the lines")
-            token = chrome.js("document.getElementById('made-key').innerText").strip()
+                  "subscriptions need no API key")
+            # The link signed the person in with their own person token: it is in the lines from the first view.
             lines = chrome.js("document.getElementById('lines-subscription').innerText")
-            check(token.startswith("enterplace_u_"), f"a person token was made ({token[:12]}...)")
+            token = lines.split("x-enterplace-user: ", 1)[-1].split('"', 1)[0].strip()
+            check(token.startswith("enterplace_u_"), f"the signed-in person's token is in the lines ({token[:12]}...)")
             check(f"export ANTHROPIC_BASE_URL={gateway}" in lines and f'ANTHROPIC_CUSTOM_HEADERS="x-enterplace-user: {token}"' in lines,
                   "the lines are the base URL and the person token")
             chrome.shot(out / "7-subscriptions.png")
-            click(chrome, "button[data-copy='agent-step-2']")
+            press(chrome, "Copy for your agent")
             time.sleep(0.5)
-            # The clipboard when headless Chrome lets the page read it back, else the text the button copies.
+            # The clipboard when headless Chrome lets the page read it back, else the prompt the API hands the button.
             copied = chrome.js("navigator.clipboard.readText().catch(() => '')") or ""
-            prompt = copied or chrome.js("document.getElementById('agent-step-2').textContent")
-            check(chrome.js("document.querySelector(\"button[data-copy='agent-step-2']\").textContent") in ("Copied", "Copy for your agent"),
+            prompt = copied or chrome.js("fetch('/console/api/start?track=coding&pay=subscriptions').then(r => r.json()).then(s => s.steps[1].agent)")
+            check(chrome.js("[...document.querySelectorAll('main button')].some(b => b.textContent === 'Copied' || b.textContent === 'Copy for your agent')"),
                   "the Copy for your agent button ran")
             check(token in prompt and gateway in prompt and "x-enterplace-user" in prompt, "Copy for your agent holds the token and the gateway")
-            md = re.search(r"https://enterplace-docs\.enterplace\.dev/(\S+?)\.md", prompt)
+            md = re.search(r"https://docs\.enterplace\.dev/(\S+?)\.md", prompt)
             check(md is not None, "Copy for your agent links the docs as Markdown")
             built = ROOT / "docs" / "dist" / f"{md.group(1)}.md"
             if (ROOT / "docs" / "dist").exists():
@@ -334,7 +341,7 @@ def main():
             got = Anthropic.seen[-1]
             check(got["fake"] and "x-enterplace-user" not in got["headers"] and "x-api-key" not in got["headers"],
                   "Anthropic got the caller's login unchanged, no person token and no key of Enterplace's")
-            chrome.go(f"{gateway}/console/start")
+            chrome.go(f"{gateway}/console/start?track=coding&pay=subscriptions", f"{gateway}/console/app/#/start?track=coding&pay=subscriptions")
             chrome.wait("document.querySelector('#step-2[data-state=done]') || document.body.innerText.includes('Your first requests arrived')",
                         "Point Claude Code at Enterplace to turn done", 15)
             chrome.go(f"{gateway}/console/app/#/requests")

@@ -1,6 +1,7 @@
-//! Start here, the console home: the first-run welcome, the checklist of the starting choice with live done
-//! detection, the first requests, and the five steps once the choice is set up. Built from the approved First run
-//! design (Pick, Checklist and the five-step strip are its new components) with the console's tokens only.
+//! Start here, the console home, in the console app (`/console/app/#/start`): the first-run welcome, the checklist of
+//! the starting choice with live done detection, the first requests, and the five steps once the choice is set up.
+//! The API computes every step and its words; the app lays them out and polls, so a step turns done as the gateway
+//! sees it happen.
 //!
 //! Every step's state is computed from the gateway's real records: keys, the request log, the policy and, through
 //! the extension, watch mode. Nothing is ticked by hand. The starting choice is kept in the store when there is one,
@@ -10,6 +11,7 @@ use std::fmt::Write as _;
 
 use axum::{
     Router,
+    body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode, Uri, header},
     response::{IntoResponse, Response},
@@ -22,31 +24,19 @@ use enterplace_core::{
     policy::{Mode, Permission, ScopeKind},
     store,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::{
-    Act, Admin, Console, Form, NOT_RECORDED, Tls, edit,
-    figures::{EST_TIP, money, money_est, time_list},
-    foreign,
-    html::{Field, code, empty, enc, esc, field, head, icon, motif, tag},
-    insights, page, pages, read_only, record, redirect, same_origin, secure,
+    Act, Admin, Console, Form, NOT_RECORDED, Tls,
+    api::{Fail, answer, bad, body_of, ok, signed_in, text},
+    edit,
+    figures::{money, money_est, time_list},
+    html::{code, empty, enc, esc, icon, motif},
+    insights, pages, read_only, record, redirect, secure,
 };
 
 /// The docs site every step links into.
 pub(crate) const DOCS: &str = "https://docs.enterplace.dev";
-
-pub(crate) fn routes() -> Router<Console> {
-    Router::new()
-        .route("/start", get(start_page))
-        .route("/start/state.json", get(state_json))
-        .route("/start/pick", post(pick))
-        .route("/start/key", post(make_key))
-        .route("/start/watch-token", post(make_watch_token))
-        .route("/start/connect", post(connect))
-        .route("/start/demo", post(use_demo))
-        .route("/start/first-key", post(first_key))
-        .route("/start/passthrough", post(turn_on_passthrough))
-}
 
 // ---------------------------------------------------------------- the five starting choices
 
@@ -568,7 +558,7 @@ fn policy_text(console: &Console) -> String {
     config::policy_text(&console.config().policy).unwrap_or_default()
 }
 
-// ---------------------------------------------------------------- small builders
+// ---------------------------------------------------------------- the server-rendered empty states' builders
 
 fn copy_button(id: &str) -> String {
     format!(
@@ -577,37 +567,12 @@ fn copy_button(id: &str) -> String {
     )
 }
 
-fn glink(label: &str, href: &str, small: bool) -> String {
-    format!(
-        r#"<a class="g-link {}" href="{href}">{label}</a>"#,
-        if small { "t-small" } else { "t-body" }
-    )
-}
-
 fn docs(label: &str, path: &str) -> String {
-    glink(label, &format!("{DOCS}{path}"), true)
+    format!(r#"<a class="g-link t-small" href="{DOCS}{path}">{label}</a>"#)
 }
 
 fn acts(inner: &str) -> String {
     format!(r#"<div class="g-setup__actions">{inner}</div>"#)
-}
-
-/// Lines to paste, in the Terminal component with Copy. A newline between the lines keeps them apart when copied.
-fn block(id: &str, tabs: &str, lines: &[String]) -> String {
-    let spans: Vec<String> = lines
-        .iter()
-        .map(|l| format!("<span>{}</span>", esc(l)))
-        .collect();
-    format!(
-        r#"<div class="g-stack" style="gap: var(--space-2)"><div class="g-check__bar">{}{}</div><div class="g-terminal t-mono" id="{id}">{}</div></div>"#,
-        if tabs.is_empty() {
-            "<span></span>"
-        } else {
-            tabs
-        },
-        copy_button(id),
-        spans.join("\n")
-    )
 }
 
 /// One command, in the Command component with Copy.
@@ -619,54 +584,76 @@ fn command(id: &str, text: &str) -> String {
     )
 }
 
-/// A value to copy that is not a command, such as a key: no prompt sign.
-fn value_pill(id: &str, text: &str) -> String {
-    format!(
-        r#"<span class="g-command g-command--value"><span class="g-command__text t-mono" id="{id}">{}</span>{}</span>"#,
-        esc(text),
-        copy_button(id)
-    )
-}
+// ---------------------------------------------------------------- the blocks the app lays out
 
-/// Tabs that pick which lines a step shows. Links, so they work without a script.
-fn tabs(aria: &str, step: usize, options: &[(&str, &str)], selected: &str) -> String {
-    tabs_by("tool", aria, step, options, selected)
-}
-
-/// Tabs that set `param` in the address, for a step whose tabs are not the tool's.
-fn tabs_by(
-    param: &str,
-    aria: &str,
-    step: usize,
-    options: &[(&str, &str)],
-    selected: &str,
-) -> String {
-    let items: String = options
-        .iter()
-        .map(|(id, label)| {
-            let here = if *id == selected {
-                r#" aria-current="true""#
-            } else {
-                ""
-            };
-            format!(
-                r#"<a class="g-tab t-small" href="/console/start?{param}={id}#step-{step}"{here}>{label}</a>"#
-            )
-        })
-        .collect();
-    format!(r#"<div class="g-tabs" role="group" aria-label="{aria}">{items}</div>"#)
-}
-
+/// Inline text the app shows: a value between backticks is set in mono, and `[label](href)` is a link.
 fn mono(text: &str) -> String {
-    format!(r#"<span class="t-mono">{}</span>"#, esc(text))
+    format!("`{text}`")
 }
 
 fn clock(time: &str) -> String {
-    format!("{} UTC", esc(&time_list(time)))
+    format!("{} UTC", time_list(time))
 }
 
-fn ent() -> String {
-    tag("product", "Enterprise", "")
+fn p(text: impl Into<String>) -> Value {
+    json!({ "type": "p", "text": text.into() })
+}
+
+/// A small muted line under what it is about.
+fn note(text: impl Into<String>) -> Value {
+    json!({ "type": "note", "text": text.into() })
+}
+
+fn link(label: &str, href: &str) -> Value {
+    json!({ "type": "link", "label": label, "href": href })
+}
+
+fn docs_link(label: &str, path: &str) -> Value {
+    link(label, &format!("{DOCS}{path}"))
+}
+
+/// Buttons and links on one row. Nothing when there is none.
+fn actions(items: Vec<Value>) -> Value {
+    if items.is_empty() {
+        Value::Null
+    } else {
+        json!({ "type": "actions", "items": items })
+    }
+}
+
+/// A button that posts `body` to `/console/api/start/<action>`.
+fn button(label: &str, action: &str, body: Value, quiet: bool) -> Value {
+    json!({ "type": "button", "label": label, "action": action, "body": body, "quiet": quiet })
+}
+
+fn command_block(text: &str) -> Value {
+    json!({ "type": "command", "text": text })
+}
+
+/// Tabs that pick which lines a step shows, by one value of the app route's query; `keep` is set along with it, so
+/// a tab keeps an answer such as how the team pays.
+fn tabs(param: &str, label: &str, options: &[(&str, &str)], selected: &str, keep: Value) -> Value {
+    json!({
+        "param": param,
+        "label": label,
+        "options": options.iter().map(|(id, l)| json!({ "id": id, "label": l })).collect::<Vec<_>>(),
+        "selected": selected,
+        "keep": keep,
+    })
+}
+
+/// Lines to paste, with Copy. `id` names them for the browser checks.
+fn lines_block(id: &str, tabs: Value, caption: &str, lines: &[String]) -> Value {
+    json!({ "type": "lines", "id": id, "tabs": tabs, "caption": caption, "lines": lines })
+}
+
+fn input(name: &str, label: &str, placeholder: &str) -> Value {
+    json!({ "name": name, "label": label, "placeholder": placeholder })
+}
+
+/// A form that posts its fields and `hidden` to `/console/api/start/<action>`.
+fn form(action: &str, button: &str, hidden: Value, fields: Vec<Value>) -> Value {
+    json!({ "type": "form", "action": action, "button": button, "hidden": hidden, "fields": fields, "after": "" })
 }
 
 // ---------------------------------------------------------------- the steps
@@ -677,7 +664,7 @@ pub(crate) struct Step {
     done: bool,
     /// Enterplace watches the request log for it, so it listens while it is the current step.
     listens: bool,
-    now: String,
+    now: Vec<Value>,
     listen: String,
     done_text: String,
     open: Option<(&'static str, &'static str)>,
@@ -719,13 +706,13 @@ pub(crate) fn md(path: &str) -> String {
 }
 
 impl Step {
-    fn new(title: &str, done: bool, now: String) -> Step {
+    fn new(title: &str, done: bool, now: Vec<Value>) -> Step {
         Step {
             title: title.into(),
             optional: false,
             done,
             listens: false,
-            now,
+            now: now.into_iter().filter(|b| !b.is_null()).collect(),
             listen: String::new(),
             done_text: String::new(),
             open: None,
@@ -771,7 +758,6 @@ struct Ctx<'a> {
     tool: String,
     made: Option<&'a Made>,
     watch_token: Option<&'a str>,
-    error: String,
     policy: String,
     /// The Coding agents choice is paid with provider API keys, not Claude subscriptions.
     pay_api: bool,
@@ -787,44 +773,20 @@ impl Ctx<'_> {
     }
 
     /// The form that makes a key, or what to do without the right to.
-    fn key_form(&self, label: &str, placeholders: (&str, &str), workload: bool) -> String {
+    fn key_form(&self, label: &str, placeholders: (&str, &str), workload: bool) -> Value {
         if !self.may_keys() {
-            return r#"<p class="t-small g-check__muted">Your role cannot make keys. Ask an admin to make this one.</p>"#.into();
+            return note("Your role cannot make keys. Ask an admin to make this one.");
         }
         let (n, t) = placeholders;
-        let error = if self.error.is_empty() {
-            String::new()
-        } else {
-            pages::alert(&esc(&self.error))
-        };
-        format!(
-            r#"{error}<form class="g-check__form" method="post" action="/console/start/key"><input type="hidden" name="kind" value="{}">{}{}{}<button class="g-btn t-body" type="submit">Make key</button></form>"#,
-            if workload { "workload" } else { "person" },
-            match (self.track == Track::Coding, self.pay_api) {
-                (true, true) => r#"<input type="hidden" name="pay" value="api">"#,
-                (true, false) => r#"<input type="hidden" name="pay" value="subscriptions">"#,
-                _ => "",
-            },
-            field(&Field {
-                id: &format!("key-name-{n}"),
-                name: "name",
-                label,
-                value: "",
-                mono: true,
-                extra: &format!(r#" placeholder="{n}" required autocomplete="off""#),
-                hint: "",
-                error: "",
-            }),
-            field(&Field {
-                id: &format!("key-team-{n}"),
-                name: "team",
-                label: "Team",
-                value: "",
-                mono: true,
-                extra: &format!(r#" placeholder="{t}" required autocomplete="off""#),
-                hint: "",
-                error: "",
-            }),
+        let mut hidden = json!({ "kind": if workload { "workload" } else { "person" } });
+        if self.track == Track::Coding {
+            hidden["pay"] = json!(if self.pay_api { "api" } else { "subscriptions" });
+        }
+        form(
+            "key",
+            "Make key",
+            hidden,
+            vec![input("name", label, n), input("team", "Team", t)],
         )
     }
 
@@ -838,32 +800,29 @@ impl Ctx<'_> {
     }
 
     /// Policy lines with the way to add them: a draft in the store's editor, else Copy and the file's path.
-    fn lines(&self, id: &str, name: &str, button: &str) -> String {
+    fn lines(&self, id: &str, name: &str, button: &str) -> Value {
         let Some(change) = change(name) else {
-            return String::new();
+            return Value::Null;
         };
         let (_, marks) = apply(&self.policy, &change);
-        let shown: Vec<(usize, String, &str)> = marks
-            .iter()
-            .map(|(n, l, k)| (*n, crate::html::yaml_line(l), *k))
-            .collect();
-        let plain: Vec<String> = marks.iter().map(|(_, l, _)| l.clone()).collect();
-        let hidden = format!(r#"<pre id="{id}" hidden>{}</pre>"#, esc(&plain.join("\n")));
         let way = if self.f.draft && edit::edits_policy(self.admin) {
-            format!(
-                r#"<a class="g-btn t-body" href="/console/policy/edit?add={}">{button}</a>"#,
-                enc(name)
-            )
+            json!({ "kind": "draft", "label": button, "href": format!("/console/policy/edit?add={}", enc(name)) })
         } else if self.f.draft {
-            r#"<span class="t-small g-check__muted">Your role cannot change the policy. Ask an admin to add these lines.</span>"#.into()
+            json!({ "kind": "cannot", "text": "Your role cannot change the policy. Ask an admin to add these lines." })
         } else {
-            format!(
-                r#"{}<span class="t-small g-check__muted">Add them to {} and save: Enterplace reads it within 2 seconds.</span>"#,
-                copy_button(id),
-                mono(&self.f.policy_path)
-            )
+            json!({
+                "kind": "copy",
+                "path": self.f.policy_path,
+                "text": format!("Add them to {} and save: Enterplace reads it within 2 seconds.", mono(&self.f.policy_path)),
+            })
         };
-        format!("{}{hidden}{}", code(&shown), acts(&way))
+        json!({
+            "type": "policy",
+            "id": id,
+            "marks": marks.iter().map(|(n, l, k)| json!({ "n": n, "text": l, "kind": k })).collect::<Vec<_>>(),
+            "plain": marks.iter().map(|(_, l, _)| l.as_str()).collect::<Vec<_>>().join("\n"),
+            "way": way,
+        })
     }
 
     fn requests_done(&self) -> String {
@@ -887,20 +846,14 @@ fn agent(r: &Row) -> String {
     if name.is_empty() {
         String::new()
     } else {
-        format!("{}, ", esc(name))
+        format!("{name}, ")
     }
 }
 
 fn cost(r: &Row) -> String {
     r.cost_usd.map_or_else(
         || "cost not known".into(),
-        |c| {
-            if r.estimate {
-                format!(r#"<span title="{}">{}</span>"#, esc(EST_TIP), money_est(c))
-            } else {
-                money(c)
-            }
-        },
+        |c| if r.estimate { money_est(c) } else { money(c) },
     )
 }
 
@@ -1032,61 +985,56 @@ fn first_lines(base: &str, key: &str, model: &str, lang: &str) -> Vec<String> {
     }
 }
 
-/// The provider, the key and Connect on one row, bottom-aligned; the one hint sits under the whole row.
-fn connect_form(providers: &str) -> String {
-    format!(
-        r#"<form class="g-check__form" method="post" action="/console/start/connect"><div class="g-field"><label class="g-field__label t-tag g-caps" for="connect-provider">Provider</label><div class="g-select-wrap"><select class="g-input g-select t-body" id="connect-provider" name="provider">{providers}</select>{}</div></div>{}<button class="g-btn t-body" type="submit">Connect</button></form><p class="t-small g-check__muted">Stored encrypted.</p>"#,
-        icon("down"),
-        field(&Field {
-            id: "connect-key",
-            name: "key",
-            label: "Provider key",
-            value: "",
-            mono: true,
-            extra: r#" type="password" placeholder="sk-..." required autocomplete="off""#,
-            // The hint goes under the whole row: inside the field it lifts the input above the select.
-            hint: "",
-            error: "",
-        })
-    )
+/// The provider, the key and Connect on one row; the one hint sits under the whole row.
+fn connect_form() -> Value {
+    let providers: Vec<Value> = enterplace_core::catalog::START_PROVIDERS
+        .iter()
+        .map(|(id, _)| json!({ "id": id, "label": provider_label(id) }))
+        .collect();
+    let mut out = form(
+        "connect",
+        "Connect",
+        json!({}),
+        vec![
+            json!({ "name": "provider", "label": "Provider", "options": providers }),
+            json!({ "name": "key", "label": "Provider key", "placeholder": "sk-...", "secret": true }),
+        ],
+    );
+    // The hint goes under the whole row: inside the field it lifts the input above the select.
+    out["after"] = json!("Stored encrypted.");
+    out
 }
 
 /// Connect a model, then Send your first request: the first data on every track, within a minute.
 fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let may_connect = c.admin.may(Permission::Credentials) && !c.admin.confined();
-    let error = if c.error.is_empty() || c.made.is_some() {
-        String::new()
-    } else {
-        pages::alert(&esc(&c.error))
-    };
-    let providers: String = enterplace_core::catalog::START_PROVIDERS
-        .iter()
-        .map(|(id, _)| format!(r#"<option value="{id}">{}</option>"#, provider_label(id)))
-        .collect();
-    let connect_form = if !may_connect {
-        r#"<p class="t-small g-check__muted">Your role cannot add provider keys. Ask an admin, or try the demo model.</p>"#.to_string()
+    let connect = if !may_connect {
+        note("Your role cannot add provider keys. Ask an admin, or try the demo model.")
     } else if !f.credentials_on {
-        r#"<p class="t-small g-check__muted">Provider keys are kept sealed under a master key, and this gateway has none. Set ENTERPLACE_MASTER_KEY (64 hex characters) or start Enterplace with enterplace start, which makes one. Meanwhile, try the demo model.</p>"#.to_string()
+        note(
+            "Provider keys are kept sealed under a master key, and this gateway has none. Set ENTERPLACE_MASTER_KEY (64 hex characters) or start Enterplace with enterplace start, which makes one. Meanwhile, try the demo model.",
+        )
     } else {
-        connect_form(&providers)
+        connect_form()
     };
-    let demo_form = if may_choose(c.admin) && f.demo_in_policy {
-        r#"<form method="post" action="/console/start/demo"><button class="g-btn g-btn--quiet t-body" type="submit">Try without a key</button></form>"#
+    let demo = if may_choose(c.admin) && f.demo_in_policy {
+        vec![button("Try without a key", "demo", json!({}), true)]
     } else {
-        ""
+        Vec::new()
     };
     let connected: Vec<String> = f.connected.iter().map(|(n, _)| mono(n)).collect();
     let s1 = Step::new(
         "Connect a model",
         // A request that arrived proves a model answered it, so this never reads Now above a done first request.
         !f.connected.is_empty() || f.demo || !f.tries.is_empty(),
-        format!(
-            r#"<p class="t-body">Paste a key from OpenAI, Anthropic or Gemini, and Enterplace sends your requests to that provider. Or try the free demo model: Enterplace answers it with a sample text, so your first request lands in seconds.</p>{error}{connect_form}{}"#,
-            acts(demo_form)
-        ),
-)
+        vec![
+            p("Paste a key from OpenAI, Anthropic or Gemini, and Enterplace sends your requests to that provider. Or try the free demo model: Enterplace answers it with a sample text, so your first request lands in seconds."),
+            connect,
+            actions(demo),
+        ],
+    )
     .finished(if connected.is_empty() {
-        r#"Using the demo model: answers are sample text, free. Connect a provider any time in <a class="g-link" href="/console/credentials">Provider credentials</a>, or on this step after <a class="g-link" href="/console/start?pick=1">changing what to start with</a>."#.to_string()
+        "Using the demo model: answers are sample text, free. Connect a provider any time in [Provider credentials](/console/credentials), or on this step after [changing what to start with](/console/app/#/start?pick=1).".to_string()
     } else {
         format!("Connected: {}. Its key is sealed; requests to its models go to it.", connected.join(", "))
     });
@@ -1098,31 +1046,38 @@ fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let key = made.map_or("$ENTERPLACE_KEY", |m| m.key.as_str());
     let model = first_model(f);
     let key_note = if made.is_some() {
-        "The key made for it is in the lines below, shown once.".to_string()
+        "The key made for it is in the lines below, shown once."
     } else if c.may_keys() {
-        r#"The lines use $ENTERPLACE_KEY, the admin key enterplace start printed in the terminal. Or make a key for this request, and it is put in the lines:"#.to_string()
+        "The lines use $ENTERPLACE_KEY, the admin key enterplace start printed in the terminal. Or make a key for this request, and it is put in the lines:"
     } else {
-        "The lines use $ENTERPLACE_KEY: set it to your Enterplace key.".to_string()
+        "The lines use $ENTERPLACE_KEY: set it to your Enterplace key."
     };
     let key_button = if made.is_none() && c.may_keys() {
-        r#"<form method="post" action="/console/start/first-key"><button class="g-btn g-btn--quiet t-body" type="submit">Make a key for this request</button></form>"#
+        vec![button(
+            "Make a key for this request",
+            "first-key",
+            json!({}),
+            true,
+        )]
     } else {
-        ""
+        Vec::new()
     };
     let first = f.tries.last();
     let s2 = Step::new(
         "Send your first request",
         first.is_some(),
-        format!(
-            r#"<p class="t-body">Run this in a terminal. {key_note}</p>{}{}<p class="t-small g-check__muted">If the provider refuses it (a wrong key, a model it does not serve), the request still shows in Requests with the provider's answer, and this step turns done.</p>"#,
-            acts(key_button),
-            block(
+        vec![
+            p(format!("Run this in a terminal. {key_note}")),
+            actions(key_button),
+            lines_block(
                 "lines-first",
-                &tabs_by("tool", "Language", 2, &[("curl", "curl"), ("python", "Python"), ("node", "Node")], lang),
-                &first_lines(&f.base, key, &model, lang)
+                tabs("tool", "Language", &[("curl", "curl"), ("python", "Python"), ("node", "Node")], lang, json!({})),
+                "",
+                &first_lines(&f.base, key, &model, lang),
             ),
-        ),
-)
+            note("If the provider refuses it (a wrong key, a model it does not serve), the request still shows in Requests with the provider's answer, and this step turns done."),
+        ],
+    )
     .listening(
         "Waiting for the first request.".into(),
         ("Open Requests", "/console/requests"),
@@ -1133,7 +1088,7 @@ fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
             clock(&r.time),
             mono(r.label("person")),
             mono(r.label("model")),
-            if r.verdict == "refused" { format!("refused ({})", esc(&r.code)) } else { "allowed".into() },
+            if r.verdict == "refused" { format!("refused ({})", r.code) } else { "allowed".into() },
             r.status.filter(|s| *s >= 400).map_or_else(String::new, |s| format!(", the provider answered {s}"))
         )
     }));
@@ -1199,11 +1154,11 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let s1 = Step::new(
         "Make a key for the first person",
         !f.people.is_empty(),
-        format!(
-            r#"<p class="t-body">Each person gets their own key, so every request carries a name and a team.</p>{}"#,
-            c.key_form("Name", ("sarah.miller", "platform"), false)
-        ),
-)
+        vec![
+            p("Each person gets their own key, so every request carries a name and a team."),
+            c.key_form("Name", ("sarah.miller", "platform"), false),
+        ],
+    )
     .finished(made_text(c, first));
     let (tool_name, tool_doc) = match tool {
         "codex" => ("Codex", "/integrations/codex/"),
@@ -1215,36 +1170,37 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let s2 = Step::new(
         "Point your coding agent at Enterplace and send one prompt",
         !f.sent_by_people().is_empty(),
-        format!(
-            r#"<p class="t-body">Paste these lines where your coding agent runs, then ask it anything. The key from step 3 is already in them.</p>{}{}"#,
-            block(
+        vec![
+            p("Paste these lines where your coding agent runs, then ask it anything. The key from step 3 is already in them."),
+            lines_block(
                 "lines-coding",
-                // The tabs keep the API key answer: without it the address falls back to Claude subscriptions.
-                &tabs(
+                // The tabs keep the API key answer: without it the view falls back to Claude subscriptions.
+                tabs(
+                    "tool",
                     "Coding tool",
-                    4,
                     &[("claude", "Claude Code"), ("codex", "Codex"), ("cursor", "Cursor"), ("gemini", "Gemini CLI"), ("other", "Other tools")],
-                    tool
-                )
-                .replace("/console/start?tool=", "/console/start?pay=api&amp;tool="),
-                &coding_lines(c, first, tool)
+                    tool,
+                    json!({ "pay": "api" }),
+                ),
+                "",
+                &coding_lines(c, first, tool),
             ),
-            acts(&docs(&format!("Read the {tool_name} guide"), tool_doc))
-        ),
-)
+            actions(vec![docs_link(&format!("Read the {tool_name} guide"), tool_doc)]),
+        ],
+    )
     .listening(
-        format!("Waiting for the first request from {}.", esc(&who)),
+        format!("Waiting for the first request from {who}."),
         ("Open Requests", "/console/requests"),
     )
     .finished(c.requests_done());
     let s3 = Step::new(
         "Add a second person",
         senders.len() >= 2,
-        format!(
-            r#"<p class="t-body">Make a key for one more developer and send them the same lines through your secret manager. With two people, Analytics can compare them.</p>{}"#,
-            c.key_form("Name", ("mike.johnson", "payments"), false)
-        ),
-)
+        vec![
+            p("Make a key for one more developer and send them the same lines through your secret manager. With two people, Analytics can compare them."),
+            c.key_form("Name", ("mike.johnson", "payments"), false),
+        ],
+    )
     .finished(format!(
         "{} sent a first request.",
         mono(second.as_deref().unwrap_or("A second person"))
@@ -1252,13 +1208,15 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let mut s4 = Step::new(
         "Let people make their own keys",
         f.people.iter().any(|k| k.name.contains('@')),
-        format!(
-            r#"<p class="t-body">Connect single sign-on with <span class="t-mono">self_issue</span>, and each developer runs one command to get a key under their company email.{}</p>{}{}"#,
-            if f.self_issue { " Single sign-on is set." } else { "" },
-            command("cmd-login", &format!("enterplace login {}", f.base)),
-            acts(&docs("Read Single sign-on", "/governance/single-sign-on/"))
-        ),
-)
+        vec![
+            p(format!(
+                "Connect single sign-on with `self_issue`, and each developer runs one command to get a key under their company email.{}",
+                if f.self_issue { " Single sign-on is set." } else { "" }
+            )),
+            command_block(&format!("enterplace login {}", f.base)),
+            actions(vec![docs_link("Read Single sign-on", "/governance/single-sign-on/")]),
+        ],
+    )
     .finished("Someone made their own key through single sign-on.".into());
     s4.optional = true;
     let base = f.base.as_str();
@@ -1379,38 +1337,16 @@ fn subscription_prompt(base: &str, token: Option<&str>, unnamed_ok: bool) -> Str
 }
 
 /// The form that makes a person token, or what to do without the right to.
-fn token_form(c: &Ctx<'_>, placeholders: (&str, &str)) -> String {
+fn token_form(c: &Ctx<'_>, placeholders: (&str, &str)) -> Value {
     if !c.may_keys() {
-        return r#"<p class="t-small g-check__muted">Your role cannot make person tokens. Ask an admin to make this one.</p>"#.into();
+        return note("Your role cannot make person tokens. Ask an admin to make this one.");
     }
     let (n, t) = placeholders;
-    let error = if c.error.is_empty() {
-        String::new()
-    } else {
-        pages::alert(&esc(&c.error))
-    };
-    format!(
-        r#"{error}<form class="g-check__form" method="post" action="/console/start/key"><input type="hidden" name="kind" value="person_token">{}{}<button class="g-btn t-body" type="submit">Make person token</button></form>"#,
-        field(&Field {
-            id: &format!("token-name-{n}"),
-            name: "name",
-            label: "Name",
-            value: "",
-            mono: true,
-            extra: &format!(r#" placeholder="{n}" required autocomplete="off""#),
-            hint: "",
-            error: "",
-        }),
-        field(&Field {
-            id: &format!("token-team-{n}"),
-            name: "team",
-            label: "Team",
-            value: "",
-            mono: true,
-            extra: &format!(r#" placeholder="{t}" required autocomplete="off""#),
-            hint: "",
-            error: "",
-        }),
+    form(
+        "key",
+        "Make person token",
+        json!({ "kind": "person_token" }),
+        vec![input("name", "Name", n), input("team", "Team", t)],
     )
 }
 
@@ -1420,11 +1356,16 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let base = f.base.as_str();
     let may_policy = edit::edits_policy(c.admin) && !c.admin.confined();
     let turn_on = if f.passthrough {
-        String::new()
+        Value::Null
     } else if may_policy {
-        r#"<form method="post" action="/console/start/passthrough"><button class="g-btn t-body" type="submit">Turn on Claude subscriptions</button></form>"#.into()
+        actions(vec![button(
+            "Turn on Claude subscriptions",
+            "passthrough",
+            json!({}),
+            false,
+        )])
     } else {
-        r#"<span class="t-small g-check__muted">Your role cannot change the policy. Ask an admin to turn this on.</span>"#.into()
+        note("Your role cannot change the policy. Ask an admin to turn this on.")
     };
     let provider: Vec<String> = enterplace_core::catalog::subscription_provider(&|_| None)
         .lines()
@@ -1433,12 +1374,12 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let s1 = Step::new(
         "Turn on Claude subscriptions",
         f.passthrough,
-        format!(
-            r#"<p class="t-body">Enterplace sends each developer's own Claude login (Pro, Max, Team or Enterprise) to Anthropic unchanged, and never keeps it. Nobody makes an Anthropic API key. Enterplace records tokens and cost (est.), and every rule, guardrail and kill switch applies.</p>{}{}"#,
-            acts(&turn_on),
-            acts(&docs("Read Subscriptions", "/governance/subscriptions/"))
-        ),
-)
+        vec![
+            p("Enterplace sends each developer's own Claude login (Pro, Max, Team or Enterprise) to Anthropic unchanged, and never keeps it. Nobody makes an Anthropic API key. Enterplace records tokens and cost (est.), and every rule, guardrail and kill switch applies."),
+            turn_on,
+            actions(vec![docs_link("Read Subscriptions", "/governance/subscriptions/")]),
+        ],
+    )
     .finished(format!(
         "On: provider {} sends each person's own Claude login. Enterplace holds no Anthropic key for it.",
         mono(enterplace_core::catalog::SUBSCRIPTION_PROVIDER)
@@ -1482,75 +1423,81 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     // The lines carry the signed-in person's token. Without one yet (a restart forgets it, single sign-on never made
     // one), one button makes it in their own name.
     let name_on_requests = if own.is_some() {
-        format!(
-            r#"<p class="t-small g-check__muted">The lines carry your person token, so your requests show as {}. It reaches no model on its own.</p>"#,
+        vec![note(format!(
+            "The lines carry your person token, so your requests show as {}. It reaches no model on its own.",
             mono(&c.admin.name)
-        )
+        ))]
     } else if c.may_keys() {
-        let error = if c.error.is_empty() {
-            String::new()
-        } else {
-            pages::alert(&esc(&c.error))
-        };
         let team = if c.admin.team.is_empty() {
             "people"
         } else {
             c.admin.team.as_str()
         };
-        format!(
-            r#"{error}<form class="g-check__form" method="post" action="/console/start/key"><input type="hidden" name="kind" value="person_token"><input type="hidden" name="name" value="{}"><input type="hidden" name="team" value="{}"><button class="g-btn t-body" type="submit">Make my token</button></form><p class="t-small g-check__muted">Puts your name on your requests: the lines above get your token. Until then they show as the person unknown.</p>"#,
-            esc(&c.admin.name),
-            esc(team)
-        )
-    } else {
-        r#"<p class="t-small g-check__muted">Your role cannot make person tokens. Ask an admin for yours.</p>"#.into()
-    };
-    let s2 = Step::new(
-        "Point Claude Code at Enterplace",
-        !seen.is_empty(),
-        format!(
-            r#"<p class="t-body">Paste this where Claude Code runs. Your Claude login stays as it is.</p>{}<p class="t-small g-check__muted">{}</p>{}"#,
-            block(
-                "lines-subscription",
-                // API keys are the default way to pay, so these tabs keep the subscription choice.
-                &tabs_by("setup", "How to set it", 2, &[("shell", "Shell"), ("mdm", "Managed settings (MDM)")], if mdm { "mdm" } else { "shell" })
-                    .replace("/console/start?setup=", "/console/start?pay=subscriptions&amp;setup="),
-                &subscription_lines(base, token.as_deref(), mdm)
+        vec![
+            actions(vec![button(
+                "Make my token",
+                "key",
+                json!({ "kind": "person_token", "name": c.admin.name, "team": team }),
+                false,
+            )]),
+            note(
+                "Puts your name on your requests: the lines above get your token. Until then they show as the person unknown.",
             ),
-            // One line under the lines shown: the paths only where the managed settings are, not under the shell lines.
-            if mdm {
-                format!("One file per machine, one token per person: {}.", esc(MANAGED_SETTINGS))
-            } else {
-                "Leave ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset.".to_string()
-            },
-            name_on_requests
+        ]
+    } else {
+        vec![note(
+            "Your role cannot make person tokens. Ask an admin for yours.",
+        )]
+    };
+    let mut body = vec![
+        p("Paste this where Claude Code runs. Your Claude login stays as it is."),
+        lines_block(
+            "lines-subscription",
+            // API keys are the default way to pay, so these tabs keep the subscription choice.
+            tabs(
+                "setup",
+                "How to set it",
+                &[("shell", "Shell"), ("mdm", "Managed settings (MDM)")],
+                if mdm { "mdm" } else { "shell" },
+                json!({ "pay": "subscriptions" }),
+            ),
+            "",
+            &subscription_lines(base, token.as_deref(), mdm),
         ),
-)
-    .listening(
-        format!("Waiting for the first request from {}.", esc(&who)),
-        ("Open Requests", "/console/requests"),
-    )
-    .finished(first_seen.map_or_else(String::new, |r| {
-        format!(
-            "First request at {} from {} on a Claude subscription: {}{}, {}.",
-            clock(&r.time),
-            mono(r.label("person")),
-            agent(r),
-            mono(r.label("model")),
-            cost(r)
+        // One line under the lines shown: the paths only where the managed settings are, not under the shell lines.
+        note(if mdm {
+            format!("One file per machine, one token per person: {MANAGED_SETTINGS}.")
+        } else {
+            "Leave ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset.".to_string()
+        }),
+    ];
+    body.extend(name_on_requests);
+    let s2 = Step::new("Point Claude Code at Enterplace", !seen.is_empty(), body)
+        .listening(
+            format!("Waiting for the first request from {who}."),
+            ("Open Requests", "/console/requests"),
         )
-    }))
-    .agent(subscription_prompt(base, made.as_deref(), f.unnamed_ok));
+        .finished(first_seen.map_or_else(String::new, |r| {
+            format!(
+                "First request at {} from {} on a Claude subscription: {}{}, {}.",
+                clock(&r.time),
+                mono(r.label("person")),
+                agent(r),
+                mono(r.label("model")),
+                cost(r)
+            )
+        }))
+        .agent(subscription_prompt(base, made.as_deref(), f.unnamed_ok));
     let subscribers = f.subscribers();
     let second = subscribers.get(1).cloned();
     let s3 = Step::new(
         "Add a second person",
         subscribers.len() >= 2,
-        format!(
-            r#"<p class="t-body">Make a person token for one more developer and send them the same lines. With two people, Analytics can compare them.</p>{}"#,
-            token_form(c, ("mike.johnson", "payments"))
-        ),
-)
+        vec![
+            p("Make a person token for one more developer and send them the same lines. With two people, Analytics can compare them."),
+            token_form(c, ("mike.johnson", "payments")),
+        ],
+    )
     .finished(format!(
         "{} sent a first request.",
         mono(second.as_deref().unwrap_or("A second person"))
@@ -1569,13 +1516,15 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let mut s4 = Step::new(
         "Let people get their own token",
         f.people.iter().any(|k| k.name.contains('@')),
-        format!(
-            r#"<p class="t-body">Connect single sign-on with <span class="t-mono">self_issue</span>, and each developer runs one command: it signs them in and sets Claude Code's lines for them.{}</p>{}{}"#,
-            if f.self_issue { " Single sign-on is set." } else { "" },
-            command("cmd-login", &format!("enterplace login {base}")),
-            acts(&docs("Read Single sign-on", "/governance/single-sign-on/"))
-        ),
-)
+        vec![
+            p(format!(
+                "Connect single sign-on with `self_issue`, and each developer runs one command: it signs them in and sets Claude Code's lines for them.{}",
+                if f.self_issue { " Single sign-on is set." } else { "" }
+            )),
+            command_block(&format!("enterplace login {base}")),
+            actions(vec![docs_link("Read Single sign-on", "/governance/single-sign-on/")]),
+        ],
+    )
     .finished("Someone got their own token through single sign-on.".into())
     .agent(prompt(
         base,
@@ -1591,6 +1540,20 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     ));
     s4.optional = true;
     vec![s1, s2, s3, s4]
+}
+
+/// The policy lines of a change, as text to paste.
+fn plain(c: &Ctx<'_>, name: &str) -> String {
+    change(name)
+        .map(|ch| {
+            apply(&c.policy, &ch)
+                .1
+                .into_iter()
+                .map(|(_, l, _)| l)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
 }
 
 fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
@@ -1610,27 +1573,28 @@ fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let s1 = Step::new(
         "Make a key for the app",
         app.is_some(),
-        format!(
-            r#"<p class="t-body">A workload key names the app, not a person. Give it the team that owns it.</p>{}"#,
-            c.key_form("Workload", ("support-bot", "support"), true)
-        ),
-)
+        vec![
+            p("A workload key names the app, not a person. Give it the team that owns it."),
+            c.key_form("Workload", ("support-bot", "support"), true),
+        ],
+    )
     .finished(made_text(c, app));
     let s2 = Step::new(
         "Change the base URL and send one request",
         first.is_some(),
-        format!(
-            r#"<p class="t-body">Set these variables where the app runs. The SDKs read them, so the code stays as it is.</p>{}{}"#,
-            block(
+        vec![
+            p("Set these variables where the app runs. The SDKs read them, so the code stays as it is."),
+            lines_block(
                 "lines-apps",
-                &tabs("Client", 4, &[("openai", "OpenAI SDKs"), ("anthropic", "Anthropic SDKs"), ("curl", "curl")], tool),
-                &coding_lines(c, app, tool)
+                tabs("tool", "Client", &[("openai", "OpenAI SDKs"), ("anthropic", "Anthropic SDKs"), ("curl", "curl")], tool, json!({})),
+                "",
+                &coding_lines(c, app, tool),
             ),
-            acts(&docs("Read Connect a project", "/integrations/connect-a-project/"))
-        ),
-)
+            actions(vec![docs_link("Read Connect a project", "/integrations/connect-a-project/")]),
+        ],
+    )
     .listening(
-        format!("Waiting for the first request from {}.", esc(&name)),
+        format!("Waiting for the first request from {name}."),
         ("Open Requests", "/console/requests"),
     )
     .finished(first.map_or_else(String::new, |r| {
@@ -1648,25 +1612,29 @@ fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let s3 = Step::new(
         "Set a monthly budget for the app's team",
         f.budget_for(&team),
-        format!(
-            r#"<p class="t-body">Add these lines to the policy.{} It counts from the next request.</p>{}{}"#,
-            if f.observe { " Observe mode is on, so it records what it would refuse and refuses nothing." } else { "" },
-            c.lines("lines-budget-team", &format!("budget-team:{team}"), "Add to a policy draft"),
-            acts(&docs("Read Budgets and rate limits", "/governance/budgets-and-rate-limits/"))
-        ),
-)
+        vec![
+            p(format!(
+                "Add these lines to the policy.{} It counts from the next request.",
+                if f.observe {
+                    " Observe mode is on, so it records what it would refuse and refuses nothing."
+                } else {
+                    ""
+                }
+            )),
+            c.lines(
+                "lines-budget-team",
+                &format!("budget-team:{team}"),
+                "Add to a policy draft",
+            ),
+            actions(vec![docs_link(
+                "Read Budgets and rate limits",
+                "/governance/budgets-and-rate-limits/",
+            )]),
+        ],
+    )
     .finished(format!("The policy has a budget for {}.", mono(&team)));
     let base = f.base.as_str();
-    let budget = change(&format!("budget-team:{team}"))
-        .map(|ch| {
-            apply(&c.policy, &ch)
-                .1
-                .into_iter()
-                .map(|(_, l, _)| l)
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default();
+    let budget = plain(c, &format!("budget-team:{team}"));
     let s1 = s1.agent(prompt(
         base,
         "Make a Enterplace workload key for the app",
@@ -1706,12 +1674,12 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let s1 = Step::new(
         "Put an MCP server behind Enterplace",
         !f.mcp_servers.is_empty(),
-        format!(
-            r#"<p class="t-body">Add the server to the policy and allow its tools in a rule. Set <span class="t-mono">GITHUB_MCP_AUTHORIZATION</span> to <span class="t-mono">Bearer</span> and your GitHub token where Enterplace runs, then restart it: a new server needs a restart.</p>{}{}"#,
+        vec![
+            p("Add the server to the policy and allow its tools in a rule. Set `GITHUB_MCP_AUTHORIZATION` to `Bearer` and your GitHub token where Enterplace runs, then restart it: a new server needs a restart."),
             c.lines("lines-mcp", "mcp-server", "Add to a policy draft"),
-            acts(&docs("Read MCP gateway", "/governance/mcp-gateway/"))
-        ),
-)
+            actions(vec![docs_link("Read MCP gateway", "/governance/mcp-gateway/")]),
+        ],
+    )
     .finished(format!(
         "{} in the policy.",
         f.mcp_servers.iter().map(|s| mono(s)).collect::<Vec<_>>().join(", ")
@@ -1720,18 +1688,15 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let s2 = Step::new(
         "Connect an MCP client and call one tool",
         call.is_some(),
-        format!(
-            r#"<p class="t-body">For Claude Code, run this where it runs. It reads your Enterplace key from <span class="t-mono">ENTERPLACE_KEY</span>. Any other client that speaks MCP over Streamable HTTP takes the same address and header.</p>{}{}"#,
-            command(
-                "cmd-mcp",
-                &format!(
-                    "claude mcp add --transport http enterplace {}/mcp --header \"Authorization: Bearer $ENTERPLACE_KEY\"",
-                    f.base
-                )
-            ),
-            acts(&glink("No key yet? Make one", "/console/start?track=coding&amp;pay=api#step-3", true))
-        ),
-)
+        vec![
+            p("For Claude Code, run this where it runs. It reads your Enterplace key from `ENTERPLACE_KEY`. Any other client that speaks MCP over Streamable HTTP takes the same address and header."),
+            command_block(&format!(
+                "claude mcp add --transport http enterplace {}/mcp --header \"Authorization: Bearer $ENTERPLACE_KEY\"",
+                f.base
+            )),
+            actions(vec![link("No key yet? Make one", "/console/app/#/start?track=coding&pay=api")]),
+        ],
+    )
     .listening(
         "Waiting for the first tool call.".into(),
         ("Open the Audit log", "/console/audit"),
@@ -1752,33 +1717,21 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let s3 = Step::new(
         "Ask for approval before a risky tool runs",
         f.approvals > 0,
-        format!(
-            r#"<p class="t-body">Name the tools an admin approves first. The call waits up to 120 seconds for an answer.</p>{}{}"#,
+        vec![
+            p("Name the tools an admin approves first. The call waits up to 120 seconds for an answer."),
             c.lines("lines-approve", "approve", "Add to a policy draft"),
-            acts(&docs("Read Tool permissions", "/governance/mcp-gateway/"))
-        ),
-)
+            actions(vec![docs_link("Read Tool permissions", "/governance/mcp-gateway/")]),
+        ],
+    )
     .finished("A call waited for approval and was answered.".into());
     let base = f.base.as_str();
-    let plain = |name: &str| {
-        change(name)
-            .map(|ch| {
-                apply(&c.policy, &ch)
-                    .1
-                    .into_iter()
-                    .map(|(_, l, _)| l)
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .unwrap_or_default()
-    };
     let s1 = s1.agent(prompt(
         base,
         "Put an MCP server behind Enterplace",
         &[("Policy file", f.policy_path.clone())],
         &[
             "1. Add these lines to the policy file:".into(),
-            plain("mcp-server"),
+            plain(c, "mcp-server"),
             "2. Where the gateway runs, set GITHUB_MCP_AUTHORIZATION to `Bearer <GitHub token>` (I set the token myself), then restart the gateway.".into(),
         ],
         "`enterplace check <policy file>` passes and the console's MCP pages list the server.",
@@ -1799,7 +1752,7 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         base,
         "Make a risky MCP tool wait for an admin's approval",
         &[("Policy file", f.policy_path.clone())],
-        &["Add these lines to the first rule of the policy file, then run `enterplace check <policy file>`:".into(), plain("approve")],
+        &["Add these lines to the first rule of the policy file, then run `enterplace check <policy file>`:".into(), plain(c, "approve")],
         "A call to that tool waits in MCP approvals.",
         "/governance/mcp-gateway/",
     ));
@@ -1816,24 +1769,25 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let s1 = Step::new(
         "Make a key",
         !f.people.is_empty(),
-        format!(
-            r#"<p class="t-body">A budget counts requests that pass through Enterplace, so traffic comes first. Start with one key.</p>{}"#,
-            c.key_form("Name", ("sarah.miller", "platform"), false)
-        ),
-)
+        vec![
+            p("A budget counts requests that pass through Enterplace, so traffic comes first. Start with one key."),
+            c.key_form("Name", ("sarah.miller", "platform"), false),
+        ],
+    )
     .finished(made_text(c, first));
     let s2 = Step::new(
         "Send requests through Enterplace",
         !f.requests.is_empty(),
-        format!(
-            r#"<p class="t-body">Paste these lines where your coding agent runs, or point an app at the same address.</p>{}"#,
-            block(
+        vec![
+            p("Paste these lines where your coding agent runs, or point an app at the same address."),
+            lines_block(
                 "lines-limit",
-                &tabs("Client", 4, &[("claude", "Claude Code"), ("codex", "Codex"), ("gemini", "Gemini CLI"), ("app", "An app")], tool),
-                &coding_lines(c, first, tool)
-            )
-        ),
-)
+                tabs("tool", "Client", &[("claude", "Claude Code"), ("codex", "Codex"), ("gemini", "Gemini CLI"), ("app", "An app")], tool, json!({})),
+                "",
+                &coding_lines(c, first, tool),
+            ),
+        ],
+    )
     .listening(
         "Waiting for the first request.".into(),
         ("Open Spend", "/console/spend"),
@@ -1848,37 +1802,27 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let s3 = Step::new(
         "Set a monthly budget for each team",
         !f.budgets.is_empty() || f.rule_budgets,
-        format!(
-            r#"<p class="t-body">Pick the amount from what you expect each team to spend.{}</p>{}{}"#,
-            if f.observe { r#" Observe mode is on, so a request over the budget is recorded as <span class="t-mono">would_refuse</span> and still sent."# } else { "" },
+        vec![
+            p(format!(
+                "Pick the amount from what you expect each team to spend.{}",
+                if f.observe { " Observe mode is on, so a request over the budget is recorded as `would_refuse` and still sent." } else { "" }
+            )),
             c.lines("lines-budget-all", "budget-all", "Add to a policy draft"),
-            acts(&docs("Read Budgets and rate limits", "/governance/budgets-and-rate-limits/"))
-        ),
-)
+            actions(vec![docs_link("Read Budgets and rate limits", "/governance/budgets-and-rate-limits/")]),
+        ],
+    )
     .finished("A budget is in the policy.".into());
     let s4 = Step::new(
         "Enforce the budget",
         !f.observe,
-        format!(
-            r#"<p class="t-body">When the numbers look right, delete the observe line. From the next request, a team over its budget is refused with <span class="t-mono">budget_exceeded</span>.</p>{}{}"#,
+        vec![
+            p("When the numbers look right, delete the observe line. From the next request, a team over its budget is refused with `budget_exceeded`."),
             c.lines("lines-enforce", "enforce", "Turn off observe mode"),
-            acts(&docs("Read Step 3: Limit", "/start/step-3-limit/"))
-        ),
-)
+            actions(vec![docs_link("Read Step 3: Limit", "/start/step-3-limit/")]),
+        ],
+    )
     .finished("Observe mode is off: budgets refuse.".into());
     let base = f.base.as_str();
-    let plain = |name: &str| {
-        change(name)
-            .map(|ch| {
-                apply(&c.policy, &ch)
-                    .1
-                    .into_iter()
-                    .map(|(_, l, _)| l)
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .unwrap_or_default()
-    };
     let s1 = s1.agent(prompt(
         base,
         "Make a Enterplace key",
@@ -1904,7 +1848,7 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         &[("Policy file", f.policy_path.clone())],
         &[
             "Add these lines to the policy file, then run `enterplace check <policy file>`:".into(),
-            plain("budget-all"),
+            plain(c, "budget-all"),
         ],
         "Spend shows each team against its budget.",
         "/governance/budgets-and-rate-limits/",
@@ -1924,53 +1868,43 @@ fn watch(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let s1 = Step::new(
         "Add a license with watch mode",
         f.watch_on,
-        format!(
-            r#"<p class="t-body">Watch mode is part of Enterplace Enterprise and keeps its data in Postgres. This gateway has not turned it on yet.</p>{}<p class="t-small g-check__muted">Add <span class="t-mono">store: {{ postgres_url_env: DATABASE_URL }}</span> to the policy and restart Enterplace.</p>{}"#,
-            block(
+        vec![
+            p("Watch mode is part of Enterplace Enterprise and keeps its data in Postgres. This gateway has not turned it on yet."),
+            lines_block(
                 "lines-license",
+                Value::Null,
                 "",
                 &[
                     "export ENTERPLACE_LICENSE=<your license key>".into(),
                     "export DATABASE_URL=postgres://enterplace@db.example.com/enterplace".into(),
-                ]
+                ],
             ),
-            acts(&docs("Read the license setup", "/deploy/overview/"))
-        ),
-)
+            note("Add `store: { postgres_url_env: DATABASE_URL }` to the policy and restart Enterplace."),
+            actions(vec![docs_link("Read the license setup", "/deploy/overview/")]),
+        ],
+    )
     .finished("The license includes watch, and the store answers.".into());
     let token = c.watch_token.unwrap_or("enterplace_watch_...");
-    let may = f.watch_on && !c.admin.read_only;
-    let form = if may {
-        let error = if c.error.is_empty() {
-            String::new()
-        } else {
-            pages::alert(&esc(&c.error))
-        };
-        format!(
-            r#"{error}<form class="g-check__form" method="post" action="/console/start/watch-token">{}<button class="g-btn t-body" type="submit">Make watch token</button></form>"#,
-            field(&Field {
-                id: "watch-team",
-                name: "team",
-                label: "Team",
-                value: "",
-                mono: true,
-                extra: r#" placeholder="engineering" required autocomplete="off""#,
-                hint: "",
-                error: "",
-            })
+    let make = if f.watch_on && !c.admin.read_only {
+        form(
+            "watch-token",
+            "Make watch token",
+            json!({}),
+            vec![input("team", "Team", "engineering")],
         )
     } else if f.watch_on {
-        r#"<p class="t-small g-check__muted">Your role cannot make watch tokens. Ask an owner or admin.</p>"#.into()
+        note("Your role cannot make watch tokens. Ask an owner or admin.")
     } else {
-        String::new()
+        Value::Null
     };
     let s2 = Step::new(
         "Make a watch token",
         f.watch_tokens > 0 || c.watch_token.is_some(),
-        format!(
-            r#"<p class="t-body">The token goes into Claude Code's managed settings. People are counted under the team you name.</p>{form}"#
-        ),
-)
+        vec![
+            p("The token goes into Claude Code's managed settings. People are counted under the team you name."),
+            make,
+        ],
+    )
     .finished(if c.watch_token.is_some() {
         "Token made. It is shown once, inside the settings block below: copy it now.".into()
     } else {
@@ -1990,16 +1924,12 @@ fn watch(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let s3 = Step::new(
         "Paste the settings into claude.ai",
         seen.is_some(),
-        format!(
-            r#"<p class="t-body">As an Owner, open claude.ai, Organization settings, Claude Code, Managed settings. Paste the block and save. Claude Code reads it at its next start.</p>{}{}"#,
-            block(
-                "lines-watch",
-                r#"<span class="t-tag g-caps g-muted">Managed settings</span>"#,
-                &settings
-            ),
-            acts(&docs("Read Claude Team and Enterprise", "/integrations/claude-team/"))
-        ),
-)
+        vec![
+            p("As an Owner, open claude.ai, Organization settings, Claude Code, Managed settings. Paste the block and save. Claude Code reads it at its next start."),
+            lines_block("lines-watch", Value::Null, "Managed settings", &settings),
+            actions(vec![docs_link("Read Claude Team and Enterprise", "/integrations/claude-team/")]),
+        ],
+    )
     .listening(
         "Waiting for Claude Code telemetry. People appear within minutes of their next session.".into(),
         ("Open Watch", "/console/watch"),
@@ -2025,7 +1955,7 @@ fn watch(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         base,
         "Make a watch token",
         &[],
-        &[format!("Open {base}/console/start?track=watch#step-3 and make the token there: it is shown once, inside the settings block.")],
+        &[format!("Open {base}/console/start?track=watch and make the token there: it is shown once, inside the settings block.")],
         "The settings block shows the token.",
         "/integrations/claude-team/",
     ));
@@ -2065,106 +1995,42 @@ fn complete(steps: &[Step]) -> bool {
     steps.iter().all(|s| s.done || s.optional)
 }
 
-// ---------------------------------------------------------------- components
-
-/// Pick: the one starting choice. A radio per row, built on Choice and Row.
-fn pick_form(selected: Option<Track>, may: bool) -> String {
-    let checked = selected.unwrap_or(Track::Coding);
-    let opts: String = TRACKS
-        .iter()
-        .map(|t| {
-            format!(
-                r#"<label class="g-pick__opt g-choice"><input type="radio" name="choice" value="{}" data-button="{}"{}{}><span class="g-pick__text"><span class="g-pick__head"><span class="t-body-strong">{}</span>{}</span><span class="t-small">{}</span><span class="g-pick__meta t-small">{} steps</span></span></label>"#,
-                t.id(),
-                t.button(),
-                if *t == checked { " checked" } else { "" },
-                if may { "" } else { " disabled" },
-                t.name(),
-                if t.enterprise() { ent() } else { String::new() },
-                t.line(),
-                t.steps()
-            )
-        })
-        .collect();
-    let actions = if may {
-        acts(&format!(
-            r#"<button class="g-btn t-body" type="submit" data-start-button>Start with {}</button><button class="g-link t-body" type="submit" name="skip" value="1" style="background: none; border: 0; padding: 0; cursor: pointer">Skip and open the console</button>"#,
-            checked.button()
-        ))
-    } else {
-        r#"<p class="t-small g-muted">Your role cannot choose what this install starts with. An admin can.</p>"#.into()
-    };
-    format!(
-        r#"<form class="g-stack" style="gap: var(--space-8)" method="post" action="/console/start/pick"><fieldset class="g-pick"><legend class="t-tag g-caps g-muted" style="padding: 0 0 var(--space-2) var(--space-6)">Start with</legend>{opts}</fieldset>{actions}</form>"#
+/// The checklist: each step with its state. Done says what happened in one line, Not yet is the title alone, and
+/// the current step holds what to do and its prompt for a coding agent.
+fn checklist(steps: &[Step], states: &[&str]) -> Value {
+    Value::Array(
+        steps
+            .iter()
+            .zip(states)
+            .enumerate()
+            .map(|(i, (s, state))| {
+                let open = matches!(*state, "now" | "listening");
+                json!({
+                    "n": i + 1,
+                    "title": s.title,
+                    "optional": s.optional,
+                    "state": state,
+                    "word": match *state {
+                        "done" => "Done",
+                        "now" => "Now",
+                        "listening" => "Waiting",
+                        _ => "Not yet",
+                    },
+                    "body": if open { s.now.clone() } else { Vec::new() },
+                    "agent": if open { s.agent.as_str() } else { "" },
+                    "listen": if *state == "listening" { s.listen.as_str() } else { "" },
+                    "open": s.open.filter(|_| *state == "listening").map(|(label, href)| json!({ "label": label, "href": href })),
+                    "done_text": if *state == "done" { s.done_text.as_str() } else { "" },
+                })
+            })
+            .collect(),
     )
 }
 
-/// Checklist: one row per step, its marker carrying the state.
-fn checklist(steps: &[Step], states: &[&str]) -> String {
-    let mut out = String::from(r#"<ol class="g-check">"#);
-    for (i, (s, state)) in steps.iter().zip(states).enumerate() {
-        let mark = match *state {
-            "done" => r#"<svg class="g-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>"#.to_string(),
-            "listening" => r#"<span class="g-check__pulse"></span>"#.into(),
-            _ => String::new(),
-        };
-        let word = match *state {
-            "done" => "Done",
-            "now" => "Now",
-            "listening" => "Waiting",
-            _ => "Not yet",
-        };
-        let agent = if s.agent.is_empty() {
-            String::new()
-        } else {
-            format!(
-                r#"<pre id="agent-step-{n}" hidden>{}</pre>{}"#,
-                esc(&s.agent),
-                acts(&format!(
-                    r#"<button class="g-btn g-btn--quiet g-btn--sm t-small" type="button" data-copy="agent-step-{}" data-agent-prompt>{}Copy for your agent</button>"#,
-                    i + 1,
-                    icon("copy")
-                )),
-                n = i + 1
-            )
-        };
-        let body = match *state {
-            // Done: one line saying what happened. Not yet: the title alone.
-            "done" => format!(r#"<p class="t-small g-check__muted">{}</p>"#, s.done_text),
-            "now" => format!("{}{agent}", s.now),
-            "listening" => format!(
-                r#"{}{agent}<p class="g-check__listen t-small" role="status"><span class="g-loading" aria-hidden="true"><i></i><i></i><i></i></span><span>{}</span></p><noscript>{}</noscript>"#,
-                s.now,
-                s.listen,
-                glink("Check now", "/console/start", true)
-            ),
-            _ => String::new(),
-        };
-        let current = if matches!(*state, "now" | "listening") {
-            r#" aria-current="step""#
-        } else {
-            ""
-        };
-        let _ = write!(
-            out,
-            r#"<li class="g-check__item" id="step-{}" data-state="{state}"{current}><span class="g-check__mark" aria-hidden="true">{mark}</span><div class="g-check__head"><span class="g-check__title {}">{}{}</span><span class="g-check__state t-small">{word}</span></div><div class="g-check__body">{body}</div></li>"#,
-            i + 1,
-            if *state == "ahead" { "t-body" } else { "t-sm" },
-            esc(&s.title),
-            if s.optional {
-                tag("", "Optional", "")
-            } else {
-                String::new()
-            }
-        );
-    }
-    out + "</ol>"
-}
-
 /// The live strip on Start here: where requests come from, the gate, where they go, how many in the last 10 minutes,
-/// and the newest three. The page redraws when a request arrives (console.js), and only the newest one's disc moves,
-/// so each new request crosses the gate once: lime when it passed, flame and held at the gate when it was refused.
-fn live_strip(f: &Facts) -> String {
+/// and the newest three. Only the newest one's disc moves in the app, so each new request crosses the gate once:
+/// lime when it passed, flame and held at the gate when it was refused.
+fn live_strip(f: &Facts) -> Value {
     let since = enterplace_core::audit::rfc3339(
         std::time::SystemTime::now() - std::time::Duration::from_secs(600),
     );
@@ -2188,64 +2054,35 @@ fn live_strip(f: &Facts) -> String {
         }
         seen
     };
-    let tags = |items: Vec<String>| -> String {
-        items
-            .iter()
-            // An identifier keeps its case, in mono: the tag's own text style would uppercase it.
-            .map(|t| {
-                format!(
-                    r#"<span class="g-tag"><span class="t-mono-sm">{}</span></span>"#,
-                    esc(t)
-                )
-            })
-            .collect()
-    };
-    let tools = tags(distinct(&|r: &Row| {
+    let tools = distinct(&|r: &Row| {
         enterplace_core::audit::tool_of(Some(r.label("agent")).filter(|a| !a.is_empty()))
-    }));
-    let providers = tags(distinct(&|r: &Row| r.label("provider").to_string()));
-    let newest: Vec<&Row> = f.tries.iter().take(3).collect();
-    let discs: String = newest
+    });
+    let providers = distinct(&|r: &Row| r.label("provider").to_string());
+    let rows: Vec<Value> = f
+        .tries
         .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            format!(
-                r#"<span class="g-flowing__disc{}" data-outcome="{}" style="--lane: {i}"></span>"#,
-                if i == 0 { " g-flowing__disc--new" } else { "" },
-                if r.verdict == "refused" {
-                    "stop"
-                } else {
-                    "pass"
-                }
-            )
-        })
-        .collect();
-    let rows: String = newest
-        .iter()
+        .take(3)
         .map(|r| {
-            let outcome = if r.verdict == "refused" {
-                tag("refused", "Refused:", &crate::pages::code_words(&r.code))
-            } else {
-                r#"<span class="t-small">Allowed</span>"#.to_string()
-            };
-            format!(
-                r#"<tr><td class="t-mono-sm">{}</td><td class="t-mono-sm">{}</td><td class="t-mono-sm g-table__wide">{}</td><td>{outcome}</td></tr>"#,
-                esc(&time_list(&r.time)),
-                esc(r.label("person")),
-                esc(r.label("model")),
-            )
+            json!({
+                "id": r.id,
+                "time": time_list(&r.time),
+                "person": r.label("person"),
+                "model": r.label("model"),
+                "refused": r.verdict == "refused",
+                "code": if r.verdict == "refused" { pages::code_words(&r.code) } else { String::new() },
+            })
         })
         .collect();
-    format!(
-        r#"<section class="g-panel g-stack" aria-label="Live traffic"><div class="g-flowing__head"><h2 class="t-sm" style="margin: 0">Live</h2><p class="t-small g-muted" style="margin: 0">{} in the last 10 minutes{}</p></div><div class="g-flowing" aria-hidden="true"><div class="g-flowing__side">{tools}</div><div class="g-flowing__lanes"><span class="g-flowing__gate"></span>{discs}</div><div class="g-flowing__side g-flowing__side--end">{providers}</div></div><div class="g-table-wrap"><table class="g-table g-table--stack"><tbody>{rows}</tbody></table></div>{}</section>"#,
-        enterplace_core::count(recent.len(), "request"),
-        if refused == 0 {
-            String::new()
-        } else {
-            format!(", {refused} refused")
-        },
-        glink("All requests", "/console/requests", true)
-    )
+    json!({
+        "count": format!(
+            "{} in the last 10 minutes{}",
+            enterplace_core::count(recent.len(), "request"),
+            if refused == 0 { String::new() } else { format!(", {refused} refused") }
+        ),
+        "tools": tools,
+        "providers": providers,
+        "rows": rows,
+    })
 }
 
 /// One of the five steps of a rollout, as the strip shows it.
@@ -2286,6 +2123,13 @@ fn stages(f: &Facts, track: Track) -> Vec<Stage> {
     let capped = teams.iter().filter(|t| f.budget_for(t)).count();
     let watch = track == Track::Watch;
     let needs = "Needs API traffic through Enterplace. Watched seats are not routed.";
+    let yes = |b: bool| {
+        if b {
+            "Yes".to_string()
+        } else {
+            "Not yet".to_string()
+        }
+    };
     vec![
         Stage {
             name: "See",
@@ -2300,11 +2144,7 @@ fn stages(f: &Facts, track: Track) -> Vec<Stage> {
             guide: ("Read the See guide", "/start/step-1-see/"),
             when: vec![(
                 "Enterplace served requests in the last 7 days".into(),
-                if seen > 0 {
-                    "Yes".into()
-                } else {
-                    "Not yet".into()
-                },
+                yes(seen > 0),
             )],
         },
         Stage {
@@ -2329,14 +2169,7 @@ fn stages(f: &Facts, track: Track) -> Vec<Stage> {
                     "Two or more people sent requests in the last 7 days".into(),
                     format!("{}", people.len()),
                 ),
-                (
-                    "Or single sign-on makes keys".into(),
-                    if f.self_issue {
-                        "Yes".into()
-                    } else {
-                        "Not yet".into()
-                    },
-                ),
+                ("Or single sign-on makes keys".into(), yes(f.self_issue)),
             ],
         },
         Stage {
@@ -2352,7 +2185,7 @@ fn stages(f: &Facts, track: Track) -> Vec<Stage> {
                 )
             },
             why: "A budget refuses a team's requests once it is spent, so no bill is a surprise.",
-            action: ("Add a budget", "/console/start?track=limit#step-5".into()),
+            action: ("Add a budget", "/console/app/#/start?track=limit".into()),
             guide: ("Read the Limit guide", "/start/step-3-limit/"),
             when: vec![(
                 "Every team with traffic has a budget".into(),
@@ -2373,14 +2206,7 @@ fn stages(f: &Facts, track: Track) -> Vec<Stage> {
             why: "A guardrail finds secrets and personal data in prompts and answers, in shadow mode first, then enforced.",
             action: ("Open the policy", "/console/policy".into()),
             guide: ("Read the Protect guide", "/start/step-4-protect/"),
-            when: vec![(
-                "A rule runs a guardrail".into(),
-                if f.guarded {
-                    "Yes".into()
-                } else {
-                    "Not yet".into()
-                },
-            )],
+            when: vec![("A rule runs a guardrail".into(), yes(f.guarded))],
         },
         Stage {
             name: "Prove",
@@ -2394,84 +2220,37 @@ fn stages(f: &Facts, track: Track) -> Vec<Stage> {
             why: "Each record is chained to the one before it. A check shows nothing was removed or changed. Export to a SIEM and retention are Enterprise.",
             action: ("Open the Audit log", "/console/audit".into()),
             guide: ("Read the Prove guide", "/start/step-5-prove/"),
-            when: vec![(
-                "Verify chain now passes".into(),
-                if f.verified {
-                    "Yes".into()
-                } else {
-                    "Not yet".into()
-                },
-            )],
+            when: vec![("Verify chain now passes".into(), yes(f.verified))],
         },
     ]
 }
 
-fn strip(f: &Facts, track: Track) -> String {
+/// The five steps of a rollout, and the first one not done, opened.
+fn strip(f: &Facts, track: Track) -> Value {
     let list = stages(f, track);
     let current = list.iter().position(|s| !s.done);
-    let mut out = String::from(r#"<ol class="g-steps g-setup">"#);
-    for (i, s) in list.iter().enumerate() {
-        let (attr, word) = if s.done {
-            (r#" data-state="done""#, "Done")
-        } else if Some(i) == current {
-            (r#" aria-current="step""#, "Current")
-        } else {
-            ("", "Ahead")
-        };
-        let _ = write!(
-            out,
-            r#"<li class="g-step"{attr}><span class="t-md">{}</span><span class="g-step__label t-small">{word}</span></li>"#,
-            s.name
-        );
-    }
-    if let Some(i) = current {
-        let s = &list[i];
-        let points: String = s
-            .when
-            .iter()
-            .map(|(t, d)| {
-                format!(
-                    r#"<div><dt class="t-body">{}</dt><dd class="t-small">{}</dd></div>"#,
-                    esc(t),
-                    esc(d)
-                )
+    json!({
+        "steps": list.iter().enumerate().map(|(i, s)| json!({
+            "name": s.name,
+            "state": if s.done { "done" } else if Some(i) == current { "current" } else { "ahead" },
+            "word": if s.done { "Done" } else if Some(i) == current { "Current" } else { "Ahead" },
+        })).collect::<Vec<_>>(),
+        "current": current.map(|i| {
+            let s = &list[i];
+            json!({
+                "n": i + 1,
+                "title": s.title,
+                "lead": s.lead,
+                "why": s.why,
+                "action": { "label": s.action.0, "href": s.action.1 },
+                "guide": { "label": s.guide.0, "href": format!("{DOCS}{}", s.guide.1) },
+                "when": s.when.iter().map(|(t, d)| json!({ "text": t, "value": d })).collect::<Vec<_>>(),
             })
-            .collect();
-        let _ = write!(
-            out,
-            r#"<li class="g-setup__next"><section class="g-panel g-setup__cols"><div class="g-stack"><p class="t-tag g-caps g-muted">Step {} of 5</p><h2 class="t-md">{}</h2><p class="t-lead">{}</p><p class="t-body g-muted g-setup__why">{}</p>{}</div><div class="g-stack" style="align-content: start"><p class="t-tag g-caps g-muted">Done when</p><dl class="g-points">{points}</dl></div></section></li>"#,
-            i + 1,
-            s.title,
-            esc(&s.lead),
-            s.why,
-            acts(&format!(
-                r#"<a class="g-btn t-body" href="{}">{}</a>{}"#,
-                s.action.1,
-                s.action.0,
-                docs(s.guide.0, s.guide.1)
-            ))
-        );
-    }
-    out + "</ol>"
+        }),
+    })
 }
 
-// ---------------------------------------------------------------- pages
-
-/// The welcome: no nav yet, nothing in it would have data.
-fn welcome(f: &Facts, may: bool) -> String {
-    let inner = format!(
-        r#"<div class="g-focus"><div class="g-focus__top"><span class="g-nav__brand"><span class="g-mark" aria-hidden="true"></span><span class="t-sm">Enterplace</span></span><span class="g-live t-small">Running at {}</span></div>{}{}{}</div>"#,
-        esc(&f.base),
-        motif(&["", "", "", ""], &["empty", "empty"], (2, 1), false, true),
-        head(
-            "What do you want to start with?",
-            "Pick one. You get a short checklist for it, and the console fills in as each step happens. The rest stays one click away.",
-            ""
-        ),
-        pick_form(None, may)
-    );
-    crate::html::document("Start here", &inner)
-}
+// ---------------------------------------------------------------- the page's answer
 
 struct View<'a> {
     kept: &'a Kept,
@@ -2479,13 +2258,15 @@ struct View<'a> {
     tool: String,
     made: Option<&'a Made>,
     watch_token: Option<&'a str>,
-    error: String,
     picking: bool,
     pay_api: bool,
     setup: String,
+    /// The steps were asked for after the choice was set up and folded.
+    checklist: bool,
 }
 
-/// What state.json answers and the page carries: the track and each step's state. A change reloads the page.
+/// What the app polls on: the track and each step's state. When it changes, a view held since a change (a key shown
+/// once) gives way to the new one.
 fn signature(track: Option<Track>, states: &[&str], complete: bool) -> String {
     format!(
         "{}:{}:{}",
@@ -2497,184 +2278,6 @@ fn signature(track: Option<Track>, states: &[&str], complete: bool) -> String {
 
 fn may_choose(admin: &Admin) -> bool {
     admin.may(Permission::IssueKeys) || edit::edits_policy(admin)
-}
-
-fn render(console: &Console, admin: &Admin, uri: &Uri, f: &Facts, v: &View<'_>) -> Response {
-    let may = may_choose(admin);
-    let problem = if f.problem.is_empty() {
-        String::new()
-    } else {
-        pages::alert(&esc(&f.problem))
-    };
-    let Some(track) = v.track else {
-        // An empty install with nothing chosen and nothing skipped opens on the welcome.
-        if !v.kept.skipped && !v.picking && f.requests.is_empty() && f.people.is_empty() {
-            return page(StatusCode::OK, welcome(f, may));
-        }
-        let main = format!(
-            "{problem}{}{}",
-            head(
-                "Start here",
-                "Pick what to start with. You get a short checklist for it, and each step turns done when the gateway sees it happen.",
-                ""
-            ),
-            pick_form(v.kept.choice, may)
-        );
-        return console.page(StatusCode::OK, admin, "Start here", uri, &main);
-    };
-    let ctx = Ctx {
-        f,
-        admin,
-        track,
-        tool: v.tool.clone(),
-        made: v.made,
-        watch_token: v.watch_token,
-        error: v.error.clone(),
-        policy: policy_text(console),
-        pay_api: v.pay_api,
-        setup: v.setup.clone(),
-        mine: console.mine(&admin.name),
-    };
-    let list = steps(&ctx);
-    let st = states(&list);
-    let done = st.iter().filter(|s| **s == "done").count();
-    let finished = complete(&list);
-    let change = if may {
-        r#"<a class="g-link t-small" href="/console/start?pick=1">Change what to start with</a>"#
-            .to_string()
-    } else {
-        String::new()
-    };
-    let others = || -> String {
-        let rows: String = TRACKS
-            .iter()
-            .filter(|t| **t != track)
-            .map(|t| {
-                let start = if may {
-                    format!(
-                        r#"<form method="post" action="/console/start/pick"><input type="hidden" name="choice" value="{}"><button class="g-btn g-btn--quiet g-btn--sm t-small" type="submit">Start</button></form>"#,
-                        t.id()
-                    )
-                } else {
-                    format!(r#"<a class="g-btn g-btn--quiet g-btn--sm t-small" href="/console/start?track={}">Show</a>"#, t.id())
-                };
-                format!(
-                    r#"<div class="g-row"><div class="g-row__main"><span class="g-pick__head"><span class="t-body-strong">{}</span>{}</span><span class="g-row__meta t-small">{} steps. Covers {}.</span></div><div class="g-row__end">{start}</div></div>"#,
-                    t.name(),
-                    if t.enterprise() { ent() } else { String::new() },
-                    t.steps(),
-                    t.covers()
-                )
-            })
-            .collect();
-        format!(
-            r#"<div class="g-stack"><h2 class="t-sm">Also start with</h2><div class="g-list">{rows}</div></div>"#
-        )
-    };
-    let viewing_other = v.kept.choice != Some(track);
-    let main = if finished
-        && v.kept.steps
-        && !viewing_other
-        && Form::of(uri).get("view") != "checklist"
-    {
-        let folded = format!(
-            r#"<div class="g-row"><span class="g-check__mark" style="background: var(--inverse); color: var(--on-inverse)" aria-hidden="true"><svg class="g-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span><div class="g-row__main"><span class="t-body-strong">{}</span><span class="g-row__meta t-small">{done} of {} done. {} people sent requests through Enterplace.</span></div><div class="g-row__end"><a class="g-btn g-btn--quiet g-btn--sm t-small" href="/console/start?view=checklist">Show the steps</a></div></div>"#,
-            track.name(),
-            list.len(),
-            f.senders().len()
-        );
-        let live = if admin.may(Permission::SeeRecords) && !f.tries.is_empty() {
-            live_strip(f)
-        } else {
-            String::new()
-        };
-        format!(
-            "{problem}{}{live}{folded}{}{}",
-            head("Start here", &format!("{} is set up.", track.name()), ""),
-            strip(f, track),
-            others()
-        )
-    } else {
-        // The first rows are records: shown only to someone who may see records.
-        // Any track, as soon as a request arrived: the live strip leads, the steps follow.
-        let traffic = admin.may(Permission::SeeRecords) && !f.tries.is_empty();
-        let sig = signature(Some(track), &st, finished);
-        let poll = if st.contains(&"listening") {
-            format!(r#" data-start-poll="{}""#, esc(&sig))
-        } else {
-            String::new()
-        };
-        let lead = if traffic {
-            format!(
-                "Your first requests arrived. {}: {done} of {} done.",
-                track.name(),
-                list.len()
-            )
-        } else {
-            format!("{}: {done} of {} done.", track.name(), list.len())
-        };
-        let viewing = if viewing_other && v.kept.choice.is_some() {
-            format!(
-                r#"<p class="t-small g-muted">Showing {}. This install started with {}.</p>"#,
-                track.name(),
-                v.kept.choice.map_or("", Track::name)
-            )
-        } else {
-            String::new()
-        };
-        let body = if traffic {
-            format!(
-                r#"{}<div class="g-stack"><h2 class="t-sm">Your steps</h2>{}</div>"#,
-                live_strip(f),
-                checklist(&list, &st)
-            )
-        } else {
-            checklist(&list, &st)
-        };
-        // Coding agents first asks how the team pays. API keys serve every coding agent; a Claude subscription is
-        // Claude Code's own login, routed with no API key at all, and stays the default answer.
-        let body = if track == Track::Coding {
-            let items: String = [
-                ("api", "API keys, any coding agent"),
-                ("subscriptions", "Claude subscriptions, for Claude Code"),
-            ]
-            .iter()
-            .map(|(id, label)| {
-                let here = if (*id == "api") == v.pay_api {
-                    r#" aria-current="true""#
-                } else {
-                    ""
-                };
-                format!(r#"<a class="g-tab t-small" href="/console/start?track=coding&amp;pay={id}"{here}>{label}</a>"#)
-            })
-            .collect();
-            format!(
-                r#"<div class="g-stack" style="gap: var(--space-2)"><h2 class="t-sm">How does your team pay for its coding agents?</h2><div class="g-tabs" role="group" aria-label="How your team pays for its coding agents">{items}</div></div>{body}"#
-            )
-        } else {
-            body
-        };
-        let banner = if finished && !viewing_other {
-            r#"<form class="g-banner" method="post" action="/console/start/pick"><span class="t-body">All required steps are done. Next: the five steps of a rollout, starting with the one this choice leaves open.</span><input type="hidden" name="steps" value="1"><button class="g-btn t-body" type="submit">Show the five steps</button></form>"#.to_string()
-        } else {
-            String::new()
-        };
-        let shown_once = v.made.map_or_else(String::new, |m| {
-            format!(
-                r#"<div class="g-banner" role="status" tabindex="-1" data-focus><span class="t-body">{} made for {}, team {}. Shown once: Enterplace keeps only its hash. Copy it now.</span>{}</div>"#,
-                if m.key.starts_with(enterplace_core::id::PERSON_PREFIX) { "Person token" } else { "Key" },
-                mono(&m.name),
-                mono(&m.team),
-                value_pill("made-key", &m.key)
-            )
-        });
-        format!(
-            r#"<div class="g-stack" style="gap: var(--space-6)"{poll}>{problem}{}{shown_once}{viewing}{body}{banner}{}</div>"#,
-            head("Start here", &lead, &change),
-            if finished { others() } else { String::new() }
-        )
-    };
-    console.page(StatusCode::OK, admin, "Start here", uri, &main)
 }
 
 /// The Coding agents track pays with API keys, which every coding agent takes, unless Claude subscriptions were picked.
@@ -2694,165 +2297,329 @@ fn view_of<'a>(kept: &'a Kept, query: &Form) -> View<'a> {
         tool: query.get("tool").to_string(),
         made: None,
         watch_token: None,
-        error: String::new(),
         picking,
         pay_api: pays_api(query.get("pay")),
         setup: query.get("setup").to_string(),
+        checklist: query.get("view") == "checklist",
     }
 }
 
-async fn start_page(
-    State(console): State<Console>,
-    headers: HeaderMap,
-    uri: Uri,
-    tls: Tls,
-) -> Response {
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let mut f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
-    let kept = match read_kept(&console) {
-        Ok(kept) => kept,
-        Err(err) => {
-            f.problem = err;
-            Kept::default()
+/// The app route's query that shows `v` again.
+fn query_of(v: &View<'_>) -> String {
+    let mut out: Vec<String> = Vec::new();
+    if let Some(track) = v.track {
+        out.push(format!("track={}", track.id()));
+        if track == Track::Coding {
+            out.push(format!(
+                "pay={}",
+                if v.pay_api { "api" } else { "subscriptions" }
+            ));
         }
-    };
-    let query = Form::of(&uri);
-    let view = view_of(&kept, &query);
-    render(&console, &admin, &uri, &f, &view)
+    }
+    for (name, value) in [("tool", &v.tool), ("setup", &v.setup)] {
+        if !value.is_empty() {
+            out.push(format!("{name}={}", enc(value)));
+        }
+    }
+    out.join("&")
 }
 
-/// The state of the shown checklist, for the page's script: it reloads when `signature` changes.
-async fn state_json(
-    State(console): State<Console>,
-    headers: HeaderMap,
-    uri: Uri,
-    tls: Tls,
-) -> Response {
-    let Some(admin) = console.admin(&headers).await else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            [(header::CONTENT_TYPE, "application/json")],
-            json!({ "error": { "code": "not_signed_in", "message": "Sign in to the console again." } }).to_string(),
-        )
-            .into_response();
-    };
-    let f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
-    let kept = read_kept(&console).unwrap_or_default();
-    let query = Form::of(&uri);
-    let track = Track::of(query.get("track")).or(kept.choice);
-    let (states, finished) = match track {
-        Some(track) => {
-            let ctx = Ctx {
-                f: &f,
-                admin: &admin,
-                track,
-                tool: String::new(),
-                made: None,
-                watch_token: None,
-                error: String::new(),
-                policy: String::new(),
-                pay_api: pays_api(query.get("pay")),
-                setup: String::new(),
-                mine: console.mine(&admin.name),
-            };
-            let list = steps(&ctx);
-            (states(&list), complete(&list))
-        }
-        None => (Vec::new(), false),
-    };
-    let body = json!({
-        "track": track.map(Track::id),
-        "steps": states,
-        "complete": finished,
-        "signature": signature(track, &states, finished),
+fn track_json(t: Track) -> Value {
+    json!({
+        "id": t.id(),
+        "name": t.name(),
+        "button": t.button(),
+        "line": t.line(),
+        "covers": t.covers(),
+        "steps": t.steps(),
+        "enterprise": t.enterprise(),
+    })
+}
+
+/// Everything Start here shows, computed from the gateway's records: the welcome, the pick, a track's checklist, or
+/// the five steps once the choice is set up.
+fn page_state(console: &Console, admin: &Admin, f: &Facts, v: &View<'_>) -> Value {
+    let may = may_choose(admin);
+    let mut out = json!({
+        "base": f.base,
+        "problem": f.problem,
+        "may_choose": may,
+        "tracks": TRACKS.iter().map(|t| track_json(*t)).collect::<Vec<_>>(),
+        "choice": v.kept.choice.map(Track::id),
+        "query": query_of(v),
     });
-    let mut response = (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        body.to_string(),
+    let Some(track) = v.track else {
+        // An empty install with nothing chosen and nothing skipped opens on the welcome. The person token the
+        // start link makes for the signed-in person does not make it any less empty.
+        let welcome = !v.kept.skipped
+            && !v.picking
+            && f.requests.is_empty()
+            && f.people.iter().all(|k| k.name == admin.name);
+        out["view"] = json!(if welcome { "welcome" } else { "pick" });
+        out["lead"] = json!(if welcome {
+            "Pick one. You get a short checklist for it, and the console fills in as each step happens. The rest stays one click away."
+        } else {
+            "Pick what to start with. You get a short checklist for it, and each step turns done when the gateway sees it happen."
+        });
+        out["signature"] = json!(signature(None, &[], false));
+        out["states"] = json!([]);
+        out["complete"] = json!(false);
+        return out;
+    };
+    let ctx = Ctx {
+        f,
+        admin,
+        track,
+        tool: v.tool.clone(),
+        made: v.made,
+        watch_token: v.watch_token,
+        policy: policy_text(console),
+        pay_api: v.pay_api,
+        setup: v.setup.clone(),
+        mine: console.mine(&admin.name),
+    };
+    let list = steps(&ctx);
+    let st = states(&list);
+    let done = st.iter().filter(|s| **s == "done").count();
+    let finished = complete(&list);
+    // The first rows are records: shown only to someone who may see records.
+    let traffic = admin.may(Permission::SeeRecords) && !f.tries.is_empty();
+    let viewing_other = v.kept.choice != Some(track);
+    let others: Vec<Value> = TRACKS
+        .iter()
+        .filter(|t| **t != track)
+        .map(|t| track_json(*t))
+        .collect();
+    out["track"] = json!(track.id());
+    out["name"] = json!(track.name());
+    out["signature"] = json!(signature(Some(track), &st, finished));
+    out["states"] = json!(st);
+    out["complete"] = json!(finished);
+    out["live"] = if traffic { live_strip(f) } else { Value::Null };
+    if finished && v.kept.steps && !viewing_other && !v.checklist {
+        out["view"] = json!("folded");
+        out["lead"] = json!(format!("{} is set up.", track.name()));
+        out["folded"] = json!(format!(
+            "{done} of {} done. {} people sent requests through Enterplace.",
+            list.len(),
+            f.senders().len()
+        ));
+        out["stages"] = strip(f, track);
+        out["others"] = json!(others);
+        return out;
+    }
+    out["view"] = json!("checklist");
+    out["lead"] = json!(if traffic {
+        format!(
+            "Your first requests arrived. {}: {done} of {} done.",
+            track.name(),
+            list.len()
+        )
+    } else {
+        format!("{}: {done} of {} done.", track.name(), list.len())
+    });
+    out["viewing"] = json!(if viewing_other && v.kept.choice.is_some() {
+        format!(
+            "Showing {}. This install started with {}.",
+            track.name(),
+            v.kept.choice.map_or("", Track::name)
+        )
+    } else {
+        String::new()
+    });
+    // Coding agents first asks how the team pays. API keys serve every coding agent; a Claude subscription is
+    // Claude Code's own login, routed with no API key at all.
+    out["pay"] = if track == Track::Coding {
+        json!(if v.pay_api { "api" } else { "subscriptions" })
+    } else {
+        Value::Null
+    };
+    out["steps"] = checklist(&list, &st);
+    out["banner"] = json!(finished && !viewing_other);
+    out["others"] = json!(if finished { others } else { Vec::new() });
+    out["made"] = v.made.map_or(Value::Null, |m| {
+        json!({
+            "word": if m.key.starts_with(enterplace_core::id::PERSON_PREFIX) { "Person token" } else { "Key" },
+            "name": m.name,
+            "team": m.team,
+            "key": m.key,
+        })
+    });
+    out
+}
+
+// ---------------------------------------------------------------- the API
+
+pub(crate) fn routes() -> Router<Console> {
+    Router::new()
+        // The server-rendered page moved to the app: old links land on the same view there.
+        .route("/start", get(|uri: Uri| async move { moved(&uri) }))
+        .route(
+            "/start/state.json",
+            get(|uri: Uri| async move {
+                redirect(&format!(
+                    "/console/api/start{}",
+                    uri.query().map(|q| format!("?{q}")).unwrap_or_default()
+                ))
+            }),
+        )
+        .route("/api/start", get(show))
+        .route("/api/start/pick", post(pick))
+        .route("/api/start/key", post(make_key))
+        .route("/api/start/watch-token", post(make_watch_token))
+        .route("/api/start/connect", post(connect))
+        .route("/api/start/demo", post(use_demo))
+        .route("/api/start/first-key", post(first_key))
+        .route("/api/start/passthrough", post(turn_on_passthrough))
+}
+
+/// The app's Start here route for an old address, keeping what its query asked for.
+fn moved(uri: &Uri) -> Response {
+    let query = Form::of(uri);
+    let kept: Vec<String> = ["track", "pay", "tool", "setup", "pick", "view"]
+        .iter()
+        .filter(|name| !query.get(name).is_empty())
+        .map(|name| format!("{name}={}", enc(query.get(name))))
+        .collect();
+    let mut to = "/console/app/#/start".to_string();
+    if !kept.is_empty() {
+        to.push('?');
+        to.push_str(&kept.join("&"));
+    }
+    redirect(&to)
+}
+
+/// A JSON body, a form, or nothing at all: a button posts no fields.
+fn body_or_empty(bytes: &Bytes) -> Result<Map<String, Value>, Fail> {
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return Ok(Map::new());
+    }
+    body_of(bytes)
+}
+
+fn is_on(body: &Map<String, Value>, name: &str) -> bool {
+    matches!(body.get(name), Some(Value::Bool(true)))
+        || matches!(body.get(name), Some(Value::String(s)) if s == "1" || s == "true")
+}
+
+/// The view a change was made from, as the app sends it with the change.
+fn query_in(body: &Map<String, Value>) -> Form {
+    Form(
+        ["track", "pay", "tool", "setup"]
+            .iter()
+            .map(|n| ((*n).to_string(), text(body, n).to_string()))
+            .collect(),
     )
-        .into_response();
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        header::HeaderValue::from_static("no-store"),
-    );
-    response
+}
+
+async fn show(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, false).await?;
+            let mut f = facts(&console, &admin, crate::base()).await;
+            let kept = read_kept(&console).unwrap_or_else(|err| {
+                f.problem = err;
+                Kept::default()
+            });
+            let view = view_of(&kept, &Form::of(&uri));
+            Ok(ok(page_state(&console, &admin, &f, &view)))
+        }
+        .await,
+    )
 }
 
 /// Keeps the starting choice, a skip, or that the five steps were asked for.
-async fn pick(State(console): State<Console>, headers: HeaderMap, body: String) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    if !may_choose(&admin) {
-        read_only(&console, &admin, "start_choice").await;
-        return redirect(crate::HOME);
-    }
-    let form = Form::parse(&body);
-    let mut kept = read_kept(&console).unwrap_or_default();
-    let target = if form.get("steps") == "1" {
-        kept.steps = true;
-        json!({ "steps": true })
-    } else if form.get("skip") == "1" {
-        kept.skipped = true;
-        json!({ "skipped": true })
-    } else {
-        let Some(track) = Track::of(form.get("choice")) else {
-            return redirect("/console/start?pick=1");
-        };
-        if kept.choice != Some(track) {
-            kept.steps = false;
+async fn pick(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            if !may_choose(&admin) {
+                read_only(&console, &admin, "start_choice").await;
+                return Err(Fail(
+                    StatusCode::FORBIDDEN,
+                    "Your role cannot choose what this install starts with. An admin can.".into(),
+                ));
+            }
+            let body = body_or_empty(&bytes)?;
+            let mut kept = read_kept(&console).unwrap_or_default();
+            let (target, message) = if is_on(&body, "steps") {
+                kept.steps = true;
+                (
+                    json!({ "steps": true }),
+                    "The five steps of a rollout are on Start here.".to_string(),
+                )
+            } else if is_on(&body, "skip") {
+                kept.skipped = true;
+                (
+                    json!({ "skipped": true }),
+                    "Skipped. Start here keeps the choice one click away.".to_string(),
+                )
+            } else {
+                let Some(track) = Track::of(text(&body, "choice")) else {
+                    return Err(bad(
+                        "Pick what to start with: coding, apps, mcp, limit or watch.",
+                    ));
+                };
+                if kept.choice != Some(track) {
+                    kept.steps = false;
+                }
+                kept.choice = Some(track);
+                (
+                    json!({ "choice": track.id() }),
+                    format!("Started with {}.", track.name()),
+                )
+            };
+            let act = Act {
+                action: "start_choice",
+                by: Some((&admin.name, &admin.team)),
+                key: None,
+                target,
+            };
+            if record(&console, &act, None, None).await.is_err() {
+                return Err(Fail(StatusCode::SERVICE_UNAVAILABLE, NOT_RECORDED.into()));
+            }
+            write_kept(&console, &kept)
+                .map_err(|err| Fail(StatusCode::SERVICE_UNAVAILABLE, err))?;
+            Ok(ok(json!({ "message": message })))
         }
-        kept.choice = Some(track);
-        json!({ "choice": track.id() })
-    };
-    let act = Act {
-        action: "start_choice",
-        by: Some((&admin.name, &admin.team)),
-        key: None,
-        target,
-    };
-    if record(&console, &act, None, None).await.is_err() {
-        return page(
-            StatusCode::SERVICE_UNAVAILABLE,
-            pages::notice("Not done", NOT_RECORDED, crate::HOME, "Back to Start here"),
-        );
+        .await,
+    )
+}
+
+/// A change that shows a key once: the message, the view it was made from, and that view with the key in it.
+async fn shown_once(
+    console: &Console,
+    admin: &Admin,
+    view: &View<'_>,
+    message: String,
+) -> Response {
+    let mut f = facts(console, admin, crate::base()).await;
+    if let Err(err) = read_kept(console) {
+        f.problem = err;
     }
-    if let Err(err) = write_kept(&console, &kept) {
-        return page(
-            StatusCode::SERVICE_UNAVAILABLE,
-            pages::notice("Not kept", &esc(&err), crate::HOME, "Back to Start here"),
-        );
-    }
-    redirect(crate::HOME)
+    ok(json!({
+        "message": message,
+        "query": query_of(view),
+        "state": page_state(console, admin, &f, view),
+    }))
 }
 
 /// Makes a key from a step, through the People page's own issue flow, and shows it once on the checklist.
-async fn make_key(
-    State(console): State<Console>,
-    headers: HeaderMap,
-    uri: Uri,
-    tls: Tls,
-    body: String,
-) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
+async fn make_key(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {
+    let admin = match signed_in(&console, &headers, true).await {
+        Ok(admin) => admin,
+        Err(fail) => return fail.into_response(),
     };
-    let form = Form::parse(&body);
+    let body = match body_or_empty(&bytes) {
+        Ok(body) => body,
+        Err(fail) => return fail.into_response(),
+    };
     let (name, team) = (
-        form.get("name").trim().to_string(),
-        form.get("team").trim().to_string(),
+        text(&body, "name").to_string(),
+        text(&body, "team").to_string(),
     );
-    let workload = form.get("kind") == "workload";
-    let token = form.get("kind") == "person_token";
+    let workload = text(&body, "kind") == "workload";
+    let token = text(&body, "kind") == "person_token";
     let mut attributes = keyfile::Attributes {
         org: admin.org.clone().unwrap_or_default(),
         customer: match admin.customers.as_slice() {
@@ -2867,75 +2634,70 @@ async fn make_key(
             .metadata
             .insert("kind".into(), "workload".into());
     }
-    let kept = read_kept(&console).unwrap_or_default();
-    let error = if !admin.may(Permission::IssueKeys) {
+    if !admin.may(Permission::IssueKeys) {
         read_only(&console, &admin, "issue_key").await;
-        Some("Your role cannot make keys. Ask an admin to make this one.".to_string())
-    } else if !admin.covers(&attributes.org, &team, attributes.customer.as_deref()) {
-        read_only(&console, &admin, "issue_key").await;
-        Some(format!(
-            "Your role keeps you to team{} {}: make the key in one of them.",
-            if admin.teams.len() == 1 { "" } else { "s" },
-            admin.teams.join(", ")
-        ))
-    } else {
-        None
-    };
-    let result = match error {
-        Some(e) => Err(e),
-        None => crate::issued_as(&console, &admin, &name, &team, attributes, token).await,
-    };
-    let mut f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
-    if let Err(err) = read_kept(&console) {
-        f.problem = err;
+        return Fail(
+            StatusCode::FORBIDDEN,
+            "Your role cannot make keys. Ask an admin to make this one.".into(),
+        )
+        .into_response();
     }
-    let mut view = view_of(&kept, &Form(Vec::new()));
+    if !admin.covers(&attributes.org, &team, attributes.customer.as_deref()) {
+        read_only(&console, &admin, "issue_key").await;
+        return Fail(
+            StatusCode::FORBIDDEN,
+            format!(
+                "Your role keeps you to team{} {}: make the key in one of them.",
+                if admin.teams.len() == 1 { "" } else { "s" },
+                admin.teams.join(", ")
+            ),
+        )
+        .into_response();
+    }
+    let key = match crate::issued_as(&console, &admin, &name, &team, attributes, token).await {
+        Ok((key, _)) => key,
+        Err(err) => return bad(err).into_response(),
+    };
+    if token && name == admin.name {
+        console.keep_mine(&name, key.clone());
+    }
+    let made = Made {
+        name,
+        team,
+        key,
+        start: false,
+    };
+    let kept = read_kept(&console).unwrap_or_default();
+    let mut view = view_of(&kept, &query_in(&body));
     // The key form of provider API keys says so; a person token is for Claude subscriptions.
-    view.pay_api = !token && pays_api(form.get("pay"));
+    view.pay_api = !token && pays_api(text(&body, "pay"));
     if token {
         view.track = Some(Track::Coding);
     }
-    let made;
-    let status;
-    match result {
-        Ok((key, _)) => {
-            if token && name == admin.name {
-                console.keep_mine(&name, key.clone());
-            }
-            made = Made {
-                name,
-                team,
-                key,
-                start: false,
-            };
-            view.made = Some(&made);
-            status = StatusCode::OK;
-        }
-        Err(err) => {
-            view.error = err;
-            status = StatusCode::BAD_REQUEST;
-        }
-    }
-    let mut response = render(&console, &admin, &uri, &f, &view);
-    *response.status_mut() = status;
-    response
+    view.made = Some(&made);
+    let message = format!(
+        "{} made for {}, team {}. Shown once: copy it now.",
+        if token { "Person token" } else { "Key" },
+        made.name,
+        made.team
+    );
+    shown_once(&console, &admin, &view, message).await
 }
 
 /// Makes a watch token through the binary's watch flow and fills it into the settings block, shown once.
 async fn make_watch_token(
     State(console): State<Console>,
     headers: HeaderMap,
-    uri: Uri,
-    tls: Tls,
-    body: String,
+    bytes: Bytes,
 ) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
+    let admin = match signed_in(&console, &headers, true).await {
+        Ok(admin) => admin,
+        Err(fail) => return fail.into_response(),
     };
-    let team = Form::parse(&body).get("team").trim().to_string();
+    let team = match body_or_empty(&bytes) {
+        Ok(body) => text(&body, "team").to_string(),
+        Err(fail) => return fail.into_response(),
+    };
     let result = match &console.0.watch {
         None => Err(
             "Watch mode is not on: it needs a license that includes watch and a store. See step 1."
@@ -2943,73 +2705,47 @@ async fn make_watch_token(
         ),
         Some(watch) => (watch.token)(console.clone(), admin.clone(), team).await,
     };
-    let f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
+    let token = match result {
+        Ok(token) => token,
+        Err(err) => return bad(err).into_response(),
+    };
     let mut kept = read_kept(&console).unwrap_or_default();
     // The token belongs to the watch checklist, whatever was chosen.
     kept.choice = kept.choice.or(Some(Track::Watch));
     let mut view = view_of(&kept, &Form(Vec::new()));
     view.track = Some(Track::Watch);
-    let token;
-    let status = match result {
-        Ok(t) => {
-            token = t;
-            view.watch_token = Some(&token);
-            StatusCode::OK
-        }
-        Err(err) => {
-            view.error = err;
-            StatusCode::BAD_REQUEST
-        }
-    };
-    let mut response = render(&console, &admin, &uri, &f, &view);
-    *response.status_mut() = status;
-    response
+    view.watch_token = Some(&token);
+    shown_once(
+        &console,
+        &admin,
+        &view,
+        "Watch token made. It is shown once, inside the settings block: copy it now.".into(),
+    )
+    .await
 }
 
 /// Connect a model: seals the pasted provider key as a credential (recorded, as on Credentials), then adds the
 /// provider to the policy, reading its key from that credential. Enterplace uses it within 2 seconds.
-async fn connect(
-    State(console): State<Console>,
-    headers: HeaderMap,
-    uri: Uri,
-    tls: Tls,
-    body: String,
-) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let form = Form::parse(&body);
-    let id = form.get("provider").trim().to_string();
-    let value = form.get("key").trim().to_string();
-    let result = connect_provider(&console, &admin, &id, &value).await;
-    match result {
-        Ok(()) => {
+async fn connect(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let body = body_or_empty(&bytes)?;
+            let id = text(&body, "provider").to_string();
+            connect_provider(&console, &admin, &id, text(&body, "key"))
+                .await
+                .map_err(bad)?;
             let mut kept = read_kept(&console).unwrap_or_default();
             kept.demo = false;
             let _ = write_kept(&console, &kept);
-            redirect("/console/start?pay=api#step-2")
+            Ok(ok(json!({
+                "message": format!("Connected: {id}. Its key is sealed; requests to its models go to it within 2 seconds."),
+                "query": "pay=api",
+            })))
         }
-        Err(err) => {
-            let mut f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
-            let kept = match read_kept(&console) {
-                Ok(kept) => kept,
-                Err(e) => {
-                    f.problem = e;
-                    Kept::default()
-                }
-            };
-            let mut view = view_of(&kept, &Form(Vec::new()));
-            view.error = err;
-            let mut response = render(&console, &admin, &uri, &f, &view);
-            *response.status_mut() = StatusCode::BAD_REQUEST;
-            response
-        }
-    }
+        .await,
+    )
 }
-
 async fn connect_provider(
     console: &Console,
     admin: &Admin,
@@ -3137,56 +2873,131 @@ async fn add_provider(
 }
 
 /// Turn on Claude subscriptions: the passthrough provider goes into the policy. It holds no key, so nothing is sealed.
-async fn turn_on_passthrough(
-    State(console): State<Console>,
-    headers: HeaderMap,
-    uri: Uri,
-    tls: Tls,
-) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let c = console.config();
-    let on = config::load(&c.policy, Some(&c.keys))
-        .is_ok_and(|l| l.providers.iter().any(|p| p.passthrough));
-    let result = if on {
-        Ok(())
-    } else if !edit::edits_policy(&admin) || admin.confined() {
-        read_only(&console, &admin, "connect_provider").await;
-        Err(
-            "Your role cannot change the policy. Ask an admin to turn on Claude subscriptions."
-                .to_string(),
-        )
-    } else {
-        let env = |name: &str| std::env::var(name).ok();
-        let lines = enterplace_core::catalog::subscription_provider(&env);
-        add_provider(
-            &console,
-            &admin,
-            enterplace_core::catalog::SUBSCRIPTION_PROVIDER,
-            &policy_text(&console),
-            &lines,
-        )
-        .await
-    };
-    match result {
-        Ok(()) => redirect("/console/start?track=coding&pay=subscriptions#step-2"),
-        Err(err) => {
-            let f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
-            let kept = read_kept(&console).unwrap_or_default();
-            let mut view = view_of(&kept, &Form(Vec::new()));
-            view.track = Some(Track::Coding);
-            view.error = err;
-            let mut response = render(&console, &admin, &uri, &f, &view);
-            *response.status_mut() = StatusCode::BAD_REQUEST;
-            response
+async fn turn_on_passthrough(State(console): State<Console>, headers: HeaderMap) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let c = console.config();
+            let on = config::load(&c.policy, Some(&c.keys))
+                .is_ok_and(|l| l.providers.iter().any(|p| p.passthrough));
+            if !on {
+                if !edit::edits_policy(&admin) || admin.confined() {
+                    read_only(&console, &admin, "connect_provider").await;
+                    return Err(Fail(
+                        StatusCode::FORBIDDEN,
+                        "Your role cannot change the policy. Ask an admin to turn on Claude subscriptions.".into(),
+                    ));
+                }
+                let env = |name: &str| std::env::var(name).ok();
+                let lines = enterplace_core::catalog::subscription_provider(&env);
+                add_provider(
+                    &console,
+                    &admin,
+                    enterplace_core::catalog::SUBSCRIPTION_PROVIDER,
+                    &policy_text(&console),
+                    &lines,
+                )
+                .await
+                .map_err(bad)?;
+            }
+            Ok(ok(json!({
+                "message": "Claude subscriptions are on: Enterplace sends each person's own Claude login to Anthropic. Enterplace uses it within 2 seconds.",
+                "query": "track=coding&pay=subscriptions",
+            })))
         }
-    }
+        .await,
+    )
 }
 
+/// Try without a key: the first request goes to the demo model.
+async fn use_demo(State(console): State<Console>, headers: HeaderMap) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            if !may_choose(&admin) {
+                read_only(&console, &admin, "start_choice").await;
+                return Err(Fail(
+                    StatusCode::FORBIDDEN,
+                    "Your role cannot choose what this install starts with. An admin can.".into(),
+                ));
+            }
+            let mut kept = read_kept(&console).unwrap_or_default();
+            kept.demo = true;
+            let act = Act {
+                action: "start_choice",
+                by: Some((&admin.name, &admin.team)),
+                key: None,
+                target: json!({ "demo": true }),
+            };
+            if record(&console, &act, None, None).await.is_err() {
+                return Err(Fail(StatusCode::SERVICE_UNAVAILABLE, NOT_RECORDED.into()));
+            }
+            write_kept(&console, &kept).map_err(|err| Fail(StatusCode::SERVICE_UNAVAILABLE, err))?;
+            Ok(ok(json!({
+                "message": "The first request goes to the demo model: answers are sample text, free.",
+                "query": "pay=api",
+            })))
+        }
+        .await,
+    )
+}
+
+/// Makes a key for the first request, through the People page's issue flow, and puts it in the lines, shown once.
+async fn first_key(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {
+    let admin = match signed_in(&console, &headers, true).await {
+        Ok(admin) => admin,
+        Err(fail) => return fail.into_response(),
+    };
+    let body = match body_or_empty(&bytes) {
+        Ok(body) => body,
+        Err(fail) => return fail.into_response(),
+    };
+    let team = admin
+        .teams
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "start".to_string());
+    let mut attributes = keyfile::Attributes {
+        org: admin.org.clone().unwrap_or_default(),
+        customer: match admin.customers.as_slice() {
+            [one] => Some(one.clone()),
+            _ => None,
+        },
+        ..keyfile::Attributes::default()
+    };
+    attributes
+        .options
+        .metadata
+        .insert("kind".into(), FIRST_KIND.into());
+    if !admin.may(Permission::IssueKeys) {
+        read_only(&console, &admin, "issue_key").await;
+        return Fail(
+            StatusCode::FORBIDDEN,
+            "Your role cannot make keys. Use your own Enterplace key in the lines.".into(),
+        )
+        .into_response();
+    }
+    let key = match crate::issued(&console, &admin, FIRST_KIND, &team, attributes).await {
+        Ok((key, _)) => key,
+        Err(err) => return bad(err).into_response(),
+    };
+    let made = Made {
+        name: FIRST_KIND.into(),
+        team,
+        key,
+        start: true,
+    };
+    let kept = read_kept(&console).unwrap_or_default();
+    let mut view = view_of(&kept, &query_in(&body));
+    view.made = Some(&made);
+    shown_once(
+        &console,
+        &admin,
+        &view,
+        "Key made for this request. It is in the lines, shown once: copy it now.".into(),
+    )
+    .await
+}
 /// Writes the policy file, only if the new text loads: checked beside it, then moved into place.
 fn write_policy(path: &std::path::Path, keys: &std::path::Path, text: &str) -> Result<(), String> {
     let temp = path.with_file_name(".enterplace.policy.new.yaml");
@@ -3210,102 +3021,6 @@ fn write_policy(path: &std::path::Path, keys: &std::path::Path, text: &str) -> R
             path.display()
         )
     })
-}
-
-/// Try without a key: the first request goes to the demo model.
-async fn use_demo(State(console): State<Console>, headers: HeaderMap) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    if !may_choose(&admin) {
-        read_only(&console, &admin, "start_choice").await;
-        return redirect(crate::HOME);
-    }
-    let mut kept = read_kept(&console).unwrap_or_default();
-    kept.demo = true;
-    let act = Act {
-        action: "start_choice",
-        by: Some((&admin.name, &admin.team)),
-        key: None,
-        target: json!({ "demo": true }),
-    };
-    if record(&console, &act, None, None).await.is_err() {
-        return page(
-            StatusCode::SERVICE_UNAVAILABLE,
-            pages::notice("Not done", NOT_RECORDED, crate::HOME, "Back to Start here"),
-        );
-    }
-    if let Err(err) = write_kept(&console, &kept) {
-        return page(
-            StatusCode::SERVICE_UNAVAILABLE,
-            pages::notice("Not kept", &esc(&err), crate::HOME, "Back to Start here"),
-        );
-    }
-    redirect("/console/start?pay=api#step-2")
-}
-
-/// Makes a key for the first request, through the People page's issue flow, and puts it in the lines, shown once.
-async fn first_key(
-    State(console): State<Console>,
-    headers: HeaderMap,
-    uri: Uri,
-    tls: Tls,
-) -> Response {
-    if !same_origin(&headers) {
-        return foreign();
-    }
-    let Some(admin) = console.admin(&headers).await else {
-        return redirect("/console/sign-in");
-    };
-    let team = admin
-        .teams
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "start".to_string());
-    let mut attributes = keyfile::Attributes {
-        org: admin.org.clone().unwrap_or_default(),
-        customer: match admin.customers.as_slice() {
-            [one] => Some(one.clone()),
-            _ => None,
-        },
-        ..keyfile::Attributes::default()
-    };
-    attributes
-        .options
-        .metadata
-        .insert("kind".into(), FIRST_KIND.into());
-    let result = if admin.may(Permission::IssueKeys) {
-        crate::issued(&console, &admin, FIRST_KIND, &team, attributes).await
-    } else {
-        read_only(&console, &admin, "issue_key").await;
-        Err("Your role cannot make keys. Use your own Enterplace key in the lines.".to_string())
-    };
-    let f = facts(&console, &admin, origin(&headers, &uri, &tls)).await;
-    let kept = read_kept(&console).unwrap_or_default();
-    let mut view = view_of(&kept, &Form(Vec::new()));
-    let made;
-    let status = match result {
-        Ok((key, _)) => {
-            made = Made {
-                name: FIRST_KIND.into(),
-                team,
-                key,
-                start: true,
-            };
-            view.made = Some(&made);
-            StatusCode::OK
-        }
-        Err(err) => {
-            view.error = err;
-            StatusCode::BAD_REQUEST
-        }
-    };
-    let mut response = render(&console, &admin, &uri, &f, &view);
-    *response.status_mut() = status;
-    response
 }
 
 // ---------------------------------------------------------------- empty pages
@@ -3451,7 +3166,6 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
 pub fn empty_page(page: &str, base: &str, act: bool) -> String {
     empty_for(page, base).map_or_else(String::new, |e| empty_state(&e, act))
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3461,13 +3175,11 @@ mod tests {
     #[test]
     fn the_connect_row_has_no_hint_inside_it_and_one_line_under_it() {
         // UX #9: a hint inside the key field lifted the input about 25px above the provider select.
-        let form = connect_form(r#"<option value="openai">OpenAI</option>"#);
-        let (row, after) = form.split_once("</form>").unwrap_or_default();
-        assert!(!row.contains("g-field__hint"), "{row}");
-        assert_eq!(
-            after,
-            r#"<p class="t-small g-check__muted">Stored encrypted.</p>"#
-        );
+        let form = connect_form();
+        let fields = form["fields"].as_array().cloned().unwrap_or_default();
+        assert_eq!(fields.len(), 2, "{form}");
+        assert!(fields.iter().all(|f| f.get("hint").is_none()), "{form}");
+        assert_eq!(form["after"], "Stored encrypted.");
     }
 
     #[test]
@@ -3566,7 +3278,7 @@ mod tests {
         let step = |done, listens, optional| Step {
             optional,
             listens,
-            ..Step::new("t", done, String::new())
+            ..Step::new("t", done, Vec::new())
         };
         let list = [
             step(true, false, false),
@@ -3593,7 +3305,6 @@ mod tests {
             tool: String::new(),
             made: None,
             watch_token: None,
-            error: String::new(),
             policy: String::new(),
             pay_api,
             setup: String::new(),
