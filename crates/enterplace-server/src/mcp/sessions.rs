@@ -1,17 +1,9 @@
 //! The MCP sessions of this gateway, for an admin: which clients are connected as whom, and which people have
 //! connected their own account to which server. Either can be ended: the client connects again, the person signs
-//! in again. Served as `/admin/mcp/sessions` and as the console's MCP sessions page.
+//! in again. Served as `/admin/mcp/sessions` and as the console app's MCP sessions page.
 // ponytail: client sessions are this gateway's own, in memory, as what a client said it supports is; behind several
 // gateways each lists and ends its own. Keep them in the store when sessions must be ended install-wide.
 
-use axum::{
-    Router,
-    extract::State,
-    http::{HeaderMap, StatusCode, Uri},
-    response::Response,
-    routing::get,
-};
-use enterplace_console::{Console, Form, html};
 use serde_json::{Value, json};
 
 use super::{Mcp, lock};
@@ -111,175 +103,10 @@ impl Mcp {
     }
 }
 
-fn reach_of(admin: &enterplace_console::Admin) -> Reach<'_> {
+pub(super) fn reach_of(admin: &enterplace_console::Admin) -> Reach<'_> {
     Reach {
         org: admin.org.as_deref(),
         teams: &admin.teams,
         customers: !admin.customers.is_empty(),
     }
-}
-
-async fn page(
-    mcp: &Mcp,
-    console: &Console,
-    headers: &HeaderMap,
-    uri: &Uri,
-    said: &str,
-) -> Response {
-    let Some(admin) = console.signed_in(headers).await else {
-        return enterplace_console::redirect("/console/sign-in");
-    };
-    if let Some(page) = super::console::no_servers(mcp, console, &admin, headers, uri, SESSIONS) {
-        return page;
-    }
-    let listed = mcp.sessions(&reach_of(&admin)).await;
-    let text = |v: &Value, f: &str| html::esc(v[f].as_str().unwrap_or("-"));
-    let end = |id: &str, label: &str| {
-        if admin.read_only {
-            String::new()
-        } else {
-            super::console::form("/console/mcp/sessions", &[("id", id)], label, "")
-        }
-    };
-    let mut rows = String::new();
-    for s in listed["sessions"].as_array().into_iter().flatten() {
-        let meta = format!(
-            "{} of team {} · {} · started {} · last used {}",
-            text(s, "person"),
-            text(s, "team"),
-            text(s, "user_agent"),
-            text(s, "started"),
-            text(s, "last_used"),
-        );
-        let title = format!(
-            "{} {}",
-            html::esc(s["client"].as_str().unwrap_or("unnamed client")),
-            html::esc(s["client_version"].as_str().unwrap_or_default())
-        );
-        rows.push_str(&html::row(
-            &title,
-            &meta,
-            &end(s["id"].as_str().unwrap_or_default(), "End session"),
-            true,
-        ));
-    }
-    for c in listed["connections"].as_array().into_iter().flatten() {
-        let meta = format!(
-            "{}'s own account at MCP server {}",
-            text(c, "person"),
-            text(c, "server")
-        );
-        rows.push_str(&html::row(
-            &format!("{} · {}", text(c, "server"), text(c, "person")),
-            &meta,
-            &end(c["id"].as_str().unwrap_or_default(), "Disconnect"),
-            true,
-        ));
-    }
-    let body = if rows.is_empty() {
-        html::empty(
-            "",
-            "No MCP session is open",
-            "An MCP client that connects to /mcp is listed here, and so is each person's own account at a server with user_auth.",
-            "",
-        )
-    } else {
-        rows
-    };
-    let lead = if said.is_empty() {
-        "Connected MCP clients and accounts.".to_string()
-    } else {
-        html::esc(said)
-    };
-    console.page(
-        StatusCode::OK,
-        &admin,
-        SESSIONS,
-        uri,
-        &format!(
-            "{}{}{body}",
-            html::head(SESSIONS, &lead, ""),
-            html::page_tabs(&super::console::MCP_PAGES, SESSIONS)
-        ),
-    )
-}
-
-async fn action(
-    mcp: &Mcp,
-    console: &Console,
-    headers: &HeaderMap,
-    uri: &Uri,
-    body: &str,
-) -> Response {
-    if !enterplace_console::same_origin(headers) {
-        return enterplace_console::foreign();
-    }
-    let Some(admin) = console.signed_in(headers).await else {
-        return enterplace_console::redirect("/console/sign-in");
-    };
-    if admin.read_only {
-        return page(
-            mcp,
-            console,
-            headers,
-            uri,
-            "Your role may look but not end sessions.",
-        )
-        .await;
-    }
-    let form = Form::parse(body);
-    let id = form.get("id");
-    // Recorded first: a session that cannot be recorded as ended is not ended.
-    if console
-        .audit(Some(&admin), "end_mcp_session", json!({"id": id}), None)
-        .await
-        .is_err()
-    {
-        return page(
-            mcp,
-            console,
-            headers,
-            uri,
-            "It could not be recorded, so nothing was ended.",
-        )
-        .await;
-    }
-    let said = match mcp.end_session(id, &reach_of(&admin)).await {
-        Some(_) => "Ended. The client connects again, or the person signs in again, to go on.",
-        None => "That session is no longer open.",
-    };
-    page(mcp, console, headers, uri, said).await
-}
-
-pub(super) fn routes(mcp: std::sync::Weak<Mcp>) -> Router<Console> {
-    let other = mcp.clone();
-    Router::new().route(
-        "/mcp/sessions",
-        get(
-            move |State(console): State<Console>, headers: HeaderMap, uri: Uri| {
-                let mcp = mcp.clone();
-                async move {
-                    let Some(mcp) = mcp.upgrade() else {
-                        return axum::response::IntoResponse::into_response(
-                            axum::http::StatusCode::NOT_FOUND,
-                        );
-                    };
-                    page(&mcp, &console, &headers, &uri, "").await
-                }
-            },
-        )
-        .post(
-            move |State(console): State<Console>, headers: HeaderMap, uri: Uri, body: String| {
-                let mcp = other.clone();
-                async move {
-                    let Some(mcp) = mcp.upgrade() else {
-                        return axum::response::IntoResponse::into_response(
-                            axum::http::StatusCode::NOT_FOUND,
-                        );
-                    };
-                    action(&mcp, &console, &headers, &uri, &body).await
-                }
-            },
-        ),
-    )
 }

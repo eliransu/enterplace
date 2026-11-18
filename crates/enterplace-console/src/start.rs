@@ -3162,6 +3162,18 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
     })
 }
 
+/// The empty state of a page as the app lays it out, for an extension's own pages: `null` for a page with none.
+pub fn empty_json(page: &str, base: &str) -> Value {
+    empty_for(page, base).map_or(Value::Null, |e| {
+        json!({
+            "title": e.title,
+            "body": e.body,
+            "action": { "label": e.action.0, "href": e.action.1 },
+            "docs": format!("{DOCS}{}", e.docs),
+        })
+    })
+}
+
 /// The empty state of a page, for an extension's own pages (Alerts, Devices, Watch, MCP approvals).
 pub fn empty_page(page: &str, base: &str, act: bool) -> String {
     empty_for(page, base).map_or_else(String::new, |e| empty_state(&e, act))

@@ -825,6 +825,21 @@ async fn admin_cookie(app: &Router) -> Result<String, Error> {
         .to_string())
 }
 
+async fn console_get(app: &Router, cookie: &str, path: &str) -> Result<Value, Error> {
+    let (status, _, body) = http(app, "GET", path, &[("cookie", cookie)], String::new()).await?;
+    assert_eq!(status, StatusCode::OK, "{path}: {body}");
+    Ok(serde_json::from_str(&body)?)
+}
+
+fn tool_named<'a>(page: &'a Value, name: &str) -> Result<&'a Value, Error> {
+    Ok(page["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|t| t["name"] == name)
+        .ok_or(format!("{name} is not listed: {page}"))?)
+}
+
 async fn console_post(app: &Router, cookie: &str, path: &str, form: &str) -> Result<String, Error> {
     let (_, _, body) = http(
         app,
@@ -1097,21 +1112,14 @@ async fn a_dangerous_tool_waits_for_an_admin_to_approve_or_deny_it() -> TestResu
         let mut held = None;
         for _ in 0..40 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            let (_, _, page) = http(
-                &m.app,
-                "GET",
-                "/console/mcp/approvals",
-                &[("cookie", &cookie)],
-                String::new(),
-            )
-            .await?;
-            if let Some(at) = page.find(r#"name="id" value=""#) {
-                let rest = &page[at + r#"name="id" value=""#.len()..];
-                held = rest.split('"').next().map(str::to_string);
+            let page = console_get(&m.app, &cookie, "/console/api/mcp-approvals").await?;
+            if let Some(call) = page["calls"].as_array().and_then(|c| c.first()) {
+                held = call["id"].as_str().map(str::to_string);
                 assert!(
-                    page.contains("maya.cohen") && page.contains("tools.deploy"),
+                    call["person"] == "maya.cohen" && call["tool"] == "tools.deploy",
                     "{page}"
                 );
+                assert_eq!(page["editable"], true, "{page}");
                 break;
             }
         }
@@ -1121,13 +1129,14 @@ async fn a_dangerous_tool_waits_for_an_admin_to_approve_or_deny_it() -> TestResu
                 .iter()
                 .all(|c| !c.starts_with("deploy") || decision == "deny")
         );
-        console_post(
+        let said = console_post(
             &m.app,
             &cookie,
-            "/console/mcp/approvals",
+            "/console/api/mcp-approvals",
             &format!("action={decision}&id={held}"),
         )
         .await?;
+        assert!(said.contains("The call to tools.deploy"), "{said}");
         let answer = waiting.await??;
         if decision == "approve" {
             assert_eq!(
@@ -1193,22 +1202,19 @@ async fn a_changed_tool_is_recorded_and_held_until_approved_and_each_tool_has_a_
         && r["held"] == true));
 
     let cookie = admin_cookie(&m.app).await?;
-    let (_, _, page) = http(
-        &m.app,
-        "GET",
-        "/console/mcp/tools",
-        &[("cookie", &cookie)],
-        String::new(),
-    )
-    .await?;
+    let page = console_get(&m.app, &cookie, "/console/api/mcp-tools").await?;
+    let whoami = tool_named(&page, "tools.whoami")?;
     assert!(
-        page.contains("tools.whoami") && page.contains("held") && page.contains("~/.ssh/id_rsa"),
+        whoami["held"] == true
+            && whoami["changed"]
+                .as_str()
+                .is_some_and(|c| c.contains("~/.ssh/id_rsa")),
         "{page}"
     );
     console_post(
         &m.app,
         &cookie,
-        "/console/mcp/tools",
+        "/console/api/mcp-tools",
         "action=approve&tool=tools%2Fwhoami",
     )
     .await?;
@@ -1221,28 +1227,24 @@ async fn a_changed_tool_is_recorded_and_held_until_approved_and_each_tool_has_a_
     console_post(
         &m.app,
         &cookie,
-        "/console/mcp/tools",
+        "/console/api/mcp-tools",
         "action=stop&tool=tools%2Fwhoami",
     )
     .await?;
     let stopped = rpc_at(&m.app, "/mcp", MAYA, call(6, "tools.whoami")).await?;
     assert_eq!(code(&stopped), "killed", "{stopped}");
-    let (_, _, page) = http(
-        &m.app,
-        "GET",
-        "/console/mcp/tools",
-        &[("cookie", &cookie)],
-        String::new(),
-    )
-    .await?;
+    let page = console_get(&m.app, &cookie, "/console/api/mcp-tools").await?;
+    let whoami = tool_named(&page, "tools.whoami")?;
     assert!(
-        page.contains("stopped") && page.contains("maya.cohen (1)"),
+        whoami["stopped"] == true
+            && whoami["used_by"] == "maya.cohen (1)"
+            && whoami["held"] == false,
         "{page}"
     );
     console_post(
         &m.app,
         &cookie,
-        "/console/mcp/tools",
+        "/console/api/mcp-tools",
         "action=start&tool=tools%2Fwhoami",
     )
     .await?;
@@ -1822,17 +1824,28 @@ async fn with_no_mcp_server_the_mcp_pages_say_how_to_add_one() -> TestResult {
     )?;
     let app = gateway(&dir)?;
     let cookie = admin_cookie(&app).await?;
-    for path in [
-        "/console/mcp/tools",
-        "/console/mcp/approvals",
-        "/console/mcp/sessions",
-    ] {
-        let (status, _, page) =
-            http(&app, "GET", path, &[("cookie", &cookie)], String::new()).await?;
-        assert_eq!(status, StatusCode::OK, "{path}");
+    for page in ["tools", "approvals", "sessions"] {
+        // The old address moved to the app.
+        let (status, headers, _) = http(
+            &app,
+            "GET",
+            &format!("/console/mcp/{page}"),
+            &[],
+            String::new(),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{page}");
+        assert_eq!(
+            headers.get(header::LOCATION).and_then(|v| v.to_str().ok()),
+            Some(format!("/console/app/#/mcp/{page}").as_str())
+        );
+        let shown = console_get(&app, &cookie, &format!("/console/api/mcp-{page}")).await?;
         assert!(
-            page.contains("No MCP servers yet") && page.contains("/console/start?track=mcp"),
-            "{path}: {page}"
+            shown["empty"]["title"] == "No MCP servers yet"
+                && shown["empty"]["action"]["href"]
+                    .as_str()
+                    .is_some_and(|h| h.contains("/console/start?track=mcp")),
+            "{page}: {shown}"
         );
     }
     let _ = std::fs::remove_dir_all(&dir);

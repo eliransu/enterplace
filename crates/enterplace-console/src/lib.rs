@@ -21,7 +21,8 @@ mod saml;
 mod spend;
 mod sso;
 mod start;
-pub use start::{empty_page, origin as gateway_origin};
+pub use api::{Answer, Fail, answer, bad, body_of, ok, signed_in, text};
+pub use start::{empty_json, empty_page, origin as gateway_origin};
 
 use std::{
     collections::{BTreeMap, HashMap},

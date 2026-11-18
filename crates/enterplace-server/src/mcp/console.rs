@@ -2,32 +2,29 @@
 //! first seen with; changes to a tool (a known way to slip instructions into an agent), recorded and, for a server
 //! with `tool_changes: block`, held until approved; a kill switch per tool; and the calls waiting for approval.
 //!
-//! Pages are added to the console through its extension, at `/console/mcp/tools` and `/console/mcp/approvals`.
+//! Pages are added to the console app through its extension: `/console/app/#/mcp/tools`, `approvals` and `sessions`,
+//! read from `/console/api/mcp-tools`, `mcp-approvals` and `mcp-sessions`.
 
 use std::collections::{BTreeMap, HashSet};
 
 use axum::{
-    Router,
+    Extension, Router,
+    body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode, Uri},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::get,
 };
-use enterplace_console::{Console, Form, html};
+use enterplace_console::{Console, Fail, Form, answer, bad, body_of, ok, signed_in, text};
 use enterplace_core::{id, kill::Kill, mcp::ToolChanges};
 use serde_json::{Value, json};
 
+use super::sessions::{SESSIONS, reach_of};
 use super::{Conn, Item, Mcp, Server, Shared, event};
 use crate::Refusal;
 
 const TOOLS: &str = "MCP tools";
 const APPROVALS: &str = "MCP approvals";
-/// The three MCP pages share one nav item and link each other.
-pub(super) const MCP_PAGES: [(&str, &str); 3] = [
-    ("/console/mcp/tools", TOOLS),
-    ("/console/mcp/approvals", APPROVALS),
-    ("/console/mcp/sessions", super::sessions::SESSIONS),
-];
 
 /// A tool as Enterplace compares it: everything a model reads of it, with object keys in one order.
 fn fingerprint(tool: &Value) -> String {
@@ -241,555 +238,518 @@ impl Mcp {
     }
 }
 
-/// The console's MCP pages and the end of an MCP client's single sign-on.
+/// The console's MCP pages, in its app at `/console/app/#/mcp/tools`, `approvals` and `sessions`, their JSON API, and
+/// the end of an MCP client's single sign-on.
 pub(super) fn extension(mcp: Shared) -> enterplace_console::Extension {
     // Weak: the console must not keep the gateway (and its audit log) alive after the server is dropped.
     let mcp = std::sync::Arc::downgrade(&mcp);
-    let sessions = mcp.clone();
-    let (a, b, c, d, e) = (mcp.clone(), mcp.clone(), mcp.clone(), mcp.clone(), mcp);
-    let routes: Router<Console> = Router::new()
-        .route(
-            "/mcp/sso-return",
-            get(move |State(console): State<Console>, uri: Uri| {
-                let mcp = a.clone();
-                async move {
-                    let Some(mcp) = mcp.upgrade() else {
-                        return axum::response::IntoResponse::into_response(
-                            axum::http::StatusCode::NOT_FOUND,
-                        );
-                    };
-                    let query = Form::of(&uri);
-                    mcp.finish_sso(&console, query.get("state"), query.get("code"))
-                        .await
-                }
-            }),
-        )
-        .route(
-            "/mcp/tools",
-            get(
-                move |State(console): State<Console>, headers: HeaderMap, uri: Uri| {
-                    let mcp = b.clone();
-                    async move {
+    let routes: Router<Console> =
+        moved()
+            .route(
+                "/mcp/sso-return",
+                get(
+                    |State(console): State<Console>,
+                     Extension(mcp): Extension<Gateway>,
+                     uri: Uri| async move {
                         let Some(mcp) = mcp.upgrade() else {
-                            return axum::response::IntoResponse::into_response(
-                                axum::http::StatusCode::NOT_FOUND,
-                            );
+                            return StatusCode::NOT_FOUND.into_response();
                         };
-                        tools_page(&mcp, &console, &headers, &uri, "").await
-                    }
-                },
+                        let query = Form::of(&uri);
+                        mcp.finish_sso(&console, query.get("state"), query.get("code"))
+                            .await
+                    },
+                ),
             )
-            .post(
-                move |State(console): State<Console>,
-                      headers: HeaderMap,
-                      uri: Uri,
-                      body: String| {
-                    let mcp = c.clone();
-                    async move {
-                        let Some(mcp) = mcp.upgrade() else {
-                            return axum::response::IntoResponse::into_response(
-                                axum::http::StatusCode::NOT_FOUND,
-                            );
-                        };
-                        tools_action(&mcp, &console, &headers, &uri, &body).await
-                    }
-                },
-            ),
-        )
-        .route(
-            "/mcp/approvals",
-            get(
-                move |State(console): State<Console>, headers: HeaderMap, uri: Uri| {
-                    let mcp = d.clone();
-                    async move {
-                        let Some(mcp) = mcp.upgrade() else {
-                            return axum::response::IntoResponse::into_response(
-                                axum::http::StatusCode::NOT_FOUND,
-                            );
-                        };
-                        approvals_page(&mcp, &console, &headers, &uri, "").await
-                    }
-                },
-            )
-            .post(
-                move |State(console): State<Console>,
-                      headers: HeaderMap,
-                      uri: Uri,
-                      body: String| {
-                    let mcp = e.clone();
-                    async move {
-                        let Some(mcp) = mcp.upgrade() else {
-                            return axum::response::IntoResponse::into_response(
-                                axum::http::StatusCode::NOT_FOUND,
-                            );
-                        };
-                        approvals_action(&mcp, &console, &headers, &uri, &body).await
-                    }
-                },
-            ),
-        );
+            .route("/api/mcp-tools", get(tools).post(tools_change))
+            .route("/api/mcp-approvals", get(approvals).post(approvals_change))
+            .route("/api/mcp-sessions", get(sessions).post(sessions_change))
+            .layer(Extension(mcp));
     enterplace_console::Extension {
-        nav: vec![
-            ("/console/mcp/tools".into(), TOOLS.into()),
-            ("/console/mcp/approvals".into(), APPROVALS.into()),
-            (
-                "/console/mcp/sessions".into(),
-                super::sessions::SESSIONS.into(),
-            ),
-        ],
-        routes: routes.merge(super::sessions::routes(sessions)),
-        ..enterplace_console::Extension::default()
-    }
-}
-
-/// With no MCP server in the policy, every MCP page says what fills it and opens the Start here step for it. The pages
-/// are served whenever the policy can reload, so a server added later shows without a restart.
-pub(super) fn no_servers(
-    mcp: &Mcp,
-    console: &Console,
-    admin: &enterplace_console::Admin,
-    headers: &HeaderMap,
-    uri: &Uri,
-    title: &str,
-) -> Option<Response> {
-    if !mcp.servers().is_empty() {
-        return None;
-    }
-    let base = enterplace_console::gateway_origin(headers, uri, &None);
-    let main = format!(
-        "{}{}{}",
-        html::head(title, "", ""),
-        html::page_tabs(&MCP_PAGES, title),
-        enterplace_console::empty_page(APPROVALS, &base, !admin.read_only)
-    );
-    Some(console.page(StatusCode::OK, admin, title, uri, &main))
-}
-
-/// Without MCP servers in the policy, MCP approvals says what fills it and opens the Start here step for it.
-pub(crate) fn empty_extension() -> enterplace_console::Extension {
-    let routes = Router::new().route(
-        "/mcp/approvals",
-        get(
-            |State(console): State<Console>, headers: HeaderMap, uri: Uri| async move {
-                let Some(admin) = console.signed_in(&headers).await else {
-                    return enterplace_console::redirect("/console/sign-in");
-                };
-                let base = enterplace_console::gateway_origin(&headers, &uri, &None);
-                let main = format!(
-                    "{}{}",
-                    html::head(APPROVALS, "", ""),
-                    enterplace_console::empty_page(APPROVALS, &base, !admin.read_only)
-                );
-                console.page(StatusCode::OK, &admin, APPROVALS, &uri, &main)
-            },
-        ),
-    );
-    enterplace_console::Extension {
-        nav: vec![("/console/mcp/approvals".into(), APPROVALS.into())],
+        nav: nav(),
         routes,
         ..enterplace_console::Extension::default()
     }
 }
 
-pub(super) fn form(action: &str, fields: &[(&str, &str)], label: &str, kind: &str) -> String {
-    let hidden: String = fields
-        .iter()
-        .map(|(n, v)| {
-            format!(
-                r#"<input type="hidden" name="{n}" value="{}">"#,
-                html::esc(v)
-            )
-        })
-        .collect();
-    format!(
-        r#"<form method="post" action="{action}">{hidden}{}</form>"#,
-        html::button(label, kind, "submit", "")
+/// The gateway the console's MCP pages read, gone once the server is dropped.
+type Gateway = std::sync::Weak<Mcp>;
+
+fn nav() -> Vec<(String, String)> {
+    ["tools", "approvals", "sessions"]
+        .into_iter()
+        .zip([TOOLS, APPROVALS, SESSIONS])
+        .map(|(page, label)| (format!("/console/mcp/{page}"), label.to_string()))
+        .collect()
+}
+
+/// The server-rendered pages moved to the app: old links land on the same page there.
+fn moved() -> Router<Console> {
+    let mut routes = Router::new();
+    for page in ["tools", "approvals", "sessions"] {
+        let to = format!("/console/app/#/mcp/{page}");
+        routes = routes.route(
+            &format!("/mcp/{page}"),
+            get(move || async move { enterplace_console::redirect(&to) }),
+        );
+    }
+    routes
+}
+
+/// What every MCP page shows with no MCP server in the policy: what fills it and the Start here step for it. The
+/// pages are served whenever the policy can reload, so a server added later shows without a restart.
+fn no_servers(headers: &HeaderMap, uri: &Uri) -> Response {
+    let base = enterplace_console::gateway_origin(headers, uri, &None);
+    ok(json!({
+        "empty": enterplace_console::empty_json(APPROVALS, &base),
+        "tools": [], "calls": [], "sessions": [], "connections": [],
+    }))
+}
+
+/// Without MCP servers in the policy, the MCP pages say what fills them and open the Start here step for it.
+pub(crate) fn empty_extension() -> enterplace_console::Extension {
+    let mut routes = moved();
+    for page in ["tools", "approvals", "sessions"] {
+        routes = routes.route(
+            &format!("/api/mcp-{page}"),
+            get(
+                |State(console): State<Console>, headers: HeaderMap, uri: Uri| async move {
+                    match signed_in(&console, &headers, false).await {
+                        Ok(_) => no_servers(&headers, &uri),
+                        Err(fail) => fail.into_response(),
+                    }
+                },
+            ),
+        );
+    }
+    enterplace_console::Extension {
+        nav: nav(),
+        routes,
+        ..enterplace_console::Extension::default()
+    }
+}
+
+/// The gateway, signed in, and for a change a form from this console and a role that may make it. `None`: no MCP
+/// server in the policy, so the page shows what fills it.
+async fn open(
+    mcp: &Gateway,
+    console: &Console,
+    headers: &HeaderMap,
+    change: Option<&str>,
+) -> Result<(std::sync::Arc<Mcp>, enterplace_console::Admin), Fail> {
+    let admin = signed_in(console, headers, change.is_some()).await?;
+    let mcp = mcp.upgrade().ok_or_else(|| {
+        Fail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The MCP gateway is shutting down. Reload the page once Enterplace is running again."
+                .into(),
+        )
+    })?;
+    if let Some(may_not) = change.filter(|_| admin.read_only) {
+        return Err(Fail(StatusCode::FORBIDDEN, may_not.into()));
+    }
+    Ok((mcp, admin))
+}
+
+fn unrecorded(what: &str) -> Fail {
+    Fail(
+        StatusCode::SERVICE_UNAVAILABLE,
+        format!(
+            "The {what} could not be recorded, so it was not made. Check that the audit log can be written, then try again."
+        ),
     )
 }
 
-async fn tools_page(
-    mcp: &Mcp,
-    console: &Console,
-    headers: &HeaderMap,
-    uri: &Uri,
-    said: &str,
+async fn tools(
+    State(console): State<Console>,
+    Extension(mcp): Extension<Gateway>,
+    headers: HeaderMap,
+    uri: Uri,
 ) -> Response {
-    let Some(admin) = console.signed_in(headers).await else {
-        return enterplace_console::redirect("/console/sign-in");
-    };
-    if let Some(page) = no_servers(mcp, console, &admin, headers, uri, TOOLS) {
-        return page;
-    }
-    let pins = mcp.keep.list("pin").await.unwrap_or_default();
-    let used = mcp.usage();
-    let kills = mcp
-        .app
-        .kills
-        .as_ref()
-        .and_then(|k| k.current().ok())
-        .map(|k| {
-            k.iter()
-                .filter(|k| k.scope == "model")
-                .map(|k| k.value.clone())
-                .collect::<HashSet<_>>()
-        })
-        .unwrap_or_default();
-    let mut rows = String::new();
-    for (id, pin) in &pins {
-        let name = id.replacen('/', ".", 1);
-        let people = used
-            .get(&name)
-            .map(|p| {
-                p.iter()
-                    .map(|(who, n)| format!("{who} ({n})"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_else(|| "no one yet".into());
-        let pending = pin["status"] == "pending";
-        let stopped = kills.contains(&name);
-        let mut meta = format!(
-            "{} · first seen {} · used by {}",
-            html::esc(pin["description"].as_str().unwrap_or("(no description)")),
-            html::esc(pin["first_seen"].as_str().unwrap_or_default()),
-            html::esc(&people)
-        );
-        if pending {
-            meta.push_str(&format!(
-                " · <b>changed {}</b>, now: {}",
-                html::esc(pin["changed_at"].as_str().unwrap_or_default()),
-                html::esc(pin["pending_description"].as_str().unwrap_or_default())
-            ));
+    answer(
+        async {
+            let (mcp, admin) = open(&mcp, &console, &headers, None).await?;
+            if mcp.servers().is_empty() {
+                return Ok(no_servers(&headers, &uri));
+            }
+            let pins = mcp.keep.list("pin").await.unwrap_or_default();
+            let used = mcp.usage();
+            let kills = mcp
+                .app
+                .kills
+                .as_ref()
+                .and_then(|k| k.current().ok())
+                .map(|k| {
+                    k.iter()
+                        .filter(|k| k.scope == "model")
+                        .map(|k| k.value.clone())
+                        .collect::<HashSet<_>>()
+                })
+                .unwrap_or_default();
+            let text = |v: &Value| v.as_str().unwrap_or_default().to_string();
+            let tools: Vec<Value> = pins
+                .iter()
+                .map(|(id, pin)| {
+                    let name = id.replacen('/', ".", 1);
+                    let used_by = used.get(&name).map_or_else(
+                        || "no one yet".to_string(),
+                        |p| {
+                            p.iter()
+                                .map(|(who, n)| format!("{who} ({n})"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        },
+                    );
+                    let held = pin["status"] == "pending";
+                    json!({
+                        "id": id,
+                        "name": name,
+                        "description": pin["description"].as_str().unwrap_or("(no description)"),
+                        "first_seen": text(&pin["first_seen"]),
+                        "used_by": used_by,
+                        "held": held,
+                        "changed": held.then(|| format!(
+                            "Changed {}, now: {}",
+                            text(&pin["changed_at"]),
+                            text(&pin["pending_description"])
+                        )),
+                        "stopped": kills.contains(&name),
+                    })
+                })
+                .collect();
+            Ok(ok(json!({
+                "lead": "Each tool your MCP servers offer, and who may use it.",
+                "editable": !admin.read_only,
+                "tools": tools,
+                "empty": null,
+                "none": {
+                    "title": "No MCP tool seen yet",
+                    "body": "Tools appear here the first time a caller lists them through /mcp.",
+                },
+            })))
         }
-        let mut end = String::new();
-        if pending {
-            end.push_str(&html::tag("warn", "held", ""));
-            if !admin.read_only {
-                end.push_str(&form(
-                    "/console/mcp/tools",
-                    &[("action", "approve"), ("tool", id)],
-                    "Approve change",
-                    "primary",
+        .await,
+    )
+}
+
+async fn tools_change(
+    State(console): State<Console>,
+    Extension(mcp): Extension<Gateway>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Response {
+    answer(
+        async {
+            let (mcp, admin) = open(
+                &mcp,
+                &console,
+                &headers,
+                Some("Your role may look but not change tools."),
+            )
+            .await?;
+            let body = body_of(&bytes)?;
+            let id = text(&body, "tool");
+            let name = id.replacen('/', ".", 1);
+            let action = text(&body, "action");
+            match action {
+                "approve" => {
+                    let Ok(Some(mut pin)) = mcp.keep.get("pin", id).await else {
+                        return Err(Fail(
+                            StatusCode::NOT_FOUND,
+                            "That tool is not pinned. Reload the page for the tools seen so far.".into(),
+                        ));
+                    };
+                    console
+                        .audit(
+                            Some(&admin),
+                            "mcp_approve_tool",
+                            json!({"tool": name, "sha256": pin["pending_sha256"]}),
+                            None,
+                        )
+                        .await
+                        .map_err(|_| unrecorded("approval"))?;
+                    pin["status"] = "approved".into();
+                    pin["sha256"] = pin["pending_sha256"].clone();
+                    pin["description"] = pin["pending_description"].clone();
+                    pin["approved_by"] = admin.name.clone().into();
+                    if let Some(p) = pin.as_object_mut() {
+                        p.remove("pending_sha256");
+                        p.remove("pending_description");
+                    }
+                    mcp.keep.put("pin", id, pin).await.map_err(|err| {
+                        Fail(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            format!("{name} could not be approved: {err}. Check the store, then try again."),
+                        )
+                    })?;
+                    Ok(ok(json!({"message": format!("{name} is approved as it is now.")})))
+                }
+                "stop" | "start" => {
+                    let stop = action == "stop";
+                    let Some(switches) = &mcp.app.kills else {
+                        return Err(bad(
+                            "This Enterplace keeps no kill switches: it serves no keys file. Start it with a keys file to stop a tool.",
+                        ));
+                    };
+                    let audit = if stop {
+                        "mcp_stop_tool"
+                    } else {
+                        "mcp_start_tool"
+                    };
+                    console
+                        .audit(Some(&admin), audit, json!({"tool": name}), None)
+                        .await
+                        .map_err(|_| unrecorded("change"))?;
+                    let switches = switches.clone();
+                    let (by, tool) = (admin.name.clone(), name.clone());
+                    let done = tokio::task::spawn_blocking(move || {
+                        if stop {
+                            switches
+                                .set(Kill {
+                                    scope: "model".into(),
+                                    value: tool,
+                                    reason: "stopped from the console's MCP tools page".into(),
+                                    by,
+                                    at: enterplace_core::audit::timestamp(),
+                                })
+                                .map(|_| ())
+                        } else {
+                            switches.clear("model", &tool).map(|_| ())
+                        }
+                    })
+                    .await
+                    .unwrap_or_else(|_| Err("the change stopped before it finished".into()));
+                    match done {
+                        Ok(()) if stop => {
+                            Ok(ok(json!({"message": format!("{name} is stopped for everyone.")})))
+                        }
+                        Ok(()) => Ok(ok(json!({"message": format!("{name} runs again.")}))),
+                        Err(err) => Err(Fail(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            format!("{name} could not be changed: {err}"),
+                        )),
+                    }
+                }
+                _ => Err(bad(
+                    "Nothing was changed: the action is approve, stop or start.",
+                )),
+            }
+        }
+        .await,
+    )
+}
+
+async fn approvals(
+    State(console): State<Console>,
+    Extension(mcp): Extension<Gateway>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    answer(
+        async {
+            let (mcp, admin) = open(&mcp, &console, &headers, None).await?;
+            if mcp.servers().is_empty() {
+                return Ok(no_servers(&headers, &uri));
+            }
+            let waiting = mcp.keep.list("approval").await.unwrap_or_default();
+            let calls: Vec<Value> = waiting
+                .iter()
+                .filter(|(_, c)| c["status"] == "pending")
+                .map(|(id, call)| {
+                    let text = |f: &str| call[f].as_str().unwrap_or_default().to_string();
+                    json!({
+                        "id": id,
+                        "tool": text("tool"),
+                        "person": text("person"),
+                        "team": text("team"),
+                        "rule": text("rule"),
+                        "asked_at": text("asked_at"),
+                        "arguments": short(&call["arguments"].to_string()),
+                    })
+                })
+                .collect();
+            Ok(ok(json!({
+                "lead": "Tool calls waiting for an admin.",
+                "editable": !admin.read_only,
+                "calls": calls,
+                "empty": null,
+                "none": {
+                    "title": "No call is waiting",
+                    "body": "A call to a tool a rule lists under approve_tools waits here until you approve or deny it, or its time runs out.",
+                },
+            })))
+        }
+        .await,
+    )
+}
+
+async fn approvals_change(
+    State(console): State<Console>,
+    Extension(mcp): Extension<Gateway>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Response {
+    answer(
+        async {
+            let (mcp, admin) = open(
+                &mcp,
+                &console,
+                &headers,
+                Some("Your role may look but not approve calls."),
+            )
+            .await?;
+            let body = body_of(&bytes)?;
+            let id = text(&body, "id");
+            let approve = match text(&body, "action") {
+                "approve" => true,
+                "deny" => false,
+                _ => return Err(bad("Nothing was decided: the action is approve or deny.")),
+            };
+            let Ok(Some(mut call)) = mcp.keep.get("approval", id).await else {
+                return Err(Fail(
+                    StatusCode::NOT_FOUND,
+                    "That call is no longer waiting: it ran out of time or was decided.".into(),
+                ));
+            };
+            if call["status"] != "pending" {
+                return Err(Fail(
+                    StatusCode::CONFLICT,
+                    "That call was decided already.".into(),
                 ));
             }
-        }
-        if stopped {
-            end.push_str(&html::tag("block", "stopped", ""));
-        }
-        if !admin.read_only {
-            let (action, label) = if stopped {
-                ("start", "Start tool")
+            let action = if approve {
+                "mcp_approve_call"
             } else {
-                ("stop", "Stop tool")
+                "mcp_deny_call"
             };
-            end.push_str(&form(
-                "/console/mcp/tools",
-                &[("action", action), ("tool", id)],
-                label,
-                "",
-            ));
+            let target = json!({"decision": id, "tool": call["tool"], "person": call["person"], "team": call["team"]});
+            console
+                .audit(Some(&admin), action, target, None)
+                .await
+                .map_err(|_| unrecorded("decision"))?;
+            call["status"] = if approve { "approved" } else { "denied" }.into();
+            call["by"] = admin.name.clone().into();
+            mcp.keep
+                .put("approval", id, call.clone())
+                .await
+                .map_err(|err| {
+                    Fail(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        format!("The decision could not be kept: {err}. Check the store, then try again."),
+                    )
+                })?;
+            let tool = call["tool"].as_str().unwrap_or_default();
+            let message = if approve {
+                format!("The call to {tool} runs now.")
+            } else {
+                format!("The call to {tool} is refused.")
+            };
+            Ok(ok(json!({ "message": message })))
         }
-        rows.push_str(&html::row(&html::esc(&name), &meta, &end, true));
-    }
-    let body = if rows.is_empty() {
-        html::empty(
-            "",
-            "No MCP tool seen yet",
-            "Tools appear here the first time a caller lists them through /mcp.",
-            "",
-        )
-    } else {
-        rows
-    };
-    let lead = if said.is_empty() {
-        "Each tool your MCP servers offer, and who may use it.".to_string()
-    } else {
-        html::esc(said)
-    };
-    let main = format!(
-        "{}{}{body}",
-        html::head(TOOLS, &lead, ""),
-        html::page_tabs(&MCP_PAGES, TOOLS)
-    );
-    console.page(StatusCode::OK, &admin, TOOLS, uri, &main)
+        .await,
+    )
 }
 
-async fn tools_action(
-    mcp: &Mcp,
-    console: &Console,
-    headers: &HeaderMap,
-    uri: &Uri,
-    body: &str,
+async fn sessions(
+    State(console): State<Console>,
+    Extension(mcp): Extension<Gateway>,
+    headers: HeaderMap,
+    uri: Uri,
 ) -> Response {
-    if !enterplace_console::same_origin(headers) {
-        return enterplace_console::foreign();
-    }
-    let Some(admin) = console.signed_in(headers).await else {
-        return enterplace_console::redirect("/console/sign-in");
-    };
-    if admin.read_only {
-        return tools_page(
-            mcp,
-            console,
-            headers,
-            uri,
-            "Your role may look but not change tools.",
-        )
-        .await;
-    }
-    let form = Form::parse(body);
-    let id = form.get("tool");
-    let name = id.replacen('/', ".", 1);
-    let action = form.get("action").to_string();
-    let said = match action.as_str() {
-        "approve" => {
-            let Ok(Some(mut pin)) = mcp.keep.get("pin", id).await else {
-                return tools_page(mcp, console, headers, uri, "That tool is not pinned.").await;
-            };
-            if console
-                .audit(
-                    Some(&admin),
-                    "mcp_approve_tool",
-                    json!({"tool": name, "sha256": pin["pending_sha256"]}),
-                    None,
-                )
-                .await
-                .is_err()
-            {
-                return tools_page(
-                    mcp,
-                    console,
-                    headers,
-                    uri,
-                    "The approval could not be recorded, so it was not made.",
-                )
-                .await;
+    answer(
+        async {
+            let (mcp, admin) = open(&mcp, &console, &headers, None).await?;
+            if mcp.servers().is_empty() {
+                return Ok(no_servers(&headers, &uri));
             }
-            pin["status"] = "approved".into();
-            pin["sha256"] = pin["pending_sha256"].clone();
-            pin["description"] = pin["pending_description"].clone();
-            pin["approved_by"] = admin.name.clone().into();
-            if let Some(p) = pin.as_object_mut() {
-                p.remove("pending_sha256");
-                p.remove("pending_description");
-            }
-            match mcp.keep.put("pin", id, pin).await {
-                Ok(()) => format!("{name} is approved as it is now."),
-                Err(err) => format!("{name} could not be approved: {err}."),
-            }
+            let listed = mcp.sessions(&reach_of(&admin)).await;
+            let text = |v: &Value, f: &str| v[f].as_str().unwrap_or("-").to_string();
+            let sessions: Vec<Value> = listed["sessions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|s| {
+                    json!({
+                        "id": s["id"],
+                        "client": format!(
+                            "{} {}",
+                            s["client"].as_str().unwrap_or("unnamed client"),
+                            s["client_version"].as_str().unwrap_or_default()
+                        ).trim_end(),
+                        "who": format!("{} of team {}", text(s, "person"), text(s, "team")),
+                        "user_agent": text(s, "user_agent"),
+                        "started": text(s, "started"),
+                        "last_used": text(s, "last_used"),
+                    })
+                })
+                .collect();
+            let connections: Vec<Value> = listed["connections"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|c| {
+                    json!({
+                        "id": c["id"],
+                        "server": text(c, "server"),
+                        "person": text(c, "person"),
+                        "detail": format!("{}'s own account at MCP server {}", text(c, "person"), text(c, "server")),
+                    })
+                })
+                .collect();
+            Ok(ok(json!({
+                "lead": "Connected MCP clients and accounts.",
+                "editable": !admin.read_only,
+                "sessions": sessions,
+                "connections": connections,
+                "empty": null,
+                "none": {
+                    "title": "No MCP session is open",
+                    "body": "An MCP client that connects to /mcp is listed here, and so is each person's own account at a server with user_auth.",
+                },
+            })))
         }
-        "stop" | "start" => {
-            let stop = action == "stop";
-            let Some(switches) = &mcp.app.kills else {
-                return tools_page(
-                    mcp,
-                    console,
-                    headers,
-                    uri,
-                    "This Enterplace keeps no kill switches: it serves no keys file.",
-                )
-                .await;
-            };
-            let audit = if stop {
-                "mcp_stop_tool"
-            } else {
-                "mcp_start_tool"
-            };
-            if console
-                .audit(Some(&admin), audit, json!({"tool": name}), None)
-                .await
-                .is_err()
-            {
-                return tools_page(
-                    mcp,
-                    console,
-                    headers,
-                    uri,
-                    "The change could not be recorded, so it was not made.",
-                )
-                .await;
-            }
-            let switches = switches.clone();
-            let (by, tool) = (admin.name.clone(), name.clone());
-            let done = tokio::task::spawn_blocking(move || {
-                if stop {
-                    switches
-                        .set(Kill {
-                            scope: "model".into(),
-                            value: tool,
-                            reason: "stopped from the console's MCP tools page".into(),
-                            by,
-                            at: enterplace_core::audit::timestamp(),
-                        })
-                        .map(|_| ())
-                } else {
-                    switches.clear("model", &tool).map(|_| ())
-                }
-            })
-            .await
-            .unwrap_or_else(|_| Err("the change stopped before it finished".into()));
-            match done {
-                Ok(()) if stop => format!("{name} is stopped for everyone."),
-                Ok(()) => format!("{name} runs again."),
-                Err(err) => format!("{name} could not be changed: {err}"),
-            }
-        }
-        _ => "Nothing was changed.".to_string(),
-    };
-    tools_page(mcp, console, headers, uri, &said).await
+        .await,
+    )
 }
 
-async fn approvals_page(
-    mcp: &Mcp,
-    console: &Console,
-    headers: &HeaderMap,
-    uri: &Uri,
-    said: &str,
+async fn sessions_change(
+    State(console): State<Console>,
+    Extension(mcp): Extension<Gateway>,
+    headers: HeaderMap,
+    bytes: Bytes,
 ) -> Response {
-    let Some(admin) = console.signed_in(headers).await else {
-        return enterplace_console::redirect("/console/sign-in");
-    };
-    if let Some(page) = no_servers(mcp, console, &admin, headers, uri, APPROVALS) {
-        return page;
-    }
-    let waiting = mcp.keep.list("approval").await.unwrap_or_default();
-    let mut rows = String::new();
-    for (id, call) in waiting.iter().filter(|(_, c)| c["status"] == "pending") {
-        let text = |f: &str| call[f].as_str().unwrap_or_default().to_string();
-        let meta = format!(
-            "{} of team {} · rule {} · asked {} · arguments <code class=\"t-mono-sm\">{}</code>",
-            html::esc(&text("person")),
-            html::esc(&text("team")),
-            html::esc(&text("rule")),
-            html::esc(&text("asked_at")),
-            html::esc(&short(&call["arguments"].to_string()))
-        );
-        let end = if admin.read_only {
-            String::new()
-        } else {
-            format!(
-                "{}{}",
-                form(
-                    "/console/mcp/approvals",
-                    &[("action", "approve"), ("id", id)],
-                    "Approve",
-                    "primary"
-                ),
-                form(
-                    "/console/mcp/approvals",
-                    &[("action", "deny"), ("id", id)],
-                    "Deny",
-                    ""
-                )
+    answer(
+        async {
+            let (mcp, admin) = open(
+                &mcp,
+                &console,
+                &headers,
+                Some("Your role may look but not end sessions."),
             )
-        };
-        rows.push_str(&html::row(&html::esc(&text("tool")), &meta, &end, true));
-    }
-    let body = if rows.is_empty() {
-        html::empty(
-            "",
-            "No call is waiting",
-            "A call to a tool a rule lists under approve_tools waits here until you approve or deny it, or its time runs out.",
-            "",
-        )
-    } else {
-        rows
-    };
-    let lead = if said.is_empty() {
-        "Tool calls waiting for an admin.".to_string()
-    } else {
-        html::esc(said)
-    };
-    let mut response = console.page(
-        StatusCode::OK,
-        &admin,
-        APPROVALS,
-        uri,
-        &format!(
-            "{}{}{body}",
-            html::head(APPROVALS, &lead, ""),
-            html::page_tabs(&MCP_PAGES, APPROVALS)
-        ),
-    );
-    response
-        .headers_mut()
-        .insert("refresh", axum::http::HeaderValue::from_static("10"));
-    response
-}
-
-async fn approvals_action(
-    mcp: &Mcp,
-    console: &Console,
-    headers: &HeaderMap,
-    uri: &Uri,
-    body: &str,
-) -> Response {
-    if !enterplace_console::same_origin(headers) {
-        return enterplace_console::foreign();
-    }
-    let Some(admin) = console.signed_in(headers).await else {
-        return enterplace_console::redirect("/console/sign-in");
-    };
-    if admin.read_only {
-        return approvals_page(
-            mcp,
-            console,
-            headers,
-            uri,
-            "Your role may look but not approve calls.",
-        )
-        .await;
-    }
-    let form = Form::parse(body);
-    let id = form.get("id");
-    let approve = form.get("action") == "approve";
-    let Ok(Some(mut call)) = mcp.keep.get("approval", id).await else {
-        return approvals_page(
-            mcp,
-            console,
-            headers,
-            uri,
-            "That call is no longer waiting: it ran out of time or was decided.",
-        )
-        .await;
-    };
-    if call["status"] != "pending" {
-        return approvals_page(mcp, console, headers, uri, "That call was decided already.").await;
-    }
-    let action = if approve {
-        "mcp_approve_call"
-    } else {
-        "mcp_deny_call"
-    };
-    let target = json!({"decision": id, "tool": call["tool"], "person": call["person"], "team": call["team"]});
-    if console
-        .audit(Some(&admin), action, target, None)
-        .await
-        .is_err()
-    {
-        return approvals_page(
-            mcp,
-            console,
-            headers,
-            uri,
-            "The decision could not be recorded, so it was not made.",
-        )
-        .await;
-    }
-    call["status"] = if approve { "approved" } else { "denied" }.into();
-    call["by"] = admin.name.clone().into();
-    let said = match mcp.keep.put("approval", id, call.clone()).await {
-        Ok(()) if approve => format!(
-            "The call to {} runs now.",
-            call["tool"].as_str().unwrap_or_default()
-        ),
-        Ok(()) => format!(
-            "The call to {} is refused.",
-            call["tool"].as_str().unwrap_or_default()
-        ),
-        Err(err) => format!("The decision could not be kept: {err}."),
-    };
-    approvals_page(mcp, console, headers, uri, &said).await
+            .await?;
+            let body = body_of(&bytes)?;
+            let id = text(&body, "id");
+            // Recorded first: a session that cannot be recorded as ended is not ended.
+            console
+                .audit(Some(&admin), "end_mcp_session", json!({"id": id}), None)
+                .await
+                .map_err(|_| {
+                    Fail(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "It could not be recorded, so nothing was ended. Check that the audit log can be written, then try again.".into(),
+                    )
+                })?;
+            match mcp.end_session(id, &reach_of(&admin)).await {
+                Some(_) => Ok(ok(json!({
+                    "message": "Ended. The client connects again, or the person signs in again, to go on.",
+                }))),
+                None => Err(Fail(
+                    StatusCode::NOT_FOUND,
+                    "That session is no longer open.".into(),
+                )),
+            }
+        }
+        .await,
+    )
 }
 
 #[cfg(test)]

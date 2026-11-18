@@ -97,7 +97,7 @@ async fn app_file(Path(file): Path<String>) -> Response {
 // ---------------------------------------------------------------- answers
 
 /// A refusal: its status and what to tell the person, naming the cause and the fix.
-pub(crate) struct Fail(pub(crate) StatusCode, pub(crate) String);
+pub struct Fail(pub StatusCode, pub String);
 
 impl IntoResponse for Fail {
     fn into_response(self) -> Response {
@@ -107,11 +107,11 @@ impl IntoResponse for Fail {
     }
 }
 
-pub(crate) fn bad(message: impl Into<String>) -> Fail {
+pub fn bad(message: impl Into<String>) -> Fail {
     Fail(StatusCode::BAD_REQUEST, message.into())
 }
 
-pub(crate) fn ok(value: Value) -> Response {
+pub fn ok(value: Value) -> Response {
     let mut response = (
         [(header::CONTENT_TYPE, "application/json")],
         value.to_string(),
@@ -123,9 +123,9 @@ pub(crate) fn ok(value: Value) -> Response {
     guarded(response)
 }
 
-pub(crate) type Answer = Result<Response, Fail>;
+pub type Answer = Result<Response, Fail>;
 
-pub(crate) fn answer(result: Answer) -> Response {
+pub fn answer(result: Answer) -> Response {
     result.unwrap_or_else(IntoResponse::into_response)
 }
 
@@ -139,7 +139,7 @@ pub(crate) fn sentence(text: &str) -> String {
 }
 
 /// The signed-in admin, and for a change also a form from this console: a change from another site is refused.
-pub(crate) async fn signed_in(
+pub async fn signed_in(
     console: &Console,
     headers: &HeaderMap,
     change: bool,
@@ -159,7 +159,7 @@ pub(crate) async fn signed_in(
     })
 }
 
-pub(crate) fn body_of(bytes: &Bytes) -> Result<Map<String, Value>, Fail> {
+pub fn body_of(bytes: &Bytes) -> Result<Map<String, Value>, Fail> {
     match serde_json::from_slice::<Value>(bytes) {
         Ok(Value::Object(map)) => Ok(map),
         // A plain HTML form (name=value&...) is read too, so a page can post without script.
@@ -173,7 +173,7 @@ pub(crate) fn body_of(bytes: &Bytes) -> Result<Map<String, Value>, Fail> {
     }
 }
 
-pub(crate) fn text<'a>(body: &'a Map<String, Value>, name: &str) -> &'a str {
+pub fn text<'a>(body: &'a Map<String, Value>, name: &str) -> &'a str {
     body.get(name).and_then(Value::as_str).unwrap_or("").trim()
 }
 

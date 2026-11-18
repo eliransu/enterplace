@@ -889,20 +889,67 @@ async fn sessions_are_listed_and_ended_and_a_rule_names_the_clients_that_may_con
         .and_then(|c| c.split(';').next())
         .ok_or("no console cookie")?
         .to_string();
-    let (status, _, page) = http(
+    let (status, _, body) = http(
         &gw.router,
         "GET",
-        "/console/mcp/sessions",
+        "/console/api/mcp-sessions",
         &[("cookie", &cookie)],
         String::new(),
     )
     .await?;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let page: Value = serde_json::from_str(&body)?;
+    let shown: Vec<&str> = page["sessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s["client"].as_str())
+        .collect();
     assert!(
-        page.contains("Cursor-Nightly")
-            && page.contains("End session")
-            && !page.contains(">claude-code "),
-        "{page}"
+        page["editable"] == true
+            && shown.iter().any(|c| c.starts_with("Cursor-Nightly"))
+            && !shown.iter().any(|c| c.starts_with("claude-code")),
+        "{body}"
     );
+    // Ending one from the console refuses its next request too, and is on record.
+    let cursor = page["sessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|s| {
+            s["client"]
+                .as_str()
+                .is_some_and(|c| c.starts_with("Cursor-Nightly"))
+        })
+        .and_then(|s| s["id"].as_str())
+        .ok_or("Cursor-Nightly is not listed")?
+        .to_string();
+    let ended = |dir| -> Result<usize, Error> {
+        Ok(records(dir)?
+            .iter()
+            .filter(|r| r["action"] == "end_mcp_session")
+            .count())
+    };
+    let before = ended(&dir)?;
+    let (status, _, body) = http(
+        &gw.router,
+        "POST",
+        "/console/api/mcp-sessions",
+        &[("cookie", &cookie), ("content-type", "application/json")],
+        json!({ "id": cursor }).to_string(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = http(
+        &gw.router,
+        "POST",
+        "/console/api/mcp-sessions",
+        &[("cookie", &cookie), ("content-type", "application/json")],
+        json!({ "id": cursor }).to_string(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    // Both tries are on record: a session is recorded as ended before it is.
+    assert_eq!(ended(&dir)?, before + 2);
     Ok(())
 }
