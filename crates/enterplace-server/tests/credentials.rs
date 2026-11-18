@@ -425,15 +425,26 @@ async fn a_credential_added_on_one_gateway_is_used_rotated_and_removed_on_anothe
         .body(Body::from("name=openai-prod&confirm=openai-prod"))?;
     let response = two.router.clone().oneshot(request).await?;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let (_, body) = call(&one.router, "GET", "/admin/credentials", ADMIN, None).await?;
-    let names: Vec<Value> = serde_json::from_str::<Value>(&body)?["credentials"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .map(|c| c["name"].clone())
-        .collect();
-    assert_eq!(names, vec![json!("openai-prod")], "{body}");
+    // The first gateway lists from its copy of the store, which follows the second gateway's change shortly after.
+    let start = Instant::now();
+    loop {
+        let (_, body) = call(&one.router, "GET", "/admin/credentials", ADMIN, None).await?;
+        let names: Vec<Value> = serde_json::from_str::<Value>(&body)?["credentials"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|c| c["name"].clone())
+            .collect();
+        if names == vec![json!("openai-prod")] {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "the removal did not reach the other gateway: {body}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
     // Each change is recorded, never with the value.
     for gw_dir in [&one_dir, &two_dir] {

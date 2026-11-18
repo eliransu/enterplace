@@ -75,7 +75,10 @@ async fn new_token(app: &Router, body: Value) -> Result<(String, String), Error>
     let made = admin(app, "POST", "/console/watch/tokens", body).await?;
     assert_eq!(made.status, StatusCode::CREATED, "{}", made.text);
     let field = |name: &str| made.body[name].as_str().unwrap_or_default().to_string();
-    assert!(field("token").starts_with("enterplace_watch_") && field("token").len() == 13 + 64);
+    assert!(
+        field("token").starts_with("enterplace_watch_")
+            && field("token").len() == super::PREFIX.len() + 64
+    );
     Ok((field("id"), field("token")))
 }
 
@@ -1818,7 +1821,7 @@ async fn setup_creates_its_token_through_a_gateway_that_listens() -> Result<(), 
         .ok_or("no token in the settings")?
         .to_string();
     assert!(
-        token.starts_with("enterplace_watch_") && token.len() == 13 + 64,
+        token.starts_with("enterplace_watch_") && token.len() == super::PREFIX.len() + 64,
         "{out}"
     );
     assert!(
