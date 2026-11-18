@@ -74,6 +74,7 @@ fn setup(name: &str) -> Result<Setup, Box<dyn std::error::Error>> {
     std::fs::write(dir.join("enterplace.keys.yaml"), keys_text())?;
     let log = AuditLog::open(&dir.join("enterplace-audit.jsonl"))?;
     let policy_sha256 = sha256_hex(POLICY.as_bytes());
+    let maya = sha256_hex(MAYA_KEY.as_bytes());
     let base = Entry {
         method: "POST",
         path: "/v1/chat/completions",
@@ -83,6 +84,7 @@ fn setup(name: &str) -> Result<Setup, Box<dyn std::error::Error>> {
     log.append(&Entry {
         id: "01AAAAAAAAAAAAAAAAAAAAAAA1",
         person: Some("maya.cohen"),
+        key: Some(&maya[..8]),
         team: Some("payments"),
         model: Some("gpt-4o-mini"),
         allowed: true,
@@ -94,6 +96,7 @@ fn setup(name: &str) -> Result<Setup, Box<dyn std::error::Error>> {
     log.append(&Entry {
         id: "01AAAAAAAAAAAAAAAAAAAAAAA2",
         person: Some("maya.cohen"),
+        key: Some(&maya[..8]),
         team: Some("payments"),
         model: Some("gpt-4o"),
         code: Some("model_not_allowed"),

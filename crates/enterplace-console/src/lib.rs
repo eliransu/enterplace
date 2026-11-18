@@ -1366,6 +1366,17 @@ pub fn offer_start_link(admin: &str, any_address: bool) -> Option<String> {
 /// admin is made (setup link) and when `enterplace start`'s link signs them in, so the lines Start here hands them for
 /// a coding agent name them from the first request. The token reaches no model on its own; a failure here changes
 /// nothing else, and Start here offers Make my token.
+/// The keys file keeps only a hash, so a person token says what it is in its metadata: People labels it by that.
+pub(crate) const PERSON_TOKEN_KIND: &str = "person-token";
+
+fn person_token_attributes(mut attributes: keyfile::Attributes) -> keyfile::Attributes {
+    attributes
+        .options
+        .metadata
+        .insert("kind".into(), PERSON_TOKEN_KIND.into());
+    attributes
+}
+
 async fn mint_mine(console: &Console, name: &str, team: &str) {
     if console.mine(name).is_some() {
         return;
@@ -1384,7 +1395,7 @@ async fn mint_mine(console: &Console, name: &str, team: &str) {
             name,
             team,
             &token,
-            &keyfile::Attributes::default(),
+            &person_token_attributes(keyfile::Attributes::default()),
             &console.config().keys,
         )
         .is_ok()
@@ -2715,6 +2726,7 @@ async fn issued_as(
         return Err("A name and a team use letters, digits, dots, dashes and underscores only, for example maya.cohen and payments.".into());
     }
     let key = if person_token {
+        attributes = person_token_attributes(attributes);
         id::new_person_token()?
     } else {
         id::new_key()?

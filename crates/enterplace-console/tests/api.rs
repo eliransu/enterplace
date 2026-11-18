@@ -1296,6 +1296,78 @@ async fn people_edits_a_key_issues_a_person_token_and_refuses_what_a_role_may_no
 }
 
 #[tokio::test]
+async fn people_labels_each_key_and_counts_requests_per_key_not_per_name() -> TestResult {
+    let s = setup("people-kinds")?;
+    let admin = sign_in(&s, ADMIN_KEY).await?;
+    // The admin's own person token, as first sign-in makes it: the same name as their admin key.
+    let (status, made) = call(
+        &s,
+        "POST",
+        "/console/api/people/issue",
+        &admin,
+        Some(json!({ "name": "noa.bar", "team": "platform", "person_token": true })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let token = &sha256_hex(made["key"].as_str().ok_or("no key")?.as_bytes())[..8];
+    // The keys file keeps what it is, so the label does not depend on the audit log.
+    let keys = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
+    assert!(keys.contains("person-token"), "{keys}");
+    let admin_key = &sha256_hex(ADMIN_KEY.as_bytes())[..8];
+    // A workload key, and a person token made before the keys file kept its kind: only its issue record says so.
+    let old_token = sha256_hex(b"enterplace_u_old");
+    let mut keys = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
+    keys.push_str(&format!(
+        "  - name: nightly.etl\n    team: data\n    sha256: {}\n    metadata: {{ kind: workload }}\n  - name: dan.levi\n    team: data\n    sha256: {old_token}\n",
+        sha256_hex(b"enterplace_workload")
+    ));
+    std::fs::write(s.dir.join("enterplace.keys.yaml"), keys)?;
+    let mut log = s.audit()?;
+    let line = |key: &str, time: &str| {
+        format!(
+            "{}\n",
+            json!({ "time": time, "person": "noa.bar", "team": "platform", "key": key, "verdict": "allow" })
+        )
+    };
+    for _ in 0..3 {
+        log.push_str(&line(admin_key, "2026-11-18T10:00:00Z"));
+    }
+    log.push_str(&line(token, "2026-11-18T11:00:00Z"));
+    log.push_str(&format!(
+        "{}\n",
+        json!({ "event": "admin", "time": "2026-11-01T09:00:00Z", "person": "noa.bar", "action": "issue_key", "verdict": "allow", "target": { "name": "dan.levi", "team": "data", "sha256_prefix": &old_token[..8], "admin": false, "person_token": true } })
+    ));
+    std::fs::write(s.dir.join("enterplace-audit.jsonl"), log)?;
+    let (status, people) = call(&s, "GET", "/console/api/people", &admin, None).await?;
+    assert_eq!(status, StatusCode::OK, "{people}");
+    let row = |hash: &str| {
+        people["entries"]
+            .as_array()
+            .and_then(|e| e.iter().find(|e| e["hash"] == hash).cloned())
+            .ok_or(format!("no row {hash}: {people}"))
+    };
+    let (by_admin, by_token) = (row(admin_key)?, row(token)?);
+    assert_eq!(
+        (&by_admin["name"], &by_admin["kind"], &by_admin["requests"]),
+        (&json!("noa.bar"), &json!("admin key"), &json!(3))
+    );
+    assert_eq!(
+        (&by_token["name"], &by_token["kind"], &by_token["requests"]),
+        (&json!("noa.bar"), &json!("person token"), &json!(1))
+    );
+    assert_eq!(
+        row(&sha256_hex(b"enterplace_workload")[..8])?["kind"],
+        "workload key"
+    );
+    assert_eq!(row(&old_token[..8])?["kind"], "person token");
+    assert_eq!(
+        row(&sha256_hex(VIEWER_KEY.as_bytes())[..8])?["kind"],
+        "admin key"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_viewer_sees_the_keys_and_changes_none() -> TestResult {
     let s = setup("people-viewer")?;
     let viewer = sign_in(&s, VIEWER_KEY).await?;

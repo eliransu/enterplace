@@ -264,8 +264,11 @@ fn entries_json(console: &Console, admin: &Admin, entries: &[KeyEntry]) -> Value
     let log = records_for(admin, &config.audit).ok().flatten();
     let kills = enterplace_core::kill::read(&enterplace_core::kill::path_beside(&config.keys))
         .unwrap_or_default();
-    // Requests and the last one, per name, from the audit log. Records are in time order, so the last seen is the latest.
+    // Requests and the last one, per key (a person may hold an admin key and a person token under one name), from
+    // the audit log. Records are in time order, so the last seen is the latest.
     let mut seen: HashMap<String, (usize, String)> = HashMap::new();
+    // Person tokens made before their kind went into the keys file: their issue record says so.
+    let mut tokens: std::collections::HashSet<String> = std::collections::HashSet::new();
     let today = pages::today();
     let mut by_key: HashMap<String, KeySpend> = HashMap::new();
     let s = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").to_string();
@@ -290,11 +293,14 @@ fn entries_json(console: &Console, admin: &Admin, entries: &[KeyEntry]) -> Value
                 k.refused_day |= refused;
             }
         }
+        if s(&record, "action") == "issue_key" && record["target"]["person_token"] == true {
+            tokens.insert(s(&record["target"], "sha256_prefix"));
+        }
         // Requests only: an admin's sign-ins and key changes are not requests through the gateway.
         if s(&record, "verdict").is_empty() || record.get("event").is_some() {
             continue;
         }
-        let item = seen.entry(s(&record, "person")).or_default();
+        let item = seen.entry(s(&record, "key")).or_default();
         item.0 += 1;
         item.1 = time;
     }
@@ -305,7 +311,15 @@ fn entries_json(console: &Console, admin: &Admin, entries: &[KeyEntry]) -> Value
         entries
             .iter()
             .map(|entry| {
-                let (count, last) = seen.get(&entry.name).cloned().unwrap_or_default();
+                let hash = &entry.sha256[..8];
+                let (count, last) = seen.get(hash).cloned().unwrap_or_default();
+                let kind = match entry.options.metadata.get("kind").map(String::as_str) {
+                    _ if entry.admin => "admin key",
+                    Some(crate::PERSON_TOKEN_KIND) => "person token",
+                    _ if tokens.contains(hash) => "person token",
+                    Some("workload") => "workload key",
+                    _ => "key",
+                };
                 // A model switch stops one model, not the person: only the switches that stop every request of this key.
                 let stopped = kills.iter().find(|k| {
                     k.scope != "model" && k.stops(&entry.name, &entry.team, &entry.sha256, None)
@@ -317,9 +331,10 @@ fn entries_json(console: &Console, admin: &Admin, entries: &[KeyEntry]) -> Value
                     "name": entry.name,
                     "team": entry.team,
                     "admin": entry.admin,
+                    "kind": kind,
                     "role": entry.role,
                     "sha256": entry.sha256,
-                    "hash": &entry.sha256[..8],
+                    "hash": hash,
                     "requests": count,
                     "last": if last.is_empty() { "never".to_string() } else { figures::time_list(&last) },
                     "status": status(entry, &by_key, &now, &soon, admin.read_only, stopped, may_restore),

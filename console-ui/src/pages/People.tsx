@@ -27,6 +27,7 @@ type Entry = {
   name: string;
   team: string;
   admin: boolean;
+  kind: string;
   sha256: string;
   hash: string;
   requests: number;
@@ -144,8 +145,7 @@ export function People({ query }: PageProps) {
                       <TableCell>
                         {e.name}
                         <span className="block text-muted-foreground">
-                          {e.team}
-                          {e.admin ? ", admin" : ""}
+                          {e.team}, {e.kind}
                         </span>
                       </TableCell>
                       <TableCell className="whitespace-normal">
