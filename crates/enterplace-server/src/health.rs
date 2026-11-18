@@ -6,7 +6,7 @@
 //! whichever replica answers: a deployment cooling down on any gateway is cooling, latency is over every gateway's
 //! samples, load is summed, a key set aside anywhere is resting. Without such a store the view is this gateway's.
 //!
-//! The page is built from the console's existing components (head, row, tag, button) and needs a design pass.
+//! The page is in the console app (`console-ui/src/pages/Deployments.tsx`), read from `/console/api/deployments`.
 
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -15,13 +15,14 @@ use std::{
 };
 
 use axum::{
-    Router,
+    Extension, Router,
+    body::Bytes,
     extract::State,
-    http::{HeaderMap, Method, StatusCode, Uri},
+    http::{HeaderMap, Method, StatusCode},
     response::Response,
     routing::get,
 };
-use enterplace_console::{Console, Form, html};
+use enterplace_console::{Console, Fail, answer, body_of, ok, signed_in, text};
 use enterplace_core::policy::Permission;
 use serde_json::{Map, Value, json};
 
@@ -320,29 +321,36 @@ pub(crate) async fn test_provider(state: &AppState, version: &Snapshot, index: u
     result
 }
 
-/// The console's Deployments page and its connection test.
+/// The console's Deployments page, in its app at `/console/app/#/deployments`: its JSON API
+/// (`/console/api/deployments`, which also runs the connection test) and the redirect from the old address.
 pub(crate) fn console(state: Arc<AppState>) -> enterplace_console::Extension {
-    let (shown, tested) = (state.clone(), state);
-    let routes: Router<Console> = Router::new().route(
-        "/deployments",
-        get(
-            move |State(console): State<Console>, headers: HeaderMap, uri: Uri| {
-                let state = shown.clone();
-                async move { page(&state, &console, &headers, &uri, None).await }
-            },
+    // Weak: the console must not keep the gateway alive after the server is dropped.
+    let state = Arc::downgrade(&state);
+    let routes: Router<Console> = Router::new()
+        .route(
+            "/deployments",
+            get(|| async { enterplace_console::redirect("/console/app/#/deployments") }),
         )
-        .post(
-            move |State(console): State<Console>, headers: HeaderMap, uri: Uri, body: String| {
-                let state = tested.clone();
-                async move { test(&state, &console, &headers, &uri, &body).await }
-            },
-        ),
-    );
+        .route("/api/deployments", get(view).post(test))
+        .layer(Extension(state));
     enterplace_console::Extension {
         nav: vec![("/console/deployments".into(), TITLE.into())],
         routes,
         ..enterplace_console::Extension::default()
     }
+}
+
+/// The gateway the page reads, gone once the server is dropped.
+type Gateway = std::sync::Weak<AppState>;
+
+fn gateway(state: &Gateway) -> Result<Arc<AppState>, Fail> {
+    state.upgrade().ok_or_else(|| {
+        Fail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The gateway is shutting down. Reload the page once Enterplace is running again."
+                .into(),
+        )
+    })
 }
 
 fn number(value: &Value, unit: &str) -> String {
@@ -352,209 +360,215 @@ fn number(value: &Value, unit: &str) -> String {
     }
 }
 
-async fn page(
-    state: &AppState,
-    console: &Console,
-    headers: &HeaderMap,
-    uri: &Uri,
-    tested: Option<&Value>,
-) -> Response {
-    let Some(admin) = console.signed_in(headers).await else {
-        return enterplace_console::redirect("/console/sign-in");
+fn may_test(admin: &enterplace_console::Admin) -> bool {
+    admin.may(Permission::EditPolicy) && !admin.confined()
+}
+
+/// One deployment as the page lays it out: its state tag and one line of what the gateway knows of it.
+fn deployment_row(d: &Value) -> Value {
+    let (state, note) = match d["state"].as_str() {
+        Some("up") => ("up", String::new()),
+        Some("cooling") => (
+            "cooling",
+            format!("{} s left", d["cooling_seconds"].as_u64().unwrap_or(0)),
+        ),
+        _ => ("down", String::new()),
     };
-    let version = state.version();
-    let view = deployments(state, &version);
-    let mut rows = String::new();
-    for d in view["deployments"].as_array().into_iter().flatten() {
-        let text = |field: &str| d[field].as_str().unwrap_or_default();
-        let state_tag = match text("state") {
-            "up" => html::tag("allow", "up", ""),
-            "cooling" => html::tag(
-                "warn",
-                "cooling",
-                &format!("{} s left", d["cooling_seconds"].as_u64().unwrap_or(0)),
-            ),
-            _ => html::tag("block", "down", ""),
-        };
-        let probe = match &d["probe"] {
-            Value::Object(p) => format!(
-                "probe {} at {}",
-                p.get("outcome").and_then(Value::as_str).unwrap_or_default(),
-                p.get("time").and_then(Value::as_str).unwrap_or_default()
-            ),
-            _ if d["probed"] == true => "probe not run yet".to_string(),
-            _ => "no probe".to_string(),
-        };
-        let limits = ["rpm", "tpm", "max_parallel"]
-            .iter()
-            .filter_map(|l| d["limits"][*l].as_u64().map(|n| format!("{l} {n}")))
-            .collect::<Vec<_>>();
-        let aliases: Vec<&str> = d["aliases"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect();
-        let meta = format!(
-            "alias {} · {} · limits {} · now {} in flight, {} requests and {} tokens this minute · p50 {} p90 {} · error rate {} · {} cooldowns",
-            html::esc(&if aliases.is_empty() {
-                "none".to_string()
-            } else {
-                aliases.join(", ")
-            }),
-            html::esc(&probe),
-            html::esc(&if limits.is_empty() {
-                "none".to_string()
-            } else {
-                limits.join(", ")
-            }),
+    let probe = match &d["probe"] {
+        Value::Object(p) => format!(
+            "probe {} at {}",
+            p.get("outcome").and_then(Value::as_str).unwrap_or_default(),
+            p.get("time").and_then(Value::as_str).unwrap_or_default()
+        ),
+        _ if d["probed"] == true => "probe not run yet".to_string(),
+        _ => "no probe".to_string(),
+    };
+    let limits = ["rpm", "tpm", "max_parallel"]
+        .iter()
+        .filter_map(|l| d["limits"][*l].as_u64().map(|n| format!("{l} {n}")))
+        .collect::<Vec<_>>();
+    let aliases: Vec<&str> = d["aliases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let none = |list: String| if list.is_empty() { "none".into() } else { list };
+    json!({
+        "deployment": d["deployment"],
+        "state": state,
+        "note": note,
+        "aliases": none(aliases.join(", ")),
+        "probe": probe,
+        "limits": none(limits.join(", ")),
+        "load": format!(
+            "{} in flight, {} requests and {} tokens this minute",
             d["in_flight"].as_u64().unwrap_or(0),
             d["requests_this_minute"].as_u64().unwrap_or(0),
             d["tokens_this_minute"].as_u64().unwrap_or(0),
+        ),
+        "latency": format!(
+            "p50 {} p90 {}",
             number(&d["latency_p50_ms"], " ms"),
             number(&d["latency_p90_ms"], " ms"),
+        ),
+        "errors": format!(
+            "error rate {} · {} cooldowns",
             d["error_rate"].as_f64().unwrap_or(0.0),
             d["cooldowns"].as_u64().unwrap_or(0),
-        );
-        rows.push_str(&html::row(
-            &html::esc(text("deployment")),
-            &meta,
-            &state_tag,
-            true,
-        ));
-    }
-    if rows.is_empty() {
-        rows = html::empty(
-            "",
-            "No deployments yet",
-            "A deployment is a provider and model an alias names under aliases: in the policy. Its circuit, probe, limits and latency show here once the policy has one.",
-            "",
-        );
-    }
-    let may_test = admin.may(Permission::EditPolicy) && !admin.confined();
-    let mut providers = String::new();
-    for p in view["providers"].as_array().into_iter().flatten() {
-        let name = p["name"].as_str().unwrap_or_default();
-        let keys: Vec<String> = p["keys"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|k| {
-                let state = match k["state"].as_str() {
-                    Some("resting") => {
-                        format!("resting {} s", k["resting_seconds"].as_u64().unwrap_or(0))
-                    }
-                    _ => "ready".to_string(),
-                };
-                format!(
-                    "{} {state}, {} uses",
-                    k["key"].as_str().unwrap_or_default(),
-                    k["uses"].as_u64().unwrap_or(0)
-                )
-            })
-            .collect();
-        let mut meta = format!(
-            "{} · {}",
-            html::esc(p["kind"].as_str().unwrap_or_default()),
-            html::esc(&if keys.is_empty() {
-                "one key".to_string()
-            } else {
-                format!("key pool: {}", keys.join("; "))
-            })
-        );
-        let mut end = String::new();
-        if let Some(result) = tested.filter(|t| t["provider"] == name) {
-            end.push_str(&if result["ok"] == true {
-                html::tag("allow", "connected", &number(&result["latency_ms"], " ms"))
-            } else {
-                html::tag(
-                    "block",
-                    "failed",
-                    result["outcome"].as_str().unwrap_or_default(),
-                )
-            });
-            meta.push_str(&format!(
-                " · <b>{}</b>",
-                html::esc(result["detail"].as_str().unwrap_or_default())
-            ));
-        }
-        if may_test {
-            end.push_str(&format!(
-                r#"<form method="post" action="/console/deployments"><input type="hidden" name="provider" value="{}">{}</form>"#,
-                html::esc(name),
-                html::button("Test connection", "quiet", "submit", "")
-            ));
-        }
-        providers.push_str(&html::row(&html::esc(name), &meta, &end, true));
-    }
-    let lead = format!(
-        "Providers and their health, as {} sees them.",
-        if view["counted_by"] == "store" {
-            format!(
-                "every gateway on the store ({} now)",
-                view["gateways"].as_u64().unwrap_or(1)
-            )
-        } else {
-            "this gateway".to_string()
-        }
-    );
-    let main = format!(
-        "{}{rows}{}{providers}",
-        html::head(TITLE, &lead, ""),
-        html::head(
-            "Providers",
-            "Each provider of the policy and the keys of its pool.",
-            ""
         ),
-    );
-    console.page(StatusCode::OK, &admin, TITLE, uri, &main)
+    })
 }
 
-async fn test(
-    state: &AppState,
-    console: &Console,
-    headers: &HeaderMap,
-    uri: &Uri,
-    body: &str,
-) -> Response {
-    if !enterplace_console::same_origin(headers) {
-        return enterplace_console::foreign();
-    }
-    let Some(admin) = console.signed_in(headers).await else {
-        return enterplace_console::redirect("/console/sign-in");
-    };
-    let form = Form::parse(body);
-    let name = form.get("provider").to_string();
-    let version = state.version();
-    let index = version.providers.iter().position(|p| p.name == name);
-    let allowed = admin.may(Permission::EditPolicy) && !admin.confined();
-    let (Some(index), true) = (index, allowed) else {
-        let code = if allowed {
-            "no_such_provider"
-        } else {
-            "not_permitted"
-        };
-        let _ = console
-            .audit(
-                Some(&admin),
-                "test_provider",
-                json!({ "provider": name }),
-                Some(code),
+/// One provider and the keys of its pool.
+fn provider_row(p: &Value) -> Value {
+    let keys: Vec<String> = p["keys"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|k| {
+            let state = match k["state"].as_str() {
+                Some("resting") => {
+                    format!("resting {} s", k["resting_seconds"].as_u64().unwrap_or(0))
+                }
+                _ => "ready".to_string(),
+            };
+            format!(
+                "{} {state}, {} uses",
+                k["key"].as_str().unwrap_or_default(),
+                k["uses"].as_u64().unwrap_or(0)
             )
-            .await;
-        return page(state, console, headers, uri, None).await;
-    };
-    let result = test_provider(state, &version, index).await;
-    // The test's outcome is the record: who tested which provider, and what it answered.
-    if let Err(message) = console
-        .audit(Some(&admin), "test_provider", result.clone(), None)
-        .await
-    {
-        let failed =
-            json!({ "provider": name, "ok": false, "outcome": "not_recorded", "detail": message });
-        return page(state, console, headers, uri, Some(&failed)).await;
-    }
-    page(state, console, headers, uri, Some(&result)).await
+        })
+        .collect();
+    json!({
+        "name": p["name"],
+        "kind": p["kind"],
+        "keys": if keys.is_empty() {
+            "one key".to_string()
+        } else {
+            format!("key pool: {}", keys.join("; "))
+        },
+    })
+}
+
+/// A connection test's outcome as the page shows it beside its provider.
+fn tested(provider: &str, result: &Value) -> Value {
+    let ok = result["ok"] == true;
+    json!({
+        "provider": provider,
+        "ok": ok,
+        "tag": if ok { "connected" } else { "failed" },
+        // A passthrough provider answers without a call, so it has no latency to show.
+        "note": if ok {
+            result["latency_ms"].as_u64().map(|ms| format!("{ms} ms")).unwrap_or_default()
+        } else {
+            result["outcome"].as_str().unwrap_or_default().to_string()
+        },
+        // A passthrough provider says why there is nothing to test in `message`.
+        "detail": result.get("detail").unwrap_or(&result["message"]),
+    })
+}
+
+async fn view(
+    State(console): State<Console>,
+    Extension(state): Extension<Gateway>,
+    headers: HeaderMap,
+) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, false).await?;
+            let state = gateway(&state)?;
+            let version = state.version();
+            let view = deployments(&state, &version);
+            let rows = |field: &str, row: fn(&Value) -> Value| -> Vec<Value> {
+                view[field].as_array().into_iter().flatten().map(row).collect()
+            };
+            let lead = format!(
+                "Providers and their health, as {} sees them.",
+                if view["counted_by"] == "store" {
+                    format!(
+                        "every gateway on the store ({} now)",
+                        view["gateways"].as_u64().unwrap_or(1)
+                    )
+                } else {
+                    "this gateway".to_string()
+                }
+            );
+            Ok(ok(json!({
+                "lead": lead,
+                "may_test": may_test(&admin),
+                "deployments": rows("deployments", deployment_row),
+                "providers": rows("providers", provider_row),
+                "none": {
+                    "title": "No deployments yet",
+                    "body": "A deployment is a provider and model an alias names under aliases: in the policy. Its circuit, probe, limits and latency show here once the policy has one.",
+                },
+            })))
+        }
+        .await,
+    )
+}
+
+/// Tests a provider's connection and records who tested it and what it answered.
+async fn test(
+    State(console): State<Console>,
+    Extension(state): Extension<Gateway>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let state = gateway(&state)?;
+            let body = body_of(&bytes)?;
+            let name = text(&body, "provider").to_string();
+            let version = state.version();
+            let index = version.providers.iter().position(|p| p.name == name);
+            let allowed = may_test(&admin);
+            let (Some(index), true) = (index, allowed) else {
+                let (code, fail) = if allowed {
+                    (
+                        "no_such_provider",
+                        Fail(
+                            StatusCode::NOT_FOUND,
+                            format!("No provider is named \"{name}\" in the policy. Reload the page to see its providers."),
+                        ),
+                    )
+                } else {
+                    (
+                        "not_permitted",
+                        Fail(
+                            StatusCode::FORBIDDEN,
+                            "Your role may not test a provider's connection: it needs edit_policy and the whole install. Ask an admin who has both.".into(),
+                        ),
+                    )
+                };
+                let _ = console
+                    .audit(
+                        Some(&admin),
+                        "test_provider",
+                        json!({ "provider": name }),
+                        Some(code),
+                    )
+                    .await;
+                return Err(fail);
+            };
+            let result = test_provider(&state, &version, index).await;
+            // The test's outcome is the record: who tested which provider, and what it answered.
+            console
+                .audit(Some(&admin), "test_provider", result.clone(), None)
+                .await
+                .map_err(|message| {
+                    Fail(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        format!("The test could not be recorded: {message} Check that the audit log can be written, then try again."),
+                    )
+                })?;
+            let tested = tested(&name, &result);
+            Ok(ok(json!({ "message": tested["detail"], "tested": tested })))
+        }
+        .await,
+    )
 }
 
 #[cfg(test)]

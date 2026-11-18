@@ -28,6 +28,7 @@ export function App() {
   useEffect(() => {
     api.get<Me>("me").then(setMe).catch(() => setMe(null));
   }, []);
+  const tools = me?.tools.filter((t) => !PAGES.some((p) => p.label === t.label)) ?? [];
   return (
     <div className="grid min-h-screen md:grid-cols-[var(--nav)_1fr]">
       <nav aria-label="Console" className="grid content-start gap-1 border-b border-border p-4 md:border-r md:border-b-0">
@@ -48,11 +49,11 @@ export function App() {
             </a>
           </div>
         ))}
-        {/* The pages an embedding binary adds are still server rendered: linked as they are. */}
-        {me?.tools.length ? (
+        {/* The pages an embedding binary adds that are still server rendered: linked as they are. One moved to the app is listed above. */}
+        {tools.length ? (
           <div className="grid gap-1">
             <span className="t-tag px-4 pt-4 uppercase text-muted-foreground">Tools</span>
-            {me.tools.map((t) => (
+            {tools.map((t) => (
               <a key={t.href} href={t.href} className={item}>
                 {t.label}
               </a>

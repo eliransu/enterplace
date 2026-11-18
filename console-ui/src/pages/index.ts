@@ -13,6 +13,7 @@ import { Start } from "./Start";
 import { Prices } from "./Prices";
 import { Teams } from "./Teams";
 import { McpApprovals, McpSessions, McpTools } from "./Mcp";
+import { Deployments } from "./Deployments";
 import { PolicyEditor, PolicyVersions, RawPolicy } from "./RawPolicy";
 
 export type PageProps = { me: Me | null; query: URLSearchParams };
@@ -27,6 +28,7 @@ export const PAGES: { route: string; label: string; page: ComponentType<PageProp
   { route: "/analytics", label: "Analytics", page: Analytics },
   { route: "/spend", label: "Spend", page: Spend },
   { route: "/audit", label: "Audit log", page: Audit },
+  { route: "/deployments", label: "Deployments", page: Deployments },
   { route: "/providers", label: "Models and providers", page: Providers, policy: true },
   { route: "/mcp", label: "MCP servers", page: McpServers, policy: true },
   { route: "/mcp/tools", label: "MCP tools", page: McpTools },

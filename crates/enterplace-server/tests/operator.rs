@@ -455,51 +455,80 @@ async fn the_console_shows_deployments_tests_a_provider_and_a_requests_time_by_s
             .body(Body::empty())
     };
 
-    let deployments = send(&g.gw.router, page("/console/deployments")?).await?;
-    assert_eq!(deployments.status, StatusCode::OK);
-    for wanted in [
-        "gone/g",
-        "mock/m",
-        "cooling",
-        "rpm 100",
-        "Test connection",
-        "this gateway",
-    ] {
-        assert!(
-            deployments.body.contains(wanted),
-            "{wanted} missing from the Deployments page"
-        );
+    // The old address lands on the app's page.
+    let moved = send(&g.gw.router, page("/console/deployments")?).await?;
+    assert_eq!(moved.status, StatusCode::SEE_OTHER);
+    assert_eq!(moved.header("location"), "/console/app/#/deployments");
+
+    let deployments = send(&g.gw.router, page("/console/api/deployments")?).await?;
+    assert_eq!(deployments.status, StatusCode::OK, "{}", deployments.body);
+    let view: Value = serde_json::from_str(&deployments.body)?;
+    assert_eq!(view["may_test"], true, "an admin may test a connection");
+    assert!(
+        view["lead"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("this gateway"),
+        "{}",
+        view["lead"]
+    );
+    let shown = view["deployments"].to_string();
+    for wanted in ["gone/g", "mock/m", "cooling", "rpm 100"] {
+        assert!(shown.contains(wanted), "{wanted} missing from {shown}");
     }
+    assert!(
+        view["providers"]
+            .as_array()
+            .is_some_and(|p| p.iter().any(|p| p["name"] == "mock")),
+        "{}",
+        view["providers"]
+    );
     let test = |provider: &str| {
-        Request::post("/console/deployments")
+        Request::post("/console/api/deployments")
             .header(header::HOST, HOST)
             .header(header::ORIGIN, format!("http://{HOST}"))
             .header(header::COOKIE, &cookie)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(Body::from(format!("provider={provider}")))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({ "provider": provider }).to_string(),
+            ))
     };
     let tested = send(&g.gw.router, test("mock")?).await?;
-    assert_eq!(tested.status, StatusCode::OK);
-    assert!(tested.body.contains("connected"), "the result is shown");
+    assert_eq!(tested.status, StatusCode::OK, "{}", tested.body);
+    let tested: Value = serde_json::from_str(&tested.body)?;
+    assert_eq!(tested["tested"]["tag"], "connected", "the result is shown");
     let failed = send(&g.gw.router, test("wrong")?).await?;
+    let failed: Value = serde_json::from_str(&failed.body)?;
+    assert_eq!(failed["tested"]["tag"], "failed");
     assert!(
-        failed.body.contains("failed") && failed.body.contains("refused the key"),
-        "a refused key is shown with what to check"
+        failed["tested"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("refused the key"),
+        "a refused key is shown with what to check: {failed}"
     );
+    let missing = send(&g.gw.router, test("nope")?).await?;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND, "{}", missing.body);
     // A form from another site tests nothing.
-    let foreign = Request::post("/console/deployments")
+    let foreign = Request::post("/console/api/deployments")
         .header(header::HOST, HOST)
         .header(header::ORIGIN, "http://elsewhere.test")
         .header(header::COOKIE, &cookie)
         .body(Body::from("provider=mock"))?;
-    assert_ne!(send(&g.gw.router, foreign).await?.status, StatusCode::OK);
+    assert_eq!(
+        send(&g.gw.router, foreign).await?.status,
+        StatusCode::FORBIDDEN
+    );
     let log = std::fs::read_to_string(&g.audit)?;
     let tests = log
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .filter(|r| r["action"] == "test_provider" && r["via"] == "console")
         .count();
-    assert_eq!(tests, 2, "each console test is recorded once");
+    assert_eq!(
+        tests, 3,
+        "each console test is recorded once, the refused one too"
+    );
 
     // The request's record sheet, as the console app reads it, says where its time went.
     let row = send(
