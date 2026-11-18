@@ -126,10 +126,10 @@ audit: {{ path: enterplace-audit.jsonl }}
         for path, title in [("requests", "No requests yet"), ("analytics", "Nothing to rank yet"), ("spend", "No spend and no budgets yet"),
                             ("people", "Only your admin key so far"), ("teams", "No teams yet"), ("policy", "One rule lets everyone in"),
                             ("mcp/approvals", "No MCP servers yet"), ("audit", "Only setup records so far")]:
-            # The pages that moved to the console app: the old address lands there, and the page fills in after its
-            # first read.
-            moved = path in ("people", "analytics", "requests", "spend", "audit")
-            chrome.go(f"{base}/console/{path}", f"{base}/console/app/#/{path}" if moved else "")
+            # Every page moved to the console app: the old address lands there, and the page fills in after its first
+            # read. The policy page is the app's raw policy.
+            route = "policy/raw" if path == "policy" else path
+            chrome.go(f"{base}/console/{path}", f"{base}/console/app/#/{route}")
             chrome.wait(f"document.body.innerText.includes({title!r})", f"the {path} page")
             check(title in chrome.js("document.body.innerText") and chrome.js("!!document.querySelector('.g-empty a.g-btn[href^=\"/console/start\"], main a[href^=\"/console/start\"]')"),
                   f"{path} says what fills it and opens the Start here step")
