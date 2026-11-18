@@ -229,8 +229,9 @@ def main():
                         "Send your first request to turn done by itself", 15)
             mark("step done")
             chrome.shot(out / "4-first-data.png")
-            chrome.go(f"http://127.0.0.1:{gport}/console/requests")
-            check("enterplace-demo" in chrome.js("document.body.innerText"), "the request is in Requests")
+            # Requests is in the console app: it fills in after its first read of the API.
+            chrome.go(f"http://127.0.0.1:{gport}/console/app/#/requests")
+            chrome.wait("document.body.innerText.includes('enterplace-demo')", "the request in Requests")
             chrome.shot(out / "5-requests.png")
         finally:
             chrome.close()
@@ -269,8 +270,8 @@ def main():
             check(f"Bearer {MOCK_KEY}" in Mock.seen, "the provider got the key pasted in the console")
             chrome.wait("document.querySelector('#step-2[data-state=done]') || document.body.innerText.includes('Your first requests arrived')",
                         "Send your first request to turn done", 15)
-            chrome.go(f"http://127.0.0.1:{gport}/console/requests")
-            check("gpt-5" in chrome.js("document.body.innerText"), "the request is in Requests")
+            chrome.go(f"http://127.0.0.1:{gport}/console/app/#/requests")
+            chrome.wait("document.body.innerText.includes('gpt-5')", "the request in Requests")
         finally:
             chrome.close()
 
@@ -336,9 +337,9 @@ def main():
             chrome.go(f"{gateway}/console/start")
             chrome.wait("document.querySelector('#step-2[data-state=done]') || document.body.innerText.includes('Your first requests arrived')",
                         "Point Claude Code at Enterplace to turn done", 15)
-            chrome.go(f"{gateway}/console/requests")
-            # Table headers are set in capitals by CSS, so innerText reads "(EST.)".
-            check("(est.)" in chrome.js("document.body.innerText").lower(), "Requests shows the cost as an estimate")
+            chrome.go(f"{gateway}/console/app/#/requests")
+            # Table headers may be set in capitals by CSS, so innerText can read "(EST.)".
+            chrome.wait("document.body.innerText.toLowerCase().includes('(est.)')", "Requests showing the cost as an estimate")
             chrome.shot(out / "8-subscription-request.png")
         finally:
             chrome.close()

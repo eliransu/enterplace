@@ -1,4 +1,5 @@
-//! The Requests and Analytics pages and the kept body view, through the console's routes, from the local chain.
+//! The Requests API of the console app, the kept body view and the Analytics page, through the console's routes,
+//! from the local chain.
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -203,90 +204,191 @@ fn records(s: &Setup) -> Result<Vec<Value>, Error> {
         .collect())
 }
 
+/// The JSON the console app reads, with its status.
+async fn api(app: &Router, path: &str, cookie: &str) -> Result<(StatusCode, Value), Error> {
+    let (status, _, body) = send(app, get(path, cookie)?).await?;
+    Ok((status, serde_json::from_str(&body)?))
+}
+
+fn ids(list: &Value) -> Vec<String> {
+    list["rows"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|r| r["id"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn has(list: &Value, prefix: &str) -> bool {
+    ids(list).iter().any(|id| id.starts_with(prefix))
+}
+
+#[tokio::test]
+async fn the_old_address_lands_on_the_app_with_its_filters_and_open_request() -> TestResult {
+    let s = setup("moved")?;
+    // No session needed: the app asks for one, and sign-in returns to the app route.
+    let (status, location) = {
+        let response = s
+            .app
+            .clone()
+            .oneshot(get(
+                "/console/requests?team=payments&open=01PAY0000000000000000000001&page=2&junk=x",
+                "",
+            )?)
+            .await?;
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        (response.status(), location)
+    };
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        location,
+        "/console/app/#/requests?team=payments&record=01PAY0000000000000000000001&page=2"
+    );
+    let (status, _, _) = send(
+        &s.app,
+        post(
+            "/console/requests/body",
+            &sign_in(&s.app, NOA).await?,
+            "id=01PAY0000000000000000000001",
+        )?,
+    )
+    .await?;
+    assert_ne!(status, StatusCode::OK, "the old form route is gone");
+    Ok(())
+}
+
 #[tokio::test]
 async fn the_request_log_filters_and_proves_each_row() -> TestResult {
     let s = setup("log")?;
+    let (status, _) = api(&s.app, "/console/api/requests", "").await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
     let cookie = sign_in(&s.app, NOA).await?;
-    let (status, _, page) = send(&s.app, get("/console/requests", &cookie)?).await?;
+    let (status, list) = api(&s.app, "/console/api/requests", &cookie).await?;
     assert_eq!(status, StatusCode::OK);
-    for id in [
-        "01PAY0000000000000000000001",
-        "01SRC0000000000000000000002",
-        "01REF0000000000000000000003",
-    ] {
-        assert!(page.contains(id), "{id} is listed");
-    }
-    // No Proof column saying Verified on every row: a row that does not prove says so in its outcome.
-    assert!(!page.contains("<th>Proof</th>") && page.contains(r#"href="/console/requests""#));
+    assert_eq!(
+        ids(&list),
+        [
+            "01REF0000000000000000000003",
+            "01SRC0000000000000000000002",
+            "01PAY0000000000000000000001",
+        ],
+        "newest first"
+    );
+    // No proof tag saying Verified on every row: a row that does not prove says so in its own tag.
+    assert!(
+        list["rows"]
+            .as_array()
+            .is_some_and(|r| r.iter().all(|r| r["proof"].is_null()))
+    );
     // Outcomes read as the Audit log reads them.
-    assert!(
-        page.contains(">Allowed<") && !page.contains(">Allow<"),
-        "{page}"
+    let pay = &list["rows"][2];
+    assert_eq!(pay["outcome"]["text"], "Allowed");
+    assert_eq!(pay["outcome"]["kind"], "allow");
+    assert_eq!(
+        list["rows"][0]["outcome"]["text"],
+        "Refused: model not allowed"
     );
-    assert!(
-        page.contains("<th class=\"g-table__num\">Tokens</th>"),
-        "{page}"
-    );
-    assert!(
-        page.contains("aria-current=\"page\">Requests"),
-        "the nav marks the page"
-    );
+    assert_eq!(pay["tokens"], "1,200");
+    assert_eq!(pay["cost"], "$4.00");
+    assert_eq!(pay["latency"], "840 ms");
+    assert_eq!(list["rows"][1]["latency"], "2,400 ms");
+    assert_eq!(pay["person"], "maya.cohen");
+    assert_eq!(pay["team"], "payments");
+    assert_eq!(list["est_header"], "USD (est.)");
+    assert_eq!(list["pager"]["text"], "Page 1, 3 requests");
+    assert_eq!(list["pager"]["older"], false);
+    assert!(list["empty"].is_null());
 
-    let (_, _, page) = send(&s.app, get("/console/requests?team=payments", &cookie)?).await?;
-    assert!(page.contains("01PAY") && !page.contains("01SRC"));
-    let (_, _, page) = send(
+    let (_, list) = api(&s.app, "/console/api/requests?team=payments", &cookie).await?;
+    assert!(has(&list, "01PAY") && !has(&list, "01SRC"));
+    let (_, list) = api(
         &s.app,
-        get(
-            "/console/requests?outcome=refused&agent=claude-code",
-            &cookie,
-        )?,
+        "/console/api/requests?outcome=refused&agent=claude-code",
+        &cookie,
     )
     .await?;
-    assert!(page.contains("01REF") && !page.contains("01PAY"));
-    let (_, _, page) = send(&s.app, get("/console/requests?min_ms=1000", &cookie)?).await?;
-    assert!(page.contains("01SRC") && !page.contains("01PAY"));
-    let (_, _, page) = send(&s.app, get("/console/requests?min_ms=fast", &cookie)?).await?;
+    assert!(has(&list, "01REF") && !has(&list, "01PAY"));
+    let (_, list) = api(&s.app, "/console/api/requests?min_ms=1000", &cookie).await?;
+    assert!(has(&list, "01SRC") && !has(&list, "01PAY"));
+    let (status, refused) = api(&s.app, "/console/api/requests?min_ms=fast", &cookie).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
-        page.contains("Write milliseconds as a whole number"),
-        "the fix is named"
+        refused["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("Write milliseconds as a whole number")),
+        "the fix is named: {refused}"
     );
+    let (_, list) = api(&s.app, "/console/api/requests?team=nobody", &cookie).await?;
+    assert_eq!(list["empty"]["title"], "No request matches");
 
-    let (_, _, page) = send(
+    let (status, sheet) = api(
         &s.app,
-        get(
-            "/console/requests?open=01PAY0000000000000000000001",
-            &cookie,
-        )?,
+        "/console/api/requests/01PAY0000000000000000000001",
+        &cookie,
     )
     .await?;
-    assert!(
-        page.contains("Read the kept body")
-            && page.contains("/console/audit?record=01PAY0000000000000000000001")
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sheet["body"], true, "Read the kept body is offered");
+    assert_eq!(
+        sheet["proof"]["audit"],
+        "/console/audit?record=01PAY0000000000000000000001"
     );
     // The row's detail names its session and its turn, and the session is one more text filter.
+    let details = sheet["details"].to_string();
     assert!(
-        page.contains("ses_0123456789abcdef01234567") && page.contains("turn_0123456789abcdef"),
-        "the session and the turn are in the row's detail"
+        details.contains("ses_0123456789abcdef01234567")
+            && details.contains("turn_0123456789abcdef"),
+        "the session and the turn are in the row's detail: {details}"
     );
     assert!(
-        page.contains(r#"name="session""#) && page.contains(r#"for="f-session">Session</label>"#)
+        list["filters"].as_array().is_some_and(|f| f
+            .iter()
+            .any(|f| f["name"] == "session" && f["label"] == "Session")),
+        "{list}"
     );
-    let (_, _, page) = send(
+    let (_, list) = api(
         &s.app,
-        get(
-            "/console/requests?session=ses_0123456789abcdef01234567",
-            &cookie,
-        )?,
+        "/console/api/requests?session=ses_0123456789abcdef01234567",
+        &cookie,
     )
     .await?;
-    assert!(page.contains("01PAY") && !page.contains("01SRC"));
-    assert!(page.contains(r#"name="session" value="ses_0123456789abcdef01234567""#));
+    assert!(has(&list, "01PAY") && !has(&list, "01SRC"));
+    assert!(
+        list["filters"].as_array().is_some_and(|f| f
+            .iter()
+            .any(|f| f["name"] == "session" && f["value"] == "ses_0123456789abcdef01234567")),
+        "{list}"
+    );
+    let (status, gone) = api(
+        &s.app,
+        "/console/api/requests/01NONE000000000000000000009",
+        &cookie,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(
+        gone["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("No request has the ID"))
+    );
 
     // A record changed on disk no longer proves: its row says so.
     let text = std::fs::read_to_string(&s.audit)?.replace("dana.levi", "dana.levy");
     std::fs::write(&s.audit, text)?;
-    let (_, _, page) = send(&s.app, get("/console/requests", &cookie)?).await?;
-    assert!(page.contains(">Changed<"));
+    let (_, list) = api(&s.app, "/console/api/requests", &cookie).await?;
+    assert!(
+        list["rows"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|r| r["proof"]["text"] == "Changed")),
+        "{list}"
+    );
     Ok(())
 }
 
@@ -297,7 +399,7 @@ async fn a_kept_body_is_shown_only_to_its_viewers_and_every_view_is_recorded() -
     let (status, _, page) = send(
         &s.app,
         post(
-            "/console/requests/body",
+            "/console/api/requests/body",
             &noa,
             "id=01PAY0000000000000000000001",
         )?,
@@ -316,7 +418,7 @@ async fn a_kept_body_is_shown_only_to_its_viewers_and_every_view_is_recorded() -
     let (status, _, page) = send(
         &s.app,
         post(
-            "/console/requests/body",
+            "/console/api/requests/body",
             &lee,
             "id=01PAY0000000000000000000001",
         )?,
@@ -328,8 +430,26 @@ async fn a_kept_body_is_shown_only_to_its_viewers_and_every_view_is_recorded() -
         && r["person"] == "lee.k"
         && r["code"] == "not_a_viewer"));
 
+    // A body never kept is gone, and asking for it is recorded too.
+    let (status, _, page) = send(
+        &s.app,
+        post(
+            "/console/api/requests/body",
+            &noa,
+            "id=01SRC0000000000000000000002",
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(page.contains("keeps no body"), "{page}");
+    assert!(
+        records(&s)?
+            .iter()
+            .any(|r| r["action"] == "view_body" && r["code"] == "no_body")
+    );
+
     // A view from another site is refused before anything is read.
-    let foreign = Request::post("/console/requests/body")
+    let foreign = Request::post("/console/api/requests/body")
         .header(header::HOST, HOST)
         .header(header::ORIGIN, "https://evil.example")
         .header(header::COOKIE, &noa)
@@ -451,46 +571,47 @@ async fn the_old_analytics_address_opens_the_app_with_its_query() -> TestResult 
 }
 
 #[tokio::test]
-async fn the_request_filters_show_four_labeled_up_front_and_fold_the_rest() -> TestResult {
+async fn the_request_filters_show_five_labeled_up_front_and_fold_the_rest() -> TestResult {
     let s = setup("filters")?;
     let cookie = sign_in(&s.app, NOA).await?;
-    let (_, _, page) = send(&s.app, get("/console/requests", &cookie)?).await?;
-    let more = page
-        .find(">More filters</summary>")
-        .ok_or("no More filters")?;
+    let (_, list) = api(&s.app, "/console/api/requests", &cookie).await?;
+    let fields = list["filters"].as_array().cloned().unwrap_or_default();
+    let field = |name: &str| fields.iter().find(|f| f["name"] == name).cloned();
     for name in ["person", "team", "model", "from", "to"] {
-        let at = page
-            .find(&format!(r#"name="{name}""#))
-            .ok_or(format!("no {name} field"))?;
-        assert!(at < more, "{name} is shown before More filters");
+        let f = field(name).ok_or(format!("no {name} field"))?;
+        assert_eq!(f["more"], false, "{name} is shown before More filters");
         assert!(
-            page.contains(&format!(r#"for="f-{name}""#)),
+            f["label"].as_str().is_some_and(|l| !l.is_empty()),
             "{name} has a label"
         );
     }
     for name in ["key", "provider", "session", "code", "min_cost", "max_ms"] {
-        let at = page
-            .find(&format!(r#"name="{name}""#))
-            .ok_or(format!("no {name} field"))?;
-        assert!(at > more, "{name} is behind More filters");
+        let f = field(name).ok_or(format!("no {name} field"))?;
+        assert_eq!(f["more"], true, "{name} is behind More filters");
     }
-    assert!(!page.contains("Filters: person, team"), "{page}");
-    assert!(!page.contains(r#"type="text" name="person" value="" aria-label"#));
-    assert!(
-        page.contains(r#"type="date" name="from""#),
+    assert_eq!(
+        field("from").ok_or("no from")?["kind"],
+        "date",
         "the range is a date picker"
     );
     // More filters is closed until one of its own filters is set.
-    assert!(!page.contains("<details open"), "{page}");
-    let (_, _, page) = send(&s.app, get("/console/requests?team=payments", &cookie)?).await?;
+    assert_eq!(list["more_open"], false);
+    let (_, list) = api(&s.app, "/console/api/requests?team=payments", &cookie).await?;
+    assert_eq!(list["more_open"], false, "a filter up front opens nothing");
+    let (_, list) = api(&s.app, "/console/api/requests?min_ms=1000", &cookie).await?;
+    assert_eq!(list["more_open"], true, "a folded filter that is set shows");
+    // A link that carries a full time keeps it in a text field: a date picker would drop it.
+    let (_, list) = api(
+        &s.app,
+        "/console/api/requests?from=2026-11-14T09:30:00Z",
+        &cookie,
+    )
+    .await?;
     assert!(
-        !page.contains("<details open"),
-        "a filter up front opens nothing"
-    );
-    let (_, _, page) = send(&s.app, get("/console/requests?min_ms=1000", &cookie)?).await?;
-    assert!(
-        page.contains("<details open"),
-        "a folded filter that is set shows"
+        list["filters"]
+            .as_array()
+            .is_some_and(|f| f.iter().any(|f| f["name"] == "from" && f["kind"] == "text")),
+        "{list}"
     );
     Ok(())
 }
@@ -499,51 +620,43 @@ async fn the_request_filters_show_four_labeled_up_front_and_fold_the_rest() -> T
 async fn the_request_sheet_says_who_what_and_how_and_folds_its_proof() -> TestResult {
     let s = setup("sheet")?;
     let cookie = sign_in(&s.app, NOA).await?;
-    let (_, _, page) = send(
+    let (_, sheet) = api(
         &s.app,
-        get(
-            "/console/requests?open=01PAY0000000000000000000001",
-            &cookie,
-        )?,
+        "/console/api/requests/01PAY0000000000000000000001",
+        &cookie,
     )
     .await?;
-    let sheet = page
-        .find(r#"<aside class="g-sheet""#)
-        .and_then(|at| page.get(at..))
-        .ok_or("no sheet")?;
-    assert!(
-        sheet.contains(">maya.cohen, gpt-4o-mini, allowed</h2>"),
-        "{sheet}"
+    assert_eq!(
+        sheet["title"], "maya.cohen, gpt-4o-mini, allowed",
+        "no ID as the title"
     );
-    assert!(!sheet.contains(">Request 01PAY"), "no ID as the title");
-    assert!(sheet.contains(">Proof</summary>"), "no Proof section");
-    let fold = sheet.find("<details").ok_or("nothing folded")?;
-    let (facts, folded) = sheet.split_at(fold);
-    assert_eq!(facts.matches("<dt ").count(), 6, "{facts}");
-    for fact in [
-        ">Time<", ">Person<", ">Model<", ">Tokens<", ">Cost<", ">Rule<",
-    ] {
-        assert!(facts.contains(fact), "{fact} is one of the six");
-    }
+    assert!(sheet["failed"].is_null());
+    let facts: Vec<&str> = sheet["facts"]
+        .as_array()
+        .map(|f| f.iter().filter_map(|f| f[0].as_str()).collect())
+        .unwrap_or_default();
+    assert_eq!(facts, ["Time", "Person", "Model", "Tokens", "Cost", "Rule"]);
+    assert_eq!(sheet["facts"][3][1], "1,200 (1,000 in, 200 out)");
+    // The hash is folded under Proof, not one of the six.
     assert!(
-        !facts.contains(">Hash<") && folded.contains(">Hash<"),
-        "the hash is folded"
+        sheet["proof"]["facts"]
+            .as_array()
+            .is_some_and(|f| f.iter().any(|f| f[0] == "Hash"))
     );
     assert!(
-        !sheet.contains("<details open"),
-        "the folded sections start closed"
+        sheet["proof"]["text"]
+            .as_str()
+            .is_some_and(|t| t.contains("follows the record before it"))
     );
-    let (_, _, page) = send(
+    let (_, sheet) = api(
         &s.app,
-        get(
-            "/console/requests?open=01REF0000000000000000000003",
-            &cookie,
-        )?,
+        "/console/api/requests/01REF0000000000000000000003",
+        &cookie,
     )
     .await?;
-    assert!(
-        page.contains(">dana.levi, gpt-4o-mini, refused (model_not_allowed)</h2>"),
-        "{page}"
+    assert_eq!(
+        sheet["title"],
+        "dana.levi, gpt-4o-mini, refused (model_not_allowed)"
     );
     Ok(())
 }

@@ -14,6 +14,7 @@ pub mod html;
 mod insights;
 mod pages;
 mod people;
+mod requests;
 mod saml;
 mod sso;
 mod start;
@@ -584,12 +585,11 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .merge(people::routes())
         .merge(credentials::routes())
         .merge(analytics::routes())
+        .merge(requests::routes())
         .merge(start::routes())
         .route("/spend", get(spend_page))
         .route("/live.json", get(live_json))
         .route("/kills/restore", post(restore_traffic))
-        .route("/requests", get(insights::requests_page))
-        .route("/requests/body", post(insights::body_view))
         .route("/assets/{file}", get(asset))
         .route("/assets/fonts/{file}", get(font))
         .merge(extension.routes)

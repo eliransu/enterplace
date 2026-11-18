@@ -1044,10 +1044,10 @@ async fn watched_requests_are_in_usage_the_request_log_analytics_and_coverage() 
         tools.text
     );
 
-    // The console's Requests page and the Analytics API, filtered and ranked by the new dimension.
+    // The console's Requests and Analytics APIs, as the app reads them, filtered and ranked by the new dimension.
     let mut owner = Browser::admin(&gw.app).await?;
     let requests = owner
-        .go(&gw.app, "GET", "/console/requests?source=watch", &[])
+        .go(&gw.app, "GET", "/console/api/requests?source=watch", &[])
         .await?;
     assert_eq!(requests.status, StatusCode::OK);
     assert!(

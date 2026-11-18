@@ -463,20 +463,35 @@ async fn a_key_made_on_the_checklist_shows_once_and_a_request_turns_its_step_don
 async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestResult {
     let s = setup("empty")?;
     let cookie = sign_in(&s.app, ADMIN_KEY).await?;
-    // Requests, empty: the one line to paste, and the one reason a desktop user sees nothing arrive.
-    let (_, _, page) = send(&s.app, get("/console/requests", &cookie)?).await?;
+    // Requests is in the app: its API carries the empty state, the one line to paste, and the one reason a desktop
+    // user sees nothing arrive.
+    let request = Request::get("/console/api/requests")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())?;
+    let (_, _, requests) = send(&s.app, request).await?;
+    let requests: serde_json::Value = serde_json::from_str(&requests)?;
+    assert_eq!(requests["empty"]["title"], "No requests yet");
+    assert_eq!(
+        requests["empty"]["action"]["href"],
+        "/console/start?track=coding#step-2"
+    );
+    assert_eq!(
+        requests["empty"]["docs"],
+        "https://docs.enterplace.dev/integrations/coding-tools/"
+    );
     assert!(
-        page.contains("Claude desktop app")
-            && page.contains("Run <span class=\"t-mono-sm\">claude</span> in a terminal"),
-        "{page}"
+        requests["empty"]["command"]
+            .as_str()
+            .is_some_and(|c| c.starts_with("export ANTHROPIC_BASE_URL=")),
+        "{requests}"
+    );
+    let notes = requests["empty"]["notes"].to_string();
+    assert!(
+        notes.contains("Claude desktop app") && notes.contains("Run claude in a terminal"),
+        "{notes}"
     );
     let pages = [
-        (
-            "/console/requests",
-            "No requests yet",
-            "/console/start?track=coding#step-2",
-            "/integrations/coding-tools/",
-        ),
         (
             "/console/spend",
             "No spend and no budgets yet",

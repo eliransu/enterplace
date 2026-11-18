@@ -501,10 +501,10 @@ async fn the_console_shows_deployments_tests_a_provider_and_a_requests_time_by_s
         .count();
     assert_eq!(tests, 2, "each console test is recorded once");
 
-    // The request's row says where its time went.
+    // The request's record sheet, as the console app reads it, says where its time went.
     let row = send(
         &g.gw.router,
-        page(&format!("/console/requests?open={decision}"))?,
+        page(&format!("/console/api/requests/{decision}"))?,
     )
     .await?;
     assert_eq!(row.status, StatusCode::OK);
