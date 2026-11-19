@@ -13,7 +13,9 @@ Every model request gets an identity, a policy decision and a tamper-evident aud
 
 [![CI](https://github.com/eliransu/enterplace/actions/workflows/ci.yml/badge.svg)](https://github.com/eliransu/enterplace/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-enterplace--docs.enterplace.dev-e3ff45.svg)](https://docs.enterplace.dev/)
+[![Docs](https://img.shields.io/badge/docs-docs.enterplace.dev-e3ff45.svg)](https://docs.enterplace.dev/)
+[![Good first issues](https://img.shields.io/github/issues/eliransu/enterplace/good%20first%20issue?label=good%20first%20issues&color=7057ff)](https://github.com/eliransu/enterplace/issues?q=is%3Aopen+label%3A%22good+first+issue%22)
+[![Discussions](https://img.shields.io/github/discussions/eliransu/enterplace?label=discussions)](https://github.com/eliransu/enterplace/discussions)
 
 [Documentation](https://docs.enterplace.dev/) · [Quickstart](https://docs.enterplace.dev/getting-started/quickstart/) · [Coding tools](https://docs.enterplace.dev/integrations/coding-tools/) · [Policy reference](https://docs.enterplace.dev/governance/policy/)
 
