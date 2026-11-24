@@ -281,40 +281,56 @@ pub fn open_store(
     keys_path: &Path,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Option<Arc<dyn Store>>, String> {
-    Ok(open_postgres(policy_path, keys_path, env)?.map(|pg| -> Arc<dyn Store> { pg }))
+    Ok(open_shared(policy_path, keys_path, env)?.1)
 }
 
-fn open_postgres(
+/// The store the policy names, as the Postgres store when it is one (its database also keeps batches, the request
+/// log and the enterprise tables), and as a store either way.
+type Opened = (Option<Arc<crate::store::PgStore>>, Option<Arc<dyn Store>>);
+
+fn open_shared(
     policy_path: &Path,
     keys_path: &Path,
     env: &dyn Fn(&str) -> Option<String>,
-) -> Result<Option<Arc<crate::store::PgStore>>, String> {
+) -> Result<Opened, String> {
     let text = match std::fs::read_to_string(policy_path) {
         Ok(text) if config::names_store(&text) => text,
         // Not a store, or a policy that does not read: `config::load` reports it as it always has.
-        _ => return Ok(None),
+        _ => return Ok((None, None)),
     };
     let setting = config::load_texts(policy_path, &text, keys_path, "")
         .map_err(|errors| errors.join("\n"))?
         .store
         .ok_or("the policy's store section could not be read. Run `enterplace check` on it.")?;
-    let variable = &setting.postgres_url_env;
-    let url = env(variable).filter(|v| !v.trim().is_empty()).ok_or_else(|| {
-        format!(
-            "the policy keeps keys, kill switches and budgets in Postgres, and {variable} (its postgres_url_env) is not set. Set it to the connection string (`export {variable}=postgres://user:password@host:5432/database`) and start again."
-        )
-    })?;
-    let opened = crate::store::open(variable, &url)?;
-    opened.share_cache(setting.answer_cache);
-    if let Some(master) = crate::MasterKey::from_env(env)? {
-        opened.unlock(master)?;
-    }
-    let shared: Arc<dyn Store> = opened.clone();
+    let (postgres, shared): (_, Arc<dyn Store>) = if setting.cloudflare {
+        let url = env(crate::cloudflare_store::URL_ENV)
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| crate::cloudflare_store::DEFAULT_URL.into());
+        let opened = crate::cloudflare_store::open(&url)?;
+        opened.share_cache(setting.answer_cache);
+        if let Some(master) = crate::MasterKey::from_env(env)? {
+            opened.unlock(master)?;
+        }
+        (None, opened)
+    } else {
+        let variable = &setting.postgres_url_env;
+        let url = env(variable).filter(|v| !v.trim().is_empty()).ok_or_else(|| {
+            format!(
+                "the policy keeps keys, kill switches and budgets in Postgres, and {variable} (its postgres_url_env) is not set. Set it to the connection string (`export {variable}=postgres://user:password@host:5432/database`) and start again."
+            )
+        })?;
+        let opened = crate::store::open(variable, &url)?;
+        opened.share_cache(setting.answer_cache);
+        if let Some(master) = crate::MasterKey::from_env(env)? {
+            opened.unlock(master)?;
+        }
+        (Some(opened.clone()), opened)
+    };
     store::attach(keys_path, &shared);
     if setting.policy_from == config::PolicyFrom::Store {
         keep_policy_in_store(policy_path, &text, &shared)?;
     }
-    Ok(Some(opened))
+    Ok((postgres, Some(shared)))
 }
 
 /// Serves the policy from the store's live version. The first gateway on an empty store imports the file as
@@ -680,11 +696,10 @@ pub fn governed_with(
     extend: &(dyn Fn(Host<'_>) -> Result<crate::Extension, String> + Sync),
 ) -> Result<Governed, String> {
     let keys_file = keys_path.map_or_else(|| config::keys_path_for(policy_path), Path::to_path_buf);
-    let postgres = open_postgres(policy_path, &keys_file, provider_key)?;
-    let shared = postgres.clone().map(|pg| -> Arc<dyn Store> { pg });
+    let (postgres, shared) = open_shared(policy_path, &keys_file, provider_key)?;
     // Without a store, credentials are sealed in a file beside the policy, under the master key `enterplace start` made.
     // A master key that does not read stops the start only when a provider needs it, as for MCP credentials below.
-    let master = if postgres.is_none() {
+    let master = if shared.is_none() {
         match crate::MasterKey::from_env(provider_key) {
             Ok(master) => master,
             Err(err) if !config::credentials_named(policy_path).is_empty() => {
@@ -695,7 +710,7 @@ pub fn governed_with(
     } else {
         None
     };
-    let vault = match (&postgres, master) {
+    let vault = match (&shared, master) {
         (None, Some(master)) => {
             let vault: Arc<dyn enterplace_core::store::Credentials> =
                 Arc::new(crate::credentials::FileVault::new(policy_path, master));
@@ -799,7 +814,7 @@ pub fn governed_with(
         .rule_list()
         .iter()
         .any(|r| r.limits.capture.is_some());
-    let master = if capturing || postgres.is_some() {
+    let master = if capturing || shared.is_some() {
         crate::MasterKey::from_env(provider_key)?
     } else {
         None

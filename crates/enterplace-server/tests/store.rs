@@ -24,7 +24,7 @@ use axum::{
     http::{Request, StatusCode, header},
     routing::post,
 };
-use enterplace_server::Governed;
+use enterplace_server::{Governed, store::TestStore};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -38,8 +38,8 @@ const PAT: &str = "enterplace_pat_0123456789abcdef01234567890";
 const LEE: &str = "enterplace_lee_0123456789abcdef01234567890";
 
 /// A fresh database for one test, on the server ENTERPLACE_TEST_DATABASE_URL names. `None` when it is not set.
-async fn database(test: &str) -> Result<Option<enterplace_server::store::TestDatabase>, Error> {
-    enterplace_server::store::TestDatabase::create(&format!(
+async fn database(test: &str) -> Result<Option<enterplace_server::store::TestStore>, Error> {
+    enterplace_server::store::TestStore::create(&format!(
         "enterplace_{}_{test}",
         std::process::id()
     ))
@@ -216,10 +216,9 @@ fn dir(name: &str) -> Result<PathBuf, Error> {
 /// A gateway serving the policy in its own directory, watching for changes as `enterplace serve` does.
 fn gateway(dir: &Path, url: &str, port: u16) -> Result<Governed, Error> {
     let policy = dir.join("enterplace.policy.yaml");
-    std::fs::write(&policy, self::policy(port))?;
-    let url = url.to_string();
+    std::fs::write(&policy, TestStore::policy(&self::policy(port)))?;
     let gw = enterplace_server::governed(&policy, None, &|variable| match variable {
-        "ENTERPLACE_STORE_URL" => Some(url.clone()),
+        _ if TestStore::env(variable, url).is_some() => TestStore::env(variable, url),
         // No master key: these gateways keep no provider credentials.
         "ENTERPLACE_MASTER_KEY" | "ENTERPLACE_MASTER_KEY_FILE" => None,
         _ => Some("provider-secret".into()),
@@ -506,7 +505,17 @@ async fn a_sliding_budget_counts_the_last_24_hours_exactly_across_two_gateways()
         ))
     };
     let (old, recent) = (ago(25), ago(2));
-    {
+    if TestStore::cloudflare() {
+        enterplace_server::cloudflare_store::call(
+            &url,
+            "settle",
+            serde_json::json!({ "changes": [
+                ["team:slid", "sliding:24h", old, 100, 0],
+                ["team:slid", "sliding:24h", recent, 0.004, 0],
+            ]}),
+        )
+        .await?;
+    } else {
         let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
         tokio::spawn(connection);
         client
@@ -548,7 +557,11 @@ async fn a_sliding_budget_counts_the_last_24_hours_exactly_across_two_gateways()
     );
     assert!(refusal.contains("The budget slides"), "{refusal}");
     assert!(refusal.contains("any 24 hours"), "{refusal}");
-    // The settled costs are in the current slot; the slot older than the window, holding nothing, is gone.
+    // The settled costs are in the current slot; the slot older than the window, holding nothing, is gone. Read
+    // with SQL, so on Postgres only.
+    if TestStore::cloudflare() {
+        return Ok(());
+    }
     let start = Instant::now();
     loop {
         let held = slots(&url).await?;
@@ -702,17 +715,29 @@ async fn with_postgres_down_known_keys_work_and_budgeted_requests_are_refused() 
     let Some(url) = database("down").await? else {
         return Ok(());
     };
-    let config: tokio_postgres::Config = url.parse()?;
-    let host = match config.get_hosts().first() {
-        Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
-        _ => "127.0.0.1".into(),
+    let (relay, through) = if TestStore::cloudflare() {
+        let port = url
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse().ok())
+            .ok_or("no port")?;
+        let relay = relay(("127.0.0.1".into(), port)).await?;
+        let through = format!("http://127.0.0.1:{}", relay.port);
+        (relay, through)
+    } else {
+        let config: tokio_postgres::Config = url.parse()?;
+        let host = match config.get_hosts().first() {
+            Some(tokio_postgres::config::Host::Tcp(host)) => host.clone(),
+            _ => "127.0.0.1".into(),
+        };
+        let relay = relay((host, config.get_ports().first().copied().unwrap_or(5432))).await?;
+        let through = key_value(
+            &config,
+            Some(relay.port),
+            config.get_dbname().unwrap_or("postgres"),
+        );
+        (relay, through)
     };
-    let relay = relay((host, config.get_ports().first().copied().unwrap_or(5432))).await?;
-    let through = key_value(
-        &config,
-        Some(relay.port),
-        config.get_dbname().unwrap_or("postgres"),
-    );
     let port = provider().await?;
     let a_dir = dir("down-a")?;
     let a = gateway(&a_dir, &through, port)?;
@@ -949,7 +974,24 @@ async fn serve_refuses_to_start_without_its_store_or_on_a_newer_schema() -> Test
     let port = provider().await?;
     let d = dir("start")?;
     let policy = d.join("enterplace.policy.yaml");
-    std::fs::write(&policy, self::policy(port))?;
+    std::fs::write(&policy, TestStore::policy(&self::policy(port)))?;
+    if TestStore::cloudflare() {
+        let closed = enterplace_server::governed(&policy, None, &|variable| match variable {
+            "ENTERPLACE_CLOUDFLARE_STORE_URL" => {
+                Some(format!("http://127.0.0.1:{}", closed_port()))
+            }
+            "ENTERPLACE_MASTER_KEY" | "ENTERPLACE_MASTER_KEY_FILE" => None,
+            _ => Some("provider-secret".into()),
+        })
+        .err()
+        .unwrap_or_default();
+        assert!(
+            closed.contains("cannot be reached") && closed.contains("wrangler"),
+            "{closed}"
+        );
+        drop(gateway(&d, &url, port)?);
+        return Ok(());
+    }
     let unset = enterplace_server::governed(&policy, None, &|variable| {
         (variable != "ENTERPLACE_STORE_URL").then(|| "provider-secret".to_string())
     })
@@ -1100,6 +1142,9 @@ async fn tls_relay(to: (String, u16)) -> Result<u16, Error> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tls_to_the_store_does_what_sslmode_and_sslrootcert_say() -> TestResult {
+    if TestStore::cloudflare() {
+        return Ok(()); // Postgres alone: the Cloudflare store has no connection string.
+    }
     let Some(url) = database("tls").await? else {
         return Ok(());
     };
@@ -1179,6 +1224,9 @@ async fn tls_to_the_store_does_what_sslmode_and_sslrootcert_say() -> TestResult 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_unix_socket_connects_without_tls_whatever_sslmode_says() -> TestResult {
+    if TestStore::cloudflare() {
+        return Ok(()); // Postgres alone: the Cloudflare store has no connection string.
+    }
     let Some(url) = database("socket").await? else {
         return Ok(());
     };
@@ -1466,7 +1514,11 @@ async fn every_gateway_shows_the_same_deployment_health() -> TestResult {
     assert_eq!(live["state"], "up");
     assert!(live["latency_p50_ms"].is_number(), "{live}");
 
-    // The FOCUS cost file is summed in the store's request index, so b writes the lines of a's requests.
+    // The FOCUS cost file is summed in the store's request index, so b writes the lines of a's requests. The
+    // request index is kept in Postgres alone.
+    if TestStore::cloudflare() {
+        return Ok(());
+    }
     let start = Instant::now();
     loop {
         let response = b
@@ -1765,12 +1817,11 @@ async fn a_console_sign_in_on_one_gateway_is_good_on_all_and_a_sign_out_ends_it_
 
 #[tokio::test(flavor = "multi_thread")]
 async fn one_gateway_at_a_time_holds_a_deployment_s_probe() -> TestResult {
-    use enterplace_core::store::Store;
     let Some(url) = database("probe_lease").await? else {
         return Ok(());
     };
-    let a = enterplace_server::store::open("ENTERPLACE_TEST_DATABASE_URL", &url)?;
-    let b = enterplace_server::store::open("ENTERPLACE_TEST_DATABASE_URL", &url)?;
+    let a = TestStore::open(&url)?;
+    let b = TestStore::open(&url)?;
     let ttl = Duration::from_secs(1);
     assert!(a.probe_lease("p/m".into(), ttl).await?);
     assert!(!b.probe_lease("p/m".into(), ttl).await?, "a holds it");
@@ -1842,10 +1893,9 @@ rules:
     let start = |name: &str| -> Result<Governed, Error> {
         let dir = dir(name)?;
         let path = dir.join("enterplace.policy.yaml");
-        std::fs::write(&path, &policy)?;
-        let url = url.clone();
+        std::fs::write(&path, TestStore::policy(&policy))?;
         let gw = enterplace_server::governed(&path, None, &|variable| match variable {
-            "ENTERPLACE_STORE_URL" => Some(url.clone()),
+            _ if TestStore::env(variable, &url).is_some() => TestStore::env(variable, &url),
             "ENTERPLACE_MASTER_KEY" | "ENTERPLACE_MASTER_KEY_FILE" => None,
             _ => Some("provider-secret".into()),
         })?;
@@ -1898,7 +1948,11 @@ rules:
 
     // The ended sessions are read with the store's poll, never on a request: 400 requests of 400 other sessions,
     // on a rule with an enforcing plugin, cost the database fewer transactions than there are requests (the two
-    // gateways' polls are all it sees). One read of the store per request would be at least 400.
+    // gateways' polls are all it sees). One read of the store per request would be at least 400. Counted by
+    // Postgres's statistics, so on Postgres only.
+    if TestStore::cloudflare() {
+        return Ok(());
+    }
     let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
     tokio::spawn(connection);
     // A backend reports its transactions at most once a second: wait for the reports before each reading.
@@ -1947,6 +2001,9 @@ rules:
 
 #[tokio::test]
 async fn a_test_database_is_dropped_with_its_guard() -> TestResult {
+    if TestStore::cloudflare() {
+        return Ok(()); // Postgres alone: the Cloudflare store has no connection string.
+    }
     let Some(url) = database("guard").await? else {
         return Ok(());
     };

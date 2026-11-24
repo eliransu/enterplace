@@ -6,6 +6,7 @@
 //! They need a real Postgres: set ENTERPLACE_TEST_DATABASE_URL (see `store.rs`). Without it each test says it was
 //! skipped and passes.
 
+use enterplace_server::store::TestStore;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -21,7 +22,7 @@ use axum::{
     http::{Request, StatusCode, header},
     routing::post,
 };
-use enterplace_core::store::{CachedAnswer, Store};
+use enterplace_core::store::CachedAnswer;
 use enterplace_server::Governed;
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -34,8 +35,8 @@ const ADMIN: &str = "enterplace_admin_0123456789abcdef012345678";
 const PAT: &str = "enterplace_pat_0123456789abcdef01234567890";
 const LEE: &str = "enterplace_lee_0123456789abcdef01234567890";
 
-async fn database(test: &str) -> Result<Option<enterplace_server::store::TestDatabase>, Error> {
-    enterplace_server::store::TestDatabase::create(&format!(
+async fn database(test: &str) -> Result<Option<enterplace_server::store::TestStore>, Error> {
+    enterplace_server::store::TestStore::create(&format!(
         "enterplace_ha_{}_{test}",
         std::process::id()
     ))
@@ -84,7 +85,7 @@ async fn provider() -> Result<(u16, Arc<AtomicUsize>), Error> {
 }
 
 fn policy(port: u16) -> String {
-    format!(
+    TestStore::policy(&format!(
         "version: 1
 store: {{ postgres_url_env: ENTERPLACE_STORE_URL, answer_cache: true }}
 providers:
@@ -121,7 +122,7 @@ rules:
     principals: {{ any: true }}
     models: []
 "
-    )
+    ))
 }
 
 fn dir(name: &str) -> Result<PathBuf, Error> {
@@ -136,7 +137,7 @@ fn gateway(dir: &Path, url: &str, port: u16) -> Result<Governed, Error> {
     std::fs::write(&policy, self::policy(port))?;
     let url = url.to_string();
     let gw = enterplace_server::governed(&policy, None, &|variable| match variable {
-        "ENTERPLACE_STORE_URL" => Some(url.clone()),
+        _ if TestStore::env(variable, &url).is_some() => TestStore::env(variable, &url),
         "ENTERPLACE_MASTER_KEY" | "ENTERPLACE_MASTER_KEY_FILE" => None,
         _ => Some("provider-secret".into()),
     })?;
@@ -237,21 +238,24 @@ async fn an_answer_cached_on_one_gateway_is_served_by_the_other_in_its_scope_onl
     assert!(!hit);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-    // The answer is written to the store without the request waiting for it.
-    let reader = enterplace_server::store::open("ENTERPLACE_STORE_URL", &url)?;
-    let connection = reader.connect().await?;
-    eventually(
-        Duration::from_secs(3),
-        "the answer is in the store",
-        || async {
-            let row = connection
-                .query_one("SELECT count(*) FROM enterplace_answer_cache", &[])
-                .await?;
-            Ok(row.try_get::<_, i64>(0)? == 1)
-        },
-    )
-    .await?;
-    reader.close();
+    // The answer is written to the store without the request waiting for it. Counted with SQL, so on Postgres; b
+    // serving it below shows it on either store.
+    if !TestStore::cloudflare() {
+        let reader = enterplace_server::store::open("ENTERPLACE_STORE_URL", &url)?;
+        let connection = reader.connect().await?;
+        eventually(
+            Duration::from_secs(3),
+            "the answer is in the store",
+            || async {
+                let row = connection
+                    .query_one("SELECT count(*) FROM enterplace_answer_cache", &[])
+                    .await?;
+                Ok(row.try_get::<_, i64>(0)? == 1)
+            },
+        )
+        .await?;
+        reader.close();
+    }
     // Gateway b never saw the request: it reads the answer from the store, and the provider is not asked again.
     let app = b.router.clone();
     eventually(
@@ -336,8 +340,8 @@ async fn the_store_keeps_answers_and_embeddings_by_scope_until_they_run_out() ->
     let Some(url) = database("vectors").await? else {
         return Ok(());
     };
-    let a = enterplace_server::store::open("ENTERPLACE_STORE_URL", &url)?;
-    let b = enterplace_server::store::open("ENTERPLACE_STORE_URL", &url)?;
+    let a = TestStore::open(&url)?;
+    let b = TestStore::open(&url)?;
     let entry = |key: u8, scope: &str, ttl: u64, vector: Option<Vec<f32>>| CachedAnswer {
         key: [key; 32],
         scope: scope.to_string(),
@@ -392,8 +396,7 @@ async fn the_store_keeps_answers_and_embeddings_by_scope_until_they_run_out() ->
     keys.sort_unstable();
     assert_eq!(keys, [1, 2]);
     assert!(b.cache_vectors([8; 32]).await?.is_empty());
-    a.close();
-    b.close();
+    drop((a, b));
     Ok(())
 }
 
@@ -453,18 +456,16 @@ async fn two_gateways_leasing_one_budget_never_pass_it_and_leave_none_of_it_unus
         tokio::time::sleep(Duration::from_millis(1200)).await;
     }
     assert_eq!(admitted, 300, "the whole budget, and no more");
-    let client = enterplace_server::store::open("ENTERPLACE_STORE_URL", &url)?;
-    let connection = client.connect().await?;
-    let row = connection
-        .query_one(
-            "SELECT spent, reserved FROM enterplace_spend WHERE scope = 'team:leased' AND per = 'day'",
-            &[],
-        )
-        .await?;
-    let (spent, reserved): (f64, f64) = (row.try_get(0)?, row.try_get(1)?);
+    let client = TestStore::open(&url)?;
+    let day = client
+        .spend("team:leased".into())
+        .await?
+        .into_iter()
+        .find(|(per, ..)| per == "day")
+        .ok_or("no spend for the day")?;
+    let (spent, reserved) = (day.2, day.3);
     assert!((spent - 0.9).abs() < 1e-6, "spent {spent}");
     assert!(reserved.abs() < 1e-6, "{reserved} is still held");
-    client.close();
     Ok(())
 }
 
@@ -543,8 +544,8 @@ async fn every_gateway_on_the_store_is_listed_with_its_version_and_health() -> T
     let Some(url) = database("replicas").await? else {
         return Ok(());
     };
-    let a = enterplace_server::store::open("ENTERPLACE_STORE_URL", &url)?;
-    let b = enterplace_server::store::open("ENTERPLACE_STORE_URL", &url)?;
+    let a = TestStore::open(&url)?;
+    let b = TestStore::open(&url)?;
     let read = a.clone();
     eventually(
         Duration::from_secs(6),
@@ -557,12 +558,17 @@ async fn every_gateway_on_the_store_is_listed_with_its_version_and_health() -> T
     for replica in &listed {
         assert!(replica.healthy, "{replica:?}");
         assert_eq!(replica.version, enterplace_core::VERSION);
-        assert!(replica.schema.contains("core ") && replica.schema.contains("enterplace_ha 1"));
+        assert!(
+            TestStore::cloudflare()
+                || (replica.schema.contains("core ") && replica.schema.contains("enterplace_ha 1")),
+            "{}",
+            replica.schema
+        );
         assert!(replica.started.ends_with('Z') && replica.seen >= replica.started);
     }
     // A gateway that stopped stays listed, and is no longer healthy once its heartbeat is 10 seconds old.
     let gone = b.replicas().await?;
-    b.close();
+    drop(b);
     assert_eq!(gone.len(), 2);
     let read = a.clone();
     eventually(
@@ -574,7 +580,7 @@ async fn every_gateway_on_the_store_is_listed_with_its_version_and_health() -> T
         },
     )
     .await?;
-    a.close();
+    drop(a);
     Ok(())
 }
 

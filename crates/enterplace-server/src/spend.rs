@@ -255,7 +255,7 @@ fn store_unavailable(err: &str) -> Refusal {
         StatusCode::SERVICE_UNAVAILABLE,
         "store_unavailable",
         format!(
-            "Refused: a budget applies to this request, and Enterplace cannot reach its store to reserve what it could cost ({err}). Requests under a budget are refused until the store is back; requests without one still work. Tell your Enterplace admin to check the Postgres database the policy's store: names."
+            "Refused: a budget applies to this request, and Enterplace cannot reach its store to reserve what it could cost ({err}). Requests under a budget are refused until the store is back; requests without one still work. Tell your Enterplace admin to check the store the policy's store: section names (its Postgres database, or on Cloudflare the Worker, with npx wrangler tail)."
         ),
     )
 }
@@ -267,7 +267,7 @@ fn rate_store_unavailable(err: &str) -> Refusal {
         StatusCode::SERVICE_UNAVAILABLE,
         "store_unavailable",
         format!(
-            "Refused: a rate limit applies to this request, and Enterplace cannot reach its store to count it against the limit every replica shares ({err}). Requests under rpm or tpm are refused until the store is back; requests without one still work. Tell your Enterplace admin to check the Postgres database the policy's store: names."
+            "Refused: a rate limit applies to this request, and Enterplace cannot reach its store to count it against the limit every replica shares ({err}). Requests under rpm or tpm are refused until the store is back; requests without one still work. Tell your Enterplace admin to check the store the policy's store: section names (its Postgres database, or on Cloudflare the Worker, with npx wrangler tail)."
         ),
     )
 }

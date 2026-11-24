@@ -908,7 +908,7 @@ pub fn dry_run(records: impl BufRead, since: &str, draft: &Loaded, keys: &Policy
     let mut run = DryRun {
         since: since.to_string(),
         source: "audit_log".into(),
-        note: "Replayed this gateway's audit log only: there is no store, so requests other gateways served are not in it. Add store: to the policy to replay every gateway's.".into(),
+        note: "Replayed this gateway's audit log only: the request log every gateway shares is kept in a Postgres store, which this policy does not name, so requests other gateways served are not in it. Name one with store: { postgres_url_env: DATABASE_URL } to replay every gateway's.".into(),
         ..DryRun::default()
     };
     let text = |r: &Value, k: &str| {

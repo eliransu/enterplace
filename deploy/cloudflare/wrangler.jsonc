@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // Enterplace on Cloudflare: a Worker in front of gateway containers, the audit chain in R2, the store in Postgres.
+  // Enterplace on Cloudflare: a Worker in front of gateway containers, the audit chain in R2, the store in a Durable
+  // Object. Everything runs on Cloudflare: no database or service outside it.
   // Edit the four marked lines, then `npx wrangler deploy`. README.md has the whole procedure.
   "name": "enterplace", // EDIT: the Worker's name
   "main": "src/index.ts",
@@ -16,8 +17,17 @@
       "instance_type": "basic"
     }
   ],
-  "durable_objects": { "bindings": [{ "name": "GATEWAY", "class_name": "EnterplaceGateway" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EnterplaceGateway"] }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "GATEWAY", "class_name": "EnterplaceGateway" },
+      // Keys, kill switches, budgets, rate limits, sessions, credentials and policy versions, shared by every gateway.
+      { "name": "STORE", "class_name": "EnterplaceStore" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["EnterplaceGateway"] },
+    { "tag": "v2", "new_sqlite_classes": ["EnterplaceStore"] }
+  ],
   // The bucket must exist: npx wrangler r2 bucket create enterplace-audit
   "r2_buckets": [{ "binding": "AUDIT", "bucket_name": "enterplace-audit" }], // EDIT: the bucket for audit segments
   "vars": {

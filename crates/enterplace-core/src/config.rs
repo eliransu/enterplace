@@ -200,6 +200,7 @@ const KNOWN: &[&str] = &[
     "teams",
     "store",
     "postgres_url_env",
+    "cloudflare",
     "policy_from",
     "approval",
     "credential",
@@ -542,7 +543,10 @@ struct JwtFile {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoreFile {
-    postgres_url_env: String,
+    #[serde(default)]
+    postgres_url_env: Option<String>,
+    #[serde(default)]
+    cloudflare: bool,
     #[serde(default)]
     policy_from: Option<String>,
     #[serde(default)]
@@ -555,8 +559,11 @@ struct StoreFile {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreSetting {
     /// The environment variable that holds the Postgres connection string. The string never goes in the file: it
-    /// carries a password.
+    /// carries a password. Empty with `cloudflare`.
     pub postgres_url_env: String,
+    /// The store is the Durable Object of the Cloudflare template (`store: { cloudflare: true }`), reached through
+    /// the Worker in front of the gateway containers, instead of Postgres.
+    pub cloudflare: bool,
     /// Where the policy is read from while Enterplace runs: the file (the default, for GitOps) or the store's live
     /// version (edited in the console and the admin API).
     pub policy_from: PolicyFrom,
@@ -566,6 +573,17 @@ pub struct StoreSetting {
     /// Cached answers are kept in the store too, so every gateway serves them. Off unless set: answers are then
     /// written to the database.
     pub answer_cache: bool,
+}
+
+impl StoreSetting {
+    /// The store in words, for messages: `the store named by DATABASE_URL` or `the Cloudflare store`.
+    pub fn named(&self) -> String {
+        if self.cloudflare {
+            "the Cloudflare store (the EnterplaceStore Durable Object)".into()
+        } else {
+            format!("the store named by {}", self.postgres_url_env)
+        }
+    }
 }
 
 /// Which one is the source of the policy when the store is set. Never both: see `store.policy_from`.
@@ -5638,8 +5656,18 @@ fn store_setting(
     errors: &mut Vec<String>,
 ) -> Option<StoreSetting> {
     let store = parsed.store.as_ref()?;
-    let env = &store.postgres_url_env;
-    if env.is_empty() || !env.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+    let env = store.postgres_url_env.clone().unwrap_or_default();
+    if store.cloudflare == store.postgres_url_env.is_some() {
+        errors.push(format!(
+            "{}:{}: store names one place: `postgres_url_env: DATABASE_URL` for a Postgres of your own, or `cloudflare: true` for the Durable Object of the Cloudflare template (deploy/cloudflare). Give one of them.",
+            file.display(),
+            line_of_key(text, "store", 1, usize::MAX)
+        ));
+        return None;
+    }
+    if !store.cloudflare
+        && (env.is_empty() || !env.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+    {
         errors.push(format!(
             "{}:{}: postgres_url_env is the name of an environment variable that holds the connection string, for example DATABASE_URL. The string itself carries a password and never goes in this file.",
             file.display(),
@@ -5660,7 +5688,8 @@ fn store_setting(
         }
     };
     Some(StoreSetting {
-        postgres_url_env: env.clone(),
+        postgres_url_env: env,
+        cloudflare: store.cloudflare,
         policy_from,
         approval: store.approval,
         answer_cache: store.answer_cache,
@@ -5964,7 +5993,7 @@ pub fn needs_restart(old: &Loaded, new: &Loaded) -> Vec<String> {
     // may change while Enterplace runs.
     let connection = |s: &Option<StoreSetting>| {
         s.as_ref()
-            .map(|s| (s.postgres_url_env.clone(), s.policy_from))
+            .map(|s| (s.postgres_url_env.clone(), s.cloudflare, s.policy_from))
     };
     if connection(&old.store) != connection(&new.store) {
         reasons.push(
@@ -7767,6 +7796,46 @@ rules:
             return Err("groq".into());
         };
         assert!(!same_connection(was, now));
+        Ok(())
+    }
+
+    #[test]
+    fn the_store_is_a_postgres_or_the_cloudflare_durable_object_never_both() -> TestResult {
+        let cloudflare = check(
+            "store-cf",
+            &format!("store: {{ cloudflare: true }}\n{MORE}"),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
+        let store = cloudflare.store.as_ref().ok_or("no store")?;
+        assert!(store.cloudflare && store.postgres_url_env.is_empty());
+        assert!(store.named().contains("Cloudflare"), "{}", store.named());
+        let postgres = check(
+            "store-pg",
+            &format!("store: {{ postgres_url_env: DATABASE_URL }}\n{MORE}"),
+            None,
+        )?
+        .map_err(|e| e.join("\n"))?;
+        assert!(!postgres.store.as_ref().ok_or("no store")?.cloudflare);
+        // Moving from one to the other is a new connection: a restart.
+        assert!(
+            needs_restart(&postgres, &cloudflare)
+                .join("\n")
+                .contains("store section changed")
+        );
+        for (name, store) in [
+            (
+                "store-both",
+                "{ cloudflare: true, postgres_url_env: DATABASE_URL }",
+            ),
+            ("store-neither", "{ cloudflare: false }"),
+        ] {
+            let text = errors(check(name, &format!("store: {store}\n{MORE}"), None)?)?;
+            assert!(
+                text.contains("store names one place") && text.contains("cloudflare: true"),
+                "{text}"
+            );
+        }
         Ok(())
     }
 

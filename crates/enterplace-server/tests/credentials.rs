@@ -6,6 +6,7 @@
 //! The Postgres tests need ENTERPLACE_TEST_DATABASE_URL, as the store tests do; without it they print that they were
 //! skipped and pass.
 
+use enterplace_server::store::TestStore;
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -36,8 +37,8 @@ const SECOND: &str = "sk-live-second-value-e5f6a7b8-2222";
 const SPARE: &str = "sk-spare-value-0a9b8c7d-3333";
 const HOST: &str = "enterplace.test";
 
-async fn database(test: &str) -> Result<Option<enterplace_server::store::TestDatabase>, Error> {
-    enterplace_server::store::TestDatabase::create(&format!(
+async fn database(test: &str) -> Result<Option<enterplace_server::store::TestStore>, Error> {
+    enterplace_server::store::TestStore::create(&format!(
         "enterplace_{}_{test}",
         std::process::id()
     ))
@@ -75,7 +76,7 @@ async fn provider() -> Result<(Arc<Mutex<Vec<String>>>, u16), Error> {
 
 /// The policy of a gateway whose provider key is `key`: `key_env: MOCK_KEY` or `credential: openai-prod`.
 fn policy(port: u16, key: &str) -> String {
-    format!(
+    TestStore::policy(&format!(
         "version: 1
 store: {{ postgres_url_env: ENTERPLACE_STORE_URL }}
 providers:
@@ -90,7 +91,7 @@ rules:
     principals: {{ any: true }}
     models: [m]
 "
-    )
+    ))
 }
 
 fn dir(name: &str) -> Result<PathBuf, Error> {
@@ -105,7 +106,7 @@ fn gateway(dir: &Path, url: &str, text: &str, master: Option<&str>) -> Result<Go
     std::fs::write(&policy, text).map_err(|e| e.to_string())?;
     let (url, master) = (url.to_string(), master.map(str::to_string));
     let gw = enterplace_server::governed(&policy, None, &|variable| match variable {
-        "ENTERPLACE_STORE_URL" => Some(url.clone()),
+        _ if TestStore::env(variable, &url).is_some() => TestStore::env(variable, &url),
         "ENTERPLACE_MASTER_KEY" => master.clone(),
         "ENTERPLACE_MASTER_KEY_FILE" => None,
         _ => Some("env-provider-key".into()),
@@ -221,7 +222,7 @@ async fn a_credential_added_on_one_gateway_is_used_rotated_and_removed_on_anothe
     let loaded = enterplace_core::config::load(&two_dir.join("enterplace.policy.yaml"), None)
         .map_err(|e| e.join("\n"))?;
     let env = |variable: &str| match variable {
-        "ENTERPLACE_STORE_URL" => Some(url.clone()),
+        _ if TestStore::env(variable, &url).is_some() => TestStore::env(variable, &url),
         "ENTERPLACE_MASTER_KEY" => Some(MASTER.to_string()),
         _ => None,
     };
@@ -544,6 +545,8 @@ async fn without_a_store_the_console_app_points_to_key_env() -> TestResult {
 }
 
 fn policy_without_store(port: u16) -> String {
-    policy(port, "key_env: MOCK_KEY")
-        .replace("store: { postgres_url_env: ENTERPLACE_STORE_URL }\n", "")
+    policy(port, "key_env: MOCK_KEY").replace(
+        &TestStore::policy("store: { postgres_url_env: ENTERPLACE_STORE_URL }\n"),
+        "",
+    )
 }

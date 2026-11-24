@@ -199,7 +199,7 @@ pub fn extend_with(
     // The license never stops traffic: a feature that cannot run says why and the gateway starts without it.
     let Some(pg) = host.postgres else {
         eprintln!(
-            "warning: the license unlocks enterprise features (members, audit export, retention, alerts, devices, watch mode) that are kept in Postgres, but the policy has no store. Add `store: {{ postgres_url_env: DATABASE_URL }}` to the policy and restart; until then they are off and the console signs in with admin keys only."
+            "warning: the license unlocks enterprise features (members, audit export, retention, alerts, devices, watch mode) that are kept in Postgres, and the policy names no Postgres store (the Cloudflare store keeps keys, budgets and policy versions, not these). Add `store: {{ postgres_url_env: DATABASE_URL }}` to the policy and restart; until then they are off and the console signs in with admin keys only."
         );
         return Ok(extension);
     };

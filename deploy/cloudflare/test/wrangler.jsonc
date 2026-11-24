@@ -1,0 +1,9 @@
+{
+  // `npx wrangler dev -c test/wrangler.jsonc`: the store's Durable Object on workerd, for gateways run locally.
+  // A local check only, never deployed.
+  "name": "enterplace-store-check",
+  "main": "store-worker.ts",
+  "compatibility_date": "2026-11-01",
+  "durable_objects": { "bindings": [{ "name": "STORE", "class_name": "EnterplaceStore" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EnterplaceStore"] }]
+}

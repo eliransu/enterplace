@@ -60,7 +60,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
                 None => {
                     out["off"] = json!({
                         "title": "Credentials need the store",
-                        "body": "Provider credentials are kept in Postgres, sealed with a master key, and this gateway's policy has no store: section. Keep each provider key in an environment variable with key_env (or a file with key_file), or add store: to the policy and set ENTERPLACE_MASTER_KEY.",
+                        "body": "Provider credentials are kept in the store, sealed with a master key, and this gateway's policy has no store: section. Keep each provider key in an environment variable with key_env (or a file with key_file), or add store: to the policy and set ENTERPLACE_MASTER_KEY.",
                     });
                     return Ok(ok(out));
                 }

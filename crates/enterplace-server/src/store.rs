@@ -53,14 +53,14 @@ pub use tokio_postgres;
 
 /// How often the versions of the keys and the kill switches are read: a change reaches every gateway within this
 /// plus the reloader's second for keys, and within this for kill switches, under the 1 second the switches promise.
-const POLL: Duration = Duration::from_millis(500);
+pub(crate) const POLL: Duration = Duration::from_millis(500);
 
 /// The longest a call waits for the database before it counts as down.
-const WAIT: Duration = Duration::from_secs(5);
+pub(crate) const WAIT: Duration = Duration::from_secs(5);
 
 /// How long a settlement is retried while the database is away. A hold never given back keeps counting against
 /// its budget until the period ends, which errs on the side of the budget.
-const SETTLE_FOR: Duration = Duration::from_secs(600);
+pub(crate) const SETTLE_FOR: Duration = Duration::from_secs(600);
 
 /// The schema, one migration per entry, applied in order. `enterplace_schema` holds the number of each one applied.
 /// Never edit an entry that has shipped: add one.
@@ -264,8 +264,8 @@ INSERT INTO enterplace_versions VALUES ('raises', 0) ON CONFLICT (name) DO NOTHI
 const SHARED_CACHE_BYTES: i64 = 1024 * 1024 * 1024;
 
 /// A gateway writes its heartbeat every this many polls (2 seconds), and counts as healthy for 10 seconds after.
-const HEARTBEAT_EVERY: u64 = 4;
-const HEALTHY_FOR_SECS: f64 = 10.0;
+pub(crate) const HEARTBEAT_EVERY: u64 = 4;
+pub(crate) const HEALTHY_FOR_SECS: f64 = 10.0;
 
 /// The version of the sessions events plugins ended, in a namespace of its own (`enterplace_events`). The sessions
 /// themselves are rows of `enterplace_sessions` whose `who` starts with `events:`, under a key no console session has.
@@ -274,24 +274,24 @@ const EVENTS_MIGRATIONS: &[&str] =
     &["INSERT INTO enterplace_versions VALUES ('events', 0) ON CONFLICT (name) DO NOTHING;"];
 
 /// What marks a row of `enterplace_sessions` as a session an events plugin ended, before the guardrail's name.
-const ENDED: &str = "events:";
+pub(crate) const ENDED: &str = "events:";
 
 /// A gateway's load on a deployment counts this long after it last wrote it: one that stopped holds nothing.
-const LOAD_FOR_SECS: f64 = 10.0;
+pub(crate) const LOAD_FOR_SECS: f64 = 10.0;
 
 /// A pin written this long ago is written again when its session sends, so the others know it is still in use. A
 /// session that keeps sending costs one write per gateway in this time.
-const PIN_TOUCH: Duration = Duration::from_secs(300);
+pub(crate) const PIN_TOUCH: Duration = Duration::from_secs(300);
 
 /// A gateway's latency samples count this long after it last wrote them: one that stopped is forgotten.
-const LATENCY_FOR_SECS: f64 = 600.0;
+pub(crate) const LATENCY_FOR_SECS: f64 = 600.0;
 
 /// Pins written up to this long before the last read are read again: a write is stamped before it commits, so one
 /// committed late is still picked up.
-const PIN_OVERLAP_SECS: f64 = 5.0;
+pub(crate) const PIN_OVERLAP_SECS: f64 = 5.0;
 
 /// Expired pins and stale latency rows are deleted every this many polls (a minute).
-const CLEAN_EVERY: u64 = 120;
+pub(crate) const CLEAN_EVERY: u64 = 120;
 
 /// The columns of a policy version, in the order `version_of` reads them.
 const VERSION_COLUMNS: &str =
@@ -302,7 +302,7 @@ const POLICY_LOCK: i64 = 7_349_127_342;
 
 /// What the master key seals once per database, so a gateway with another master key is refused at start rather
 /// than at the first credential it cannot open.
-const MASTER_CHECK: (&str, &[u8]) = ("enterplace master key check", b"enterplace");
+pub(crate) const MASTER_CHECK: (&str, &[u8]) = ("enterplace master key check", b"enterplace");
 
 /// The columns of a credential anyone may see, in the order `credential_of` reads them.
 const SHOWN: &str =
@@ -310,7 +310,7 @@ const SHOWN: &str =
 
 /// How much longer than its [`LEASE`] the store counts a grant in the minute, in milliseconds: a gateway's clock
 /// and the database's may drift apart a little within one second, and a lease is spent by the gateway's.
-const LEASE_MARGIN_MS: u64 = 500;
+pub(crate) const LEASE_MARGIN_MS: u64 = 500;
 
 /// The store, with the runtime its connection and poller run on. Its own runtime, so the command line (which
 /// blocks) and the server (which awaits) can both call it, and a busy server does not delay the poll.
@@ -397,13 +397,13 @@ type Pinned = (String, Instant, Instant);
 /// A credential and its value as sealed.
 type Sealed = (Credential, Vec<u8>);
 
-fn read<T: Clone>(lock: &RwLock<T>) -> T {
+pub(crate) fn read<T: Clone>(lock: &RwLock<T>) -> T {
     lock.read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
 }
 
-fn write<T>(lock: &RwLock<T>, value: T) {
+pub(crate) fn write<T>(lock: &RwLock<T>, value: T) {
     *lock
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = value;
@@ -3249,6 +3249,117 @@ impl Drop for TestDatabase {
                 "the test database {} was not dropped: the thread that drops it stopped. Drop it by hand, or remove the test Postgres with its volume.",
                 self.name
             ),
+        }
+    }
+}
+
+/// The store a test of the shared state runs against: a Postgres database of its own (the default), or with
+/// ENTERPLACE_TEST_STORE=cloudflare the Cloudflare store's own code (`deploy/cloudflare/src/store.ts`) on
+/// node:sqlite, empty, in a process of its own that ends with this. Reads as its address. A policy written for the
+/// Postgres store is changed to name the one chosen with [`policy`](Self::policy), and a gateway finds it with
+/// [`env`](Self::env).
+#[doc(hidden)]
+pub enum TestStore {
+    Postgres(Box<TestDatabase>),
+    Cloudflare {
+        url: String,
+        server: std::process::Child,
+    },
+}
+
+impl TestStore {
+    /// `None` (and a line saying so) when the backend chosen has nothing to run on.
+    pub async fn create(name: &str) -> Result<Option<Self>, Box<dyn std::error::Error>> {
+        if !Self::cloudflare() {
+            return Ok(TestDatabase::create(name)
+                .await?
+                .map(|db| Self::Postgres(Box::new(db))));
+        }
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../deploy/cloudflare/test/store-server.ts");
+        let mut server = std::process::Command::new("node")
+            .arg("--no-warnings")
+            .arg(&script)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|err| {
+                format!(
+                    "node could not be started for the Cloudflare store ({err}). Install Node.js 23.6 or later, which runs {} as it is.",
+                    script.display()
+                )
+            })?;
+        let mut port = String::new();
+        if let Some(out) = server.stdout.take() {
+            std::io::BufRead::read_line(&mut std::io::BufReader::new(out), &mut port)?;
+        }
+        let port: u16 = port
+            .trim()
+            .parse()
+            .map_err(|_| format!("the Cloudflare store server said {port:?}, not its port"))?;
+        Ok(Some(Self::Cloudflare {
+            url: format!("http://127.0.0.1:{port}"),
+            server,
+        }))
+    }
+
+    /// Whether this run tests the Cloudflare store (ENTERPLACE_TEST_STORE=cloudflare).
+    pub fn cloudflare() -> bool {
+        std::env::var("ENTERPLACE_TEST_STORE").as_deref() == Ok("cloudflare")
+    }
+
+    /// `text`, a policy naming the Postgres store by ENTERPLACE_STORE_URL, naming the store this run tests.
+    pub fn policy(text: &str) -> String {
+        if Self::cloudflare() {
+            text.replace("postgres_url_env: ENTERPLACE_STORE_URL", "cloudflare: true")
+        } else {
+            text.to_string()
+        }
+    }
+
+    /// `url` for a gateway's `variable` when it is the one that names the store: ENTERPLACE_STORE_URL for
+    /// Postgres, the Cloudflare store's variable for that one.
+    pub fn env(variable: &str, url: &str) -> Option<String> {
+        matches!(
+            variable,
+            "ENTERPLACE_STORE_URL" | crate::cloudflare_store::URL_ENV
+        )
+        .then(|| url.to_string())
+    }
+
+    /// The Cloudflare store at `url` or the Postgres store at it, as the store this run tests, for a test that
+    /// drives a store without a gateway.
+    pub fn open(url: &str) -> Result<Arc<dyn Store>, String> {
+        if Self::cloudflare() {
+            Ok(crate::cloudflare_store::open(url)?)
+        } else {
+            Ok(open("ENTERPLACE_STORE_URL", url)?)
+        }
+    }
+}
+
+impl std::ops::Deref for TestStore {
+    type Target = String;
+
+    fn deref(&self) -> &String {
+        match self {
+            Self::Postgres(db) => db,
+            Self::Cloudflare { url, .. } => url,
+        }
+    }
+}
+
+impl std::fmt::Display for TestStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self)
+    }
+}
+
+impl Drop for TestStore {
+    fn drop(&mut self) {
+        if let Self::Cloudflare { server, .. } = self {
+            let _ = server.kill();
+            let _ = server.wait();
         }
     }
 }

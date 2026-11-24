@@ -1,6 +1,6 @@
 ---
 title: Cloudflare
-description: Deploy Enterplace Enterprise on Cloudflare with the wrangler template, gateway containers behind a Worker with the audit chain in R2 and the store in Postgres, then verify and run it in production.
+description: Deploy Enterplace Enterprise on Cloudflare with the wrangler template, gateway containers behind a Worker with the audit chain in R2 and the store in a Durable Object, so nothing runs outside Cloudflare, then verify and run it in production.
 sidebar:
   label: Cloudflare
   order: 8
@@ -8,7 +8,54 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The wrangler template `cloudflare`, which ships inside the `enterplace` image, runs gateways in Cloudflare Containers behind a Worker, keeps each gateway's audit chain in R2, and keeps keys, kill switches and budgets in Postgres.
+The wrangler template `cloudflare`, which ships inside the `enterplace` image, runs gateways in Cloudflare Containers behind a Worker, keeps each gateway's audit chain in R2, and keeps keys, kill switches and budgets in a Durable Object.
+
+**The only runtime dependencies are Cloudflare and your model providers.** No database, cache or other service outside Cloudflare is needed: the license is checked offline, and everything the gateways share lives in the Worker's own Durable Object and R2 bucket.
+
+## Deploy with your coding agent
+
+Copy this prompt into Claude Code, Codex, Cursor or another coding agent. It asks you for your hostname, names, providers and license, has you sign in to Cloudflare and type each secret yourself, deploys the template and verifies it. The steps it runs are the ones below.
+
+```text
+Deploy Enterplace, the self-hosted AI gateway, to my Cloudflare account with its wrangler template, so everything runs on Cloudflare: the gateways in Cloudflare Containers behind a Worker, the store (keys, kill switches, budgets, sessions, credentials, policy versions) in a Durable Object, the audit chain in R2. No database or service outside Cloudflare.
+
+Never put a secret in chat, in a file or in a command line I can see: I type each one myself at the wrangler prompt, or you pipe a generated one straight into wrangler.
+
+First ask me, one at a time:
+- The hostname for the gateway (for example ai.example.com), in a zone on my Cloudflare account.
+- A name for the Worker (default enterplace) and for the R2 bucket (default enterplace-audit).
+- Which model providers I use (OpenAI, Anthropic, Gemini, others), and the models each rule should allow.
+- Whether I have an Enterplace license key (optional: without one it runs the open source edition).
+
+Then:
+1. Check the prerequisites and tell me what is missing: Docker running, Node.js 20 or later, and a Cloudflare account on the Workers Paid plan (Containers need it) with R2 enabled.
+2. Copy the template out of the image, pinned to the digest of the newest build:
+   docker pull ghcr.io/eliransu/enterplace:latest
+   IMAGE=$(docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/eliransu/enterplace:latest)
+   docker create --name enterplace-files "$IMAGE" && docker cp enterplace-files:/deploy/cloudflare ./enterplace-cloudflare && docker rm enterplace-files
+   cd enterplace-cloudflare && npm ci && npx wrangler login   (I sign in in the browser)
+3. Edit the lines marked EDIT in wrangler.jsonc: the Worker name, ENTERPLACE_IMAGE in image_vars (set it to $IMAGE), the bucket name, and my hostname. Set "GATEWAYS" to "1" for now.
+4. Edit enterplace.policy.yaml: one provider per provider I named (kind, url, key_env: <NAME>_PROVIDER_KEY, models), and the rules. Keep its last two lines as they are:
+   audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
+   store: { cloudflare: true }
+5. Create the bucket and deploy: npx wrangler r2 bucket create <bucket>, then npx wrangler deploy (the first build takes a few minutes).
+6. Secrets. Generate these yourself, piped so the values never show:
+   openssl rand -hex 32 | npx wrangler secret put ENTERPLACE_MASTER_KEY
+   openssl rand -hex 32 | npx wrangler secret put ENTERPLACE_EXPORT_KEY
+   openssl rand -hex 32 | tee audit-read-token.txt | npx wrangler secret put ENTERPLACE_AUDIT_READ_TOKEN
+   Then have me run, one by one, npx wrangler secret put <NAME>_PROVIDER_KEY for each provider, and ENTERPLACE_LICENSE if I have one. Tell me to keep a copy of the master key outside Cloudflare: a lost one cannot be recovered. Run npx wrangler deploy again so the gateways start with the secrets.
+7. Verify, and show me each result:
+   - curl -s https://<hostname>/healthz answers (the first request starts a container, which takes a few seconds).
+   - npx wrangler tail --format pretty | grep "First run" gives the one-time setup link. Show it to me with http://127.0.0.1:8080 replaced by https://<hostname>, for me to open, make the first admin and keep the admin key it shows once. Never ask me to paste that key into chat: I export ENTERPLACE_ADMIN_KEY in my own shell.
+   - With that key, issue a test key with POST https://<hostname>/admin/keys and send one chat request through https://<hostname>/v1/chat/completions.
+   - The audit chain: curl -s -H "Authorization: Bearer $(cat audit-read-token.txt)" https://<hostname>/_enterplace/audit/gateway-0 > chain.jsonl, then docker run --rm -v "$PWD":/w:ro "$IMAGE" audit verify /w/chain.jsonl
+8. Set "GATEWAYS" back to "2" and deploy again: keys, kill switches and budgets are shared through the store's Durable Object, so either instance answers any request.
+
+Docs as Markdown, read them for anything not covered here:
+https://docs.enterplace.dev/deploy/cloudflare.md
+https://docs.enterplace.dev/operations/store.md
+Every page: https://docs.enterplace.dev/llms.txt
+```
 
 ## What it creates
 
@@ -16,14 +63,15 @@ The wrangler template `cloudflare`, which ships inside the `enterplace` image, r
 |---|---|
 | A Worker on your hostname | Sends each request to one of `GATEWAYS` gateway instances, named `gateway-0`, `gateway-1` and on. Serves `GET /_enterplace/audit/<instance>`, the whole audit chain of one instance |
 | Durable Object class `EnterplaceGateway` and its container application | One gateway per instance, from an image built of the Enterplace image and your policy. Instances start on the first request and stop after 30 minutes without one |
+| Durable Object class `EnterplaceStore`, bound as `STORE` | The store every instance shares: keys, kill switches, budgets, rate limits, cooldowns, console sessions, sealed provider credentials, policy versions, the answer cache, and routing and health. One object, in its own SQLite |
 | R2 bucket, bound as `AUDIT` | Each instance's sealed audit segments, under `audit/<instance id>/` |
-| Workers secrets | `DATABASE_URL`, `ENTERPLACE_LICENSE`, provider keys and the rest. The Worker passes them to the container as environment variables when it starts |
+| Workers secrets | `ENTERPLACE_LICENSE`, provider keys and the rest. The Worker passes them to the container as environment variables when it starts |
 
 **The audit chain in R2.** A container's disk is new at every start, and the audit log is one hash-chained file. So the gateway seals its log every `ENTERPLACE_AUDIT_SEAL_SECONDS` (60 by default), or as soon as it reaches `ENTERPLACE_AUDIT_SEAL_BYTES` (1 MiB), and writes each sealed segment to R2. Only once R2 has a segment does the gateway remove it from disk, with an `audit_retired` record in the chain that names it and its SHA-256. A graceful stop (a deploy, or an idle instance going to sleep) seals and writes the rest first. On a start with an empty disk, the gateway fetches its newest segments back from R2 and continues the chain from the last hash. The segments in R2, in name order, followed by the records not yet sealed, are one chain from record 1 that `enterplace audit verify` proves.
 
 **No R2 access key.** The gateway sends its S3 requests to `http://audit.enterplace.internal`, a name that exists only inside the container: the Worker answers it from the bucket binding. It keeps each instance in its own folder, so one gateway cannot write another's chain, has no delete, and refuses to overwrite a segment with different bytes.
 
-**Postgres over TLS, not Hyperdrive.** Hyperdrive is a binding for Worker code. A container reaches its Worker over HTTP only, so the gateway connects to Postgres itself, with TLS checked against the Mozilla roots built into it. Use a Postgres that is reachable from the internet and whose certificate chains to a public authority, such as Neon.
+**The store in a Durable Object.** A container cannot use Worker bindings (D1, Durable Objects, Hyperdrive), so the gateway reaches its store the way it reaches R2: with `store: { cloudflare: true }` it sends each store call to `http://store.enterplace.internal`, and the Worker forwards it to the `EnterplaceStore` object. That object runs one call at a time, in its own SQLite, so a budget reservation, a rate-limit lease, a probe lease and a policy version change are each atomic across every instance, as Postgres makes them elsewhere. It is reachable only from the template's containers, so it needs no key. The gateways read keys and kill switches from memory and poll the object twice a second, so only a request under a budget or a rate limit waits on it.
 
 **Why wrangler and not Terraform.** `wrangler deploy` builds the image, pushes it to your account's registry and deploys the Worker, the Durable Object class and the container application in one command, and rolls the containers when the image changes. The Cloudflare Terraform provider does not build or push images, so it would still need wrangler beside it.
 
@@ -31,7 +79,6 @@ The wrangler template `cloudflare`, which ships inside the `enterplace` image, r
 
 - A Cloudflare account on the Workers Paid plan, which Containers need, with R2 enabled and a zone for the gateway's hostname.
 - Node.js 20 or later, and Docker running: wrangler builds the image locally for `linux/amd64`.
-- A Postgres database reachable over TLS from the internet, and its connection string with `sslmode=require`.
 - Your license key, a provider key, and the image version you will run.
 
 ## Deploy
@@ -52,7 +99,7 @@ The wrangler template `cloudflare`, which ships inside the `enterplace` image, r
 
    ```yaml title="enterplace.policy.yaml"
    audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
-   store: { postgres_url_env: DATABASE_URL }
+   store: { cloudflare: true }
    ```
 
 3. Create the bucket, deploy, and set the secrets. The first deploy builds and pushes the image, which takes a few minutes.
@@ -60,7 +107,6 @@ The wrangler template `cloudflare`, which ships inside the `enterplace` image, r
    ```bash
    npx wrangler r2 bucket create enterplace-audit
    npx wrangler deploy
-   npx wrangler secret put DATABASE_URL
    npx wrangler secret put ENTERPLACE_LICENSE
    npx wrangler secret put OPENAI_PROVIDER_KEY
    openssl rand -hex 32 | npx wrangler secret put ENTERPLACE_MASTER_KEY
@@ -68,7 +114,7 @@ The wrangler template `cloudflare`, which ships inside the `enterplace` image, r
    openssl rand -hex 32 | tee audit-read-token.txt | npx wrangler secret put ENTERPLACE_AUDIT_READ_TOKEN
    ```
 
-   Every secret or variable named `ENTERPLACE_*`, `DATABASE_URL`, `AWS_*` or `*_PROVIDER_KEY` reaches the gateway. Keep a copy of the master key outside Cloudflare: a lost master key cannot be recovered. A running gateway reads its environment when it starts, so a secret set later reaches it at its next start: run `npx wrangler deploy` again to roll the instances.
+   Every secret or variable named `ENTERPLACE_*`, `AWS_*` or `*_PROVIDER_KEY` reaches the gateway, and `DATABASE_URL` for [the Postgres option](#postgres-instead). Keep a copy of the master key outside Cloudflare: a lost master key cannot be recovered. A running gateway reads its environment when it starts, so a secret set later reaches it at its next start: run `npx wrangler deploy` again to roll the instances.
 
 </Steps>
 
@@ -82,6 +128,20 @@ The wrangler template `cloudflare`, which ships inside the `enterplace` image, r
 | `ENTERPLACE_AUDIT_SEAL_SECONDS` | `vars` | `60` | How often the audit log is sealed and written to R2, when it holds new records |
 | `ENTERPLACE_AUDIT_SEAL_BYTES` | `vars` | `1048576` | Seal sooner when the open file reaches this size |
 | `sleepAfter` | `src/index.ts` | `30m` | How long an idle instance runs before it stops. Each start fetches its newest segments from R2 |
+
+### Postgres instead
+
+If you already run a Postgres, the gateways can share it instead of the Durable Object. The features below keep their data in Postgres and are off with the Durable Object store, so they need this option today: members and SCIM, audit export to a SIEM, retention, alerts, devices and watch mode (Enterprise), batches, the request log every gateway shares (cost export and dry runs across gateways), and MCP credentials shared between gateways.
+
+```yaml title="enterplace.policy.yaml"
+store: { postgres_url_env: DATABASE_URL }
+```
+
+```bash
+npx wrangler secret put DATABASE_URL
+```
+
+A container cannot use Hyperdrive, a Worker binding, so the gateway connects to Postgres itself over TLS (`sslmode=require` or stricter), checked against the Mozilla roots built into it. Use a Postgres reachable from the internet whose certificate chains to a public authority, such as Neon; one from a private authority, such as Cloud SQL, is refused. Changing the store is a restart: deploy again.
 
 ## Verify
 
@@ -137,22 +197,23 @@ The wrangler template `cloudflare`, which ships inside the `enterplace` image, r
 
 - **A killed container loses its unsealed records.** A graceful stop loses nothing. A container that is killed (out of memory, a host failure) loses the records written since the last seal, at most `ENTERPLACE_AUDIT_SEAL_SECONDS` of them; the chain then continues from the last segment in R2 and still verifies. Lower the interval to narrow the window; each seal adds one `audit_retired` record and one R2 write.
 - **A chain per organization ships under its own folder.** With `audit: { per_org: true }`, each organization's chain is sealed and written to R2 as the instance's is, under `<instance folder>/orgs/<org>`, and fetched back on a start with an empty disk for each organization listed under `orgs:`. See [a chain per organization](/governance/audit-log/#a-chain-per-organization).
-- **Hyperdrive is not used.** See above: the gateway connects to Postgres directly over TLS. A database whose certificate comes from a private authority, such as Cloud SQL, is refused.
+- **Some features keep their data in Postgres.** Members and SCIM, SIEM export, retention, alerts, devices, watch mode, batches, the shared request log and shared MCP credentials are off with the Durable Object store (the Enterprise ones say so at start). Use [the Postgres option](#postgres-instead) for them.
+- **One store object.** Every store call of every instance goes to one Durable Object, which Cloudflare runs in one place, near the first instance that used it. Each instance polls it twice a second, and a request under a budget makes two calls (reserve, then settle); a rate limit leases a second's allowance at a time. Cloudflare's guidance for one object is about 1,000 requests a second: past a few hundred budgeted requests a second, use the Postgres option.
 - **Requests are spread at random.** Keys, kill switches and budgets are shared through the store, so any instance answers any request. The answer cache is per instance, and a single sign-on callback must reach the instance that started the sign-in: with single sign-on, run one instance.
-- **The store is required for more than one instance.** Without `store:`, each instance has its own keys file baked into the image and forgets spend at every start, because it is replayed from the audit log on disk.
+- **The store is required for more than one instance.** Keep `store: { cloudflare: true }`. Without `store:`, each instance has its own keys file baked into the image and forgets spend at every start, because it is replayed from the audit log on disk.
 - **Every start reads the bucket listing.** A start lists the instance's folder in R2 to find the newest segment, one request per 1,000 segments. At one segment a minute that is about 45 requests after a month of traffic. Set a lifecycle rule on the bucket only after you have copied older segments where you keep evidence, since a rule deletes them for good.
 - **Each start records a refused `GET /`.** The Containers runtime checks the port with a request to `/` when an instance starts, and the gateway records it as a refusal with `no_key`. Filter these out by path in reports.
 - **No metrics port.** The Worker reaches the gateway's one port, so `/metrics` is not exposed. Use Workers observability and OpenTelemetry traces.
-- **One region per instance.** Cloudflare places each instance near its first request. Put Postgres close to where your callers are.
+- **One region per instance.** Cloudflare places each instance near its first request, and the store object near the first instance that used it.
 
 ## Production checklist
 
 - **TLS.** The custom domain has a Cloudflare certificate. The Worker reaches the container inside Cloudflare.
 - **Secrets.** Every secret is a Workers secret, set with `wrangler secret put` and never in `wrangler.jsonc`. Never change the master key in place: the credentials sealed with it would no longer open.
-- **Backups.** Turn on your Postgres provider's backups with point-in-time recovery. The audit chain is in R2: copy the bucket, or each instance's folder, to storage where the account that runs Enterplace cannot delete, and keep each instance's last hash from step 4 outside Cloudflare.
+- **Backups.** The store object's SQLite is kept by Cloudflare, which holds 30 days of point-in-time history for it; a restore is a change to the Worker (`ctx.storage.onNextSessionRestoreBookmark`), so test one before you need it. With the Postgres option, turn on your provider's backups with point-in-time recovery. The audit chain is in R2: copy the bucket, or each instance's folder, to storage where the account that runs Enterplace cannot delete, and keep each instance's last hash from step 4 outside Cloudflare.
 - **Monitoring.** A health check on `$GATEWAY/healthz` (Cloudflare Health Checks, or your own), Workers observability for errors, and an alert on the log line `warning: audit segments`, which means a segment could not be written to R2 and stays on the container's disk until it can.
-- **Upgrades.** Take a database backup first, since a newer Enterplace may update the schema and an older one refuses a database a newer one has written. Change `ENTERPLACE_IMAGE` in `image_vars` and run `npx wrangler deploy`. Instances roll one by one; each seals and writes its chain before it stops.
-- **Rollback.** Put the previous version back in `image_vars` and deploy again. Each instance continues its chain from R2. If the older version refuses the database because the new one changed the schema, restore the backup first. `npx wrangler rollback` rolls back the Worker code only, not the containers.
+- **Upgrades.** Take the template of the new version (step 1 of Deploy), carry over your `wrangler.jsonc` edits and policy, and run `npx wrangler deploy`: the Worker and the store object update with the image. The object adds its new tables on its first call after the deploy, and a Worker older than the tables refuses them, naming the fix. Instances roll one by one; each seals and writes its chain before it stops.
+- **Rollback.** Put the previous version back in `image_vars` and deploy again. Each instance continues its chain from R2. If the older Worker refuses the store because the new one added tables, deploy the newer template again; with the Postgres option, restore the database backup first. `npx wrangler rollback` rolls back the Worker code only, not the containers.
 
 ### What to watch
 
@@ -160,7 +221,7 @@ The wrangler template `cloudflare`, which ships inside the `enterplace` image, r
 |---|---|---|
 | `gateway_not_ready` answers | The container did not start: a policy it cannot use, a missing secret, or a chain in R2 that does not verify | `npx wrangler tail`: the error names the fix |
 | `warning: audit segments` in the log | R2 did not take a segment. It stays on disk, and is written when R2 answers again | Check the bucket binding and R2's status |
-| Refusals with `store_unavailable` | Postgres cannot be reached. Budgeted requests are refused; others are served | Check the database and `DATABASE_URL` |
+| Refusals with `store_unavailable` | The store did not answer: the Worker or its `EnterplaceStore` object (or, with the Postgres option, the database). Budgeted requests are refused; others are served | `npx wrangler tail`: the error names the cause |
 | License warning in the log | The license is in its 30-day grace period | Set the renewed license with `wrangler secret put ENTERPLACE_LICENSE` and deploy |
 
 ## Next

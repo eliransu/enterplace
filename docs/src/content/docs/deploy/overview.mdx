@@ -82,7 +82,7 @@ Nothing calls home. The gateway connects only to what your policy and environmen
 | AWS | [ECS on Fargate](/deploy/aws/) | 1 or more | RDS with RDS Proxy | EFS, an access point per replica | AWS without a cluster |
 | Google Cloud | [Cloud Run](/deploy/gcp/) | 1 | Cloud SQL | Filestore | GCP without a cluster |
 | Azure | [Container Apps](/deploy/azure/) | 1 | Azure Database for PostgreSQL | Azure Files | Azure without a cluster |
-| Cloudflare | [Containers behind a Worker](/deploy/cloudflare/) | 1 or more | Any Postgres reachable over TLS | None: sealed segments in R2 | Teams already on Cloudflare |
+| Cloudflare | [Containers behind a Worker](/deploy/cloudflare/) | 1 or more | A Durable Object of the Worker, no database (or any Postgres reachable over TLS) | None: sealed segments in R2 | Teams already on Cloudflare, with nothing outside it |
 
 Cloud Run and Container Apps run one replica: neither can give each replica a volume of its own, and two gateways on one audit log would break its chain. For more than one replica on Google Cloud or Azure, use GKE or AKS with the Helm chart.
 

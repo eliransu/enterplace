@@ -5,6 +5,7 @@
 //!
 //! Needs ENTERPLACE_TEST_DATABASE_URL, as the store tests do; without it each test says it was skipped and passes.
 
+use enterplace_server::store::TestStore;
 use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -29,8 +30,8 @@ const SECOND: &str = "enterplace_second_0123456789abcdef01234567";
 const MAYA: &str = "enterplace_maya_0123456789abcdef0123456789";
 const HOST: &str = "enterplace.test";
 
-async fn database(test: &str) -> Result<Option<enterplace_server::store::TestDatabase>, Error> {
-    enterplace_server::store::TestDatabase::create(&format!(
+async fn database(test: &str) -> Result<Option<enterplace_server::store::TestStore>, Error> {
+    enterplace_server::store::TestStore::create(&format!(
         "enterplace_{}_{test}",
         std::process::id()
     ))
@@ -52,7 +53,7 @@ async fn provider() -> Result<u16, Error> {
 }
 
 fn policy(port: u16, from: &str) -> String {
-    format!(
+    TestStore::policy(&format!(
         "version: 1
 store: {{ postgres_url_env: ENTERPLACE_STORE_URL, policy_from: {from} }}
 providers:
@@ -66,7 +67,7 @@ rules:
     principals: {{ any: true }}
     models: [m]
 "
-    )
+    ))
 }
 
 fn dir(name: &str) -> Result<PathBuf, Error> {
@@ -82,7 +83,7 @@ fn gateway(dir: &Path, url: &str, text: &str) -> Result<Governed, String> {
     std::fs::write(&policy, text).map_err(|e| e.to_string())?;
     let url = url.to_string();
     let gw = enterplace_server::governed(&policy, None, &|variable| match variable {
-        "ENTERPLACE_STORE_URL" => Some(url.clone()),
+        _ if TestStore::env(variable, &url).is_some() => TestStore::env(variable, &url),
         _ => None,
     })?;
     gw.reloader.watch();
@@ -255,7 +256,9 @@ async fn a_version_saved_on_one_gateway_is_live_on_another_within_two_seconds() 
         "{body}"
     );
     // A change that needs a restart is refused before it is saved.
-    let moved = second.replace("ENTERPLACE_STORE_URL", "OTHER_URL");
+    let moved = second
+        .replace("ENTERPLACE_STORE_URL", "OTHER_URL")
+        .replace("cloudflare: true", "postgres_url_env: OTHER_URL");
     let (status, body) = put(&two.router, ADMIN, "2", &moved).await?;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert!(body.to_string().contains("restart"), "{body}");
@@ -636,7 +639,7 @@ async fn the_console_adds_a_model_edits_a_key_and_shows_teams_and_versions() -> 
 /// Each policy field the other branches added, in one version: organizations, profiles, scoped limits, roles,
 /// JWT issuers, trusted proxies, CORS origins, residency, capture, the semantic and prompt caches, file retention, parallel.
 fn every_field(port: u16) -> String {
-    format!(
+    TestStore::policy(&format!(
         "version: 1
 store: {{ postgres_url_env: ENTERPLACE_STORE_URL, policy_from: store }}
 providers:
@@ -679,7 +682,7 @@ roles:
     permissions: [see_spend]
     org: acme
 "
-    )
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -695,7 +698,7 @@ async fn every_policy_field_survives_a_saved_version_and_none_needs_a_restart() 
     let store_url = url.clone();
     // A master key, so capture can seal what it keeps.
     let gw = enterplace_server::governed(&path, None, &|variable| match variable {
-        "ENTERPLACE_STORE_URL" => Some(store_url.clone()),
+        _ if TestStore::env(variable, &store_url).is_some() => TestStore::env(variable, &store_url),
         "ENTERPLACE_MASTER_KEY" => {
             Some("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".into())
         }
@@ -748,6 +751,9 @@ async fn every_policy_field_survives_a_saved_version_and_none_needs_a_restart() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_dry_run_replays_the_requests_of_every_gateway_on_the_store() -> TestResult {
+    if TestStore::cloudflare() {
+        return Ok(()); // The request log every gateway shares is kept in Postgres alone.
+    }
     let Some(url) = database("dry_run_shared").await? else {
         return Ok(());
     };
@@ -811,7 +817,9 @@ async fn a_dry_run_replays_the_requests_of_every_gateway_on_the_store() -> TestR
     // Without a store, the dry run replays this gateway's own log, and says so.
     let alone_dir = dir("dry-alone")?;
     let alone_text = text.replace(
-        "store: { postgres_url_env: ENTERPLACE_STORE_URL, policy_from: file }\n",
+        &TestStore::policy(
+            "store: { postgres_url_env: ENTERPLACE_STORE_URL, policy_from: file }\n",
+        ),
         "",
     );
     let alone = gateway(&alone_dir, &url, &alone_text)?;
@@ -831,7 +839,7 @@ async fn a_dry_run_replays_the_requests_of_every_gateway_on_the_store() -> TestR
         body["dry_run"]["note"]
             .as_str()
             .unwrap_or_default()
-            .contains("no store"),
+            .contains("does not name"),
         "{body}"
     );
     Ok(())

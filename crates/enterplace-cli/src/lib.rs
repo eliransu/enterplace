@@ -822,7 +822,7 @@ fn check(policy: &Path, keys: Option<&Path>) -> ExitCode {
             }
             // With a store the keys are in the database, which `check` does not connect to.
             let keys = match &loaded.store {
-                Some(store) => format!("keys in the store named by {}", store.postgres_url_env),
+                Some(store) => format!("keys in {}", store.named()),
                 None => enterplace_core::count(loaded.policy.keys(), "key"),
             };
             println!(

@@ -50,6 +50,12 @@ jobs:
       # Shared CI machines are noisy, so the bench runs at 1,000 requests a second rather than the 5,000 used locally.
       # The limit stays at the plan's target: 1,000 microseconds at p99.
       - run: scripts/ci.sh
+      # The store tests again, on the Cloudflare store's own code (deploy/cloudflare/src/store.ts, the EnterplaceStore
+      # Durable Object) run on node:sqlite: the same keys, kill switches, budgets, leases and sessions across gateways.
+      - name: Store tests on the Cloudflare store
+        env:
+          ENTERPLACE_TEST_STORE: cloudflare
+        run: cargo test -p enterplace-server --test store --test ha --test credentials --test policy_versions
       # The screenshots of the new user's path (scripts/ftue_check.py, run by ci.sh with the runner's Chrome).
       - uses: actions/upload-artifact@v4
         if: always()

@@ -35,6 +35,7 @@ mod alias;
 mod batch;
 pub mod cloud;
 mod cloud_batch;
+pub mod cloudflare_store;
 mod cors;
 mod credentials;
 mod demo;
@@ -10403,12 +10404,12 @@ pub async fn serve_policy_with(
     );
     // With a store, keys come from the database and the keys file is not read.
     let keys_from = match &loaded.store {
-        Some(store) => format!("the store named by {}", store.postgres_url_env),
+        Some(store) => store.named(),
         None => loaded.keys_path.display().to_string(),
     };
     if loaded.store.is_some() {
         println!(
-            "Keys, kill switches and budgets are shared through {keys_from} with every Enterplace on that database."
+            "Keys, kill switches and budgets are shared through {keys_from} with every Enterplace on that store."
         );
     }
     println!(

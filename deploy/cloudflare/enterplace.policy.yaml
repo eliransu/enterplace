@@ -12,5 +12,5 @@ rules:
     principals: { any: true }
     models: [gpt-4o-mini]
 audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
-# Keys, kill switches and budgets live in Postgres. The Workers secret DATABASE_URL holds the connection string.
-store: { postgres_url_env: DATABASE_URL }
+# Keys, kill switches and budgets live in the Worker's EnterplaceStore Durable Object: nothing outside Cloudflare.
+store: { cloudflare: true }

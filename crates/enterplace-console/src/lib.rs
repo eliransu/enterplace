@@ -1092,7 +1092,7 @@ impl Console {
                 .await
                 .map_err(|err| {
                     html::esc(&format!(
-                        "The session could not be saved in the store ({err}), so you are not signed in. Ask your Enterplace admin to check the Postgres database the policy's store: names, then sign in again."
+                        "The session could not be saved in the store ({err}), so you are not signed in. Ask your Enterplace admin to check the store the policy's store: section names (its Postgres database, or on Cloudflare the Worker, with npx wrangler tail), then sign in again."
                     ))
                 })?;
             return Ok(session);

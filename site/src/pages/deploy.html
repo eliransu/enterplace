@@ -23,8 +23,52 @@ nav: product
     <a href="docs:/deploy/aws/"><strong>AWS</strong><span>Terraform for ECS, RDS and EFS. Bedrock is reached as the task role, with no provider key.</span>{{> arrow}}</a>
     <a href="docs:/deploy/gcp/"><strong>Google Cloud</strong><span>Terraform for Cloud Run, Cloud SQL and Filestore. Vertex AI is reached as the service account.</span>{{> arrow}}</a>
     <a href="docs:/deploy/azure/"><strong>Azure</strong><span>Terraform for Container Apps, Azure Database for PostgreSQL and Azure Files.</span>{{> arrow}}</a>
-    <a href="docs:/deploy/cloudflare/"><strong>Cloudflare</strong><span>Containers, with the audit chain sealed into R2.</span>{{> arrow}}</a>
+    <a href="docs:/deploy/cloudflare/"><strong>Cloudflare</strong><span>Containers, the store in a Durable Object, the audit chain sealed into R2. Nothing outside Cloudflare.</span>{{> arrow}}</a>
   </nav>
+  <div class="actions">
+    <button class="btn btn-line" type="button" data-copy="cloudflare-agent">Deploy on Cloudflare with your agent</button>
+  </div>
+  <details class="agent-setup">
+    <summary class="muted">Show the Cloudflare agent prompt</summary>
+<pre id="cloudflare-agent">Deploy Enterplace, the self-hosted AI gateway, to my Cloudflare account with its wrangler template, so everything runs on Cloudflare: the gateways in Cloudflare Containers behind a Worker, the store (keys, kill switches, budgets, sessions, credentials, policy versions) in a Durable Object, the audit chain in R2. No database or service outside Cloudflare.
+
+Never put a secret in chat, in a file or in a command line I can see: I type each one myself at the wrangler prompt, or you pipe a generated one straight into wrangler.
+
+First ask me, one at a time:
+- The hostname for the gateway (for example ai.example.com), in a zone on my Cloudflare account.
+- A name for the Worker (default enterplace) and for the R2 bucket (default enterplace-audit).
+- Which model providers I use (OpenAI, Anthropic, Gemini, others), and the models each rule should allow.
+- Whether I have an Enterplace license key (optional: without one it runs the open source edition).
+
+Then:
+1. Check the prerequisites and tell me what is missing: Docker running, Node.js 20 or later, and a Cloudflare account on the Workers Paid plan (Containers need it) with R2 enabled.
+2. Copy the template out of the image, pinned to the digest of the newest build:
+   docker pull ghcr.io/eliransu/enterplace:latest
+   IMAGE=$(docker inspect --format '&#123;&#123;index .RepoDigests 0&#125;&#125;' ghcr.io/eliransu/enterplace:latest)
+   docker create --name enterplace-files "$IMAGE" &amp;&amp; docker cp enterplace-files:/deploy/cloudflare ./enterplace-cloudflare &amp;&amp; docker rm enterplace-files
+   cd enterplace-cloudflare &amp;&amp; npm ci &amp;&amp; npx wrangler login   (I sign in in the browser)
+3. Edit the lines marked EDIT in wrangler.jsonc: the Worker name, ENTERPLACE_IMAGE in image_vars (set it to $IMAGE), the bucket name, and my hostname. Set "GATEWAYS" to "1" for now.
+4. Edit enterplace.policy.yaml: one provider per provider I named (kind, url, key_env: &lt;NAME&gt;_PROVIDER_KEY, models), and the rules. Keep its last two lines as they are:
+   audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
+   store: { cloudflare: true }
+5. Create the bucket and deploy: npx wrangler r2 bucket create &lt;bucket&gt;, then npx wrangler deploy (the first build takes a few minutes).
+6. Secrets. Generate these yourself, piped so the values never show:
+   openssl rand -hex 32 | npx wrangler secret put ENTERPLACE_MASTER_KEY
+   openssl rand -hex 32 | npx wrangler secret put ENTERPLACE_EXPORT_KEY
+   openssl rand -hex 32 | tee audit-read-token.txt | npx wrangler secret put ENTERPLACE_AUDIT_READ_TOKEN
+   Then have me run, one by one, npx wrangler secret put &lt;NAME&gt;_PROVIDER_KEY for each provider, and ENTERPLACE_LICENSE if I have one. Tell me to keep a copy of the master key outside Cloudflare: a lost one cannot be recovered. Run npx wrangler deploy again so the gateways start with the secrets.
+7. Verify, and show me each result:
+   - curl -s https://&lt;hostname&gt;/healthz answers (the first request starts a container, which takes a few seconds).
+   - npx wrangler tail --format pretty | grep "First run" gives the one-time setup link. Show it to me with http://127.0.0.1:8080 replaced by https://&lt;hostname&gt;, for me to open, make the first admin and keep the admin key it shows once. Never ask me to paste that key into chat: I export ENTERPLACE_ADMIN_KEY in my own shell.
+   - With that key, issue a test key with POST https://&lt;hostname&gt;/admin/keys and send one chat request through https://&lt;hostname&gt;/v1/chat/completions.
+   - The audit chain: curl -s -H "Authorization: Bearer $(cat audit-read-token.txt)" https://&lt;hostname&gt;/_enterplace/audit/gateway-0 &gt; chain.jsonl, then docker run --rm -v "$PWD":/w:ro "$IMAGE" audit verify /w/chain.jsonl
+8. Set "GATEWAYS" back to "2" and deploy again: keys, kill switches and budgets are shared through the store's Durable Object, so either instance answers any request.
+
+Docs as Markdown, read them for anything not covered here:
+https://docs.enterplace.dev/deploy/cloudflare.md
+https://docs.enterplace.dev/operations/store.md
+Every page: https://docs.enterplace.dev/llms.txt</pre>
+  </details>
   <p class="tbl-note">The guides use the Enterplace Enterprise image with its Compose stack, Helm chart and Terraform modules. <span class="ent">Enterprise</span> Without a license the same image runs the open source edition.</p>
 </section>
 

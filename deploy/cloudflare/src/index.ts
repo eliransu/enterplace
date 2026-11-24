@@ -1,22 +1,31 @@
 // Enterplace on Cloudflare: this Worker routes every request to a gateway container (the enterplace image, one gateway per
 // instance) and keeps each gateway's audit chain in R2, because a container's disk does not survive a restart.
 //
-// - Routing: each request goes to one of GATEWAYS instances, named gateway-0 to gateway-(N-1). They share the store
-//   (Postgres at DATABASE_URL), so any of them can answer any request.
+// - Routing: each request goes to one of GATEWAYS instances, named gateway-0 to gateway-(N-1). They share the store,
+//   so any of them can answer any request.
+// - Store: keys, kill switches, budgets, rate limits, sessions, credentials and policy versions live in the SQLite of
+//   one Durable Object (EnterplaceStore, src/store.ts). The gateway (`store: { cloudflare: true }`) sends its store
+//   calls to store.enterplace.internal, answered below by forwarding them to that object. Like the audit handler it
+//   is reachable only from this application's containers, so it needs no key. Nothing runs outside Cloudflare.
 // - Audit: the gateway seals its log every ENTERPLACE_AUDIT_SEAL_SECONDS and writes each sealed segment to R2 through the
 //   handler below, which speaks the three S3 calls the gateway makes (PUT, GET, ListObjectsV2) against the AUDIT
 //   bucket binding. No R2 access key exists: the handler is reachable only from this application's containers, and
 //   it keeps each instance under audit/<its Durable Object id>/, so one gateway cannot write another's chain. It
 //   never overwrites a segment with other bytes and has no delete.
 // - Secrets: Workers secrets and vars named ENTERPLACE_*, DATABASE_URL, AWS_* or *_PROVIDER_KEY are passed to the
-//   container as environment variables when it starts.
+//   container as environment variables when it starts. DATABASE_URL is read only by a policy that keeps its store in
+//   a Postgres of your own (`store: { postgres_url_env: DATABASE_URL }`).
 
 import { Container, ContainerProxy, getContainer } from "@cloudflare/containers";
+import { EnterplaceStore } from "./store-object";
+
+export { EnterplaceStore };
 
 export { ContainerProxy };
 
 export interface Env {
   GATEWAY: DurableObjectNamespace<EnterplaceGateway>;
+  STORE: DurableObjectNamespace<EnterplaceStore>;
   AUDIT: R2Bucket;
   GATEWAYS?: string;
   ENTERPLACE_AUDIT_READ_TOKEN?: string;
@@ -25,6 +34,9 @@ export interface Env {
 
 // Not a real host: the container's HTTP requests to it are answered by `segments` below.
 const AUDIT_HOST = "audit.enterplace.internal";
+
+// Not a real host either: the container's store calls to it go to the one EnterplaceStore object.
+const STORE_HOST = "store.enterplace.internal";
 
 const root = (containerId: string) => `audit/${containerId}/`;
 
@@ -73,6 +85,8 @@ async function segments(req: Request, env: Env, ctx: { containerId: string }): P
   return new Response("not allowed\n", { status: 405 });
 }
 
+const store = (req: Request, env: Env) => env.STORE.get(env.STORE.idFromName("enterplace")).fetch(req);
+
 export class EnterplaceGateway extends Container<Env> {
   defaultPort = 8080;
   // /healthz answers without an audit record, so probes do not fill the chain.
@@ -82,7 +96,7 @@ export class EnterplaceGateway extends Container<Env> {
 }
 // Assigned, not declared as a static field: a class field would define its own property and skip the setter that
 // registers the handler, and the container's requests to AUDIT_HOST would then be refused.
-EnterplaceGateway.outboundByHost = { [AUDIT_HOST]: segments };
+EnterplaceGateway.outboundByHost = { [AUDIT_HOST]: segments, [STORE_HOST]: store };
 
 const PASSED = /^(ENTERPLACE_[A-Z0-9_]+|DATABASE_URL|AWS_[A-Z0-9_]+|[A-Z0-9_]+_PROVIDER_KEY)$/;
 
@@ -93,6 +107,7 @@ function startEnv(env: Env, instance: string): Record<string, string> {
   }
   vars.HOSTNAME = instance;
   vars.ENTERPLACE_AUDIT_SEGMENTS_URL = `http://${AUDIT_HOST}/segments`;
+  vars.ENTERPLACE_CLOUDFLARE_STORE_URL = `http://${STORE_HOST}`;
   return vars;
 }
 
