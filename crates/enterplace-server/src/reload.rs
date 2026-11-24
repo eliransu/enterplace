@@ -574,6 +574,15 @@ fn oci_signer(
         .map_err(|why| format!("provider \"{name}\": {why}"))
 }
 
+/// The variable that sets the first-run setup link's token.
+pub const SETUP_TOKEN_ENV: &str = "ENTERPLACE_SETUP_TOKEN";
+
+/// Whether a setup token is long enough to be unguessable: 32 or more letters and digits, as `openssl rand -hex 32`
+/// writes. A shorter one is not used, and the gateway makes its own.
+fn setup_token_ok(token: &str) -> bool {
+    token.len() >= 32 && token.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
 /// What a binary that embeds the gateway builds its additions from, once the files are checked and the store is open.
 pub struct Host<'a> {
     /// The store's database when the policy has `store:` (Postgres, or the Cloudflare store's Durable Object), for
@@ -875,9 +884,15 @@ pub fn governed_with(
         ),
     };
     enterplace_core::insights::attach(&loaded.audit_path, index, bodies.clone());
-    // First run: no one can sign in to the console yet, so a one-time link makes the first admin.
-    let setup = (!loaded.policy.entries().any(|(_, p)| p.admin))
-        .then(|| enterplace_core::id::random_hex(24));
+    // First run: no one can sign in to the console yet, so a one-time link makes the first admin. Its token is new at
+    // each start and printed, unless ENTERPLACE_SETUP_TOKEN gives it: where nobody reads the gateway's output (a
+    // Cloudflare Container), the one who deploys keeps that token and opens the link with it.
+    let setup = (!loaded.policy.entries().any(|(_, p)| p.admin)).then(|| {
+        provider_key(SETUP_TOKEN_ENV)
+            .map(|t| t.trim().to_string())
+            .filter(|t| setup_token_ok(t))
+            .unwrap_or_else(|| enterplace_core::id::random_hex(24))
+    });
     let policy_now = crate::PolicyNow::default();
     let extension = extend(Host {
         db: db.as_ref(),

@@ -156,3 +156,32 @@ async fn the_setup_link_makes_the_first_admin_once_and_that_key_makes_a_governed
     );
     Ok(())
 }
+
+/// Where nobody reads the gateway's output (a Cloudflare Container), ENTERPLACE_SETUP_TOKEN gives the setup link's
+/// token, so the one who deploys opens the link with the token they set. A short one is not used.
+#[tokio::test]
+async fn the_setup_token_may_be_set_by_whoever_deploys() -> Result<(), Error> {
+    let port = provider().await?;
+    let set = "0123456789abcdef0123456789abcdef0123456789abcdef";
+    for (name, given, used) in [("set", set, true), ("short", "abc123", false)] {
+        let dir = std::env::temp_dir().join(format!(
+            "enterplace-first-run-token-{name}-{}",
+            std::process::id()
+        ));
+        let path = policy(&dir, port)?;
+        let gw = enterplace_server::governed(&path, None, &|variable| match variable {
+            "ENTERPLACE_SETUP_TOKEN" => Some(given.into()),
+            "ENTERPLACE_MASTER_KEY" | "ENTERPLACE_MASTER_KEY_FILE" => None,
+            _ => Some("provider-secret".into()),
+        })?;
+        let token = gw.setup.clone().ok_or("no setup link offered")?;
+        assert_eq!(token == given, used, "{name}: {token}");
+        let (status, page) = send(
+            &gw.router,
+            Request::get(format!("/console/setup/{token}")).body(Body::empty())?,
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK, "{page}");
+    }
+    Ok(())
+}
