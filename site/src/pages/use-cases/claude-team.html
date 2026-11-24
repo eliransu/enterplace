@@ -1,0 +1,117 @@
+<!--
+title: Claude Code on Claude Team or Enterprise: see every developer's usage with one paste in claude.ai
+description: Paste one managed settings block into claude.ai and every Claude Code user in your organization reports to your own Enterplace gateway: who used it, which models, tokens and estimated cost. Nothing is installed on laptops, and the same block can route requests for rules and limits.
+nav: use-cases
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/use-cases/">Use cases</a><span>Claude Team and Enterprise</span></nav>
+  <h1>Every Claude Code user in your organization, with one paste in claude.ai.</h1>
+  <p class="lead">On Claude Team or Enterprise, an Owner can push settings to every Claude Code install from claude.ai. Paste the block Enterplace prints, and Claude Code reports who used it, on which model, with how many tokens, to a gateway you run. Nothing is installed on laptops and nobody changes their login.</p>
+</section>
+
+<section class="wrap sec" style="padding-top: 40px">
+  <div class="split">
+    <div class="stack">
+      <h2>Where it goes</h2>
+      <p>claude.ai, <strong>Organization settings</strong>, <strong>Claude Code</strong>, <strong>Managed settings</strong>. Paste and save. Claude Code fetches it at its next start and checks again every hour. Each developer approves the telemetry endpoint once.</p>
+      <p class="muted">On Team the block applies to the whole organization. On Enterprise each group of members can get its own block, counted under its own Enterplace team.</p>
+    </div>
+    <figure class="code"><figcaption>Managed settings, as <code>enterplace watch setup</code> prints it</figcaption><pre>{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://enterplace.example.com/otlp",
+    "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer enterplace_watch_..."
+  }
+}</pre></figure>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head">
+    <h2>The steps</h2>
+    <p>Three steps, done once by an admin. Developers do nothing.</p>
+  </div>
+  <ol class="guide">
+    <li>
+      <div class="guide-text">
+        <h3>Run Enterplace where laptops can reach it</h3>
+        <p>Claude Code sends its telemetry to the address in the block, so the gateway needs an HTTPS address your developers reach, not 127.0.0.1. Watch mode keeps its data in a store and is part of Enterplace Enterprise.</p>
+        <a class="more" href="/deploy/">Docker, Kubernetes and the clouds {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>enterplace.policy.yaml (added)</figcaption><pre>store:
+  postgres_url_env: DATABASE_URL</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Make a watch token</h3>
+        <p>The command prints the managed settings block with the token in it. The token is shown once. <code>--team</code> names the Enterplace team people are counted under. The console's Start here page does the same with a button.</p>
+        <a class="more" href="docs:/integrations/claude-team/">Watch mode in the docs {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>On any machine with an admin key</figcaption><pre>export ENTERPLACE_ADMIN_KEY=enterplace_...
+enterplace watch setup \
+  --gateway https://enterplace.example.com \
+  --team engineering</pre></figure>
+    </li>
+    <li>
+      <div class="guide-text">
+        <h3>Paste it into claude.ai</h3>
+        <p>As an Owner or Primary Owner, paste the block into Managed settings and save. Within a few minutes of each developer's next session, they show on the console's Watch page, told apart by the email they signed in to Claude with.</p>
+      </div>
+      <figure class="code"><figcaption>Check who has arrived</figcaption><pre>curl -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY" \
+  https://enterplace.example.com/console/watch/summary.json</pre></figure>
+    </li>
+  </ol>
+</section>
+
+<section class="wrap sec">
+  <div class="split">
+    <div class="stack">
+      <h2>What you see afterwards</h2>
+      <ul class="ticks">
+        <li>Who used Claude Code, when and on which model, <strong>per person and team</strong>.</li>
+        <li>Tokens by type and Claude Code's own cost estimate at list price. Seats are not billed per dollar, so read it as relative usage.</li>
+        <li>Tool calls accepted, rejected and failed, lines changed, commits, pull requests and sessions.</li>
+        <li>The same data in the Requests and Analytics pages, coverage, alerts, SIEM export and the audit chain, as source <code>watch</code>.</li>
+      </ul>
+    </div>
+    <div class="stack">
+      <h2>When you want to enforce, not only watch</h2>
+      <p>Watch mode observes: Claude Code still talks to Anthropic directly, so nothing can be blocked. To add rules, kill switches and token limits, route Claude Code through Enterplace on the same seats. Enterplace passes each person's Claude login to Anthropic unchanged, so nobody needs an API key, and the same managed settings block can hold both.</p>
+      <figure class="code"><figcaption>Added to the same <code>env</code> block</figcaption><pre>"ANTHROPIC_BASE_URL": "https://enterplace.example.com"</pre></figure>
+      <a class="more" href="docs:/integrations/claude-code/">Claude subscriptions through Enterplace {{> arrow}}</a>
+    </div>
+  </div>
+</section>
+
+<section class="wrap sec doc">
+  <h2>Limits to know before you start</h2>
+  <ul class="ticks out">
+    <li><strong>Watch mode blocks nothing.</strong> Budgets, guardrails and kill switches need requests through Enterplace.</li>
+    <li><strong>Server-managed settings reach Claude logins only.</strong> Developers on an API key, Amazon Bedrock or Vertex AI need the same block as a managed settings file on the machine, delivered by your device management. <a href="docs:/operations/device-deployment/">Device deployment</a></li>
+    <li><strong>Routing skips the Claude desktop app's Code tab.</strong> It sets its own base URL, so those sessions go to Anthropic directly. Claude Code in a terminal and in VS Code is routed.</li>
+    <li><strong>A routed request needs a person token to carry a name.</strong> One block for the whole organization cannot hold one per person, so routed requests show as <code>unknown</code> until each developer adds their token. Watch data names people by their Claude email either way.</li>
+  </ul>
+</section>
+
+<section class="wrap sec doc">
+  <h2>Questions people ask</h2>
+  <div class="qa">
+    <details><summary>Does Enterplace see our prompts or code?</summary><p>Not in watch mode. Claude Code's telemetry holds usage counts and events, and Enterplace keeps no prompt or answer text.</p></details>
+    <details><summary>Does any of this go to Enterplace the company?</summary><p>No. Claude Code sends the telemetry only to the address in the block, which is your own gateway.</p></details>
+    <details><summary>Can we start with one team?</summary><p>On Enterprise, give one group of members its own block and token as a pilot. On Team the block applies to everyone, so pilot with one developer's <code>~/.claude/settings.json</code> first.</p></details>
+  </div>
+</section>
+
+<section class="wrap sec">
+  <div class="sec-head solo"><h2>Read next</h2></div>
+  <nav class="rows tight" aria-label="Read next">
+    <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Codex, Cursor, Gemini CLI and the rest, each developer under a name and a budget.</span>{{> arrow}}</a>
+    <a href="/enterprise/"><strong>Open source and Enterprise</strong><span>What the license adds, watch mode among it.</span>{{> arrow}}</a>
+    <a href="/for/engineering-leaders/"><strong>For engineering leaders</strong><span>What you can tell finance and security after the rollout.</span>{{> arrow}}</a>
+  </nav>
+</section>
+
+{{> cta}}

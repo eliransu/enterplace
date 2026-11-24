@@ -99,12 +99,33 @@ req: 0 | sarah.miller | payments | allow | claude-sonnet-5-5, rule payments-team
   </div>
 </section>
 
+<section class="wrap sec" id="claude-team">
+  <div class="split">
+    <div class="stack">
+      <h2>On Claude Team or Enterprise? One paste in claude.ai.</h2>
+      <p>An Owner pastes one managed settings block into claude.ai, and every Claude Code user in the organization reports to your own gateway: who used it, which models, tokens and estimated cost. Nothing is installed on laptops and nobody changes their login. Add one line to the same block to route requests and get rules, kill switches and token limits on the same seats.</p>
+      <a class="more" href="/use-cases/claude-team/">Claude Team and Enterprise, step by step {{> arrow}}</a>
+    </div>
+    <figure class="code"><figcaption>claude.ai, Organization settings, Claude Code, Managed settings</figcaption><pre>{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://enterplace.example.com/otlp",
+    "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer enterplace_watch_..."
+  }
+}</pre></figure>
+  </div>
+</section>
+
 <section class="wrap sec" id="use-cases">
   <div class="sec-head">
     <h2>Start from what you are running.</h2>
     <p>Each page is a short path: the situation, what goes wrong without control, the steps with the exact policy lines, and what you see afterwards.</p>
   </div>
   <nav class="rows" aria-label="Use cases">
+    <a href="/use-cases/claude-team/"><strong>Claude Team and Enterprise</strong><span>Your developers use Claude Code on company seats, and nobody outside Anthropic's console can see who uses what.</span>{{> arrow}}</a>
     <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Developers run Codex, Claude Code, Copilot, Cursor or Gemini CLI on a shared provider key, and nobody can say who spent what.</span>{{> arrow}}</a>
     <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Services and agents in your cloud call models with keys copied into environment files.</span>{{> arrow}}</a>
     <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Agents call MCP servers for GitHub, the warehouse and deploys, and no one can list who may call which tool.</span>{{> arrow}}</a>

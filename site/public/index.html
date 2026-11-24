@@ -55,6 +55,7 @@ enterplace</a>
         <div class="menu menu-wide" id="menu-use-cases">
           <div class="menu-col">
             <p class="menu-title">By what you run</p>
+            <a href="/use-cases/claude-team/"><strong>Claude Team and Enterprise</strong><span>One paste in claude.ai, every Claude Code user</span></a>
             <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Codex, Claude Code, Copilot, Cursor, Gemini CLI</span></a>
             <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Apps and agents calling models from your cloud</span></a>
             <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Your MCP servers behind one endpoint</span></a>
@@ -199,12 +200,35 @@ Every page: https://docs.enterplace.dev/llms.txt</pre>
   </div>
 </section>
 
+<section class="wrap sec" id="claude-team">
+  <div class="split">
+    <div class="stack">
+      <h2>On Claude Team or Enterprise? One paste in claude.ai.</h2>
+      <p>An Owner pastes one managed settings block into claude.ai, and every Claude Code user in the organization reports to your own gateway: who used it, which models, tokens and estimated cost. Nothing is installed on laptops and nobody changes their login. Add one line to the same block to route requests and get rules, kill switches and token limits on the same seats.</p>
+      <a class="more" href="/use-cases/claude-team/">Claude Team and Enterprise, step by step <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
+    </div>
+    <figure class="code"><figcaption>claude.ai, Organization settings, Claude Code, Managed settings</figcaption><pre>{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://enterplace.example.com/otlp",
+    "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer enterplace_watch_..."
+  }
+}</pre></figure>
+  </div>
+</section>
+
 <section class="wrap sec" id="use-cases">
   <div class="sec-head">
     <h2>Start from what you are running.</h2>
     <p>Each page is a short path: the situation, what goes wrong without control, the steps with the exact policy lines, and what you see afterwards.</p>
   </div>
   <nav class="rows" aria-label="Use cases">
+    <a href="/use-cases/claude-team/"><strong>Claude Team and Enterprise</strong><span>Your developers use Claude Code on company seats, and nobody outside Anthropic's console can see who uses what.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+</a>
     <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Developers run Codex, Claude Code, Copilot, Cursor or Gemini CLI on a shared provider key, and nobody can say who spent what.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
     <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Services and agents in your cloud call models with keys copied into environment files.</span><svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
@@ -320,6 +344,7 @@ enterplace</a>
       </div>
       <div>
         <h2>Use cases</h2>
+        <a href="/use-cases/claude-team/">Claude Team and Enterprise</a>
         <a href="/use-cases/coding-agents/">Coding agents</a>
         <a href="/use-cases/cloud-agents/">Cloud and production agents</a>
         <a href="/use-cases/mcp-tools/">MCP tools</a>
