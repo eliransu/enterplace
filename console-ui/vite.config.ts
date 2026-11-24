@@ -23,5 +23,13 @@ export default defineConfig({
     },
   },
   // `npm run dev` against a gateway on this machine: the API and the session cookie are the gateway's.
-  server: { proxy: { "/console/api": "http://127.0.0.1:8080", "/console/assets": "http://127.0.0.1:8080" } },
+  server: {
+    proxy: {
+      "/console/api": "http://127.0.0.1:8080",
+      "/console/assets": "http://127.0.0.1:8080",
+      "/console/live.json": "http://127.0.0.1:8080",
+      // Vite prefixes index.html's root-relative links with the base in dev.
+      "/console/app/console/assets": { target: "http://127.0.0.1:8080", rewrite: (p) => p.replace("/console/app", "") },
+    },
+  },
 });
