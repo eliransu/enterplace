@@ -376,7 +376,7 @@ CREATE TABLE enterplace_batches_held (
 #[derive(Default)]
 pub(crate) struct Registry {
     map: Mutex<HashMap<String, Owned>>,
-    pg: Option<Arc<crate::store::PgStore>>,
+    pg: Option<crate::sql::Db>,
     /// Answers Enterplace holds for their owner: async jobs and translated responses kept with `store: true`. With a
     /// store they are kept in its `enterplace_batches_held` table (sealed under the master key when there is one), so
     /// every replica serves them; without one, in this process's memory only.
@@ -402,8 +402,8 @@ fn held_name(id: &str) -> String {
 
 impl Registry {
     /// Keeps ownership in the store's `batches` namespace, created here.
-    pub(crate) fn with_store(pg: Arc<crate::store::PgStore>) -> Result<Self, String> {
-        pg.migrate(NAMESPACE, MIGRATIONS)?;
+    pub(crate) fn with_store(pg: crate::sql::Db) -> Result<Self, String> {
+        pg.migrate(NAMESPACE, MIGRATIONS, &[])?;
         Ok(Self {
             map: Mutex::default(),
             pg: Some(pg),
@@ -524,7 +524,7 @@ impl Registry {
         }
     }
 
-    async fn client(&self) -> Option<tokio_postgres::Client> {
+    async fn client(&self) -> Option<crate::sql::Conn> {
         let pg = self.pg.as_ref()?;
         match pg.connect().await {
             Ok(client) => Some(client),

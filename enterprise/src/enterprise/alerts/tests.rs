@@ -335,14 +335,12 @@ fn request(
     Ok(())
 }
 
-pub(crate) async fn rows(
-    url: &str,
-    sql: &str,
-) -> Result<Vec<enterplace_server::store::tokio_postgres::Row>, Error> {
-    use enterplace_server::store::tokio_postgres;
-    let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls).await?;
-    tokio::spawn(connection);
-    Ok(client.query(sql, &[]).await?)
+/// The rows of `sql` on the store this run tests, Postgres or the Cloudflare store.
+async fn select(url: &str, sql: &str) -> Result<Vec<enterplace_server::sql::Row>, Error> {
+    let conn = enterplace_server::store::TestStore::db(url)?
+        .connect()
+        .await?;
+    Ok(conn.query(sql.to_string(), &[]).await?)
 }
 
 async fn run(ex: &Arc<crate::enterprise::siem::Exporter>) -> Result<(), Error> {
@@ -631,7 +629,7 @@ async fn rules_fire_once_with_their_records_and_every_change_is_recorded() -> Re
             .map(|h| h.json())
             .collect::<Vec<_>>()
     );
-    let suppressed = rows(&url, "SELECT suppressed FROM enterprise_alert_state s JOIN enterprise_alert_rules r ON r.id = s.rule WHERE r.name = 'Blocks'").await?;
+    let suppressed = select(&url, "SELECT suppressed FROM enterprise_alert_state s JOIN enterprise_alert_rules r ON r.id = s.rule WHERE r.name = 'Blocks'").await?;
     assert_eq!(
         suppressed
             .first()
@@ -804,24 +802,29 @@ async fn webhook(owner: &mut Browser, gw: &Gateway, sink: &Sink) -> Result<(), E
 }
 
 async fn execute(url: &str, sql: &str, params: &[&str]) -> Result<(), Error> {
-    use enterplace_server::store::tokio_postgres;
-    let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls).await?;
-    tokio::spawn(connection);
-    let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
-        .iter()
-        .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
-        .collect();
-    client.execute(sql, &params).await?;
+    use enterplace_server::store::tokio_postgres::types::ToSql;
+    let conn = enterplace_server::store::TestStore::db(url)?
+        .connect()
+        .await?;
+    let params: Vec<&(dyn ToSql + Sync)> =
+        params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
+    conn.execute(sql.to_string(), &params).await?;
     Ok(())
 }
 
 /// What the gateway's own counter has spent, as settled spend: the alert reads the counter enforcement reads.
 async fn set_spent(url: &str, scope: &str, per: Period, usd: f64) -> Result<(), Error> {
     let label = per.label(&audit::timestamp());
+    // The Cloudflare store keeps the counters in its own table.
+    let table = if enterplace_server::store::TestStore::cloudflare() {
+        "spend"
+    } else {
+        "enterplace_spend"
+    };
     execute(
         url,
         &format!(
-            "INSERT INTO enterplace_spend (scope, per, period, spent) VALUES ($1, $2, $3, {usd}) \
+            "INSERT INTO {table} (scope, per, period, spent) VALUES ($1, $2, $3, {usd}) \
              ON CONFLICT (scope, per, period) DO UPDATE SET spent = {usd}"
         ),
         &[scope, &per.word(), &label],
@@ -1005,7 +1008,7 @@ async fn an_export_received_over_otlp_sets_off_a_budget_rule_and_is_in_the_diges
 
     let engine = ex.alerts.get().ok_or("no alert engine")?;
     engine.checks().await?;
-    let fired = rows(
+    let fired = select(
         &url,
         "SELECT summary FROM enterprise_alerts WHERE kind = 'daily_digest'",
     )
@@ -1277,7 +1280,7 @@ async fn the_new_kinds_fire_on_anomalies_failures_expiring_keys_and_a_lagging_ex
     // A 14-day latency baseline of 100 ms a request for team payments.
     let yesterday =
         audit::rfc3339(std::time::SystemTime::now() - std::time::Duration::from_secs(86_400));
-    rows(
+    select(
         &url,
         &format!(
             "INSERT INTO enterprise_alert_daily (scope, day, requests, errors, latency_ms, timed) VALUES ('team:payments', '{}', 10, 0, 1000, 10)",
@@ -1329,12 +1332,12 @@ async fn the_new_kinds_fire_on_anomalies_failures_expiring_keys_and_a_lagging_ex
     )?;
     run(&ex).await?;
     // An export destination that has sent nothing of records two hours old.
-    rows(
+    select(
         &url,
         "INSERT INTO enterprise_export_destinations (kind, url, created_by) VALUES ('webhook', 'https://siem.example.com/in', 'test')",
     )
     .await?;
-    rows(
+    select(
         &url,
         "UPDATE enterprise_audit SET time = now() - interval '2 hours'",
     )
@@ -1343,7 +1346,7 @@ async fn the_new_kinds_fire_on_anomalies_failures_expiring_keys_and_a_lagging_ex
     engine.checks().await?;
     engine.checks().await?;
 
-    let fired = rows(
+    let fired = select(
         &url,
         "SELECT kind, key, summary FROM enterprise_alerts ORDER BY id",
     )
@@ -1351,7 +1354,7 @@ async fn the_new_kinds_fire_on_anomalies_failures_expiring_keys_and_a_lagging_ex
     let fired: Vec<(String, String, String)> = fired
         .iter()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?)))
-        .collect::<Result<_, enterplace_server::store::tokio_postgres::Error>>()?;
+        .collect::<Result<_, enterplace_server::sql::Error>>()?;
     let of = |kind: &str| {
         fired
             .iter()
@@ -1579,7 +1582,7 @@ async fn digests_regions_rejected_changes_cleared_kills_and_open_circuits_alert(
     engine.checks().await?;
     engine.checks().await?;
 
-    let fired = rows(
+    let fired = select(
         &url,
         "SELECT kind, key, summary FROM enterprise_alerts ORDER BY id",
     )
@@ -1587,7 +1590,7 @@ async fn digests_regions_rejected_changes_cleared_kills_and_open_circuits_alert(
     let fired: Vec<(String, String, String)> = fired
         .iter()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?)))
-        .collect::<Result<_, enterplace_server::store::tokio_postgres::Error>>()?;
+        .collect::<Result<_, enterplace_server::sql::Error>>()?;
     let of = |kind: &str| {
         fired
             .iter()

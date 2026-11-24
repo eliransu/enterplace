@@ -33,6 +33,21 @@ ALTER TABLE enterprise_export_settings ADD COLUMN capture_hours integer NOT NULL
 CREATE INDEX enterprise_audit_decision ON enterprise_audit (replica, ((line::jsonb)->>'id'));
 ";
 
+/// `MIGRATION` on the Cloudflare store: the decision index is on the expression `join` looks records up by there.
+pub const LITE_MIGRATION: &str = "
+CREATE TABLE enterprise_captures (
+    decision text PRIMARY KEY,
+    replica text NOT NULL,
+    team text NOT NULL,
+    sealed text NOT NULL,
+    captured_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    expires_at TEXT NOT NULL
+);
+CREATE INDEX enterprise_captures_expires ON enterprise_captures (expires_at);
+ALTER TABLE enterprise_export_settings ADD COLUMN capture_hours integer NOT NULL DEFAULT 24;
+CREATE INDEX enterprise_audit_decision ON enterprise_audit (replica, json_extract(line, '$.id'));
+";
+
 /// Most requests waiting between two exporter ticks (one second). Past it text is dropped, never the request.
 const QUEUE: usize = 10_000;
 pub const HOURS_MAX: i32 = 168;
@@ -174,8 +189,13 @@ impl Captures {
         for (decision, team, sealed) in &rows {
             client
                 .execute(
-                    "INSERT INTO enterprise_captures (decision, replica, team, sealed, expires_at) \
-                     VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5)) ON CONFLICT (decision) DO NOTHING",
+                    enterplace_server::sql::Sql::both(
+                        "INSERT INTO enterprise_captures (decision, replica, team, sealed, expires_at) \
+                         VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5)) ON CONFLICT (decision) DO NOTHING",
+                        "INSERT INTO enterprise_captures (decision, replica, team, sealed, expires_at) \
+                         VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || ?5 || ' hours')) \
+                         ON CONFLICT (decision) DO NOTHING",
+                    ),
                     &[decision, &replica, team, sealed, &hours],
                 )
                 .await
@@ -211,7 +231,11 @@ pub async fn texts(
     let client = db.client().await?;
     let rows = client
         .query(
-            "SELECT decision, team, sealed FROM enterprise_captures WHERE decision = ANY($1) AND expires_at >= now()",
+            enterplace_server::sql::Sql::both(
+                "SELECT decision, team, sealed FROM enterprise_captures WHERE decision = ANY($1) AND expires_at >= now()",
+                "SELECT decision, team, sealed FROM enterprise_captures \
+                 WHERE decision IN (SELECT value FROM json_each(?1)) AND expires_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+            ),
             &[&ids],
         )
         .await

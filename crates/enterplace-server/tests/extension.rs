@@ -149,10 +149,10 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
     let kept = Arc::new(Mutex::new(None));
     let keep = kept.clone();
     let extend = move |host: enterplace_server::Host<'_>| {
-        let pg = host.postgres.ok_or("no store")?.clone();
-        pg.migrate("demo", ONE)?;
+        let pg = host.db.ok_or("no store")?.clone();
+        pg.migrate("demo", ONE, &[])?;
         // Applied once: a second start, or a second replica, finds version 1 and does nothing.
-        pg.migrate("demo", ONE)?;
+        pg.migrate("demo", ONE, &[])?;
         *keep.lock().map_err(|e| e.to_string())? = Some(pg);
         Ok(Extension::default())
     };
@@ -173,7 +173,7 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
     let rows: Vec<(String, i32)> = versions
         .iter()
         .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
-        .collect::<Result<_, tokio_postgres::Error>>()?;
+        .collect::<Result<_, enterplace_server::sql::Error>>()?;
     // The gateway's own namespaces, beside the extension's: ownership of files and batches, policy versions, the
     // version of the sessions events plugins ended, the session pins and latency, the request index and the MCP
     // gateway's state, and what gateways share for high availability (heartbeats, the answer cache, budget raises).
@@ -211,7 +211,7 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
 
     // A newer binary adds an entry: only that one runs.
     let migrate = pg.clone();
-    tokio::task::spawn_blocking(move || migrate.migrate("demo", TWO)).await??;
+    tokio::task::spawn_blocking(move || migrate.migrate("demo", TWO, &[])).await??;
     client
         .execute(
             "INSERT INTO ext_notes (text, author) VALUES ('x', 'ada')",
@@ -220,7 +220,7 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
         .await?;
     // An older binary on a database a newer one wrote is refused, with the fix.
     let migrate = pg.clone();
-    let err = tokio::task::spawn_blocking(move || migrate.migrate("demo", ONE))
+    let err = tokio::task::spawn_blocking(move || migrate.migrate("demo", ONE, &[]))
         .await?
         .err()
         .ok_or("an older binary migrated a newer database")?;

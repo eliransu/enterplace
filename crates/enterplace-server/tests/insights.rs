@@ -13,6 +13,7 @@ use axum::{
     routing::post,
 };
 use enterplace_core::id::sha256_hex;
+use enterplace_server::{sql::Sql, store::TestStore};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -265,13 +266,10 @@ async fn capture_needs_the_master_key_and_keeps_bodies_redacted_and_sealed() -> 
     Ok(())
 }
 
-/// A fresh database on the server ENTERPLACE_TEST_DATABASE_URL names, as a connection string. `None` when it is not set.
-async fn database(test: &str) -> Result<Option<enterplace_server::store::TestDatabase>, Error> {
-    enterplace_server::store::TestDatabase::create(&format!(
-        "enterplace_{}_{test}",
-        std::process::id()
-    ))
-    .await
+/// A fresh store of the backend this run tests (a Postgres database on the server ENTERPLACE_TEST_DATABASE_URL names,
+/// or with ENTERPLACE_TEST_STORE=cloudflare the Cloudflare store). `None` when there is nothing to run on.
+async fn database(test: &str) -> Result<Option<TestStore>, Error> {
+    TestStore::create(&format!("enterplace_{}_{test}", std::process::id())).await
 }
 
 fn decision(id: &str, team: &str, allowed: bool) -> serde_json::Map<String, Value> {
@@ -301,7 +299,7 @@ async fn the_index_holds_every_replica_and_answers_as_the_local_chain_does() -> 
         return Ok(());
     };
     use enterplace_core::insights::{Bodies, Index, Query};
-    let pg = enterplace_server::store::open("ENTERPLACE_TEST_DATABASE_URL", &url)?;
+    let pg = TestStore::db(&url)?;
     let master = enterplace_server::MasterKey::from_env(&|n: &str| {
         (n == "ENTERPLACE_MASTER_KEY").then(|| MASTER.to_string())
     })?
@@ -440,7 +438,13 @@ async fn the_index_holds_every_replica_and_answers_as_the_local_chain_does() -> 
     assert_eq!(index.body("01GONE").await?, None);
     let client = pg.connect().await?;
     let left: i64 = client
-        .query_one("SELECT count(*) FROM enterplace_bodies WHERE position(CAST('MASKED' AS bytea) in sealed) > 0", &[])
+        .query_one(
+            Sql::both(
+                "SELECT count(*) FROM enterplace_bodies WHERE position(CAST('MASKED' AS bytea) in sealed) > 0",
+                "SELECT count(*) FROM enterplace_bodies WHERE instr(sealed, CAST('MASKED' AS BLOB)) > 0",
+            ),
+            &[],
+        )
         .await?
         .try_get(0)?;
     assert_eq!(left, 0, "no body text is readable in the table");
@@ -459,7 +463,7 @@ async fn legal_hold_keeps_expired_bodies_and_retention_takes_rows_and_bodies_wit
         return Ok(());
     };
     use enterplace_core::insights::{Bodies, Index, Query};
-    let pg = enterplace_server::store::open("ENTERPLACE_TEST_DATABASE_URL", &url)?;
+    let pg = TestStore::db(&url)?;
     let master = enterplace_server::MasterKey::from_env(&|n: &str| {
         (n == "ENTERPLACE_MASTER_KEY").then(|| MASTER.to_string())
     })?
@@ -492,7 +496,7 @@ async fn legal_hold_keeps_expired_bodies_and_retention_takes_rows_and_bodies_wit
         async move {
             let client = pg.connect().await?;
             let n: i64 = client
-                .query_one(&format!("SELECT count(*) FROM {table}"), &[])
+                .query_one(format!("SELECT count(*) FROM {table}"), &[])
                 .await?
                 .try_get(0)?;
             Ok::<i64, Error>(n)
@@ -545,7 +549,7 @@ async fn analytics_summed_in_the_store_match_the_local_fold() -> TestResult {
         return Ok(());
     };
     use enterplace_core::insights::{Index, Query};
-    let pg = enterplace_server::store::open("ENTERPLACE_TEST_DATABASE_URL", &url)?;
+    let pg = TestStore::db(&url)?;
     let dir = dir("index-analytics")?;
     let path = dir.join("enterplace-audit.jsonl");
     let log = enterplace_core::audit::AuditLog::open(&path)?;

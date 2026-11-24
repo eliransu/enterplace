@@ -33,7 +33,8 @@ use super::Db;
 use super::devices::{Json, api_admin, bearer, fail, not_admin, outside, token_org};
 use super::siem::{Role, db_error, random_hex, role_of};
 use crate::license::Status;
-use enterplace_server::store::tokio_postgres::Client;
+use enterplace_server::sql::{Conn as Client, Sql};
+use enterplace_server::store::tokio_postgres::types::ToSql;
 
 pub const FEATURE: &str = "watch";
 
@@ -67,6 +68,42 @@ CREATE TABLE enterprise_watch_daily (
     metric text NOT NULL,
     label text NOT NULL DEFAULT '',
     value double precision NOT NULL,
+    PRIMARY KEY (day, person, metric, label)
+);
+";
+
+/// `MIGRATION` on the Cloudflare store. A series' time is kept as text there: nanoseconds since 1970 pass 2^53,
+/// past what the Durable Object's JavaScript numbers hold exactly.
+pub const LITE_MIGRATION: &str = "
+CREATE TABLE enterprise_watch_tokens (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    person TEXT NOT NULL DEFAULT '',
+    team TEXT NOT NULL DEFAULT '',
+    token_sha256 TEXT NOT NULL UNIQUE,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT,
+    last_used TEXT
+);
+CREATE TABLE enterprise_watch_seen (
+    key TEXT PRIMARY KEY,
+    at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE TABLE enterprise_watch_series (
+    key TEXT PRIMARY KEY,
+    time_ns TEXT NOT NULL,
+    value REAL NOT NULL,
+    at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE TABLE enterprise_watch_daily (
+    day TEXT NOT NULL,
+    person TEXT NOT NULL,
+    team TEXT NOT NULL DEFAULT '',
+    metric TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    value REAL NOT NULL,
     PRIMARY KEY (day, person, metric, label)
 );
 ";
@@ -541,6 +578,21 @@ fn event_record(
     Some(r)
 }
 
+/// Whether another feature's `table` is there: the install may not have that feature.
+async fn has_table(client: &Client, table: &str) -> Result<bool, String> {
+    client
+        .query_one(
+            Sql::both(
+                "SELECT to_regclass($1) IS NOT NULL",
+                "SELECT count(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            ),
+            &[&table],
+        )
+        .await
+        .and_then(|r| r.try_get(0))
+        .map_err(db_error)
+}
+
 impl Watch {
     /// The watch token an export came with, if it is one that works now.
     async fn token(&self, headers: &HeaderMap) -> Result<Token, Refusal> {
@@ -608,12 +660,7 @@ impl Watch {
             }
         });
         // The members feature's table, when the install has it.
-        let has: bool = client
-            .query_one("SELECT to_regclass('enterprise_people') IS NOT NULL", &[])
-            .await
-            .and_then(|r| r.try_get(0))
-            .map_err(db_error)?;
-        if has {
+        if has_table(client, "enterprise_people").await? {
             let rows = client
                 .query("SELECT lower(email) FROM enterprise_people", &[])
                 .await
@@ -646,7 +693,19 @@ impl Watch {
                 reported.to_string()
             }
         };
-        let tx = client.transaction().await.map_err(failed)?;
+        // What is read below decides what is written, so one export is kept at a time: the Durable Object's
+        // transaction holds the store, and on Postgres the lock does the same.
+        // ponytail: one lock for all exports on Postgres; key it by token if exports queue on it.
+        let mut tx = client.transaction().await.map_err(failed)?;
+        tx.query(
+            Sql::both(
+                "SELECT pg_advisory_xact_lock(hashtext('enterprise_watch'))::text",
+                "SELECT 1",
+            ),
+            &[],
+        )
+        .await
+        .map_err(failed)?;
 
         // Events: each taken once. The key is who and when, with the sequence Claude Code numbers its events by.
         let mut candidates = Vec::new();
@@ -678,9 +737,12 @@ impl Watch {
             }
         }
         let keys: Vec<&str> = candidates.iter().map(|c| c.0.as_str()).collect();
-        let fresh: std::collections::HashSet<String> = tx
+        let seen: std::collections::HashSet<String> = tx
             .query(
-                "INSERT INTO enterprise_watch_seen (key) SELECT DISTINCT unnest($1::text[]) ON CONFLICT DO NOTHING RETURNING key",
+                Sql::both(
+                    "SELECT key FROM enterprise_watch_seen WHERE key = ANY($1)",
+                    "SELECT key FROM enterprise_watch_seen WHERE key IN (SELECT value FROM json_each(?1))",
+                ),
                 &[&keys],
             )
             .await
@@ -688,8 +750,13 @@ impl Watch {
             .iter()
             .filter_map(|r| r.try_get(0).ok())
             .collect();
+        let fresh: Vec<&str> = keys
+            .iter()
+            .copied()
+            .filter(|k| !seen.contains(*k))
+            .collect();
         for (key, event, name, person, reported, said) in &candidates {
-            if !fresh.contains(key) {
+            if seen.contains(key) {
                 continue;
             }
             let day = at(event.time_ns).get(..10).unwrap_or_default().to_string();
@@ -714,6 +781,9 @@ impl Watch {
         // Metrics: a point newer than the last of its series counts. A delta point adds its value; a cumulative
         // one adds what the total grew by since the last.
         let mut by_session: BTreeMap<(String, String), [Map<String, Value>; 2]> = BTreeMap::new();
+        // Each series as it stands with what this export changed so far: (time, value), read once.
+        let mut series: BTreeMap<String, Option<(i64, f64)>> = BTreeMap::new();
+        let mut series_writes: Vec<(String, String, f64)> = Vec::new();
         for point in &points {
             let Some((metric, label)) = metric_of(point) else {
                 continue;
@@ -726,28 +796,36 @@ impl Watch {
             let key =
                 sha256_hex(format!("{reported}\0{}\0{start}\0{attrs}", point.metric).as_bytes());
             let time = i64::try_from(point.time_ns).unwrap_or(i64::MAX);
-            let before: Option<f64> = if point.cumulative {
-                tx.query_opt(
-                    "SELECT value FROM enterprise_watch_series WHERE key = $1",
-                    &[&key],
-                )
-                .await
-                .map_err(failed)?
-                .and_then(|r| r.try_get(0).ok())
-            } else {
-                None
+            let last = match series.get(&key) {
+                Some(last) => *last,
+                None => tx
+                    .query_opt(
+                        "SELECT time_ns::text, value FROM enterprise_watch_series WHERE key = $1",
+                        &[&key],
+                    )
+                    .await
+                    .map_err(failed)?
+                    .map(|r| {
+                        let at: String = r.try_get(0)?;
+                        Ok((at.parse().unwrap_or(i64::MAX), r.try_get(1)?))
+                    })
+                    .transpose()
+                    .map_err(failed)?,
             };
-            let newer = tx
-                .execute(
-                    "INSERT INTO enterprise_watch_series (key, time_ns, value) VALUES ($1, $2, $3) \
-                     ON CONFLICT (key) DO UPDATE SET time_ns = excluded.time_ns, value = excluded.value, at = now() \
-                     WHERE enterprise_watch_series.time_ns < excluded.time_ns",
-                    &[&key, &time, &point.value],
-                )
-                .await
-                .map_err(failed)?;
-            let value = (point.value - before.unwrap_or(0.0)).max(0.0);
-            if newer == 0 || value == 0.0 || !value.is_finite() {
+            let newer = last.is_none_or(|(at, _)| at < time);
+            if newer {
+                series.insert(key.clone(), Some((time, point.value)));
+                series_writes.push((key, time.to_string(), point.value));
+            } else {
+                series.insert(key, last);
+            }
+            let before = if point.cumulative {
+                last.map_or(0.0, |(_, v)| v)
+            } else {
+                0.0
+            };
+            let value = (point.value - before).max(0.0);
+            if !newer || value == 0.0 || !value.is_finite() {
                 continue;
             }
             let day = at(point.time_ns).get(..10).unwrap_or_default().to_string();
@@ -775,16 +853,38 @@ impl Watch {
             added.records.push(record);
         }
 
+        // Every write lands together, after the records are on file.
+        let mut writes: Vec<(Sql, Vec<&(dyn ToSql + Sync)>, Option<u64>)> = Vec::new();
+        if !fresh.is_empty() {
+            writes.push((
+                Sql::both(
+                    "INSERT INTO enterprise_watch_seen (key) SELECT DISTINCT unnest($1::text[]) ON CONFLICT DO NOTHING",
+                    // `WHERE true` tells SQLite the ON CONFLICT is the upsert's, not a join's.
+                    "INSERT INTO enterprise_watch_seen (key) SELECT DISTINCT value FROM json_each(?1) WHERE true ON CONFLICT DO NOTHING",
+                ),
+                vec![&fresh],
+                None,
+            ));
+        }
+        for (key, time, value) in &series_writes {
+            writes.push((
+                "INSERT INTO enterprise_watch_series (key, time_ns, value) VALUES ($1, CAST($2 AS text)::bigint, $3) \
+                 ON CONFLICT (key) DO UPDATE SET time_ns = excluded.time_ns, value = excluded.value, at = now()"
+                    .into(),
+                vec![key, time, value],
+                None,
+            ));
+        }
         for ((day, person, team, metric, label), value) in &added.daily {
-            tx.execute(
+            writes.push((
                 // ponytail: a row is one person's day, so someone watched through two organizations' tokens on one day is
                 // counted under the later one. Put org in the primary key if that happens.
                 "INSERT INTO enterprise_watch_daily (day, person, team, metric, label, value, org) VALUES (CAST($1 AS text)::date, $2, $3, $4, $5, $6, $7) \
-                 ON CONFLICT (day, person, metric, label) DO UPDATE SET value = enterprise_watch_daily.value + excluded.value, team = excluded.team, org = excluded.org",
-                &[day, person, team, metric, label, value, &token.org],
-            )
-            .await
-            .map_err(failed)?;
+                 ON CONFLICT (day, person, metric, label) DO UPDATE SET value = enterprise_watch_daily.value + excluded.value, team = excluded.team, org = excluded.org"
+                    .into(),
+                vec![day, person, team, metric, label, value, &token.org],
+                None,
+            ));
         }
 
         // The records go on file before the sums are kept: a watched unit that is counted is in the chain.
@@ -811,6 +911,9 @@ impl Watch {
                 None => break,
             }
         }
+        if !writes.is_empty() {
+            tx.atomic(writes).await.map_err(failed)?;
+        }
         tx.commit().await.map_err(failed)?;
         drop(client);
         self.prune().await;
@@ -834,15 +937,7 @@ impl Watch {
             let client = self.db.client().await?;
             // The retention feature's setting, when the install has its table. An error reading it deletes nothing:
             // legal hold may be on.
-            let has: bool = client
-                .query_one(
-                    "SELECT to_regclass('enterprise_export_settings') IS NOT NULL",
-                    &[],
-                )
-                .await
-                .and_then(|r| r.try_get(0))
-                .map_err(db_error)?;
-            let (days, hold) = if has {
+            let (days, hold) = if has_table(&client, "enterprise_export_settings").await? {
                 match client
                     .query_opt(
                         "SELECT retention_days, legal_hold FROM enterprise_export_settings",
@@ -865,7 +960,10 @@ impl Watch {
             }
             client
                 .execute(
-                    "DELETE FROM enterprise_watch_daily WHERE day < current_date - $1::int",
+                    Sql::both(
+                        "DELETE FROM enterprise_watch_daily WHERE day < current_date - $1::int",
+                        "DELETE FROM enterprise_watch_daily WHERE day < date('now', '-' || ?1 || ' days')",
+                    ),
                     &[&days],
                 )
                 .await
@@ -873,8 +971,9 @@ impl Watch {
             for table in ["enterprise_watch_seen", "enterprise_watch_series"] {
                 client
                     .execute(
-                        &format!(
-                            "DELETE FROM {table} WHERE at < now() - make_interval(days => $1)"
+                        Sql::both(
+                            format!("DELETE FROM {table} WHERE at < now() - make_interval(days => $1)"),
+                            format!("DELETE FROM {table} WHERE at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || ?1 || ' days')"),
                         ),
                         &[&REPEAT_DAYS],
                     )
@@ -1115,9 +1214,14 @@ impl Watch {
         let client = self.db.client().await.map_err(unavailable)?;
         let row = client
             .query_one(
-                &format!(
+                Sql::both(
+                    format!(
+                        "INSERT INTO enterprise_watch_tokens (id, label, person, team, token_sha256, created_by, expires_at, org) \
+                         VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(days => $7), $8) RETURNING to_char(expires_at AT TIME ZONE 'UTC', {TIME})"
+                    ),
                     "INSERT INTO enterprise_watch_tokens (id, label, person, team, token_sha256, created_by, expires_at, org) \
-                     VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(days => $7), $8) RETURNING to_char(expires_at AT TIME ZONE 'UTC', {TIME})"
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || ?7 || ' days'), ?8) \
+                     RETURNING strftime('%Y-%m-%dT%H:%M:%SZ', expires_at)",
                 ),
                 &[&id, &label, &person, &team, &sha256_hex(token.as_bytes()), &admin.name, &days, &org],
             )
@@ -1172,8 +1276,12 @@ impl Watch {
         let known = self.people(&client).await?;
         let rows = client
             .query(
-                "SELECT person, team, metric, label, sum(value)::float8, to_char(max(day), 'YYYY-MM-DD'), org FROM enterprise_watch_daily \
-                 WHERE day > current_date - $1::int GROUP BY person, team, org, metric, label ORDER BY person, metric, label",
+                Sql::both(
+                    "SELECT person, team, metric, label, sum(value)::float8, to_char(max(day), 'YYYY-MM-DD'), org FROM enterprise_watch_daily \
+                     WHERE day > current_date - $1::int GROUP BY person, team, org, metric, label ORDER BY person, metric, label",
+                    "SELECT person, team, metric, label, sum(value) * 1.0, max(day), org FROM enterprise_watch_daily \
+                     WHERE day > date('now', '-' || ?1 || ' days') GROUP BY person, team, org, metric, label ORDER BY person, metric, label",
+                ),
                 &[&days],
             )
             .await

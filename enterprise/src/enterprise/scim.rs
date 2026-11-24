@@ -31,7 +31,7 @@ use enterplace_console::{
     html::{self, esc},
     redirect, same_origin,
 };
-use enterplace_server::store::tokio_postgres::{Row, Transaction};
+use enterplace_server::sql::{Row, Sql};
 use serde_json::{Map, Value, json};
 
 use super::Db;
@@ -332,12 +332,22 @@ struct Person {
     groups: Value,
 }
 
-const PERSON: &str = r#"SELECT p.id, p.email, p.name, p.role, p.team,
+/// A person's row, in Postgres and in the Postgres-like text [`select`] translates for SQLite, where the groups are
+/// aggregated over an ordered subquery (`json_group_array` takes no `ORDER BY` before SQLite 3.44).
+const PERSON: [&str; 2] = [
+    r#"SELECT p.id, p.email, p.name, p.role, p.team,
     to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created, p.scim_external_id,
     COALESCE((SELECT json_agg(json_build_object('value', g.id, 'display', g.display_name) ORDER BY g.display_name)
         FROM enterprise_scim_group_members m JOIN enterprise_scim_groups g ON g.id = m.group_id
         WHERE m.person_id = p.id), '[]')::text AS groups
-    FROM enterprise_people p"#;
+    FROM enterprise_people p"#,
+    r#"SELECT p.id, p.email, p.name, p.role, p.team,
+    to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created, p.scim_external_id,
+    (SELECT json_group_array(json_object('value', id, 'display', display_name)) FROM (SELECT g.id, g.display_name
+        FROM enterprise_scim_group_members m JOIN enterprise_scim_groups g ON g.id = m.group_id
+        WHERE m.person_id = p.id ORDER BY g.display_name)) AS groups
+    FROM enterprise_people p"#,
+];
 
 fn person(row: &Row) -> Result<Person, String> {
     let groups: String = row.try_get("groups").map_err(members::db_error)?;
@@ -362,13 +372,31 @@ struct Group {
     members: Vec<(String, String)>,
 }
 
-const GROUP_ROW: &str = r#"SELECT g.id, g.display_name, g.external_id,
+/// A group's row, as [`PERSON`] is a person's.
+const GROUP_ROW: [&str; 2] = [
+    r#"SELECT g.id, g.display_name, g.external_id,
     to_char(g.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created,
     to_char(g.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated,
     COALESCE((SELECT json_agg(json_build_array(p.id, p.email) ORDER BY p.email)
         FROM enterprise_scim_group_members m JOIN enterprise_people p ON p.id = m.person_id
         WHERE m.group_id = g.id), '[]')::text AS members
-    FROM enterprise_scim_groups g"#;
+    FROM enterprise_scim_groups g"#,
+    r#"SELECT g.id, g.display_name, g.external_id,
+    to_char(g.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created,
+    to_char(g.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated,
+    (SELECT json_group_array(json_array(id, email)) FROM (SELECT p.id, p.email
+        FROM enterprise_scim_group_members m JOIN enterprise_people p ON p.id = m.person_id
+        WHERE m.group_id = g.id ORDER BY p.email)) AS members
+    FROM enterprise_scim_groups g"#,
+];
+
+/// `before`, a row select of [`PERSON`] or [`GROUP_ROW`], then `after`, for each database.
+fn select(row: [&str; 2], before: &str, after: &str) -> Sql {
+    Sql::both(
+        format!("{before}{}{after}", row[0]),
+        enterplace_server::sql::lite(&format!("{before}{}{after}", row[1])),
+    )
+}
 
 fn group(row: &Row) -> Result<Group, String> {
     let members: String = row.try_get("members").map_err(members::db_error)?;
@@ -382,35 +410,28 @@ fn group(row: &Row) -> Result<Group, String> {
     })
 }
 
-/// Sets the team and role of these people from their groups, in `tx`. Owners keep their role.
-async fn follow_groups(tx: &Transaction<'_>, people: &[String]) -> Result<(), String> {
-    for id in people {
-        let rows = tx
-            .query(
-                "SELECT g.team, g.grants FROM enterprise_scim_group_members m JOIN enterprise_scim_groups g \
-                 ON g.id = m.group_id WHERE m.person_id = $1 ORDER BY g.display_name",
-                &[id],
-            )
-            .await
-            .map_err(members::db_error)?;
-        let team = rows
-            .first()
-            .map(|r| r.try_get::<_, String>(0))
-            .transpose()
-            .map_err(members::db_error)?
-            .unwrap_or_else(|| "default".into());
-        let admin = rows
-            .iter()
-            .any(|r| r.try_get::<_, &str>(1).is_ok_and(|g| g == "admin"));
-        tx.execute(
-            "UPDATE enterprise_people SET team = $2, \
-             role = CASE WHEN role = 'owner' THEN role WHEN $3 THEN 'admin' ELSE 'viewer' END WHERE id = $1",
-            &[id, &team, &admin],
-        )
-        .await
-        .map_err(members::db_error)?;
-    }
-    Ok(())
+/// What sets the team and role of people from their groups (owners keep their role): the people `who` picks, a
+/// condition on `enterprise_people.id`. One statement that reads the groups as they are when it runs, so it goes last
+/// in the same atomic write as the group change it follows.
+fn follow_groups(who: &str) -> String {
+    format!(
+        "UPDATE enterprise_people SET \
+         team = COALESCE((SELECT g.team FROM enterprise_scim_group_members m JOIN enterprise_scim_groups g \
+             ON g.id = m.group_id WHERE m.person_id = enterprise_people.id ORDER BY g.display_name LIMIT 1), 'default'), \
+         role = CASE WHEN role = 'owner' THEN role \
+             WHEN EXISTS (SELECT 1 FROM enterprise_scim_group_members m JOIN enterprise_scim_groups g \
+                 ON g.id = m.group_id WHERE m.person_id = enterprise_people.id AND g.grants = 'admin') THEN 'admin' \
+             ELSE 'viewer' END \
+         WHERE {who}"
+    )
+}
+
+/// [`follow_groups`] for the people in the list parameter `$1`.
+fn follow_people() -> Sql {
+    Sql::both(
+        follow_groups("id = ANY($1)"),
+        enterplace_server::sql::lite(&follow_groups("id IN (SELECT value FROM json_each($1))")),
+    )
 }
 
 // ---------------------------------------------------------------- the API
@@ -530,7 +551,7 @@ impl Call<'_> {
     async fn person(&self, id: &str) -> Result<Option<Person>, Response> {
         let client = self.db().client().await.map_err(unavailable)?;
         let row = client
-            .query_opt(&format!("{PERSON} WHERE p.id = $1"), &[&id])
+            .query_opt(select(PERSON, "", " WHERE p.id = $1"), &[&id])
             .await
             .map_err(|e| unavailable(members::db_error(e)))?;
         row.as_ref().map(person).transpose().map_err(unavailable)
@@ -539,7 +560,7 @@ impl Call<'_> {
     async fn group(&self, id: &str) -> Result<Option<Group>, Response> {
         let client = self.db().client().await.map_err(unavailable)?;
         let row = client
-            .query_opt(&format!("{GROUP_ROW} WHERE g.id = $1"), &[&id])
+            .query_opt(select(GROUP_ROW, "", " WHERE g.id = $1"), &[&id])
             .await
             .map_err(|e| unavailable(members::db_error(e)))?;
         row.as_ref().map(group).transpose().map_err(unavailable)
@@ -567,11 +588,11 @@ impl Call<'_> {
         })
     }
 
-    /// A page of `select` (PERSON or GROUP_ROW) filtered as the query asks.
+    /// A page of `row` (PERSON or GROUP_ROW) filtered as the query asks.
     async fn page(
         &self,
         uri: &Uri,
-        select: &str,
+        row: [&str; 2],
         columns: &[(&str, &str)],
         order: &str,
     ) -> Result<(Vec<Row>, i64, i64), Response> {
@@ -615,9 +636,13 @@ impl Call<'_> {
             };
         let rows = client
             .query(
-                &format!(
-                    "{select}{condition} ORDER BY {order} OFFSET {} LIMIT {count}",
-                    start - 1
+                select(
+                    row,
+                    "",
+                    &format!(
+                        "{condition} ORDER BY {order} LIMIT {count} OFFSET {}",
+                        start - 1
+                    ),
                 ),
                 &params,
             )
@@ -625,7 +650,11 @@ impl Call<'_> {
             .map_err(|e| unavailable(members::db_error(e)))?;
         let total: i64 = client
             .query_one(
-                &format!("SELECT count(*) FROM ({select}{condition}) AS matched"),
+                select(
+                    row,
+                    "SELECT count(*) FROM (",
+                    &format!("{condition}) AS matched"),
+                ),
                 &params,
             )
             .await
@@ -996,7 +1025,10 @@ impl Call<'_> {
         let client = self.db().client().await.map_err(unavailable)?;
         let known: Vec<String> = client
             .query(
-                "SELECT id FROM enterprise_people WHERE id = ANY($1)",
+                Sql::both(
+                    "SELECT id FROM enterprise_people WHERE id = ANY($1)",
+                    "SELECT id FROM enterprise_people WHERE id IN (SELECT value FROM json_each(?1))",
+                ),
                 &[&ids],
             )
             .await
@@ -1039,34 +1071,36 @@ impl Call<'_> {
     ) -> Result<(), Response> {
         let team = team_of(name).ok_or_else(|| bad_group_name(name))?;
         let mut client = self.db().client().await.map_err(unavailable)?;
-        let written = async {
-            let tx = client.transaction().await.map_err(members::db_error)?;
-            tx.execute(
-                "INSERT INTO enterprise_scim_groups (id, display_name, external_id, team) VALUES ($1, $2, $3, $4) \
-                 ON CONFLICT (id) DO UPDATE SET display_name = $2, external_id = $3, team = $4, updated_at = now()",
-                &[&id, &name, &external, &team],
-            )
+        let mut affected: Vec<String> = before.iter().chain(members).cloned().collect();
+        affected.sort();
+        affected.dedup();
+        let members = members.to_vec();
+        client
+            .atomic(vec![
+                (
+                    "INSERT INTO enterprise_scim_groups (id, display_name, external_id, team) VALUES ($1, $2, $3, $4) \
+                     ON CONFLICT (id) DO UPDATE SET display_name = $2, external_id = $3, team = $4, updated_at = now()".into(),
+                    vec![&id, &name, &external, &team],
+                    None,
+                ),
+                (
+                    "DELETE FROM enterprise_scim_group_members WHERE group_id = $1".into(),
+                    vec![&id],
+                    None,
+                ),
+                (
+                    Sql::both(
+                        "INSERT INTO enterprise_scim_group_members (group_id, person_id) SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING",
+                        "INSERT INTO enterprise_scim_group_members (group_id, person_id) SELECT ?1, value FROM json_each(?2) WHERE true ON CONFLICT DO NOTHING",
+                    ),
+                    vec![&id, &members],
+                    None,
+                ),
+                (follow_people(), vec![&affected], None),
+            ])
             .await
-            .map_err(members::db_error)?;
-            tx.execute(
-                "DELETE FROM enterprise_scim_group_members WHERE group_id = $1",
-                &[&id],
-            )
-            .await
-            .map_err(members::db_error)?;
-            tx.execute(
-                "INSERT INTO enterprise_scim_group_members (group_id, person_id) SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING",
-                &[&id, &members],
-            )
-            .await
-            .map_err(members::db_error)?;
-            let mut affected: Vec<String> = before.iter().chain(members).cloned().collect();
-            affected.sort();
-            affected.dedup();
-            follow_groups(&tx, &affected).await?;
-            tx.commit().await.map_err(members::db_error)
-        };
-        written.await.map_err(unavailable)
+            .map(|_| ())
+            .map_err(|e| unavailable(members::db_error(e)))
     }
 
     async fn list_groups(&self, uri: &Uri) -> Answer {
@@ -1284,15 +1318,23 @@ impl Call<'_> {
                 )
                 .await?;
                 let mut client = self.db().client().await.map_err(unavailable)?;
-                let deleted = async {
-                    let tx = client.transaction().await.map_err(members::db_error)?;
-                    tx.execute("DELETE FROM enterprise_scim_groups WHERE id = $1", &[&g.id])
-                        .await
-                        .map_err(members::db_error)?;
-                    follow_groups(&tx, &before).await?;
-                    tx.commit().await.map_err(members::db_error)
-                };
-                deleted.await.map_err(unavailable)?;
+                // Its members go with it (ON DELETE CASCADE), before the people follow their groups that remain.
+                client
+                    .atomic(vec![
+                        (
+                            "DELETE FROM enterprise_scim_group_members WHERE group_id = $1".into(),
+                            vec![&g.id],
+                            None,
+                        ),
+                        (
+                            "DELETE FROM enterprise_scim_groups WHERE id = $1".into(),
+                            vec![&g.id],
+                            None,
+                        ),
+                        (follow_people(), vec![&before], None),
+                    ])
+                    .await
+                    .map_err(|e| unavailable(members::db_error(e)))?;
                 Ok(StatusCode::NO_CONTENT.into_response())
             }
             _ => Err(not_allowed(method, "a Group")),
@@ -1969,7 +2011,7 @@ async fn revoke_token(
         let client = scim.members.db.client().await?;
         client
             .execute(
-                "DELETE FROM enterprise_scim_tokens WHERE left(token_sha256, 16) = $1",
+                "DELETE FROM enterprise_scim_tokens WHERE substr(token_sha256, 1, 16) = $1",
                 &[&prefix],
             )
             .await
@@ -2034,25 +2076,25 @@ async fn group_role(
     }
     let changed = async {
         let mut client = scim.members.db.client().await?;
-        let tx = client.transaction().await.map_err(members::db_error)?;
-        tx.execute(
-            "UPDATE enterprise_scim_groups SET grants = $2, updated_at = now() WHERE id = $1",
-            &[&id, &role],
-        )
-        .await
-        .map_err(members::db_error)?;
-        let people: Vec<String> = tx
-            .query(
-                "SELECT person_id FROM enterprise_scim_group_members WHERE group_id = $1",
-                &[&id],
-            )
+        client
+            .atomic(vec![
+                (
+                    "UPDATE enterprise_scim_groups SET grants = $2, updated_at = now() WHERE id = $1".into(),
+                    vec![&id, &role],
+                    None,
+                ),
+                (
+                    follow_groups(
+                        "id IN (SELECT person_id FROM enterprise_scim_group_members WHERE group_id = $1)",
+                    )
+                    .into(),
+                    vec![&id],
+                    None,
+                ),
+            ])
             .await
-            .map_err(members::db_error)?
-            .iter()
-            .filter_map(|r| r.try_get(0).ok())
-            .collect();
-        follow_groups(&tx, &people).await?;
-        tx.commit().await.map_err(members::db_error)
+            .map(|_| ())
+            .map_err(members::db_error)
     };
     match changed.await {
         Err(err) => refuse(StatusCode::SERVICE_UNAVAILABLE, &err),
@@ -2127,8 +2169,8 @@ async fn password_link(
         client
             .execute(
                 "INSERT INTO enterprise_password_links (token_sha256, person_id, created_by, expires_at) \
-                 VALUES ($1, $2, $3, now() + make_interval(days => $4))",
-                &[&enterplace_core::id::sha256_hex(token.as_bytes()), &id, &admin.name, &LINK_DAYS],
+                 VALUES ($1, $2, $3, $4)",
+                &[&enterplace_core::id::sha256_hex(token.as_bytes()), &id, &admin.name, &members::expiry(LINK_DAYS)],
             )
             .await
             .map_err(members::db_error)
@@ -2272,28 +2314,24 @@ async fn set_password(
     }
     // The link is marked used and the password set together: of two submissions at once only one passes, and only
     // while the person still has no password.
+    let link = enterplace_core::id::sha256_hex(token.as_bytes());
     let set = async {
         let mut client = scim.members.db.client().await?;
-        let tx = client.transaction().await.map_err(members::db_error)?;
-        let used = tx
-            .execute(
-                "UPDATE enterprise_password_links SET used_at = now() WHERE token_sha256 = $1 AND used_at IS NULL AND expires_at > now()",
-                &[&enterplace_core::id::sha256_hex(token.as_bytes())],
-            )
+        client
+            .atomic(vec![
+                (
+                    "UPDATE enterprise_password_links SET used_at = now() WHERE token_sha256 = $1 AND used_at IS NULL AND expires_at > now()".into(),
+                    vec![&link],
+                    Some(1),
+                ),
+                (
+                    "UPDATE enterprise_people SET password_salt = $2, password_hash = $3 WHERE id = $1 AND password_hash = '!'".into(),
+                    vec![&id, &salt, &hash],
+                    Some(1),
+                ),
+            ])
             .await
-            .map_err(members::db_error)?;
-        let changed = tx
-            .execute(
-                "UPDATE enterprise_people SET password_salt = $2, password_hash = $3 WHERE id = $1 AND password_hash = '!'",
-                &[&id, &salt, &hash],
-            )
-            .await
-            .map_err(members::db_error)?;
-        if used != 1 || changed != 1 {
-            return Ok(false);
-        }
-        tx.commit().await.map_err(members::db_error)?;
-        Ok::<_, String>(true)
+            .map_err(members::db_error)
     };
     match set.await {
         Err(err) => set_password_form(&token, &email, &err),

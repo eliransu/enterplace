@@ -667,7 +667,43 @@ impl CfStore {
         Ok(())
     }
 
-    fn master(&self) -> Result<&MasterKey, String> {
+    /// One SQL call of the features with tables of their own (`crate::sql`), on the store's runtime.
+    pub(crate) async fn sql_call(&self, name: &'static str, body: Value) -> Result<Value, String> {
+        let inner = self.inner.clone();
+        self.handle
+            .spawn(async move { inner.call(name, body).await })
+            .await
+            .map_err(|_| "the store stopped before it answered".to_string())?
+    }
+
+    /// Ends a SQL transaction without waiting: the one that dropped it does not.
+    pub(crate) fn sql_end(&self, session: String) {
+        let inner = self.inner.clone();
+        self.handle.spawn(async move {
+            let _ = inner.call("sql_end", json!({ "session": session })).await;
+        });
+    }
+
+    /// Applies the SQLite migrations of `namespace` that have not run, in order, each in one transaction. Blocks.
+    pub(crate) fn migrate_sql(
+        &self,
+        namespace: &str,
+        migrations: Vec<String>,
+    ) -> Result<(), String> {
+        let (inner, body) = (
+            self.inner.clone(),
+            json!({ "namespace": namespace, "migrations": migrations }),
+        );
+        self.wait(async move {
+            inner
+                .call("sql_migrate", body)
+                .await
+                .map(|_| ())
+        })
+        .map_err(|err| format!("the {namespace} tables could not be created or updated in the Cloudflare store: {err}"))
+    }
+
+    pub(crate) fn master(&self) -> Result<&MasterKey, String> {
         self.inner.master.get().ok_or_else(|| NO_MASTER.to_string())
     }
 

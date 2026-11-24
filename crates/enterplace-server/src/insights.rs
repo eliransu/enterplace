@@ -16,14 +16,18 @@ use std::{
     time::Duration,
 };
 
+use crate::sql::Conn as Client;
 use enterplace_core::{
     audit,
     insights::{self, Bodies, Body, Fact, Index, Query, Row, Seal},
     store::Pending,
 };
-use tokio_postgres::{Client, types::ToSql};
+use tokio_postgres::types::ToSql;
 
-use crate::{credentials::MasterKey, store::PgStore};
+use crate::{
+    credentials::MasterKey,
+    sql::{self, Db, Sql},
+};
 
 pub const NAMESPACE: &str = "insights";
 
@@ -96,7 +100,7 @@ type Hint = Option<(u64, u64)>;
 
 /// The request log of every replica on the store, and this replica's copier into it.
 pub struct PgIndex {
-    pg: Arc<PgStore>,
+    pg: Db,
     replica: String,
     path: PathBuf,
     seal: Option<Arc<dyn Seal>>,
@@ -116,7 +120,7 @@ impl std::fmt::Debug for PgIndex {
     }
 }
 
-fn db(err: tokio_postgres::Error) -> String {
+fn db(err: crate::sql::Error) -> String {
     format!("the request index in the store failed: {err}")
 }
 
@@ -251,7 +255,7 @@ fn int(v: Option<u64>) -> Option<i64> {
 
 const COLUMNS: &str = "id, to_char(time AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'), replica, n, hash, linked, line, path, labels::text, verdict, code, rule, findings, status, input_tokens, output_tokens, cost_usd, charged_usd, latency_ms, body, coalesce(stages, '[]')";
 
-fn row_of(r: &tokio_postgres::Row) -> Result<Row, String> {
+fn row_of(r: &crate::sql::Row) -> Result<Row, String> {
     let get = |i: usize| r.try_get::<_, String>(i).map_err(db);
     let unsigned = |v: Option<i64>| v.and_then(|v| u64::try_from(v).ok());
     let line = get(6)?;
@@ -287,98 +291,152 @@ fn row_of(r: &tokio_postgres::Row) -> Result<Row, String> {
     })
 }
 
-/// The WHERE clause and its parameters for a query. Means what [`Query::matches`] means.
-fn clause(query: &Query) -> (String, Vec<Box<dyn ToSql + Sync + Send>>) {
-    let mut terms: Vec<String> = Vec::new();
+/// A WHERE clause for each database: Postgres, and the SQLite that keeps labels and findings as JSON text.
+struct Clause {
+    pg: String,
+    lite: String,
+}
+
+/// The WHERE clause and its parameters for a query. Means what [`Query::matches`] means. Both texts number the
+/// parameters `$N`; the SQLite one goes through [`sql::lite`] with the statement around it.
+fn clause(query: &Query) -> (Clause, Vec<Box<dyn ToSql + Sync + Send>>) {
+    let mut terms: Vec<(String, String)> = Vec::new();
     let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
-    let mut add = |term: &str, value: Box<dyn ToSql + Sync + Send>| {
+    let mut add = |pg: &str, lite: &str, value: Box<dyn ToSql + Sync + Send>| {
         params.push(value);
-        terms.push(term.replace('?', &format!("${}", params.len())));
+        let n = format!("${}", params.len());
+        terms.push((pg.replace('?', &n), lite.replace('?', &n)));
     };
     for (dimension, value) in &query.labels {
         let wanted = serde_json::json!({ dimension: [value] }).to_string();
-        add("labels @> CAST(? AS text)::jsonb", Box::new(wanted));
+        add(
+            "labels @> CAST(? AS text)::jsonb",
+            // `wanted` has one dimension with one value: containment is that value among the row's.
+            "EXISTS (SELECT 1 FROM json_each(?) w, json_each(w.value) x, json_each(labels -> w.key) l WHERE l.value = x.value)",
+            Box::new(wanted),
+        );
     }
     for (dimension, any) in &query.within {
         // The name goes in the SQL itself, so only a dimension Enterplace defines is accepted; anything else matches
         // nothing rather than everything.
         if enterplace_core::insights::dimensions().any(|d| d.name == dimension) {
-            let term = format!("jsonb_exists_any(labels -> '{dimension}', CAST(? AS text[]))");
-            add(&term, Box::new(any.clone()));
+            add(
+                &format!("jsonb_exists_any(labels -> '{dimension}', CAST(? AS text[]))"),
+                &format!(
+                    "EXISTS (SELECT 1 FROM json_each(labels -> '{dimension}') l, json_each(?) w WHERE l.value = w.value)"
+                ),
+                Box::new(any.clone()),
+            );
         } else {
             add(
                 "false AND CAST(? AS text[]) IS NOT NULL",
+                "0 AND ? IS NOT NULL",
                 Box::new(any.clone()),
             );
         }
     }
     if !query.code.is_empty() {
-        add("code = ?", Box::new(query.code.clone()));
+        add("code = ?", "code = ?", Box::new(query.code.clone()));
     }
     if !query.finding.is_empty() {
-        add("? = ANY(findings)", Box::new(query.finding.clone()));
+        add(
+            "? = ANY(findings)",
+            "EXISTS (SELECT 1 FROM json_each(findings) f WHERE f.value = ?)",
+            Box::new(query.finding.clone()),
+        );
     }
     if !query.id.is_empty() {
-        add("id = ?", Box::new(query.id.clone()));
+        add("id = ?", "id = ?", Box::new(query.id.clone()));
     }
     if !query.from.is_empty() {
         add(
             "time >= CAST(? AS text)::timestamptz",
+            &format!("time >= strftime('{TIME}', ?)"),
             Box::new(query.from.clone()),
         );
     }
     if query.to.len() == 10 {
         add(
             "time < CAST(? AS text)::date + 1",
+            &format!("time < strftime('{TIME}', ?, '+1 day')"),
             Box::new(query.to.clone()),
         );
     } else if !query.to.is_empty() {
         add(
             "time <= CAST(? AS text)::timestamptz",
+            &format!("time <= strftime('{TIME}', ?)"),
             Box::new(query.to.clone()),
         );
     }
     if let Some(v) = query.min_cost {
-        add("cost_usd >= ?", Box::new(v));
+        add("cost_usd >= ?", "cost_usd >= ?", Box::new(v));
     }
     if let Some(v) = query.max_cost {
-        add("cost_usd <= ?", Box::new(v));
+        add("cost_usd <= ?", "cost_usd <= ?", Box::new(v));
     }
     if let Some(v) = int(query.min_ms) {
-        add("latency_ms >= ?", Box::new(v));
+        add("latency_ms >= ?", "latency_ms >= ?", Box::new(v));
     }
     if let Some(v) = int(query.max_ms) {
-        add("latency_ms <= ?", Box::new(v));
+        add("latency_ms <= ?", "latency_ms <= ?", Box::new(v));
     }
     let blocked = "code = 'guardrail_blocked'";
-    match query.outcome.as_str() {
-        "allowed" => terms.push(format!(
+    let outcome = match query.outcome.as_str() {
+        "allowed" => Some(format!(
             "verdict = 'allow' AND NOT {blocked} AND coalesce(status, 0) < 400"
         )),
-        "refused" => terms.push(format!("(verdict = 'refused' OR {blocked})")),
-        "error" => terms.push(format!(
+        "refused" => Some(format!("(verdict = 'refused' OR {blocked})")),
+        "error" => Some(format!(
             "verdict <> 'refused' AND NOT {blocked} AND status >= 400"
         )),
-        _ => {}
+        _ => None,
+    };
+    if let Some(term) = outcome {
+        terms.push((term.clone(), term));
     }
-    let clause = if terms.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", terms.join(" AND "))
+    let join = |pick: fn(&(String, String)) -> &String| {
+        if terms.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "WHERE {}",
+                terms
+                    .iter()
+                    .map(pick)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" AND ")
+            )
+        }
+    };
+    let clause = Clause {
+        pg: join(|t| &t.0),
+        lite: join(|t| &t.1),
     };
     (clause, params)
+}
+
+/// The time text SQLite keeps, as `strftime` makes it: a time compared with a column is put in it first, so text
+/// order is time order.
+const TIME: &str = "%Y-%m-%dT%H:%M:%fZ";
+
+fn refs(params: &[Box<dyn ToSql + Sync + Send>]) -> Vec<&(dyn ToSql + Sync)> {
+    params
+        .iter()
+        .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+        .collect()
 }
 
 impl PgIndex {
     /// Creates the tables, and serves the request log (and the bodies, when `seal` is set) of the audit log at
     /// `path` from the store. `copy` starts the copier, every two seconds; tests call [`PgIndex::copy`] themselves.
     pub fn open(
-        pg: Arc<PgStore>,
+        pg: Db,
         path: &Path,
         seal: Option<Arc<dyn Seal>>,
         copy: bool,
     ) -> Result<Arc<Self>, String> {
-        pg.migrate(NAMESPACE, MIGRATIONS)?;
+        pg.migrate(NAMESPACE, MIGRATIONS, &[])?;
         let index = Arc::new(Self {
             pg,
             replica: replica_id(path),
@@ -469,25 +527,34 @@ impl PgIndex {
         let Some((last, last_line)) = lines.last().cloned() else {
             return Ok(0);
         };
-        let tx = client.transaction().await.map_err(db)?;
+        // Every write of the pass lands together, so the cursor never moves past rows that were not written. On the
+        // Cloudflare store only `atomic` gives that.
+        type Params = Vec<Box<dyn ToSql + Sync + Send>>;
+        let mut writes: Vec<(Sql, Params)> = Vec::new();
         for (_, line) in &lines {
             let fact = insights::fact(line, &self.replica, prev.as_deref());
             prev = insights::hash_of_line(line);
             match fact {
                 Some(Fact::Request(row)) => {
                     let labels = serde_json::to_string(&row.labels).unwrap_or_else(|_| "{}".into());
-                    tx.execute(
+                    writes.push((
                         // What a request's usage record fills in later is empty here; a watch row, which has no
                         // usage record, arrives with its own.
-                        "INSERT INTO enterplace_requests (id, time, replica, n, hash, linked, line, path, labels, verdict, code, rule, findings, \
-                         status, input_tokens, output_tokens, cost_usd, latency_ms) \
-                         VALUES ($1, CAST($2 AS text)::timestamptz, $3, $4, $5, $6, $7, $8, CAST($9 AS text)::jsonb, $10, $11, $12, $13, \
-                         $14, $15, $16, $17, $18) ON CONFLICT (id) DO NOTHING",
-                        &[&row.id, &row.time, &row.replica, &int(Some(row.n)), &row.hash, &row.linked, &row.line, &row.path, &labels, &row.verdict, &row.code, &row.rule, &row.findings,
-                          &row.status.map(i32::from), &int(row.input_tokens), &int(row.output_tokens), &row.cost_usd, &int(row.latency_ms)],
-                    )
-                    .await
-                    .map_err(db)?;
+                        Sql::both(
+                            "INSERT INTO enterplace_requests (id, time, replica, n, hash, linked, line, path, labels, verdict, code, rule, findings, \
+                             status, input_tokens, output_tokens, cost_usd, latency_ms) \
+                             VALUES ($1, CAST($2 AS text)::timestamptz, $3, $4, $5, $6, $7, $8, CAST($9 AS text)::jsonb, $10, $11, $12, $13, \
+                             $14, $15, $16, $17, $18) ON CONFLICT (id) DO NOTHING",
+                            sql::lite(&format!(
+                                "INSERT INTO enterplace_requests (id, time, replica, n, hash, linked, line, path, labels, verdict, code, rule, findings, \
+                                 status, input_tokens, output_tokens, cost_usd, latency_ms) \
+                                 VALUES ($1, strftime('{TIME}', $2), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
+                                 $14, $15, $16, $17, $18) ON CONFLICT (id) DO NOTHING"
+                            )),
+                        ),
+                        vec![Box::new(row.id), Box::new(row.time), Box::new(row.replica), Box::new(int(Some(row.n))), Box::new(row.hash), Box::new(row.linked), Box::new(row.line), Box::new(row.path), Box::new(labels), Box::new(row.verdict), Box::new(row.code), Box::new(row.rule), Box::new(row.findings),
+                             Box::new(row.status.map(i32::from)), Box::new(int(row.input_tokens)), Box::new(int(row.output_tokens)), Box::new(row.cost_usd), Box::new(int(row.latency_ms))],
+                    ));
                 }
                 Some(Fact::Usage(usage)) => {
                     let mut moved = serde_json::Map::new();
@@ -496,14 +563,16 @@ impl PgIndex {
                             moved.insert(d.into(), serde_json::json!([v]));
                         }
                     }
-                    tx.execute(
-                        "UPDATE enterplace_requests SET labels = labels || CAST($2 AS text)::jsonb, status = $3, input_tokens = $4, output_tokens = $5, \
-                         cost_usd = $6, charged_usd = $7, latency_ms = $8, body = $9, stages = $10 WHERE id = $1",
-                        &[&usage.id, &serde_json::Value::Object(moved).to_string(), &usage.status.map(i32::from), &int(usage.input_tokens), &int(usage.output_tokens), &usage.cost_usd, &usage.charged_usd, &int(usage.latency_ms), &usage.body,
-                          &serde_json::to_string(&usage.stages).unwrap_or_else(|_| "[]".into())],
-                    )
-                    .await
-                    .map_err(db)?;
+                    let set = "status = $3, input_tokens = $4, output_tokens = $5, cost_usd = $6, charged_usd = $7, latency_ms = $8, body = $9, stages = $10 WHERE id = $1";
+                    writes.push((
+                        Sql::both(
+                            format!("UPDATE enterplace_requests SET labels = labels || CAST($2 AS text)::jsonb, {set}"),
+                            // json_patch replaces a top-level key as `||` does.
+                            sql::lite(&format!("UPDATE enterplace_requests SET labels = json_patch(labels, $2), {set}")),
+                        ),
+                        vec![Box::new(usage.id), Box::new(serde_json::Value::Object(moved).to_string()), Box::new(usage.status.map(i32::from)), Box::new(int(usage.input_tokens)), Box::new(int(usage.output_tokens)), Box::new(usage.cost_usd), Box::new(usage.charged_usd), Box::new(int(usage.latency_ms)), Box::new(usage.body),
+                             Box::new(serde_json::to_string(&usage.stages).unwrap_or_else(|_| "[]".into()))],
+                    ));
                 }
                 Some(Fact::Failure {
                     id,
@@ -511,53 +580,62 @@ impl PgIndex {
                     code,
                     latency_ms,
                 }) => {
-                    tx.execute(
-                        "UPDATE enterplace_requests SET status = $2, code = $3, latency_ms = $4 WHERE id = $1",
-                        &[&id, &status.map(i32::from), &code, &int(latency_ms)],
-                    )
-                    .await
-                    .map_err(db)?;
+                    writes.push((
+                        "UPDATE enterplace_requests SET status = $2, code = $3, latency_ms = $4 WHERE id = $1".into(),
+                        vec![Box::new(id), Box::new(status.map(i32::from)), Box::new(code), Box::new(int(latency_ms))],
+                    ));
                 }
                 Some(Fact::Answer {
                     id,
                     blocked,
                     findings,
                 }) => {
-                    tx.execute(
-                        "UPDATE enterplace_requests SET code = CASE WHEN $2 THEN 'guardrail_blocked' ELSE code END, findings = findings || $3 WHERE id = $1",
-                        &[&id, &blocked, &findings],
-                    )
-                    .await
-                    .map_err(db)?;
+                    writes.push((
+                        Sql::both(
+                            "UPDATE enterplace_requests SET code = CASE WHEN $2 THEN 'guardrail_blocked' ELSE code END, findings = findings || $3 WHERE id = $1",
+                            // The row's findings, then the answer's, in order, as `||` appends.
+                            "UPDATE enterplace_requests SET code = CASE WHEN ?2 THEN 'guardrail_blocked' ELSE code END, \
+                             findings = (SELECT json_group_array(value) FROM (SELECT 0 AS s, key AS k, value FROM json_each(findings) \
+                             UNION ALL SELECT 1, key, value FROM json_each(?3) ORDER BY s, k)) WHERE id = ?1",
+                        ),
+                        vec![Box::new(id), Box::new(blocked), Box::new(findings)],
+                    ));
                 }
                 // Retention removed these records from the chain: their rows and kept bodies follow, so the index
                 // never holds what the audit log no longer does. Retention does not run under legal hold.
                 Some(Fact::Retired { through }) => {
-                    tx.execute(
-                        "DELETE FROM enterplace_bodies WHERE id IN (SELECT id FROM enterplace_requests WHERE replica = $1 AND n <= $2)",
-                        &[&self.replica, &int(Some(through))],
-                    )
-                    .await
-                    .map_err(db)?;
-                    tx.execute(
-                        "DELETE FROM enterplace_requests WHERE replica = $1 AND n <= $2",
-                        &[&self.replica, &int(Some(through))],
-                    )
-                    .await
-                    .map_err(db)?;
+                    writes.push((
+                        "DELETE FROM enterplace_bodies WHERE id IN (SELECT id FROM enterplace_requests WHERE replica = $1 AND n <= $2)".into(),
+                        vec![Box::new(self.replica.clone()), Box::new(int(Some(through)))],
+                    ));
+                    writes.push((
+                        "DELETE FROM enterplace_requests WHERE replica = $1 AND n <= $2".into(),
+                        vec![Box::new(self.replica.clone()), Box::new(int(Some(through)))],
+                    ));
                 }
                 None => {}
             }
         }
         let hash = insights::hash_of_line(&last_line).unwrap_or_default();
-        tx.execute(
+        writes.push((
             "INSERT INTO enterplace_insights_replicas (id, n, hash) VALUES ($1, $2, $3) \
-             ON CONFLICT (id) DO UPDATE SET n = excluded.n, hash = excluded.hash, seen_at = now()",
-            &[&self.replica, &int(Some(last)), &hash],
-        )
-        .await
-        .map_err(db)?;
-        tx.commit().await.map_err(db)?;
+             ON CONFLICT (id) DO UPDATE SET n = excluded.n, hash = excluded.hash, seen_at = now()"
+                .into(),
+            vec![
+                Box::new(self.replica.clone()),
+                Box::new(int(Some(last))),
+                Box::new(hash),
+            ],
+        ));
+        client
+            .atomic(
+                writes
+                    .iter()
+                    .map(|(sql, params)| (sql.clone(), refs(params), None))
+                    .collect(),
+            )
+            .await
+            .map_err(db)?;
         self.copied.fetch_max(last, Ordering::SeqCst);
         Ok(lines.len())
     }
@@ -576,7 +654,10 @@ impl PgIndex {
             let written = match insights::seal_body(seal.as_ref(), body) {
                 Ok(sealed) => client
                     .execute(
-                        "INSERT INTO enterplace_bodies (id, expires, sealed) VALUES ($1, to_timestamp($2), $3) ON CONFLICT (id) DO NOTHING",
+                        Sql::both(
+                            "INSERT INTO enterplace_bodies (id, expires, sealed) VALUES ($1, to_timestamp($2), $3) ON CONFLICT (id) DO NOTHING",
+                            format!("INSERT INTO enterplace_bodies (id, expires, sealed) VALUES (?1, strftime('{TIME}', ?2, 'unixepoch'), ?3) ON CONFLICT (id) DO NOTHING"),
+                        ),
                         &[&body.id, &(body.expires as f64), &sealed],
                     )
                     .await
@@ -613,31 +694,57 @@ impl Index for PgIndex {
         Box::pin(async move {
             let client = pg.connect().await?;
             let (clause, mut params) = clause(&query);
+            let lite = client.is_lite();
             let bucket = if hourly {
                 "to_char(time AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24')"
             } else {
                 "to_char(time AT TIME ZONE 'UTC', 'YYYY-MM-DD')"
             };
-            let totals = format!("SELECT '' AS k, {GROUP_STATS} FROM enterplace_requests {clause}");
-            let series = format!(
-                "SELECT {bucket} AS k, {GROUP_STATS} FROM enterplace_requests {clause} GROUP BY 1 ORDER BY 1"
+            let totals = Sql::both(
+                format!(
+                    "SELECT '' AS k, {GROUP_STATS} FROM enterplace_requests {}",
+                    clause.pg
+                ),
+                sql::lite(&format!(
+                    "SELECT '' AS k, {GROUP_STATS_LITE} FROM enterplace_requests {}",
+                    clause.lite
+                )),
+            );
+            let series = Sql::both(
+                format!(
+                    "SELECT {bucket} AS k, {GROUP_STATS} FROM enterplace_requests {} GROUP BY 1 ORDER BY 1",
+                    clause.pg
+                ),
+                sql::lite(&format!(
+                    "SELECT {bucket} AS k, {GROUP_STATS_LITE} FROM enterplace_requests {} GROUP BY 1 ORDER BY 1",
+                    clause.lite
+                )),
             );
             params.push(Box::new(dimension));
+            let n = params.len();
             // A request counts once under each value it has, and under "" when it has none, as `ranking` folds it.
-            let ranking = format!(
-                "SELECT v.k, {GROUP_STATS} FROM enterplace_requests CROSS JOIN LATERAL jsonb_array_elements_text( \
-                   CASE WHEN jsonb_typeof(labels -> ${n}) = 'array' AND jsonb_array_length(labels -> ${n}) > 0 \
-                   THEN labels -> ${n} ELSE '[\"\"]'::jsonb END) AS v(k) {clause} GROUP BY 1",
-                n = params.len()
+            // On SQLite the rows are filtered first: json_each's own columns (id, path) would make the clause's
+            // ambiguous.
+            let ranking = Sql::both(
+                format!(
+                    "SELECT v.k, {GROUP_STATS} FROM enterplace_requests CROSS JOIN LATERAL jsonb_array_elements_text( \
+                       CASE WHEN jsonb_typeof(labels -> ${n}) = 'array' AND jsonb_array_length(labels -> ${n}) > 0 \
+                       THEN labels -> ${n} ELSE '[\"\"]'::jsonb END) AS v(k) {} GROUP BY 1",
+                    clause.pg
+                ),
+                sql::lite(&format!(
+                    "SELECT v.value, {GROUP_STATS_LITE} FROM (SELECT * FROM enterplace_requests {}) r CROSS JOIN json_each( \
+                       CASE WHEN json_type(r.labels -> ${n}) = 'array' AND json_array_length(r.labels -> ${n}) > 0 \
+                       THEN r.labels -> ${n} ELSE '[\"\"]' END) AS v GROUP BY 1",
+                    clause.lite
+                )),
             );
-            let refs: Vec<&(dyn ToSql + Sync)> = params
-                .iter()
-                .map(|p| p.as_ref() as &(dyn ToSql + Sync))
-                .collect();
+            let refs = refs(&params);
             let all = &refs[..refs.len() - 1];
-            let totals = client.query_one(&totals, all).await.map_err(db)?;
-            let series = client.query(&series, all).await.map_err(db)?;
-            let ranking = client.query(&ranking, &refs).await.map_err(db)?;
+            let totals = client.query_one(totals, all).await.map_err(db)?;
+            let series = client.query(series, all).await.map_err(db)?;
+            let ranking = client.query(ranking, &refs).await.map_err(db)?;
+            let stats_of = |r: &sql::Row| stats_of(r, lite);
             let mut ranked = ranking
                 .iter()
                 .map(stats_of)
@@ -657,23 +764,28 @@ impl Index for PgIndex {
         Box::pin(async move {
             let client = pg.connect().await?;
             let (clause, params) = clause(&query);
-            let allowed = if clause.is_empty() {
-                "WHERE verdict <> 'refused'".to_string()
-            } else {
-                format!("{clause} AND verdict <> 'refused'")
+            let allowed = |clause: &str| {
+                if clause.is_empty() {
+                    "WHERE verdict <> 'refused'".to_string()
+                } else {
+                    format!("{clause} AND verdict <> 'refused'")
+                }
             };
-            // The first value of each label, as `Row::label` reads it, so both ways of counting agree.
-            let sql = format!(
-                "SELECT to_char(time AT TIME ZONE 'UTC', 'YYYY-MM-DD'), coalesce(labels -> 'org' ->> 0, ''), \
+            // The first value of each label, as `Row::label` reads it, so both ways of counting agree. `->` and
+            // `->>` mean the same on SQLite.
+            let text = |allowed: String| {
+                format!(
+                    "SELECT to_char(time AT TIME ZONE 'UTC', 'YYYY-MM-DD'), coalesce(labels -> 'org' ->> 0, ''), \
                  coalesce(labels -> 'team' ->> 0, ''), coalesce(labels -> 'provider' ->> 0, ''), coalesce(labels -> 'model' ->> 0, ''), \
                  count(*), coalesce(sum(input_tokens), 0)::bigint, coalesce(sum(output_tokens), 0)::bigint, coalesce(sum(cost_usd), 0)::float8 \
                  FROM enterplace_requests {allowed} GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 2, 3, 4, 5"
+                )
+            };
+            let sql = Sql::both(
+                text(allowed(&clause.pg)),
+                sql::lite(&text(allowed(&clause.lite))),
             );
-            let refs: Vec<&(dyn ToSql + Sync)> = params
-                .iter()
-                .map(|p| p.as_ref() as &(dyn ToSql + Sync))
-                .collect();
-            let rows = client.query(&sql, &refs).await.map_err(db)?;
+            let rows = client.query(sql, &refs(&params)).await.map_err(db)?;
             rows.iter()
                 .map(|r| {
                     let text = |i: usize| r.try_get::<_, String>(i).map_err(db);
@@ -705,18 +817,23 @@ impl Index for PgIndex {
             let (clause, mut params) = clause(&query);
             params.push(Box::new(dimension));
             // One sum per value of the dimension, over the index's own rows: nothing is folded here.
-            let sql = format!(
-                "SELECT v.k, COALESCE(sum(charged_usd), 0) FROM enterplace_requests CROSS JOIN LATERAL jsonb_array_elements_text( \
-                   CASE WHEN jsonb_typeof(labels -> ${n}) = 'array' THEN labels -> ${n} ELSE '[]'::jsonb END) AS v(k) \
-                   {clause} GROUP BY 1",
-                n = params.len()
+            let n = params.len();
+            let sql = Sql::both(
+                format!(
+                    "SELECT v.k, COALESCE(sum(charged_usd), 0) FROM enterplace_requests CROSS JOIN LATERAL jsonb_array_elements_text( \
+                       CASE WHEN jsonb_typeof(labels -> ${n}) = 'array' THEN labels -> ${n} ELSE '[]'::jsonb END) AS v(k) \
+                       {} GROUP BY 1",
+                    clause.pg
+                ),
+                // Filtered first, as in `analytics`.
+                sql::lite(&format!(
+                    "SELECT v.value, COALESCE(sum(charged_usd), 0) * 1.0 FROM (SELECT * FROM enterplace_requests {}) r CROSS JOIN json_each( \
+                       CASE WHEN json_type(r.labels -> ${n}) = 'array' THEN r.labels -> ${n} ELSE '[]' END) AS v GROUP BY 1",
+                    clause.lite
+                )),
             );
-            let refs: Vec<&(dyn ToSql + Sync)> = params
-                .iter()
-                .map(|p| p.as_ref() as &(dyn ToSql + Sync))
-                .collect();
             client
-                .query(&sql, &refs)
+                .query(sql, &refs(&params))
                 .await
                 .map_err(db)?
                 .iter()
@@ -733,8 +850,14 @@ impl Index for PgIndex {
             let client = pg.connect().await?;
             let rows = client
                 .query(
-                    "SELECT line FROM (SELECT line, time, id FROM enterplace_requests WHERE time >= $1::text::timestamptz \
-                     ORDER BY time DESC, id DESC LIMIT $2) newest ORDER BY time, id",
+                    Sql::both(
+                        "SELECT line FROM (SELECT line, time, id FROM enterplace_requests WHERE time >= $1::text::timestamptz \
+                         ORDER BY time DESC, id DESC LIMIT $2) newest ORDER BY time, id",
+                        format!(
+                            "SELECT line FROM (SELECT line, time, id FROM enterplace_requests WHERE time >= strftime('{TIME}', ?1) \
+                             ORDER BY time DESC, id DESC LIMIT ?2) newest ORDER BY time, id"
+                        ),
+                    ),
                     &[&since, &max],
                 )
                 .await
@@ -753,16 +876,15 @@ impl Index for PgIndex {
                 query.limit.min(insights::MAX_ROWS) as u64
             ))));
             params.push(Box::new(int(Some(query.offset as u64))));
-            let sql = format!(
-                "SELECT {COLUMNS} FROM enterplace_requests {clause} ORDER BY time DESC, id DESC LIMIT ${} OFFSET ${}",
-                params.len() - 1,
-                params.len()
-            );
-            let refs: Vec<&(dyn ToSql + Sync)> = params
-                .iter()
-                .map(|p| p.as_ref() as &(dyn ToSql + Sync))
-                .collect();
-            let rows = client.query(&sql, &refs).await.map_err(db)?;
+            let n = params.len();
+            let text = |clause: &str| {
+                format!(
+                    "SELECT {COLUMNS} FROM enterplace_requests {clause} ORDER BY time DESC, id DESC LIMIT ${} OFFSET ${n}",
+                    n - 1
+                )
+            };
+            let sql = Sql::both(text(&clause.pg), sql::lite(&text(&clause.lite)));
+            let rows = client.query(sql, &refs(&params)).await.map_err(db)?;
             rows.iter().map(row_of).collect()
         })
     }
@@ -776,7 +898,14 @@ const GROUP_STATS: &str = "count(*), count(*) FILTER (WHERE verdict = 'refused' 
     percentile_disc(0.5) WITHIN GROUP (ORDER BY latency_ms), percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms), \
     percentile_disc(0.99) WITHIN GROUP (ORDER BY latency_ms)";
 
-fn stats_of(r: &tokio_postgres::Row) -> Result<(String, insights::Stats), String> {
+/// [`GROUP_STATS`] on SQLite, which has no `percentile_disc`: the group's latencies instead, for
+/// [`insights::Stats::percentile`] to rank. Written in Postgres for [`sql::lite`].
+const GROUP_STATS_LITE: &str = "count(*), count(*) FILTER (WHERE verdict = 'refused' OR code = 'guardrail_blocked'), \
+    count(*) FILTER (WHERE verdict <> 'refused' AND code <> 'guardrail_blocked' AND status >= 400), \
+    coalesce(sum(input_tokens), 0)::bigint, coalesce(sum(output_tokens), 0)::bigint, coalesce(sum(cost_usd), 0)::float8, \
+    json_group_array(latency_ms) FILTER (WHERE latency_ms IS NOT NULL)";
+
+fn stats_of(r: &sql::Row, lite: bool) -> Result<(String, insights::Stats), String> {
     let n = |i: usize| -> Result<u64, String> {
         Ok(u64::try_from(r.try_get::<_, i64>(i).map_err(db)?).unwrap_or_default())
     };
@@ -784,6 +913,18 @@ fn stats_of(r: &tokio_postgres::Row) -> Result<(String, insights::Stats), String
         Ok(r.try_get::<_, Option<i64>>(i)
             .map_err(db)?
             .and_then(|v| u64::try_from(v).ok()))
+    };
+    let (latencies, quantiles) = if lite {
+        let text: String = r.try_get(7).map_err(db)?;
+        let mut all: Vec<u64> = serde_json::from_str(&text).map_err(|err| {
+            format!(
+                "the request index in the store sent latencies that are not a list ({err}): {text}"
+            )
+        })?;
+        all.sort_unstable();
+        (all, None)
+    } else {
+        (Vec::new(), Some([q(7)?, q(8)?, q(9)?]))
     };
     Ok((
         r.try_get(0).map_err(db)?,
@@ -794,8 +935,8 @@ fn stats_of(r: &tokio_postgres::Row) -> Result<(String, insights::Stats), String
             input_tokens: n(4)?,
             output_tokens: n(5)?,
             cost_usd: r.try_get(6).map_err(db)?,
-            latencies: Vec::new(),
-            quantiles: Some([q(7)?, q(8)?, q(9)?]),
+            latencies,
+            quantiles,
         },
     ))
 }

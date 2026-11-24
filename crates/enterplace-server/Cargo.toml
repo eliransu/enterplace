@@ -20,6 +20,8 @@ hyper-rustls.workspace = true
 tokio-rustls.workspace = true
 http-body-util.workspace = true
 tokio-postgres.workspace = true
+# BytesMut, which tokio-postgres encodes a parameter into: the Cloudflare store sends parameters as JSON (sql.rs).
+bytes = "1"
 webpki-roots.workspace = true
 # Answers are passed on frame by frame (Bedrock streams decoded, usage read as it passes): that needs a body type of Enterplace's own.
 http-body.workspace = true

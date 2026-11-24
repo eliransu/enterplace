@@ -1514,11 +1514,7 @@ async fn every_gateway_shows_the_same_deployment_health() -> TestResult {
     assert_eq!(live["state"], "up");
     assert!(live["latency_p50_ms"].is_number(), "{live}");
 
-    // The FOCUS cost file is summed in the store's request index, so b writes the lines of a's requests. The
-    // request index is kept in Postgres alone.
-    if TestStore::cloudflare() {
-        return Ok(());
-    }
+    // The FOCUS cost file is summed in the store's request index, so b writes the lines of a's requests.
     let start = Instant::now();
     loop {
         let response = b

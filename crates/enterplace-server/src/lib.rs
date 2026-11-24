@@ -55,6 +55,7 @@ mod posthog_logs;
 mod realtime;
 mod reload;
 mod spend;
+pub mod sql;
 mod stages;
 pub mod store;
 mod teams_api;
@@ -1138,7 +1139,7 @@ fn build(
     }
     // With a store, who owns each file, batch and job is kept there, so every replica answers for it.
     let owned = Arc::new(match &config.mcp_setup.postgres {
-        Some(pg) => batch::Registry::with_store(pg.clone()).map_err(ConfigError)?,
+        Some(db) => batch::Registry::with_store(db.clone()).map_err(ConfigError)?,
         None => batch::Registry::default(),
     });
     if let Some(path) = &config.spent_from {

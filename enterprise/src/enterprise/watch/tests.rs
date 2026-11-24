@@ -19,6 +19,8 @@ use tower::ServiceExt;
 
 use super::otlp;
 use crate::enterprise::testing::*;
+use enterplace_server::sql::Sql;
+use enterplace_server::store::TestStore;
 
 const LOGS_JSON: &[u8] = include_bytes!("fixtures/claude-code-2.1.325-logs.json");
 const METRICS_JSON: &[u8] = include_bytes!("fixtures/claude-code-2.1.325-metrics.json");
@@ -397,14 +399,18 @@ async fn a_real_claude_code_export_gives_the_person_tokens_and_cost_once() -> Re
     // The text Claude Code was told to send is nowhere: not in the chain, the answers or the tables.
     let chain = std::fs::read_to_string(&gw.audit)?;
     let tables = {
-        use enterplace_server::store::tokio_postgres;
-        let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
-        tokio::spawn(connection);
+        let client = TestStore::db(&url)?.connect().await?;
         let row = client
             .query_one(
-                "SELECT coalesce((SELECT string_agg(d::text, ' ') FROM enterprise_watch_daily d), '') || \
-                 coalesce((SELECT string_agg(s::text, ' ') FROM enterprise_watch_series s), '') || \
-                 coalesce((SELECT string_agg(k::text, ' ') FROM enterprise_watch_seen k), '')",
+                Sql::both(
+                    "SELECT coalesce((SELECT string_agg(d::text, ' ') FROM enterprise_watch_daily d), '') || \
+                     coalesce((SELECT string_agg(s::text, ' ') FROM enterprise_watch_series s), '') || \
+                     coalesce((SELECT string_agg(k::text, ' ') FROM enterprise_watch_seen k), '')",
+                    // Every column of every row, as the Postgres row text has them.
+                    "SELECT coalesce((SELECT group_concat(json_array(day, person, team, metric, label, value, org), ' ') FROM enterprise_watch_daily), '') || \
+                     coalesce((SELECT group_concat(json_array(key, time_ns, value, at), ' ') FROM enterprise_watch_series), '') || \
+                     coalesce((SELECT group_concat(json_array(key, at), ' ') FROM enterprise_watch_seen), '')",
+                ),
                 &[],
             )
             .await?;
@@ -857,14 +863,15 @@ async fn a_missing_wrong_revoked_or_expired_token_and_a_bad_export_are_refused()
 
     // Expired: refused, saying when and what to do.
     {
-        use enterplace_server::store::tokio_postgres;
-        let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
-        tokio::spawn(connection);
+        let client = TestStore::db(&url)?.connect().await?;
         client
             .execute("UPDATE enterprise_watch_tokens SET expires_at = now() - interval '1 minute' WHERE id = $1", &[&id])
             .await?;
         let hashes: i64 = client
-            .query_one("SELECT count(*) FROM enterprise_watch_tokens WHERE token_sha256 ~ '^[0-9a-f]{64}$' AND token_sha256 <> $1", &[&token])
+            .query_one(Sql::both(
+                "SELECT count(*) FROM enterprise_watch_tokens WHERE token_sha256 ~ '^[0-9a-f]{64}$' AND token_sha256 <> $1",
+                "SELECT count(*) FROM enterprise_watch_tokens WHERE length(token_sha256) = 64 AND token_sha256 NOT GLOB '*[^0-9a-f]*' AND token_sha256 <> ?1",
+            ), &[&token])
             .await?
             .try_get(0)?;
         assert_eq!(hashes, 2, "tokens are kept as hashes");
@@ -1121,11 +1128,12 @@ async fn without_the_feature_watch_answers_license_required_and_makes_no_tables(
                 answer.text
             );
         }
-        use enterplace_server::store::tokio_postgres;
-        let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
-        tokio::spawn(connection);
+        let client = TestStore::db(&url)?.connect().await?;
         let tables: i64 = client
-            .query_one("SELECT count(*) FROM information_schema.tables WHERE table_name LIKE 'enterprise_watch%'", &[])
+            .query_one(Sql::both(
+                "SELECT count(*) FROM information_schema.tables WHERE table_name LIKE 'enterprise_watch%'",
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 'enterprise_watch%'",
+            ), &[])
             .await?
             .try_get(0)?;
         assert_eq!(tables, 0);
@@ -1140,10 +1148,11 @@ async fn the_watch_tables_follow_retention_and_legal_hold() -> Result<(), Error>
     };
     let gw = gateway("watch_retention", &url, &licensed(&["watch", "retention"]))?;
     let (_, token) = new_token(&gw.app, json!({ "label": "team" })).await?;
-    use enterplace_server::store::tokio_postgres;
-    let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
-    tokio::spawn(connection);
-    let old = "INSERT INTO enterprise_watch_daily (day, person, metric, value) VALUES (current_date - 400, 'old@acme.co', 'sessions', 1)";
+    let client = TestStore::db(&url)?.connect().await?;
+    let old = Sql::both(
+        "INSERT INTO enterprise_watch_daily (day, person, metric, value) VALUES (current_date - 400, 'old@acme.co', 'sessions', 1)",
+        "INSERT INTO enterprise_watch_daily (day, person, metric, value) VALUES (date('now', '-400 days'), 'old@acme.co', 'sessions', 1)",
+    );
     let left = || async {
         client
             .query_one(
@@ -1177,7 +1186,14 @@ async fn the_watch_tables_follow_retention_and_legal_hold() -> Result<(), Error>
     client
         .batch_execute("UPDATE enterprise_export_settings SET legal_hold = false")
         .await?;
-    client.batch_execute("DELETE FROM enterplace_keys").await?;
+    // The core store's keys table is named otherwise on Cloudflare.
+    client
+        .batch_execute(if TestStore::cloudflare() {
+            "DELETE FROM keys"
+        } else {
+            "DELETE FROM enterplace_keys"
+        })
+        .await?;
     let gw = gateway("watch_retention", &url, &licensed(&["watch", "retention"]))?;
     assert_eq!(
         send(

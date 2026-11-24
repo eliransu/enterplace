@@ -616,8 +616,8 @@ async fn a_fine_tuning_job_needs_an_allowed_model_and_a_training_file_you_own() 
 }
 
 /// A fresh database for one test, as a connection string. `None` when ENTERPLACE_TEST_DATABASE_URL is not set.
-async fn database(test: &str) -> Result<Option<enterplace_server::store::TestDatabase>, Error> {
-    enterplace_server::store::TestDatabase::create(&format!(
+async fn database(test: &str) -> Result<Option<enterplace_server::store::TestStore>, Error> {
+    enterplace_server::store::TestStore::create(&format!(
         "enterplace_{}_{test}",
         std::process::id()
     ))
@@ -638,13 +638,17 @@ async fn with_a_store_every_replica_answers_for_a_file_and_a_batch_is_metered_on
             &policy,
             text.replacen(
                 "version: 1\n",
-                "version: 1\nstore: { postgres_url_env: ENTERPLACE_STORE_URL }\n",
+                &enterplace_server::store::TestStore::policy(
+                    "version: 1\nstore: { postgres_url_env: ENTERPLACE_STORE_URL }\n",
+                ),
                 1,
             ),
         )?;
         let url = url.clone();
         let gw = enterplace_server::governed(&policy, None, &move |variable| match variable {
-            "ENTERPLACE_STORE_URL" => Some(url.clone()),
+            _ if enterplace_server::store::TestStore::env(variable, &url).is_some() => {
+                enterplace_server::store::TestStore::env(variable, &url)
+            }
             "ENTERPLACE_MASTER_KEY" | "ENTERPLACE_MASTER_KEY_FILE" => None,
             _ => Some("provider-secret".into()),
         })?;
@@ -757,13 +761,17 @@ async fn replicas(
             &policy,
             text.replacen(
                 "version: 1\n",
-                "version: 1\nstore: { postgres_url_env: ENTERPLACE_STORE_URL }\n",
+                &enterplace_server::store::TestStore::policy(
+                    "version: 1\nstore: { postgres_url_env: ENTERPLACE_STORE_URL }\n",
+                ),
                 1,
             ),
         )?;
         let url = url.to_string();
         let gw = enterplace_server::governed(&policy, None, &move |variable| match variable {
-            "ENTERPLACE_STORE_URL" => Some(url.clone()),
+            _ if enterplace_server::store::TestStore::env(variable, &url).is_some() => {
+                enterplace_server::store::TestStore::env(variable, &url)
+            }
             "ENTERPLACE_MASTER_KEY" => Some("ab".repeat(32)),
             "ENTERPLACE_MASTER_KEY_FILE" => None,
             _ => Some("provider-secret".into()),
@@ -874,8 +882,9 @@ async fn with_a_store_any_replica_serves_held_answers_and_a_background_response_
     assert_eq!(serde_json::from_str::<Value>(&body)?, made);
     let (status, _) = call(&b.router, "GET", &path, OMER, "application/json", vec![]).await?;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
-    tokio::spawn(connection);
+    let client = enterplace_server::store::TestStore::db(&url)?
+        .connect()
+        .await?;
     let rows = client
         .query("SELECT value, sealed FROM enterplace_batches_held", &[])
         .await?;
@@ -954,13 +963,13 @@ async fn with_a_store_any_replica_serves_held_answers_and_a_background_response_
     // Its reservation was given back: nothing stays reserved in the store.
     let mut reserved = f64::NAN;
     for _ in 0..50 {
-        reserved = client
-            .query_one(
-                "SELECT COALESCE(SUM(reserved), 0)::float8 FROM enterplace_spend",
-                &[],
-            )
-            .await?
-            .try_get(0)?;
+        // The Cloudflare store keeps spend in its own table, `spend`.
+        let table = if enterplace_server::store::TestStore::cloudflare() {
+            "SELECT COALESCE(SUM(reserved), 0)::float8 FROM spend"
+        } else {
+            "SELECT COALESCE(SUM(reserved), 0)::float8 FROM enterplace_spend"
+        };
+        reserved = client.query_one(table, &[]).await?.try_get(0)?;
         if reserved.abs() < 1e-9 {
             break;
         }

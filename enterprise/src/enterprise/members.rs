@@ -24,7 +24,7 @@ use enterplace_console::{
     html::{self, Field, esc},
     redirect, same_origin,
 };
-use enterplace_server::store::tokio_postgres::{self, Row};
+use enterplace_server::sql::Row;
 use serde_json::json;
 
 use super::Db;
@@ -244,7 +244,7 @@ struct Person {
     joined: String,
 }
 
-fn person(row: &Row) -> Result<Person, tokio_postgres::Error> {
+fn person(row: &Row) -> Result<Person, enterplace_server::sql::Error> {
     let role: String = row.try_get("role")?;
     Ok(Person {
         id: row.try_get("id")?,
@@ -257,6 +257,12 @@ fn person(row: &Row) -> Result<Person, tokio_postgres::Error> {
 }
 
 const PERSON: &str = "SELECT id, email, name, role, team, to_char(created_at, 'YYYY-MM-DD') AS joined FROM enterprise_people";
+
+/// `days` from now. Computed here because `make_interval` has no SQLite form, and both stores take a time.
+pub(super) fn expiry(days: i32) -> std::time::SystemTime {
+    std::time::SystemTime::now()
+        + std::time::Duration::from_secs(u64::from(days.unsigned_abs()) * 86_400)
+}
 
 pub(super) fn db_error(err: impl std::fmt::Display) -> String {
     format!(
@@ -708,14 +714,14 @@ async fn invite(
         client
             .execute(
                 "INSERT INTO enterprise_invites (token_sha256, email, role, team, created_by, expires_at) \
-                 VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6))",
+                 VALUES ($1, $2, $3, $4, $5, $6)",
                 &[
                     &enterplace_core::id::sha256_hex(token.as_bytes()),
                     &email,
                     &role.word(),
                     &team,
                     &admin.name,
-                    &INVITE_DAYS,
+                    &expiry(INVITE_DAYS),
                 ],
             )
             .await
@@ -811,7 +817,7 @@ async fn revoke_invite(
         let client = members.db.client().await?;
         client
             .execute(
-                "DELETE FROM enterprise_invites WHERE accepted_at IS NULL AND left(token_sha256, 16) = $1",
+                "DELETE FROM enterprise_invites WHERE accepted_at IS NULL AND substr(token_sha256, 1, 16) = $1",
                 &[&prefix],
             )
             .await
@@ -1109,30 +1115,25 @@ async fn accept(
     {
         return sign_up_form(&inv, &token, err, &name);
     }
-    // One transaction: the invite is marked used and the person made together, so two clicks cannot both accept it.
+    // One atomic write: the invite is marked used and the person made together, so two clicks cannot both accept it.
     let accepted = async {
         let mut client = members.db.client().await?;
-        let tx = client.transaction().await.map_err(db_error)?;
-        let used = tx
-            .execute(
-                "UPDATE enterprise_invites SET accepted_at = now() WHERE token_sha256 = $1 AND accepted_at IS NULL AND expires_at > now()",
-                &[&inv.hash],
-            )
+        client
+            .atomic(vec![
+                (
+                    "UPDATE enterprise_invites SET accepted_at = now() WHERE token_sha256 = $1 AND accepted_at IS NULL AND expires_at > now()".into(),
+                    vec![&inv.hash],
+                    Some(1),
+                ),
+                (
+                    "INSERT INTO enterprise_people (id, email, name, password_salt, password_hash, role, team) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (email) DO NOTHING".into(),
+                    vec![&id, &inv.email, &name, &salt, &hash, &inv.role, &inv.team],
+                    Some(1),
+                ),
+            ])
             .await
-            .map_err(db_error)?;
-        let made = tx
-            .execute(
-                "INSERT INTO enterprise_people (id, email, name, password_salt, password_hash, role, team) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (email) DO NOTHING",
-                &[&id, &inv.email, &name, &salt, &hash, &inv.role, &inv.team],
-            )
-            .await
-            .map_err(db_error)?;
-        if used != 1 || made != 1 {
-            return Ok(false);
-        }
-        tx.commit().await.map_err(db_error)?;
-        Ok::<_, String>(true)
+            .map_err(db_error)
     };
     match accepted.await {
         Err(err) => sign_up_form(&inv, &token, &err, &name),
@@ -1218,7 +1219,7 @@ async fn sign_in(
             .await
             .map_err(db_error)?;
         row.map(|r| {
-            Ok::<_, tokio_postgres::Error>((
+            Ok::<_, enterplace_server::sql::Error>((
                 r.try_get::<_, String>(0)?,
                 r.try_get::<_, String>(1)?,
                 r.try_get::<_, String>(2)?,

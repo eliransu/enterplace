@@ -12,7 +12,33 @@
 /** The SQL a Durable Object's `ctx.storage` gives, or node:sqlite in tests. */
 export interface Sql {
   exec(query: string, ...params: unknown[]): { toArray(): Record<string, any>[] };
+  /** A statement's rows as arrays in column order, for the features' own SQL. */
+  rows(query: string, ...params: unknown[]): { columns: string[]; rows: unknown[][] };
+  /** Several statements separated by semicolons, without parameters. */
+  script(text: string): void;
   tx<T>(work: () => T): T;
+}
+
+/** A parameter of the features' SQL as JSON: bytes come as {"$b64": ...}, a boolean as 1 or 0. */
+function bind(value: unknown): unknown {
+  if (value === true) return 1;
+  if (value === false) return 0;
+  if (value && typeof value === "object" && "$b64" in value) {
+    return Uint8Array.from(atob(String((value as { $b64: string }).$b64)), (c) => c.charCodeAt(0));
+  }
+  return value ?? null;
+}
+
+/** A cell of the features' SQL as JSON: bytes as {"$b64": ...}. */
+function cell(value: unknown): unknown {
+  if (value instanceof ArrayBuffer || value instanceof Uint8Array) {
+    const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+    let text = "";
+    for (const b of bytes) text += String.fromCharCode(b);
+    return { $b64: btoa(text) };
+  }
+  if (typeof value === "bigint") return Number(value);
+  return value;
 }
 
 type Row = Record<string, any>;
@@ -94,6 +120,68 @@ export class StoreCore {
 
   private bump(name: string) {
     this.run("UPDATE versions SET version = version + 1 WHERE name = ?", name);
+  }
+
+  // The features with tables of their own (the request log, batches, MCP state, the enterprise features) send
+  // their SQL here, already in SQLite. A transaction holds the object: until it ends (or 10 seconds pass with no
+  // statement of it), another connection's statement waits.
+  private holder: { id: string; until: number } | null = null;
+
+  private held(session: string | null | undefined): boolean {
+    if (this.holder && this.holder.until < Date.now()) this.holder = null;
+    return !!this.holder && this.holder.id !== session;
+  }
+
+  async sqlCall(name: string, body: any): Promise<unknown> {
+    const started = Date.now();
+    while (this.held(body?.session)) {
+      if (Date.now() - started > 10_000) throw new Error("another gateway's transaction held the store for 10 seconds");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const now = Date.now();
+    if (name === "sql_begin") {
+      this.holder = { id: crypto.randomUUID(), until: now + 10_000 };
+      return { session: this.holder.id };
+    }
+    if (name === "sql_end") {
+      if (this.holder?.id === body.session) this.holder = null;
+      return {};
+    }
+    if (name === "sql_migrate") return this.migrate(body.namespace, body.migrations);
+    if (this.holder) this.holder.until = now + 10_000;
+    const run = () =>
+      (body.statements as { sql: string; params: unknown[]; expect: number | null }[]).map((st) => {
+        const { columns, rows } = this.sql.rows(st.sql, ...(st.params ?? []).map(bind));
+        const changed = /^\s*(select|with\s[^;]*\bselect\b(?![\s\S]*\b(insert|update|delete)\b))/i.test(st.sql)
+          ? 0
+          : Number(this.one("SELECT changes() AS n")?.n ?? 0);
+        if (st.expect != null && changed !== st.expect) {
+          throw new Error(`unexpected row count: ${changed}, not ${st.expect}, from ${st.sql.slice(0, 80)}`);
+        }
+        return { columns, rows: rows.map((row) => row.map(cell)), changed };
+      });
+    return { results: body.atomic ? this.sql.tx(run) : run() };
+  }
+
+  private migrate(namespace: string, migrations: string[]) {
+    this.sql.exec("CREATE TABLE IF NOT EXISTS enterplace_migrations (namespace TEXT PRIMARY KEY, version INTEGER NOT NULL)");
+    const applied = Number(this.one("SELECT version AS v FROM enterplace_migrations WHERE namespace = ?", namespace)?.v ?? 0);
+    if (applied > migrations.length) {
+      throw new Error(
+        `the ${namespace} tables were written by a newer Enterplace (version ${applied}, this one knows ${migrations.length}). Run the same version on every gateway.`,
+      );
+    }
+    this.sql.tx(() => {
+      migrations.slice(applied).forEach((text, i) => {
+        this.sql.script(text);
+        this.sql.exec(
+          "INSERT INTO enterplace_migrations VALUES (?, ?) ON CONFLICT (namespace) DO UPDATE SET version = excluded.version",
+          namespace,
+          applied + i + 1,
+        );
+      });
+    });
+    return {};
   }
 
   /** The answer to one call. Unknown calls are refused by the caller. */
@@ -592,7 +680,8 @@ export async function serve(core: StoreCore, req: Request): Promise<Response> {
   const call = /^\/v1\/([a-z_]+)$/.exec(new URL(req.url).pathname)?.[1];
   if (req.method !== "POST" || !call) return new Response("POST /v1/<call>\n", { status: 404 });
   try {
-    const answer = core.call(call, await req.json());
+    const body = await req.json();
+    const answer = call.startsWith("sql") ? await core.sqlCall(call, body) : core.call(call, body);
     if (answer === undefined) {
       return new Response(
         `the store has no call "${call}": the gateway is newer than this Worker. Deploy the Worker of the same Enterplace version.\n`,

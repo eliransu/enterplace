@@ -563,19 +563,29 @@ async fn without_the_feature_the_console_keeps_admin_keys_only() -> Result<(), E
             "{name}: an invite was made without the feature"
         );
         // None of members' tables were made, and no other feature's when nothing else is unlocked.
-        let config: enterplace_server::store::tokio_postgres::Config = url.parse()?;
-        let (client, connection) = config
-            .connect(enterplace_server::store::tokio_postgres::NoTls)
+        let client = enterplace_server::store::TestStore::db(&url)?
+            .connect()
             .await?;
-        tokio::spawn(connection);
         let tables: i64 = client
-            .query_one("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('enterprise_people', 'enterprise_invites')", &[])
+            .query_one(
+                enterplace_server::sql::Sql::both(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_name IN ('enterprise_people', 'enterprise_invites')",
+                    "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('enterprise_people', 'enterprise_invites')",
+                ),
+                &[],
+            )
             .await?
             .try_get(0)?;
         assert_eq!(tables, 0, "{name}");
         if matches!(name, "none" | "scim" | "reports") {
             let any: i64 = client
-                .query_one("SELECT count(*) FROM information_schema.tables WHERE table_name LIKE 'enterprise_%'", &[])
+                .query_one(
+                    enterplace_server::sql::Sql::both(
+                        "SELECT count(*) FROM information_schema.tables WHERE table_name LIKE 'enterprise_%'",
+                        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 'enterprise_%'",
+                    ),
+                    &[],
+                )
                 .await?
                 .try_get(0)?;
             assert_eq!(any, 0, "{name}");

@@ -45,6 +45,8 @@ use super::siem::{
 };
 use crate::license::Status;
 use channels::{Alert, Channel, Kind as ChannelKind, Severity};
+use enterplace_server::sql::Sql;
+use enterplace_server::store::tokio_postgres::types::ToSql;
 
 pub const FEATURE: &str = "alerts";
 
@@ -1126,9 +1128,14 @@ impl Engine {
         // baseline are whole from the start. Those records count and never fire.
         client
             .execute(
-                "INSERT INTO enterprise_alert_cursors (replica, n) \
-                 SELECT $1, coalesce(max(n), 0) FROM enterprise_audit \
-                 WHERE replica = $1 AND time < date_trunc('month', now()) - interval '14 days' ON CONFLICT DO NOTHING",
+                Sql::both(
+                    "INSERT INTO enterprise_alert_cursors (replica, n) \
+                     SELECT $1, coalesce(max(n), 0) FROM enterprise_audit \
+                     WHERE replica = $1 AND time < date_trunc('month', now()) - interval '14 days' ON CONFLICT DO NOTHING",
+                    "INSERT INTO enterprise_alert_cursors (replica, n) \
+                     SELECT ?1, coalesce(max(n), 0) FROM enterprise_audit \
+                     WHERE replica = ?1 AND time < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', 'start of month', '-14 days') ON CONFLICT DO NOTHING",
+                ),
                 &[&self.replica],
             )
             .await
@@ -1253,7 +1260,10 @@ impl Engine {
             let client = self.db.client().await?;
             for row in client
                 .query(
-                    "SELECT key, client FROM enterprise_alert_seen WHERE key = ANY($1)",
+                    Sql::both(
+                        "SELECT key, client FROM enterprise_alert_seen WHERE key = ANY($1)",
+                        "SELECT key, client FROM enterprise_alert_seen WHERE key IN (SELECT value FROM json_each(?1))",
+                    ),
                     &[&keys],
                 )
                 .await
@@ -1858,68 +1868,58 @@ impl Engine {
             *counts.entry(slot).or_default() += n;
         }
         {
-            let mut client = self.db.client().await?;
-            let tx = client.transaction().await.map_err(db_error)?;
+            // One write of all of it: on the Cloudflare store a transaction cannot take back a write it made.
+            let counted = "INSERT INTO enterprise_alert_counts (rule, key, minute, count) VALUES ($1, $2, CAST($3::text AS timestamptz), $4) \
+                 ON CONFLICT (rule, key, minute) DO UPDATE SET count = enterprise_alert_counts.count + EXCLUDED.count";
+            let mut writes: Vec<(Sql, Vec<&(dyn ToSql + Sync)>, Option<u64>)> = Vec::new();
             for ((scope, period), usd) in &spend {
-                tx.execute(
+                writes.push((
                     "INSERT INTO enterprise_alert_spend (scope, period, usd) VALUES ($1, $2, $3) \
-                     ON CONFLICT (scope, period) DO UPDATE SET usd = enterprise_alert_spend.usd + EXCLUDED.usd",
-                    &[scope, period, usd],
-                )
-                .await
-                .map_err(db_error)?;
+                     ON CONFLICT (scope, period) DO UPDATE SET usd = enterprise_alert_spend.usd + EXCLUDED.usd"
+                        .into(),
+                    vec![scope, period, usd],
+                    None,
+                ));
             }
-            for ((rule, key, minute), count) in &counts {
-                tx.execute(
-                    "INSERT INTO enterprise_alert_counts (rule, key, minute, count) VALUES ($1, $2, CAST($3::text AS timestamptz), $4) \
-                     ON CONFLICT (rule, key, minute) DO UPDATE SET count = enterprise_alert_counts.count + EXCLUDED.count",
-                    &[rule, key, minute, count],
-                )
-                .await
-                .map_err(db_error)?;
+            for ((rule, key, minute), count) in counts.iter().chain(&oks) {
+                writes.push((counted.into(), vec![rule, key, minute, count], None));
             }
             for ((scope, day), [requests, errors, latency, timed]) in &daily {
-                tx.execute(
+                writes.push((
                     "INSERT INTO enterprise_alert_daily (scope, day, requests, errors, latency_ms, timed) VALUES ($1, $2, $3, $4, $5, $6) \
                      ON CONFLICT (scope, day) DO UPDATE SET requests = enterprise_alert_daily.requests + EXCLUDED.requests, \
                      errors = enterprise_alert_daily.errors + EXCLUDED.errors, latency_ms = enterprise_alert_daily.latency_ms + EXCLUDED.latency_ms, \
-                     timed = enterprise_alert_daily.timed + EXCLUDED.timed",
-                    &[scope, day, requests, errors, latency, timed],
-                )
-                .await
-                .map_err(db_error)?;
-            }
-            for ((rule, key, minute), count) in &oks {
-                tx.execute(
-                    "INSERT INTO enterprise_alert_counts (rule, key, minute, count) VALUES ($1, $2, CAST($3::text AS timestamptz), $4) \
-                     ON CONFLICT (rule, key, minute) DO UPDATE SET count = enterprise_alert_counts.count + EXCLUDED.count",
-                    &[rule, key, minute, count],
-                )
-                .await
-                .map_err(db_error)?;
+                     timed = enterprise_alert_daily.timed + EXCLUDED.timed"
+                        .into(),
+                    vec![scope, day, requests, errors, latency, timed],
+                    None,
+                ));
             }
             for (key, client_ip) in &addresses {
-                tx.execute(
-                    "INSERT INTO enterprise_alert_seen (key, client) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                    &[key, client_ip],
-                )
+                writes.push((
+                    "INSERT INTO enterprise_alert_seen (key, client) VALUES ($1, $2) ON CONFLICT DO NOTHING".into(),
+                    vec![key, client_ip],
+                    None,
+                ));
+            }
+            writes.push((
+                "UPDATE enterprise_alert_cursors SET n = $2 WHERE replica = $1".into(),
+                vec![&self.replica, &last],
+                None,
+            ));
+            // Old counts are of no window any more.
+            writes.push((
+                "DELETE FROM enterprise_alert_counts WHERE minute < now() - interval '2 days'"
+                    .into(),
+                Vec::new(),
+                None,
+            ));
+            self.db
+                .client()
+                .await?
+                .atomic(writes)
                 .await
                 .map_err(db_error)?;
-            }
-            tx.execute(
-                "UPDATE enterprise_alert_cursors SET n = $2 WHERE replica = $1",
-                &[&self.replica, &last],
-            )
-            .await
-            .map_err(db_error)?;
-            // Old counts are of no window any more.
-            tx.execute(
-                "DELETE FROM enterprise_alert_counts WHERE minute < now() - interval '2 days'",
-                &[],
-            )
-            .await
-            .map_err(db_error)?;
-            tx.commit().await.map_err(db_error)?;
         }
 
         // One check per rule and subject, with the records of every hit.
@@ -1975,11 +1975,7 @@ impl Engine {
         if rule.kind.windowed() {
             let client = self.db.client().await?;
             let total: i64 = client
-                .query_one(
-                    "SELECT coalesce(sum(count), 0)::bigint FROM enterprise_alert_counts \
-                     WHERE rule = $1 AND key = $2 AND minute >= date_trunc('minute', now()) - make_interval(mins => $3)",
-                    &[&rule.id, &c.key, &rule.minutes()],
-                )
+                .query_one(window(), &[&rule.id, &c.key, &rule.minutes()])
                 .await
                 .map_err(db_error)?
                 .try_get(0)
@@ -1990,8 +1986,7 @@ impl Engine {
             if rule.kind == RuleKind::DeploymentDown {
                 let answered: i64 = client
                     .query_one(
-                        "SELECT coalesce(sum(count), 0)::bigint FROM enterprise_alert_counts \
-                         WHERE rule = $1 AND key = $2 AND minute >= date_trunc('minute', now()) - make_interval(mins => $3)",
+                        window(),
                         &[&rule.id, &format!("ok:{}", c.key), &rule.minutes()],
                     )
                     .await
@@ -2046,8 +2041,12 @@ impl Engine {
                 let client = self.db.client().await?;
                 let past: f64 = client
                     .query_one(
-                        "SELECT coalesce(sum(usd), 0) FROM enterprise_alert_spend WHERE scope = $1 \
-                         AND period ~ '^\\d{4}-\\d{2}-\\d{2}$' AND period < $2 AND period >= to_char(CAST($2 AS date) - 14, 'YYYY-MM-DD')",
+                        Sql::both(
+                            "SELECT coalesce(sum(usd), 0) FROM enterprise_alert_spend WHERE scope = $1 \
+                             AND period ~ '^\\d{4}-\\d{2}-\\d{2}$' AND period < $2 AND period >= to_char(CAST($2 AS date) - 14, 'YYYY-MM-DD')",
+                            "SELECT coalesce(sum(usd), 0) FROM enterprise_alert_spend WHERE scope = ?1 \
+                             AND period GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND period < ?2 AND period >= date(?2, '-14 days')",
+                        ),
                         &[&format!("person:{person}"), &day],
                     )
                     .await
@@ -2130,14 +2129,21 @@ impl Engine {
             let from = per.window_start_label(label);
             client
                 .query_one(
-                    "SELECT coalesce(sum(spent), 0) FROM enterplace_spend WHERE scope = $1 AND per = $2 AND period >= $3 AND period <= $4",
+                    // The Cloudflare store keeps the gateway's counters in its own table, `spend`.
+                    Sql::both(
+                        "SELECT coalesce(sum(spent), 0) FROM enterplace_spend WHERE scope = $1 AND per = $2 AND period >= $3 AND period <= $4",
+                        "SELECT coalesce(sum(spent), 0.0) FROM spend WHERE scope = ?1 AND per = ?2 AND period >= ?3 AND period <= ?4",
+                    ),
                     &[&scope, &per.word(), &from, &label],
                 )
                 .await
         } else {
             client
                 .query_one(
-                    "SELECT coalesce(sum(spent), 0) FROM enterplace_spend WHERE scope = $1 AND per = $2 AND period = $3",
+                    Sql::both(
+                        "SELECT coalesce(sum(spent), 0) FROM enterplace_spend WHERE scope = $1 AND per = $2 AND period = $3",
+                        "SELECT coalesce(sum(spent), 0.0) FROM spend WHERE scope = ?1 AND per = ?2 AND period = ?3",
+                    ),
                     &[&scope, &per.word(), &label],
                 )
                 .await
@@ -2234,11 +2240,7 @@ impl Engine {
             .enumerate()
             {
                 sums[i] = client
-                    .query_one(
-                        "SELECT coalesce(sum(count), 0)::bigint FROM enterprise_alert_counts \
-                         WHERE rule = $1 AND key = $2 AND minute >= date_trunc('minute', now()) - make_interval(mins => $3)",
-                        &[&rule.id, slot, &rule.minutes()],
-                    )
+                    .query_one(window(), &[&rule.id, slot, &rule.minutes()])
                     .await
                     .map_err(db_error)?
                     .try_get(0)
@@ -2306,9 +2308,7 @@ impl Engine {
             )
             .await
             .map_err(db_error)?;
-        let list = |rows: &[enterplace_server::store::tokio_postgres::Row],
-                    money: bool|
-         -> Result<String, String> {
+        let list = |rows: &[enterplace_server::sql::Row], money: bool| -> Result<String, String> {
             let mut out = Vec::new();
             for row in rows {
                 let name: String = row.try_get(0).map_err(db_error)?;
@@ -2345,9 +2345,7 @@ impl Engine {
     async fn unusual(&self, rule: &Rule, key: &str) -> Result<Option<String>, String> {
         let (scope, day) = key.rsplit_once(':').unwrap_or_default();
         let client = self.db.client().await?;
-        let sum = |row: &enterplace_server::store::tokio_postgres::Row,
-                   i: usize|
-         -> Result<f64, String> {
+        let sum = |row: &enterplace_server::sql::Row, i: usize| -> Result<f64, String> {
             Ok(row.try_get::<_, i64>(i).map_err(db_error)? as f64)
         };
         let today = client
@@ -2360,9 +2358,14 @@ impl Engine {
             .map_err(db_error)?;
         let past = client
             .query_one(
-                "SELECT coalesce(sum(requests), 0)::bigint, coalesce(sum(errors), 0)::bigint, coalesce(sum(latency_ms), 0)::bigint, \
-                 coalesce(sum(timed), 0)::bigint FROM enterprise_alert_daily WHERE scope = $1 AND day < $2 \
-                 AND day >= to_char(CAST($2 AS date) - 14, 'YYYY-MM-DD')",
+                Sql::both(
+                    "SELECT coalesce(sum(requests), 0)::bigint, coalesce(sum(errors), 0)::bigint, coalesce(sum(latency_ms), 0)::bigint, \
+                     coalesce(sum(timed), 0)::bigint FROM enterprise_alert_daily WHERE scope = $1 AND day < $2 \
+                     AND day >= to_char(CAST($2 AS date) - 14, 'YYYY-MM-DD')",
+                    "SELECT coalesce(sum(requests), 0), coalesce(sum(errors), 0), coalesce(sum(latency_ms), 0), \
+                     coalesce(sum(timed), 0) FROM enterprise_alert_daily WHERE scope = ?1 AND day < ?2 \
+                     AND day >= date(?2, '-14 days')",
+                ),
                 &[&scope, &day],
             )
             .await
@@ -2482,12 +2485,20 @@ impl Engine {
                     let client = self.db.client().await?;
                     let rows = client
                         .query(
-                            "SELECT d.id, d.kind, coalesce(c.n, 0), \
-                             (SELECT count(*) FROM enterprise_audit a WHERE a.replica = $1 AND a.n > coalesce(c.n, 0)), \
-                             (SELECT coalesce(extract(epoch FROM now() - min(a.time)), 0)::float8 FROM enterprise_audit a \
-                              WHERE a.replica = $1 AND a.n > coalesce(c.n, 0)) \
-                             FROM enterprise_export_destinations d \
-                             LEFT JOIN enterprise_export_cursors c ON c.destination = d.id AND c.replica = $1",
+                            Sql::both(
+                                "SELECT d.id, d.kind, coalesce(c.n, 0), \
+                                 (SELECT count(*) FROM enterprise_audit a WHERE a.replica = $1 AND a.n > coalesce(c.n, 0)), \
+                                 (SELECT coalesce(extract(epoch FROM now() - min(a.time)), 0)::float8 FROM enterprise_audit a \
+                                  WHERE a.replica = $1 AND a.n > coalesce(c.n, 0)) \
+                                 FROM enterprise_export_destinations d \
+                                 LEFT JOIN enterprise_export_cursors c ON c.destination = d.id AND c.replica = $1",
+                                "SELECT d.id, d.kind, coalesce(c.n, 0), \
+                                 (SELECT count(*) FROM enterprise_audit a WHERE a.replica = ?1 AND a.n > coalesce(c.n, 0)), \
+                                 (SELECT coalesce((julianday('now') - julianday(min(a.time))) * 86400.0, 0.0) FROM enterprise_audit a \
+                                  WHERE a.replica = ?1 AND a.n > coalesce(c.n, 0)) \
+                                 FROM enterprise_export_destinations d \
+                                 LEFT JOIN enterprise_export_cursors c ON c.destination = d.id AND c.replica = ?1",
+                            ),
                             &[&self.replica],
                         )
                         .await
@@ -2540,9 +2551,14 @@ impl Engine {
             let client = self.db.client().await?;
             let fresh = client
                 .query_opt(
-                    "INSERT INTO enterprise_alert_state (rule, key, last_at) VALUES ($1, $2, now()) \
-                     ON CONFLICT (rule, key) DO UPDATE SET last_at = now() \
-                     WHERE enterprise_alert_state.last_at < now() - make_interval(mins => $3) RETURNING rule",
+                    Sql::both(
+                        "INSERT INTO enterprise_alert_state (rule, key, last_at) VALUES ($1, $2, now()) \
+                         ON CONFLICT (rule, key) DO UPDATE SET last_at = now() \
+                         WHERE enterprise_alert_state.last_at < now() - make_interval(mins => $3) RETURNING rule",
+                        "INSERT INTO enterprise_alert_state (rule, key, last_at) VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) \
+                         ON CONFLICT (rule, key) DO UPDATE SET last_at = excluded.last_at \
+                         WHERE enterprise_alert_state.last_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || ?3 || ' minutes') RETURNING rule",
+                    ),
                     &[&rule.id, &key, &quiet],
                 )
                 .await
@@ -2680,6 +2696,16 @@ impl Engine {
         .map_err(db_error)?;
         Ok(())
     }
+}
+
+/// What a rule (`$1`) counted for a subject (`$2`) in its last `$3` minutes, whole minutes as the counts are kept.
+fn window() -> Sql {
+    Sql::both(
+        "SELECT coalesce(sum(count), 0)::bigint FROM enterprise_alert_counts \
+         WHERE rule = $1 AND key = $2 AND minute >= date_trunc('minute', now()) - make_interval(mins => $3)",
+        "SELECT coalesce(sum(count), 0) FROM enterprise_alert_counts \
+         WHERE rule = ?1 AND key = ?2 AND minute >= strftime('%Y-%m-%dT%H:%M:00Z', 'now', '-' || ?3 || ' minutes')",
+    )
 }
 
 /// How much of a day (`2026-11-14`) or month (`2026-11`) has passed, from 0 to 1.

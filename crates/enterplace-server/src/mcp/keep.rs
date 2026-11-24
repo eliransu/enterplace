@@ -1,7 +1,8 @@
 //! What the MCP gateway keeps beyond one request: OAuth clients, codes and tokens, each person's credentials to
 //! upstream servers (sealed), tool pins and the calls waiting for an admin's approval.
 //!
-//! With a `store:` in the policy it is a table in that Postgres, shared by every gateway on it. Without one it is a
+//! With a `store:` in the policy it is a table in that store's database (Postgres, or the Cloudflare store's
+//! Durable Object), shared by every gateway on it. Without one it is a
 //! JSON file beside the policy, read at start and written whole on each change. Tests run it in memory.
 
 use std::{
@@ -13,7 +14,7 @@ use std::{
 
 use serde_json::Value;
 
-use crate::{credentials::MasterKey, store::PgStore};
+use crate::{credentials::MasterKey, sql::Db};
 
 /// The MCP gateway's tables, applied once per database under their own namespace.
 pub(crate) const MIGRATIONS: &[&str] = &["
@@ -38,16 +39,13 @@ pub(crate) fn now() -> u64 {
 pub enum Sealer {
     None,
     Own(Arc<MasterKey>),
-    Store(Arc<PgStore>),
+    Store(Db),
 }
 
 enum Backend {
     Memory,
     File(PathBuf),
-    Postgres(
-        Arc<PgStore>,
-        tokio::sync::Mutex<Option<tokio_postgres::Client>>,
-    ),
+    Postgres(Db, Box<tokio::sync::Mutex<Option<crate::sql::Conn>>>),
 }
 
 type Map = BTreeMap<String, BTreeMap<String, Value>>;
@@ -62,8 +60,8 @@ pub(crate) struct Keep {
 /// Where the MCP gateway keeps its state, as the server is configured.
 #[derive(Clone, Default)]
 pub struct McpSetup {
-    /// The shared store, when the policy has `store:`.
-    pub postgres: Option<Arc<PgStore>>,
+    /// The shared store's database, when the policy has `store:`.
+    pub postgres: Option<Db>,
     /// The file used without a store. `None` keeps everything in memory, for tests and embedders.
     pub file: Option<PathBuf>,
     /// Seals each person's credentials without a store. With one, the store's master key does.
@@ -96,9 +94,9 @@ impl Keep {
     pub(crate) fn start(setup: McpSetup) -> Result<Self, String> {
         let (backend, sealer, memory) = match (setup.postgres, setup.file) {
             (Some(pg), _) => {
-                pg.migrate("mcp", MIGRATIONS)?;
+                pg.migrate("mcp", MIGRATIONS, &[])?;
                 (
-                    Backend::Postgres(pg.clone(), tokio::sync::Mutex::new(None)),
+                    Backend::Postgres(pg.clone(), Box::default()),
                     Sealer::Store(pg),
                     Map::new(),
                 )
@@ -163,11 +161,11 @@ impl Keep {
     }
 
     async fn client<'a>(
-        pg: &PgStore,
-        slot: &'a tokio::sync::Mutex<Option<tokio_postgres::Client>>,
-    ) -> Result<tokio::sync::MutexGuard<'a, Option<tokio_postgres::Client>>, String> {
+        pg: &Db,
+        slot: &'a tokio::sync::Mutex<Option<crate::sql::Conn>>,
+    ) -> Result<tokio::sync::MutexGuard<'a, Option<crate::sql::Conn>>, String> {
         let mut held = slot.lock().await;
-        if held.as_ref().is_none_or(tokio_postgres::Client::is_closed) {
+        if held.as_ref().is_none_or(crate::sql::Conn::is_closed) {
             *held = Some(pg.connect().await?);
         }
         Ok(held)
@@ -176,7 +174,7 @@ impl Keep {
     /// One statement on the store's database, returning its rows as (id, value, exp).
     async fn query(
         &self,
-        sql: &str,
+        sql: &'static str,
         kind: &str,
         id: Option<&str>,
         value: Option<(&str, i64)>,
@@ -391,28 +389,21 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn the_store_keeps_values_for_every_gateway_and_seals_with_its_master_key()
     -> Result<(), String> {
-        let Ok(url) = std::env::var("ENTERPLACE_TEST_DATABASE_URL") else {
-            eprintln!(
-                "skipped: set ENTERPLACE_TEST_DATABASE_URL to run the MCP keep against Postgres"
-            );
+        let Some(url) = crate::store::TestStore::create("mcp_keep")
+            .await
+            .map_err(|e| e.to_string())?
+        else {
             return Ok(());
         };
-        // CI's Postgres offers no TLS, and the store refuses that unless the string says so, as the store tests do.
-        let url = if url.contains("sslmode") {
-            url
-        } else if url.contains('?') {
-            format!("{url}&sslmode=disable")
-        } else if url.contains("://") {
-            format!("{url}?sslmode=disable")
-        } else {
-            format!("{url} sslmode=disable")
-        };
-        let pg = crate::store::open("ENTERPLACE_TEST_DATABASE_URL", &url)?;
+        let pg = crate::store::TestStore::db(&url)?;
         let hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-        if let Some(master) = MasterKey::from_env(&|v| {
+        let master = MasterKey::from_env(&|v| {
             (v == crate::credentials::MASTER_ENV).then(|| hex.to_string())
-        })? {
-            pg.unlock(master)?;
+        })?
+        .ok_or("no master key")?;
+        match &pg {
+            Db::Postgres(store) => store.unlock(master)?,
+            Db::Cloudflare(store) => store.unlock(master)?,
         }
         let setup = || McpSetup {
             postgres: Some(pg.clone()),

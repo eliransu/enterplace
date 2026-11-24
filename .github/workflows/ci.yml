@@ -42,9 +42,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # 24: the Cloudflare store's tests run its TypeScript as it is, on node:sqlite with rows as arrays.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       # fmt, clippy -D warnings, tests, release build, the policy examples, the bench gate and the docs build:
       # the same script a developer runs before pushing, so CI and a laptop cannot disagree.
       # Shared CI machines are noisy, so the bench runs at 1,000 requests a second rather than the 5,000 used locally.
@@ -52,10 +53,14 @@ jobs:
       - run: scripts/ci.sh
       # The store tests again, on the Cloudflare store's own code (deploy/cloudflare/src/store.ts, the EnterplaceStore
       # Durable Object) run on node:sqlite: the same keys, kill switches, budgets, leases and sessions across gateways.
+      # Then the features with tables of their own (batches, the request log, MCP state, and the enterprise
+      # features), which run on the same Durable Object through crates/enterplace-server/src/sql.rs.
       - name: Store tests on the Cloudflare store
         env:
           ENTERPLACE_TEST_STORE: cloudflare
-        run: cargo test -p enterplace-server --test store --test ha --test credentials --test policy_versions
+        run: |
+          cargo test -p enterplace-server --test store --test ha --test credentials --test policy_versions --test batches --test insights --lib
+          cargo test -p enterplace-enterprise --all-features
       # The screenshots of the new user's path (scripts/ftue_check.py, run by ci.sh with the runner's Chrome).
       - uses: actions/upload-artifact@v4
         if: always()

@@ -30,7 +30,7 @@ store:
   postgres_url_env: DATABASE_URL
 ```
 
-On Cloudflare, the template keeps the store in a Durable Object of its own Worker instead, with `store: { cloudflare: true }` and no database: see [Cloudflare](/deploy/cloudflare/#what-it-creates). It shares everything this page lists except the request log, and the features that keep their own tables in Postgres need the Postgres store.
+On Cloudflare, the template keeps the store in a Durable Object of its own Worker instead, with `store: { cloudflare: true }` and no database: see [Cloudflare](/deploy/cloudflare/#what-it-creates). It shares everything this page lists, and the features with tables of their own (the request log, batches, MCP state and the Enterprise features) keep them there too.
 
 Set the variable on every replica:
 

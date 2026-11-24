@@ -30,7 +30,7 @@ nav: product
   </div>
   <details class="agent-setup">
     <summary class="muted">Show the Cloudflare agent prompt</summary>
-<pre id="cloudflare-agent">Deploy Enterplace, the self-hosted AI gateway, to my Cloudflare account with its wrangler template, so everything runs on Cloudflare: the gateways in Cloudflare Containers behind a Worker, the store (keys, kill switches, budgets, sessions, credentials, policy versions) in a Durable Object, the audit chain in R2. No database or service outside Cloudflare.
+<pre id="cloudflare-agent">Deploy Enterplace, the self-hosted AI gateway, to my Cloudflare account with its wrangler template, so everything runs on Cloudflare: the gateways in Cloudflare Containers behind a Worker, the store and every feature's data (keys, kill switches, budgets, sessions, credentials, policy versions, the request log, batches, and with a license members, SCIM, audit export, retention, alerts, devices and watch mode) in a Durable Object, the audit chain in R2. No database or service outside Cloudflare.
 
 Never put a secret in chat, in a file or in a command line I can see: I type each one myself at the wrangler prompt, or you pipe a generated one straight into wrangler.
 

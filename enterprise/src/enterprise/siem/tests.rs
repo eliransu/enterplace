@@ -845,15 +845,15 @@ async fn without_the_features_the_page_and_api_say_why_and_nothing_is_made() -> 
         assert!(!audit.text.contains("/console/siem"), "no nav entry");
         // The gateway's own request index names its replica in the same `.replica` file the export uses, so that
         // file says nothing about the export: its tables, below, do.
-        let (client, connection) = enterplace_server::store::tokio_postgres::connect(
-            &url,
-            enterplace_server::store::tokio_postgres::NoTls,
-        )
-        .await?;
-        tokio::spawn(connection);
+        let client = enterplace_server::store::TestStore::db(&url)?
+            .connect()
+            .await?;
         let made: i64 = client
             .query_one(
-                "SELECT count(*) FROM information_schema.tables WHERE table_name IN ('enterprise_audit', 'enterprise_replicas', 'enterprise_export_destinations')",
+                enterplace_server::sql::Sql::both(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_name IN ('enterprise_audit', 'enterprise_replicas', 'enterprise_export_destinations')",
+                    "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('enterprise_audit', 'enterprise_replicas', 'enterprise_export_destinations')",
+                ),
                 &[],
             )
             .await?
@@ -1883,12 +1883,9 @@ async fn text_goes_only_to_destinations_that_opt_in_redacted_encrypted_and_for_a
             .iter()
             .any(|l| l.contains("please") || l.contains("AKIA"))
     );
-    let (client, connection) = enterplace_server::store::tokio_postgres::connect(
-        &url,
-        enterplace_server::store::tokio_postgres::NoTls,
-    )
-    .await?;
-    tokio::spawn(connection);
+    let client = enterplace_server::store::TestStore::db(&url)?
+        .connect()
+        .await?;
     let sealed: String = client
         .query_one(
             "SELECT sealed FROM enterprise_captures WHERE decision = $1",
@@ -1898,7 +1895,13 @@ async fn text_goes_only_to_destinations_that_opt_in_redacted_encrypted_and_for_a
         .try_get(0)?;
     assert!(sealed.starts_with("v1:") && !sealed.contains("please"));
     let hours: f64 = client
-        .query_one("SELECT extract(epoch FROM expires_at - captured_at)::float8 / 3600 FROM enterprise_captures WHERE decision = $1", &[&id])
+        .query_one(
+            enterplace_server::sql::Sql::both(
+                "SELECT extract(epoch FROM expires_at - captured_at)::float8 / 3600 FROM enterprise_captures WHERE decision = $1",
+                "SELECT (julianday(expires_at) - julianday(captured_at)) * 24 FROM enterprise_captures WHERE decision = ?1",
+            ),
+            &[&id],
+        )
         .await?
         .try_get(0)?;
     assert!(
@@ -1934,6 +1937,14 @@ async fn text_goes_only_to_destinations_that_opt_in_redacted_encrypted_and_for_a
             && l.contains("\"text_teams\":\"research\"")
     ));
     Ok(())
+}
+
+/// The one number `sql` selects, read from the store this run tests.
+async fn scalar(url: &str, sql: &str) -> Result<i64, Error> {
+    let client = enterplace_server::store::TestStore::db(url)?
+        .connect()
+        .await?;
+    Ok(client.query_one(sql.to_string(), &[]).await?.try_get(0)?)
 }
 
 /// Request records of organization acme, which go to its own chain with `audit: { per_org: true }`.
@@ -2002,12 +2013,8 @@ async fn per_org_each_chain_is_exported_retained_held_and_alerted_on_its_own() -
             "SELECT count(*) FROM enterprise_audit WHERE replica = '{replica}' AND line LIKE '%\"org\":\"acme\"%'"
         )
     };
-    let n = |rows: Vec<enterplace_server::store::tokio_postgres::Row>| -> i64 {
-        rows.first().and_then(|r| r.try_get(0).ok()).unwrap_or(-1)
-    };
-    let rows = crate::enterprise::alerts::tests::rows;
-    assert_eq!(n(rows(&url, &count(&org.replica)).await?), 4);
-    assert_eq!(n(rows(&url, &count(&ex.replica)).await?), 0);
+    assert_eq!(scalar(&url, &count(&org.replica)).await?, 4);
+    assert_eq!(scalar(&url, &count(&ex.replica)).await?, 0);
     org.ship().await?;
     assert!(
         sink.deliveries()
@@ -2128,7 +2135,9 @@ async fn an_org_added_by_a_reload_is_exported_retained_held_and_shipped_at_once(
     // The policy now names globex: the reload opens its chain and starts everything on it, with no restart.
     std::fs::write(
         gw.dir.join("enterplace.policy.yaml"),
-        format!("{POLICY}orgs: [acme, globex]\naudit: {{ per_org: true }}\n"),
+        enterplace_server::store::TestStore::policy(&format!(
+            "{POLICY}orgs: [acme, globex]\naudit: {{ per_org: true }}\n"
+        )),
     )?;
     let reloader = gw.governed.reloader.clone();
     let reload =
@@ -2155,7 +2164,7 @@ async fn an_org_added_by_a_reload_is_exported_retained_held_and_shipped_at_once(
     org.log.flush();
     assert!(std::fs::read_to_string(&globex)?.contains("globex-0"));
     while org.ingest().await? > 0 {}
-    let rows = crate::enterprise::alerts::tests::rows(
+    let globex_rows = scalar(
         &url,
         &format!(
             "SELECT count(*) FROM enterprise_audit WHERE replica = '{}' AND line LIKE '%globex-0%'",
@@ -2163,10 +2172,7 @@ async fn an_org_added_by_a_reload_is_exported_retained_held_and_shipped_at_once(
         ),
     )
     .await?;
-    assert_eq!(
-        rows.first().and_then(|r| r.try_get::<_, i64>(0).ok()),
-        Some(1)
-    );
+    assert_eq!(globex_rows, 1);
 
     // Retention and legal hold run on it.
     let mut owner = Browser::admin(&gw.app).await?;

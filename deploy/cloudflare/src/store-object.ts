@@ -10,6 +10,13 @@ export class EnterplaceStore<Env = unknown> extends DurableObject<Env> {
     const sql = ctx.storage.sql;
     this.core = new StoreCore({
       exec: (query, ...params) => sql.exec(query, ...params),
+      rows: (query, ...params) => {
+        const cursor = sql.exec(query, ...params);
+        return { columns: cursor.columnNames, rows: [...cursor.raw()] };
+      },
+      script: (text) => {
+        sql.exec(text);
+      },
       tx: (work) => ctx.storage.transactionSync(work),
     });
   }

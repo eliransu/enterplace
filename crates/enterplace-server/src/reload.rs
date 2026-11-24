@@ -103,7 +103,7 @@ type Seal = Arc<dyn enterplace_core::insights::Seal>;
 /// What an organization added by a reload needs: a request index copier on the store, and the embedding binary told.
 #[derive(Clone, Default)]
 struct NewOrg {
-    index: Option<(Arc<crate::store::PgStore>, Option<Seal>)>,
+    index: Option<(crate::sql::Db, Option<Seal>)>,
     tell: Option<Arc<dyn Fn(OrgChain) + Send + Sync>>,
     /// The runtime the gateway started on: reloads run on a thread of their own, and the copier and what the
     /// binary starts for the chain run there.
@@ -281,12 +281,12 @@ pub fn open_store(
     keys_path: &Path,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Option<Arc<dyn Store>>, String> {
-    Ok(open_shared(policy_path, keys_path, env)?.1)
+    Ok(open_shared(policy_path, keys_path, env)?.0)
 }
 
-/// The store the policy names, as the Postgres store when it is one (its database also keeps batches, the request
-/// log and the enterprise tables), and as a store either way.
-type Opened = (Option<Arc<crate::store::PgStore>>, Option<Arc<dyn Store>>);
+/// The store the policy names, as a store and as the database of the features with tables of their own (batches,
+/// the request log, MCP state, the enterprise features): Postgres or the Cloudflare store's Durable Object.
+type Opened = (Option<Arc<dyn Store>>, Option<crate::sql::Db>);
 
 fn open_shared(
     policy_path: &Path,
@@ -302,7 +302,7 @@ fn open_shared(
         .map_err(|errors| errors.join("\n"))?
         .store
         .ok_or("the policy's store section could not be read. Run `enterplace check` on it.")?;
-    let (postgres, shared): (_, Arc<dyn Store>) = if setting.cloudflare {
+    let (shared, db): (Arc<dyn Store>, _) = if setting.cloudflare {
         let url = env(crate::cloudflare_store::URL_ENV)
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| crate::cloudflare_store::DEFAULT_URL.into());
@@ -311,7 +311,7 @@ fn open_shared(
         if let Some(master) = crate::MasterKey::from_env(env)? {
             opened.unlock(master)?;
         }
-        (None, opened)
+        (opened.clone(), crate::sql::Db::Cloudflare(opened))
     } else {
         let variable = &setting.postgres_url_env;
         let url = env(variable).filter(|v| !v.trim().is_empty()).ok_or_else(|| {
@@ -324,13 +324,13 @@ fn open_shared(
         if let Some(master) = crate::MasterKey::from_env(env)? {
             opened.unlock(master)?;
         }
-        (Some(opened.clone()), opened)
+        (opened.clone(), crate::sql::Db::Postgres(opened))
     };
     store::attach(keys_path, &shared);
     if setting.policy_from == config::PolicyFrom::Store {
         keep_policy_in_store(policy_path, &text, &shared)?;
     }
-    Ok((postgres, Some(shared)))
+    Ok((Some(shared), Some(db)))
 }
 
 /// Serves the policy from the store's live version. The first gateway on an empty store imports the file as
@@ -576,9 +576,9 @@ fn oci_signer(
 
 /// What a binary that embeds the gateway builds its additions from, once the files are checked and the store is open.
 pub struct Host<'a> {
-    /// The Postgres store when the policy has `store:`, for tables of the binary's own
-    /// ([`PgStore::migrate`](crate::store::PgStore::migrate), [`PgStore::connect`](crate::store::PgStore::connect)).
-    pub postgres: Option<&'a Arc<crate::store::PgStore>>,
+    /// The store's database when the policy has `store:` (Postgres, or the Cloudflare store's Durable Object), for
+    /// tables of the binary's own ([`Db::migrate`](crate::sql::Db::migrate), [`Db::connect`](crate::sql::Db::connect)).
+    pub db: Option<&'a crate::sql::Db>,
     /// The keys file's path. Keys are read and changed through it (`enterplace_core::keyfile`), from the store when there is one.
     pub keys: &'a Path,
     pub policy: &'a Path,
@@ -696,7 +696,7 @@ pub fn governed_with(
     extend: &(dyn Fn(Host<'_>) -> Result<crate::Extension, String> + Sync),
 ) -> Result<Governed, String> {
     let keys_file = keys_path.map_or_else(|| config::keys_path_for(policy_path), Path::to_path_buf);
-    let (postgres, shared) = open_shared(policy_path, &keys_file, provider_key)?;
+    let (shared, db) = open_shared(policy_path, &keys_file, provider_key)?;
     // Without a store, credentials are sealed in a file beside the policy, under the master key `enterplace start` made.
     // A master key that does not read stops the start only when a provider needs it, as for MCP credentials below.
     let master = if shared.is_none() {
@@ -739,7 +739,7 @@ pub fn governed_with(
     let mcp = mcp_routes(&loaded.mcp, provider_key)?;
     // Each person's MCP credentials are sealed with the store's master key, or without a store with the gateway's.
     // Read whenever it is set, so a server with user_auth can be added by a reload.
-    let mcp_master = if postgres.is_none() {
+    let mcp_master = if db.is_none() {
         match crate::MasterKey::from_env(provider_key) {
             Ok(master) => master.map(Arc::new),
             Err(err)
@@ -755,9 +755,9 @@ pub fn governed_with(
     } else {
         None
     };
-    let mcp_seals = postgres.is_some() || mcp_master.is_some();
+    let mcp_seals = db.is_some() || mcp_master.is_some();
     let mcp_setup = crate::McpSetup {
-        postgres: postgres.clone(),
+        postgres: db.clone(),
         file: Some(policy_path.with_file_name("enterplace.mcp.json")),
         master: mcp_master,
         sso: loaded
@@ -839,11 +839,11 @@ pub fn governed_with(
         .collect();
     let known_orgs: BTreeSet<String> = org_chains.iter().map(|c| c.org.clone()).collect();
     let mut new_org = NewOrg {
-        index: postgres.clone().map(|pg| (pg, seal.clone())),
+        index: db.clone().map(|pg| (pg, seal.clone())),
         runtime: tokio::runtime::Handle::try_current().ok(),
         ..NewOrg::default()
     };
-    let (index, bodies): Served = match &postgres {
+    let (index, bodies): Served = match &db {
         Some(pg) => {
             let index =
                 crate::insights::PgIndex::open(pg.clone(), &loaded.audit_path, seal.clone(), true)?;
@@ -880,7 +880,7 @@ pub fn governed_with(
         .then(|| enterplace_core::id::random_hex(24));
     let policy_now = crate::PolicyNow::default();
     let extension = extend(Host {
-        postgres: postgres.as_ref(),
+        db: db.as_ref(),
         keys: &loaded.keys_path,
         policy: policy_path,
         audit: &log,

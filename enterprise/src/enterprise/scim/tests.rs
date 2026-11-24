@@ -94,12 +94,10 @@ fn record<'a>(all: &'a [Value], action: &str) -> Result<&'a Value, Error> {
         .ok_or(format!("{action} not recorded"))?)
 }
 
-async fn client(url: &str) -> Result<enterplace_server::store::tokio_postgres::Client, Error> {
-    use enterplace_server::store::tokio_postgres;
-    let config: tokio_postgres::Config = url.parse()?;
-    let (client, connection) = config.connect(tokio_postgres::NoTls).await?;
-    tokio::spawn(connection);
-    Ok(client)
+async fn client(url: &str) -> Result<enterplace_server::sql::Conn, Error> {
+    Ok(enterplace_server::store::TestStore::db(url)?
+        .connect()
+        .await?)
 }
 
 /// The role and team of the person with `email`.
@@ -1129,12 +1127,24 @@ async fn without_the_feature_scim_answers_license_required() -> Result<(), Error
         // SCIM's tables and column are made only when it is on; members' only when members is.
         let db = client(&url).await?;
         let scim: i64 = db
-            .query_one("SELECT count(*) FROM information_schema.columns WHERE table_name LIKE 'enterprise_%' AND (table_name LIKE 'enterprise_scim_%' OR table_name = 'enterprise_password_links' OR column_name = 'scim_external_id')", &[])
+            .query_one(
+                enterplace_server::sql::Sql::both(
+                    "SELECT count(*) FROM information_schema.columns WHERE table_name LIKE 'enterprise_%' AND (table_name LIKE 'enterprise_scim_%' OR table_name = 'enterprise_password_links' OR column_name = 'scim_external_id')",
+                    "SELECT count(*) FROM sqlite_master t, pragma_table_info(t.name) c WHERE t.type = 'table' AND t.name LIKE 'enterprise_%' AND (t.name LIKE 'enterprise_scim_%' OR t.name = 'enterprise_password_links' OR c.name = 'scim_external_id')",
+                ),
+                &[],
+            )
             .await?
             .try_get(0)?;
         assert_eq!(scim, 0, "{name}");
         let people: i64 = db
-            .query_one("SELECT count(*) FROM information_schema.tables WHERE table_name = 'enterprise_people'", &[])
+            .query_one(
+                enterplace_server::sql::Sql::both(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_name = 'enterprise_people'",
+                    "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'enterprise_people'",
+                ),
+                &[],
+            )
             .await?
             .try_get(0)?;
         assert_eq!(people, i64::from(name == "members_only"), "{name}");

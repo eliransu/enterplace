@@ -503,12 +503,9 @@ async fn admin_api_issues_team_tokens_that_expire_and_revoke() -> Result<(), Err
     assert!(!listed.text.contains(&token));
 
     // Expired: refused, and says so.
-    let client = {
-        use enterplace_server::store::tokio_postgres;
-        let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
-        tokio::spawn(connection);
-        client
-    };
+    let client = enterplace_server::store::TestStore::db(&url)?
+        .connect()
+        .await?;
     client
         .execute(
             "UPDATE enterprise_device_tokens SET expires_at = now() - interval '1 day' WHERE id = $1",
@@ -644,15 +641,16 @@ async fn without_the_feature_devices_answer_license_required() -> Result<(), Err
                 answer.text
             );
         }
-        let client = {
-            use enterplace_server::store::tokio_postgres;
-            let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await?;
-            tokio::spawn(connection);
-            client
-        };
+        let client = enterplace_server::store::TestStore::db(&url)?
+            .connect()
+            .await?;
         let tables: i64 = client
             .query_one(
-                "SELECT count(*) FROM information_schema.tables WHERE table_name LIKE 'enterprise_device%'",
+                if enterplace_server::store::TestStore::cloudflare() {
+                    "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 'enterprise_device%'"
+                } else {
+                    "SELECT count(*) FROM information_schema.tables WHERE table_name LIKE 'enterprise_device%'"
+                },
                 &[],
             )
             .await?

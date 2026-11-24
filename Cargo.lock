@@ -653,6 +653,7 @@ name = "enterplace-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bytes",
  "enterplace-console",
  "enterplace-core",
  "futures-core",

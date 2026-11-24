@@ -10,7 +10,7 @@ providers. The guide is `docs/deploy/cloudflare` on the docs site; this file is 
 |---|---|
 | Worker (`src/index.ts`) with a custom domain | Routes each request to one of `GATEWAYS` gateway instances, and serves `GET /_enterplace/audit/<instance>` |
 | Durable Object class `EnterplaceGateway` and its container application | One Enterplace gateway per instance, built from `./Dockerfile` (the image plus your policy) |
-| Durable Object class `EnterplaceStore`, bound as `STORE` (`src/store-object.ts`, `src/store.ts`) | The store every instance shares: keys, kill switches, budgets, rate limits, sessions, sealed credentials, policy versions, cache, routing and health, in the object's SQLite |
+| Durable Object class `EnterplaceStore`, bound as `STORE` (`src/store-object.ts`, `src/store.ts`) | The store every instance shares: keys, kill switches, budgets, rate limits, sessions, sealed credentials, policy versions, cache, routing and health, plus the tables of the request log, batches, MCP state and the Enterprise features, in the object's SQLite |
 | R2 bucket binding `AUDIT` | Each instance's sealed audit segments, under `audit/<instance id>/` |
 | Workers secrets | `ENTERPLACE_LICENSE`, `ENTERPLACE_MASTER_KEY`, `ENTERPLACE_EXPORT_KEY`, `ENTERPLACE_AUDIT_READ_TOKEN`, each `*_PROVIDER_KEY`. Passed to the container as environment variables |
 
@@ -69,12 +69,9 @@ docker run --rm -v "$PWD":/w:ro ghcr.io/eliransu/enterplace:<version> audit veri
 ## Limits
 
 - Containers need the Workers Paid plan.
-- Members and SCIM, SIEM export, retention, alerts, devices, watch mode, batches, the shared request log and shared
-  MCP credentials keep their data in Postgres, and are off with the Durable Object store. To use them, set
-  `store: { postgres_url_env: DATABASE_URL }` and the `DATABASE_URL` secret: a Postgres reachable from the internet
-  over TLS (`sslmode=require` or stricter) whose certificate chains to a public authority, such as Neon. A container
-  cannot use Hyperdrive.
-- Every store call goes to one Durable Object (about 1,000 requests a second by Cloudflare's guidance). Past a few
-  hundred budgeted requests a second, use Postgres.
+- Every store call goes to one Durable Object (about 1,000 requests a second by Cloudflare's guidance, 10 GB of
+  SQLite, most of it the request log: set retention). Past that, set `store: { postgres_url_env: DATABASE_URL }` and
+  the `DATABASE_URL` secret: a Postgres reachable from the internet over TLS (`sslmode=require` or stricter) whose
+  certificate chains to a public authority, such as Neon. A container cannot use Hyperdrive.
 - Requests are spread at random, so single sign-on to the console needs `GATEWAYS` set to 1.
 - Without a store, keys and budgets are per instance and spend is forgotten at restart: keep `store: { cloudflare: true }`.

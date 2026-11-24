@@ -19,7 +19,7 @@ use std::sync::atomic::AtomicU64;
 
 use enterplace_server::{
     Extension, Host,
-    store::{PgStore, tokio_postgres::Client},
+    sql::{Conn as Client, Db as Store},
 };
 use serde_json::json;
 
@@ -72,9 +72,28 @@ const NAMESPACES: &[(&str, &[&str])] = &[
     ("enterprise.watch", WATCH),
 ];
 
-fn migrate(pg: &PgStore, namespace: &str) -> Result<(), String> {
+/// Each namespace's SQLite migrations for the Cloudflare store, where an entry does not translate word for word:
+/// entry N stands for entry N of the Postgres list, and an empty or missing entry is translated (`sql::lite`).
+fn lite_migrations(namespace: &str) -> &'static [&'static str] {
+    match namespace {
+        "enterprise.watch" => &[watch::LITE_MIGRATION],
+        // SQLite takes no column names on a VALUES alias, so the old entries go in a CTE.
+        "enterprise.split" => &["
+WITH old (feature, entry) AS (VALUES ('enterprise.members', 1), ('enterprise.scim', 2), ('enterprise.siem', 3))
+INSERT INTO enterplace_migrations (namespace, version)
+SELECT feature, 1
+FROM enterplace_migrations, old
+WHERE namespace = 'enterprise' AND version >= entry
+ON CONFLICT (namespace) DO NOTHING;
+"],
+        "enterprise.siem" => &[siem::LITE_MIGRATION, capture::LITE_MIGRATION],
+        _ => &[],
+    }
+}
+
+fn migrate(pg: &Store, namespace: &str) -> Result<(), String> {
     match NAMESPACES.iter().find(|(name, _)| *name == namespace) {
-        Some((name, list)) => pg.migrate(name, list),
+        Some((name, list)) => pg.migrate(name, list, lite_migrations(name)),
         None => Err(format!(
             "{namespace} has no migration list. Add it to NAMESPACES in enterprise/src/enterprise/mod.rs."
         )),
@@ -126,7 +145,7 @@ pub fn extend_with(
     }
     // Retired on disk only through what the audit export has read, when it runs (for export or for alerting, which
     // reads the same table); through anything otherwise. With a store the request index must have copied it too.
-    let export_reads = (siem_on || alerts_on) && host.postgres.is_some();
+    let export_reads = (siem_on || alerts_on) && host.db.is_some();
     let read_limit = || Arc::new(AtomicU64::new(if export_reads { 0 } else { u64::MAX }));
     let limit = read_limit();
     // Each organization's chain (`audit: { per_org: true }`) is exported, retained and shipped as the install's is,
@@ -197,9 +216,9 @@ pub fn extend_with(
         return Ok(extension);
     }
     // The license never stops traffic: a feature that cannot run says why and the gateway starts without it.
-    let Some(pg) = host.postgres else {
+    let Some(pg) = host.db else {
         eprintln!(
-            "warning: the license unlocks enterprise features (members, audit export, retention, alerts, devices, watch mode) that are kept in Postgres, and the policy names no Postgres store (the Cloudflare store keeps keys, budgets and policy versions, not these). Add `store: {{ postgres_url_env: DATABASE_URL }}` to the policy and restart; until then they are off and the console signs in with admin keys only."
+            "warning: the license unlocks enterprise features (members, audit export, retention, alerts, devices, watch mode) that are kept in the store, but the policy has no store. Add `store: {{ postgres_url_env: DATABASE_URL }}` (or on Cloudflare `store: {{ cloudflare: true }}`) to the policy and restart; until then they are off and the console signs in with admin keys only."
         );
         return Ok(extension);
     };
@@ -474,12 +493,12 @@ fn health(status: &Status) -> enterplace_server::Health {
 // ponytail: one connection, so enterprise queries (console pages and sign-ins, not model traffic) wait in turn.
 // A pool when a feature puts queries on the request path.
 pub struct Db {
-    pg: Arc<PgStore>,
+    pg: Store,
     client: tokio::sync::Mutex<Option<Client>>,
 }
 
 impl Db {
-    fn new(pg: Arc<PgStore>) -> Self {
+    fn new(pg: Store) -> Self {
         Self {
             pg,
             client: tokio::sync::Mutex::new(None),
@@ -493,7 +512,7 @@ impl Db {
             *client = Some(self.pg.connect().await?);
         }
         tokio::sync::MutexGuard::try_map(client, Option::as_mut)
-            .map_err(|_| "the connection to Postgres was not opened".to_string())
+            .map_err(|_| "the connection to the store was not opened".to_string())
     }
 }
 
@@ -542,8 +561,8 @@ pub(crate) mod testing {
     /// set, so a machine without Postgres skips these tests; CI sets it.
     pub async fn database(
         test: &str,
-    ) -> Result<Option<enterplace_server::store::TestDatabase>, Error> {
-        enterplace_server::store::TestDatabase::create(&format!(
+    ) -> Result<Option<enterplace_server::store::TestStore>, Error> {
+        enterplace_server::store::TestStore::create(&format!(
             "enterplace_ent_{}_{test}",
             std::process::id()
         ))
@@ -564,11 +583,15 @@ pub(crate) mod testing {
     /// Closes the gateway's store when the test drops its gateway. The reloader and the store's own tasks hold the
     /// store for as long as the process runs, so without this every finished test left its connections open and a
     /// run on many cores passed Postgres's default of 100.
-    struct Closes(Option<std::sync::Arc<enterplace_server::store::PgStore>>);
+    struct Closes(Option<enterplace_server::sql::Db>);
 
     impl Drop for Closes {
         fn drop(&mut self) {
-            if let Some(store) = &self.0 {
+            if let Some(store) = self
+                .0
+                .as_ref()
+                .and_then(enterplace_server::sql::Db::postgres)
+            {
                 store.close();
             }
         }
@@ -605,10 +628,15 @@ pub(crate) mod testing {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
         let policy = dir.join("enterplace.policy.yaml");
-        std::fs::write(&policy, policy_text)?;
+        std::fs::write(
+            &policy,
+            enterplace_server::store::TestStore::policy(policy_text),
+        )?;
         let url = url.to_string();
         let env = move |variable: &str| match variable {
-            "ENTERPLACE_STORE_URL" => Some(url.clone()),
+            _ if enterplace_server::store::TestStore::env(variable, &url).is_some() => {
+                enterplace_server::store::TestStore::env(variable, &url)
+            }
             // Unset, as on a gateway that keeps no provider credentials in the store: a catch-all answer would set
             // both of these, which the gateway refuses.
             "ENTERPLACE_MASTER_KEY" | "ENTERPLACE_MASTER_KEY_FILE" => None,
@@ -623,7 +651,7 @@ pub(crate) mod testing {
         let store = std::sync::Mutex::new(None);
         let gw = enterplace_server::governed_with(&policy, None, &env, &|host| {
             if let Ok(mut store) = store.lock() {
-                *store = host.postgres.cloned();
+                *store = host.db.cloned();
             }
             super::extend_with(status, host, vars.clone())
         })?;
@@ -808,12 +836,19 @@ mod migration_tests {
         )?;
         Ok(())
     }
-    use enterplace_server::store::tokio_postgres::{self, Client, NoTls};
+    use enterplace_server::sql::{Conn as Client, Sql};
+    use enterplace_server::store::TestStore;
 
     async fn connect(url: &str) -> Result<Client, Error> {
-        let (client, connection) = tokio_postgres::connect(url, NoTls).await?;
-        tokio::spawn(connection);
-        Ok(client)
+        Ok(TestStore::db(url)?.connect().await?)
+    }
+
+    /// How many tables named `name` there are.
+    fn tables_named(name: &str) -> Sql {
+        Sql::both(
+            format!("SELECT count(*) FROM information_schema.tables WHERE table_name = '{name}'"),
+            format!("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = '{name}'"),
+        )
     }
 
     async fn versions(client: &Client) -> Result<Vec<(String, i32)>, Error> {
@@ -838,7 +873,14 @@ mod migration_tests {
         client: &Client,
         features: &[&str],
     ) -> Result<(), Error> {
-        client.batch_execute("DELETE FROM enterplace_keys").await?;
+        // The Cloudflare store keeps the core store's keys in its own `keys` table.
+        client
+            .batch_execute(if TestStore::cloudflare() {
+                "DELETE FROM keys"
+            } else {
+                "DELETE FROM enterplace_keys"
+            })
+            .await?;
         gateway(test, url, &licensed(features))?;
         Ok(())
     }
@@ -849,16 +891,22 @@ mod migration_tests {
         let client = connect(url).await?;
         client
             .batch_execute(
-                "CREATE TABLE enterplace_migrations (namespace text PRIMARY KEY, version integer NOT NULL)",
+                // The Cloudflare store makes this table when it starts.
+                "CREATE TABLE IF NOT EXISTS enterplace_migrations (namespace text PRIMARY KEY, version integer NOT NULL)",
             )
             .await?;
         let old = [
-            super::members::MIGRATION,
-            super::scim::MIGRATION,
-            super::siem::MIGRATION,
+            ("enterprise.members", super::members::MIGRATION),
+            ("enterprise.scim", super::scim::MIGRATION),
+            ("enterprise.siem", super::siem::MIGRATION),
         ];
-        for sql in old.iter().take(ran) {
-            client.batch_execute(sql).await?;
+        for (namespace, sql) in old.iter().take(ran) {
+            // Each was entry 1 of its feature's list, whose SQLite text the Cloudflare store runs.
+            let text = match super::lite_migrations(namespace).first() {
+                Some(lite) if !lite.trim().is_empty() => Sql::both(*sql, *lite),
+                _ => Sql::from(*sql),
+            };
+            client.batch_execute(text).await?;
         }
         let version = i32::try_from(ran)?;
         client
@@ -969,10 +1017,7 @@ mod migration_tests {
             ]
         );
         let audit: i64 = client
-            .query_one(
-                "SELECT count(*) FROM information_schema.tables WHERE table_name = 'enterprise_audit'",
-                &[],
-            )
+            .query_one(tables_named("enterprise_audit"), &[])
             .await?
             .try_get(0)?;
         assert_eq!(audit, 1);

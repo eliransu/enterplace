@@ -11,6 +11,13 @@ const core = new StoreCore({
     const rows = db.prepare(query).all(...(params as never[]));
     return { toArray: () => rows as Record<string, any>[] };
   },
+  rows: (query, ...params) => {
+    const statement = db.prepare(query);
+    statement.setReturnArrays(true);
+    const columns = statement.columns().map((c) => c.name);
+    return { columns, rows: statement.all(...(params as never[])) as unknown as unknown[][] };
+  },
+  script: (text) => db.exec(text),
   tx: (work) => {
     db.exec("BEGIN");
     try {

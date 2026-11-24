@@ -36,6 +36,8 @@ use enterplace_console::{
     redirect, same_origin,
 };
 use enterplace_core::audit::{self, AuditLog};
+use enterplace_server::sql::Sql;
+use enterplace_server::store::tokio_postgres::types::ToSql;
 use serde_json::{Value, json};
 
 use super::{Db, alerts, capture};
@@ -92,6 +94,60 @@ CREATE TABLE enterprise_export_settings (
     legal_hold_reason text,
     legal_hold_by text,
     legal_hold_at timestamptz,
+    pull_sha256 text
+);
+INSERT INTO enterprise_export_settings DEFAULT VALUES;
+";
+
+/// `MIGRATION` on the Cloudflare store: SQLite numbers only a primary key by itself, and the pull API pages by `seq`,
+/// so `seq` is the key (never reused, as a bigserial) and (replica, n) a unique pair.
+pub const LITE_MIGRATION: &str = "
+CREATE TABLE enterprise_audit (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    replica text NOT NULL,
+    n bigint NOT NULL,
+    hash text NOT NULL,
+    prev text NOT NULL,
+    time TEXT NOT NULL,
+    line text NOT NULL,
+    received_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE (replica, n)
+);
+CREATE INDEX enterprise_audit_time ON enterprise_audit (time);
+CREATE TABLE enterprise_replicas (
+    id text PRIMARY KEY,
+    ingested_n bigint NOT NULL DEFAULT 0,
+    seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    retention_at TEXT,
+    retention_note text
+);
+CREATE TABLE enterprise_export_destinations (
+    id INTEGER PRIMARY KEY,
+    kind text NOT NULL,
+    url text NOT NULL,
+    secret text NOT NULL DEFAULT '',
+    options text NOT NULL DEFAULT '{}',
+    created_by text NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    last_success_at TEXT,
+    last_error text,
+    last_error_at TEXT,
+    delivered bigint NOT NULL DEFAULT 0
+);
+CREATE TABLE enterprise_export_cursors (
+    destination bigint NOT NULL REFERENCES enterprise_export_destinations (id) ON DELETE CASCADE,
+    replica text NOT NULL,
+    n bigint NOT NULL,
+    hash text NOT NULL,
+    PRIMARY KEY (destination, replica)
+);
+CREATE TABLE enterprise_export_settings (
+    id boolean PRIMARY KEY DEFAULT 1 CHECK (id),
+    retention_days integer NOT NULL DEFAULT 365,
+    legal_hold boolean NOT NULL DEFAULT 0,
+    legal_hold_reason text,
+    legal_hold_by text,
+    legal_hold_at TEXT,
     pull_sha256 text
 );
 INSERT INTO enterprise_export_settings DEFAULT VALUES;
@@ -544,25 +600,44 @@ impl Exporter {
         let Some(last) = rows.last().map(|r| r.0) else {
             return Ok(0);
         };
-        let mut client = self.db.client().await?;
-        let tx = client.transaction().await.map_err(db_error)?;
-        for (n, hash, prev, time, line) in &rows {
-            let n = i64::try_from(*n).unwrap_or(i64::MAX);
-            tx.execute(
-                "INSERT INTO enterprise_audit (replica, n, hash, prev, time, line) \
-                 VALUES ($1, $2, $3, $4, coalesce(CAST(nullif($5, '') AS timestamptz), now()), $6) ON CONFLICT DO NOTHING",
-                &[&self.replica, &n, hash, prev, time, line],
-            )
+        // The records and the cursor past them land together: on the Cloudflare store a transaction cannot roll back.
+        let numbers: Vec<i64> = rows
+            .iter()
+            .map(|r| i64::try_from(r.0).unwrap_or(i64::MAX))
+            .collect();
+        let last_n = i64::try_from(last).unwrap_or(i64::MAX);
+        let mut writes: Vec<(Sql, Vec<&(dyn ToSql + Sync)>, Option<u64>)> = rows
+            .iter()
+            .zip(&numbers)
+            .map(|((_, hash, prev, time, line), n)| {
+                (
+                    Sql::from(
+                        "INSERT INTO enterprise_audit (replica, n, hash, prev, time, line) \
+                         VALUES ($1, $2, $3, $4, coalesce(CAST(nullif($5, '') AS timestamptz), now()), $6) ON CONFLICT DO NOTHING",
+                    ),
+                    vec![
+                        &self.replica as &(dyn ToSql + Sync),
+                        n,
+                        hash,
+                        prev,
+                        time,
+                        line,
+                    ],
+                    None,
+                )
+            })
+            .collect();
+        writes.push((
+            Sql::from("UPDATE enterprise_replicas SET ingested_n = $2 WHERE id = $1"),
+            vec![&self.replica, &last_n],
+            None,
+        ));
+        self.db
+            .client()
+            .await?
+            .atomic(writes)
             .await
             .map_err(db_error)?;
-        }
-        tx.execute(
-            "UPDATE enterprise_replicas SET ingested_n = $2 WHERE id = $1",
-            &[&self.replica, &i64::try_from(last).unwrap_or(i64::MAX)],
-        )
-        .await
-        .map_err(db_error)?;
-        tx.commit().await.map_err(db_error)?;
         self.read_through
             .fetch_max(last, std::sync::atomic::Ordering::SeqCst);
         Ok(rows.len())
@@ -574,8 +649,12 @@ impl Exporter {
         let client = self.db.client().await?;
         let rows = client
             .query(
-                "SELECT id, kind, url, secret, options, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
-                 FROM enterprise_export_destinations ORDER BY id",
+                // SQLite keeps the time as this text already, to the millisecond it was written with.
+                Sql::both(
+                    "SELECT id, kind, url, secret, options, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
+                     FROM enterprise_export_destinations ORDER BY id",
+                    "SELECT id, kind, url, secret, options, created_at FROM enterprise_export_destinations ORDER BY id",
+                ),
                 &[],
             )
             .await
@@ -647,8 +726,13 @@ impl Exporter {
             let client = self.db.client().await?;
             client
                 .query(
-                    "SELECT line FROM enterprise_audit WHERE replica = $1 AND (line::jsonb)->>'id' = ANY($2) \
-                     AND (line::jsonb)->>'event' IS NULL",
+                    Sql::both(
+                        "SELECT line FROM enterprise_audit WHERE replica = $1 AND (line::jsonb)->>'id' = ANY($2) \
+                         AND (line::jsonb)->>'event' IS NULL",
+                        "SELECT line FROM enterprise_audit WHERE replica = ?1 \
+                         AND json_extract(line, '$.id') IN (SELECT value FROM json_each(?2)) \
+                         AND json_extract(line, '$.event') IS NULL",
+                    ),
                     &[&batch.replica, &ids],
                 )
                 .await
@@ -1912,15 +1996,20 @@ async fn backfill(ex: &Exporter, dest: &Dest, days: i32) -> Result<usize, (usize
         let client = ex.db.client().await?;
         let rows = client
             .query(
-                "SELECT replica, n, line FROM (SELECT replica, n, line, seq FROM enterprise_audit \
-                 WHERE time >= now() - make_interval(days => $1) ORDER BY seq DESC LIMIT $2) newest ORDER BY replica, n",
+                Sql::both(
+                    "SELECT replica, n, line FROM (SELECT replica, n, line, seq FROM enterprise_audit \
+                     WHERE time >= now() - make_interval(days => $1) ORDER BY seq DESC LIMIT $2) newest ORDER BY replica, n",
+                    "SELECT replica, n, line FROM (SELECT replica, n, line, seq FROM enterprise_audit \
+                     WHERE time >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || ?1 || ' days') ORDER BY seq DESC LIMIT ?2) newest \
+                     ORDER BY replica, n",
+                ),
                 &[&days, &BACKFILL_MAX],
             )
             .await
             .map_err(db_error)?;
         rows.iter()
             .map(|r| Ok((r.try_get::<_, String>(0)?, r.try_get::<_, i64>(1)?, r.try_get::<_, String>(2)?)))
-            .collect::<Result<Vec<_>, enterplace_server::store::tokio_postgres::Error>>()
+            .collect::<Result<Vec<_>, enterplace_server::sql::Error>>()
             .map_err(db_error)
     }
     .await
@@ -2115,8 +2204,13 @@ async fn archive(
                 let client = ex.db.client().await?;
                 client
                 .query(
-                    "SELECT replica, n, line FROM enterprise_audit WHERE time >= CAST($1::text AS date) AND time < CAST($2::text AS date) + 1 \
-                     AND (replica, n) > ($3, $4) ORDER BY replica, n LIMIT 1000",
+                    // SQLite's times are UTC text, which a date sorts before any time of that day.
+                    Sql::both(
+                        "SELECT replica, n, line FROM enterprise_audit WHERE time >= CAST($1::text AS date) AND time < CAST($2::text AS date) + 1 \
+                         AND (replica, n) > ($3, $4) ORDER BY replica, n LIMIT 1000",
+                        "SELECT replica, n, line FROM enterprise_audit WHERE time >= ?1 AND time < date(?2, '+1 day') \
+                         AND (replica, n) > (?3, ?4) ORDER BY replica, n LIMIT 1000",
+                    ),
                     &[&from, &to, &replica, &n],
                 )
                 .await

@@ -26,6 +26,8 @@ use enterplace_console::{
     redirect, same_origin,
 };
 use enterplace_core::{config, coverage, id::sha256_hex};
+use enterplace_server::sql::Sql;
+use enterplace_server::store::tokio_postgres::types::ToSql;
 use serde_json::{Value, json};
 
 use super::Db;
@@ -505,14 +507,30 @@ impl Devices {
         let client = self.db.client().await?;
         let rows = client
             .query(
-                &format!("SELECT k.transport, k.target, coalesce(string_agg(DISTINCT m.server, ', '), ''), coalesce(string_agg(DISTINCT m.tool, ', '), ''), \
-                 count(DISTINCT m.device_id), coalesce(bool_and(m.via_enterplace), false), coalesce(x.decision, 'pending'), coalesce(x.decided_by, ''), \
-                 coalesce(to_char(x.decided_at AT TIME ZONE 'UTC', {TIME}), '') \
-                 FROM (SELECT transport, target FROM enterprise_device_mcp WHERE $1::text[] IS NULL OR device_id = ANY($1) \
-                 UNION SELECT transport, target FROM enterprise_mcp_decisions WHERE $1::text[] IS NULL) k \
-                 LEFT JOIN enterprise_device_mcp m ON m.transport = k.transport AND m.target = k.target AND ($1::text[] IS NULL OR m.device_id = ANY($1)) \
-                 LEFT JOIN enterprise_mcp_decisions x ON x.transport = k.transport AND x.target = k.target \
-                 GROUP BY k.transport, k.target, x.decision, x.decided_by, x.decided_at ORDER BY k.target, k.transport"),
+                Sql::both(
+                    format!("SELECT k.transport, k.target, coalesce(string_agg(DISTINCT m.server, ', '), ''), coalesce(string_agg(DISTINCT m.tool, ', '), ''), \
+                     count(DISTINCT m.device_id), coalesce(bool_and(m.via_enterplace), false), coalesce(x.decision, 'pending'), coalesce(x.decided_by, ''), \
+                     coalesce(to_char(x.decided_at AT TIME ZONE 'UTC', {TIME}), '') \
+                     FROM (SELECT transport, target FROM enterprise_device_mcp WHERE $1::text[] IS NULL OR device_id = ANY($1) \
+                     UNION SELECT transport, target FROM enterprise_mcp_decisions WHERE $1::text[] IS NULL) k \
+                     LEFT JOIN enterprise_device_mcp m ON m.transport = k.transport AND m.target = k.target AND ($1::text[] IS NULL OR m.device_id = ANY($1)) \
+                     LEFT JOIN enterprise_mcp_decisions x ON x.transport = k.transport AND x.target = k.target \
+                     GROUP BY k.transport, k.target, x.decision, x.decided_by, x.decided_at ORDER BY k.target, k.transport"),
+                    // SQLite: the device list is JSON text, and a DISTINCT group_concat takes no separator, so the
+                    // names are joined in subqueries, sorted as Postgres sorts them for DISTINCT.
+                    "SELECT k.transport, k.target, \
+                     coalesce((SELECT group_concat(server, ', ') FROM (SELECT DISTINCT n.server FROM enterprise_device_mcp n WHERE n.transport = k.transport AND n.target = k.target \
+                       AND (?1 IS NULL OR n.device_id IN (SELECT value FROM json_each(?1))) ORDER BY n.server)), ''), \
+                     coalesce((SELECT group_concat(tool, ', ') FROM (SELECT DISTINCT n.tool FROM enterprise_device_mcp n WHERE n.transport = k.transport AND n.target = k.target \
+                       AND (?1 IS NULL OR n.device_id IN (SELECT value FROM json_each(?1))) ORDER BY n.tool)), ''), \
+                     count(DISTINCT m.device_id), coalesce(min(m.via_enterplace), 0), coalesce(x.decision, 'pending'), coalesce(x.decided_by, ''), \
+                     coalesce(strftime('%Y-%m-%dT%H:%M:%SZ', x.decided_at), '') \
+                     FROM (SELECT transport, target FROM enterprise_device_mcp WHERE ?1 IS NULL OR device_id IN (SELECT value FROM json_each(?1)) \
+                     UNION SELECT transport, target FROM enterprise_mcp_decisions WHERE ?1 IS NULL) k \
+                     LEFT JOIN enterprise_device_mcp m ON m.transport = k.transport AND m.target = k.target AND (?1 IS NULL OR m.device_id IN (SELECT value FROM json_each(?1))) \
+                     LEFT JOIN enterprise_mcp_decisions x ON x.transport = k.transport AND x.target = k.target \
+                     GROUP BY k.transport, k.target, x.decision, x.decided_by, x.decided_at ORDER BY k.target, k.transport",
+                ),
                 &[&within],
             )
             .await
@@ -728,8 +746,9 @@ impl Devices {
         let row = client
             .query_one(
                 &format!("INSERT INTO enterprise_device_tokens (id, label, team, token_sha256, created_by, expires_at, org) \
-                 VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6), $7) RETURNING to_char(expires_at AT TIME ZONE 'UTC', {TIME})"),
-                &[&id, &label, &team, &sha256_hex(token.as_bytes()), &admin.name, &days, &org],
+                 VALUES ($1, $2, $3, $4, $5, now() + $6 * interval '1 day', $7) RETURNING to_char(expires_at AT TIME ZONE 'UTC', {TIME})"),
+                // A float: Postgres reads `$6 * interval` as float8, and SQLite takes a fractional day count.
+                &[&id, &label, &team, &sha256_hex(token.as_bytes()), &admin.name, &f64::from(days), &org],
             )
             .await
             .map_err(|e| unavailable(db_error(e)))?;
@@ -1017,120 +1036,119 @@ async fn report(Ext(d): Ext<Devices>, headers: HeaderMap, body: String) -> Respo
         .collect();
     let stored = async {
         let mut client = d.db.client().await?;
-        let tx = client.transaction().await.map_err(db_error)?;
-        // The first report binds the device to its person and token scope; a device from before the binding keeps
-        // its person and takes the scope of its next report.
-        let bound = tx
-            .query_opt(
-                "SELECT person, token_scope FROM enterprise_devices WHERE device_id = $1 FOR UPDATE",
-                &[&device_id],
-            )
-            .await
-            .map_err(db_error)?;
-        if let Some(row) = bound {
-            let was: String = row.try_get(0).unwrap_or_default();
-            let scope: Option<String> = row.try_get(1).unwrap_or_default();
-            let reason = if was != person {
-                Some(format!("bound to person {was}"))
-            } else if scope.as_ref().is_some_and(|s| *s != token.team) {
-                Some(format!(
-                    "bound to the token scope {}",
-                    scope
-                        .as_deref()
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or("every team")
-                ))
-            } else {
-                None
-            };
-            if let Some(reason) = reason {
-                tx.execute(
-                    "INSERT INTO enterprise_device_refusals (device_id, person, token_id, reason) VALUES ($1, $2, $3, $4)",
-                    &[&device_id, &person, &token.id, &reason],
+        // The writes land together through `atomic`, whose first statement updates the device only while it is
+        // bound as read here: a report that raced another's binding changes no row, writes nothing, and reads again.
+        for _ in 0..3 {
+            // The first report binds the device to its person and token scope; a device from before the binding
+            // keeps its person and takes the scope of its next report.
+            let bound = client
+                .query_opt(
+                    "SELECT person, token_scope FROM enterprise_devices WHERE device_id = $1",
+                    &[&device_id],
                 )
                 .await
                 .map_err(db_error)?;
-                tx.commit().await.map_err(db_error)?;
-                return Ok::<_, String>(Some(reason));
+            if let Some(row) = bound {
+                let was: String = row.try_get(0).unwrap_or_default();
+                let scope: Option<String> = row.try_get(1).unwrap_or_default();
+                let reason = if was != person {
+                    Some(format!("bound to person {was}"))
+                } else if scope.as_ref().is_some_and(|s| *s != token.team) {
+                    Some(format!(
+                        "bound to the token scope {}",
+                        scope
+                            .as_deref()
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("every team")
+                    ))
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    client
+                        .execute(
+                            "INSERT INTO enterprise_device_refusals (device_id, person, token_id, reason) VALUES ($1, $2, $3, $4)",
+                            &[&device_id, &person, &token.id, &reason],
+                        )
+                        .await
+                        .map_err(db_error)?;
+                    return Ok::<_, String>(Some(reason));
+                }
+            }
+            let mut writes: Vec<(Sql, Vec<&(dyn ToSql + Sync)>, Option<u64>)> = vec![(
+                "INSERT INTO enterprise_devices (device_id, hostname, os_user, person, team, agent_version, token_id, token_scope) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 ON CONFLICT (device_id) DO UPDATE SET hostname = excluded.hostname, os_user = excluded.os_user, team = excluded.team, \
+                 agent_version = excluded.agent_version, token_id = excluded.token_id, token_scope = excluded.token_scope, last_seen = now() \
+                 WHERE enterprise_devices.person = excluded.person AND (enterprise_devices.token_scope IS NULL OR enterprise_devices.token_scope = excluded.token_scope)".into(),
+                vec![&device_id, &hostname, &os_user, &person, &team, &version, &token.id, &token.team],
+                Some(1),
+            )];
+            if let Some(os) = &os {
+                writes.push((
+                    "UPDATE enterprise_devices SET os = $2 WHERE device_id = $1".into(),
+                    vec![&device_id, os],
+                    None,
+                ));
+            }
+            if let Some(mcp) = &mcp {
+                writes.push((
+                    "DELETE FROM enterprise_device_mcp WHERE device_id = $1".into(),
+                    vec![&device_id],
+                    None,
+                ));
+                for m in mcp {
+                    writes.push((
+                        "INSERT INTO enterprise_device_mcp (device_id, tool, file, server, transport, target, via_enterplace) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING".into(),
+                        vec![&device_id, &m.tool, &m.file, &m.server, &m.transport, &m.target, &m.via_enterplace],
+                        None,
+                    ));
+                }
+            }
+            if let Some(apps) = &apps {
+                writes.push((
+                    "DELETE FROM enterprise_device_apps WHERE device_id = $1".into(),
+                    vec![&device_id],
+                    None,
+                ));
+                for (app, (status, running)) in apps {
+                    writes.push((
+                        "INSERT INTO enterprise_device_apps (device_id, app, status, running) VALUES ($1, $2, $3, $4)".into(),
+                        vec![&device_id, app, status, running],
+                        None,
+                    ));
+                }
+            }
+            for (m, action) in &actions {
+                writes.push((
+                    "INSERT INTO enterprise_device_mcp_actions (device_id, person, tool, server, transport, target, action) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)".into(),
+                    vec![&device_id, &person, &m.tool, &m.server, &m.transport, &m.target, action],
+                    None,
+                ));
+            }
+            for (tool, (state, endpoints, drift)) in &tools {
+                writes.push((
+                    "INSERT INTO enterprise_device_tools (device_id, tool, state, endpoints) VALUES ($1, $2, $3, $4) \
+                     ON CONFLICT (device_id, tool) DO UPDATE SET state = excluded.state, endpoints = excluded.endpoints, updated_at = now()".into(),
+                    vec![&device_id, tool, state, endpoints],
+                    None,
+                ));
+                if *drift {
+                    writes.push((
+                        "INSERT INTO enterprise_device_drift (device_id, person, tool) VALUES ($1, $2, $3)".into(),
+                        vec![&device_id, &person, tool],
+                        None,
+                    ));
+                }
+            }
+            if client.atomic(writes).await.map_err(db_error)? {
+                return Ok(None);
             }
         }
-        tx.execute(
-            "INSERT INTO enterprise_devices (device_id, hostname, os_user, person, team, agent_version, token_id, token_scope) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (device_id) DO UPDATE SET hostname = excluded.hostname, os_user = excluded.os_user, team = excluded.team, \
-             agent_version = excluded.agent_version, token_id = excluded.token_id, token_scope = excluded.token_scope, last_seen = now()",
-            &[&device_id, &hostname, &os_user, &person, &team, &version, &token.id, &token.team],
-        )
-        .await
-        .map_err(db_error)?;
-        if let Some(os) = &os {
-            tx.execute(
-                "UPDATE enterprise_devices SET os = $2 WHERE device_id = $1",
-                &[&device_id, os],
-            )
-            .await
-            .map_err(db_error)?;
-        }
-        if let Some(mcp) = &mcp {
-            tx.execute(
-                "DELETE FROM enterprise_device_mcp WHERE device_id = $1",
-                &[&device_id],
-            )
-            .await
-            .map_err(db_error)?;
-            for m in mcp {
-                tx.execute(
-                    "INSERT INTO enterprise_device_mcp (device_id, tool, file, server, transport, target, via_enterplace) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
-                    &[&device_id, &m.tool, &m.file, &m.server, &m.transport, &m.target, &m.via_enterplace],
-                )
-                .await
-                .map_err(db_error)?;
-            }
-        }
-        if let Some(apps) = &apps {
-            tx.execute(
-                "DELETE FROM enterprise_device_apps WHERE device_id = $1",
-                &[&device_id],
-            )
-            .await
-            .map_err(db_error)?;
-            for (app, (status, running)) in apps {
-                tx.execute(
-                    "INSERT INTO enterprise_device_apps (device_id, app, status, running) VALUES ($1, $2, $3, $4)",
-                    &[&device_id, app, status, running],
-                )
-                .await
-                .map_err(db_error)?;
-            }
-        }
-        for (m, action) in &actions {
-            tx.execute(
-                "INSERT INTO enterprise_device_mcp_actions (device_id, person, tool, server, transport, target, action) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                &[&device_id, &person, &m.tool, &m.server, &m.transport, &m.target, action],
-            )
-            .await
-            .map_err(db_error)?;
-        }
-        for (tool, (state, endpoints, drift)) in &tools {
-            tx.execute(
-                "INSERT INTO enterprise_device_tools (device_id, tool, state, endpoints) VALUES ($1, $2, $3, $4) \
-                 ON CONFLICT (device_id, tool) DO UPDATE SET state = excluded.state, endpoints = excluded.endpoints, updated_at = now()",
-                &[&device_id, tool, state, endpoints],
-            )
-            .await
-            .map_err(db_error)?;
-            if *drift {
-                tx.execute(
-                    "INSERT INTO enterprise_device_drift (device_id, person, tool) VALUES ($1, $2, $3)",
-                    &[&device_id, &person, tool],
-                )
-                .await
-                .map_err(db_error)?;
-            }
-        }
-        tx.commit().await.map_err(db_error)?;
-        Ok::<_, String>(None)
+        Err(format!(
+            "Device {device_id} was bound by another report while this one was stored, three times over. Send the report again."
+        ))
     };
     match stored.await {
         Ok(None) => Json(json!({ "ok": true, "person": person, "team": team })).into_response(),
@@ -1679,11 +1697,11 @@ async fn main(d: &Devices, admin: &Admin, notice: &str, error: bool) -> Result<S
     // ponytail: their people's traffic is cut to those with such a device, and the recent refusals and drift to
     // those among the install's last 20. Filter in the queries if a kept role needs the rest.
     let (traffic, profiles, drift, refusals, actions) = if admin.confined() {
-        let mine = |row: &enterplace_server::store::tokio_postgres::Row, i: usize| {
+        let mine = |row: &enterplace_server::sql::Row, i: usize| {
             let id = row.try_get::<_, String>(i).unwrap_or_default();
             devices.iter().any(|d| d["device_id"] == id.as_str())
         };
-        let team = |row: &enterplace_server::store::tokio_postgres::Row| {
+        let team = |row: &enterplace_server::sql::Row| {
             admin
                 .teams
                 .contains(&row.try_get::<_, String>(0).unwrap_or_default())

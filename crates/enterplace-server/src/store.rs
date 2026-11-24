@@ -3327,6 +3327,17 @@ impl TestStore {
         .then(|| url.to_string())
     }
 
+    /// The database of the features with tables of their own, on the store this run tests at `url`.
+    pub fn db(url: &str) -> Result<crate::sql::Db, String> {
+        if Self::cloudflare() {
+            Ok(crate::sql::Db::Cloudflare(crate::cloudflare_store::open(
+                url,
+            )?))
+        } else {
+            Ok(crate::sql::Db::Postgres(open("ENTERPLACE_STORE_URL", url)?))
+        }
+    }
+
     /// The Cloudflare store at `url` or the Postgres store at it, as the store this run tests, for a test that
     /// drives a store without a gateway.
     pub fn open(url: &str) -> Result<Arc<dyn Store>, String> {

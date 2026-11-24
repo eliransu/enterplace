@@ -751,9 +751,6 @@ async fn every_policy_field_survives_a_saved_version_and_none_needs_a_restart() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_dry_run_replays_the_requests_of_every_gateway_on_the_store() -> TestResult {
-    if TestStore::cloudflare() {
-        return Ok(()); // The request log every gateway shares is kept in Postgres alone.
-    }
     let Some(url) = database("dry_run_shared").await? else {
         return Ok(());
     };
