@@ -1580,13 +1580,13 @@ fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     )
     .finished(made_text(c, app));
     let s2 = Step::new(
-        "Change the base URL and send one request",
+        "Point your app at Enterplace and send one request",
         first.is_some(),
         vec![
-            p("Set these variables where the app runs. The SDKs read them, so the code stays as it is."),
+            p("Your app keeps its code and its models, whichever provider serves them (OpenAI, Anthropic, Bedrock, Vertex, Azure or your own). Only the address it calls changes: pick the API format your code already uses and set these lines where it runs."),
             lines_block(
                 "lines-apps",
-                tabs("tool", "Client", &[("openai", "OpenAI SDKs"), ("anthropic", "Anthropic SDKs"), ("curl", "curl")], tool, json!({})),
+                tabs("tool", "Your code uses", &[("openai", "OpenAI-compatible API"), ("anthropic", "Anthropic API"), ("curl", "Plain HTTP (curl)")], tool, json!({})),
                 "",
                 &coding_lines(c, app, tool),
             ),

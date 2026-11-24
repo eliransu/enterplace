@@ -353,7 +353,7 @@ async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> Test
             "apps",
             &[
                 "Make a key for the app",
-                "Change the base URL and send one request",
+                "Point your app at Enterplace and send one request",
                 "Set a monthly budget for the app",
             ],
         ),
