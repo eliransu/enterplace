@@ -596,6 +596,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .merge(audit_log::routes())
         .merge(start::routes())
         .route("/live.json", get(live_json))
+        .route("/events", get(events))
         .route("/kills/restore", post(restore_traffic))
         .route("/assets/{file}", get(asset))
         .route("/assets/fonts/{file}", get(font))
@@ -2519,32 +2520,81 @@ fn read(path: &std::path::Path) -> Result<Option<String>, String> {
     }
 }
 
-/// What the pages that show requests ask every 2 seconds: a value that changes when a record is written. It is the
-/// audit log's size and time of change, which costs no read of the log, so the page redraws only when there is
-/// something new.
-// ponytail: polling, as Start here does, not a socket. One stat call per open tab every 2 seconds; a stream is the
-// upgrade if tabs are counted in hundreds.
-async fn live_json(State(console): State<Console>, headers: HeaderMap) -> Response {
-    let json = [(header::CONTENT_TYPE, "application/json")];
-    if console.admin(&headers).await.is_none() {
-        let body = serde_json::json!({ "error": { "code": "not_signed_in", "message": "Sign in to the console again." } });
-        return (StatusCode::UNAUTHORIZED, json, body.to_string()).into_response();
-    }
-    let meta = std::fs::metadata(&console.config().audit).ok();
+/// When the console's data last changed: the audit log's size and time of change (a record was written), and the
+/// policy and keys files' times of change. A stat of three files, no read, so it is cheap to ask often.
+fn live_state(config: &ConsoleConfig) -> (String, Option<u64>) {
+    let ms = |m: &std::fs::Metadata| {
+        m.modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|d| u64::try_from(d.as_millis()).ok())
+    };
+    let audit = std::fs::metadata(&config.audit).ok();
     // The log's time of change is when the last record was written; null before the first.
-    let changed = meta
-        .as_ref()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .and_then(|d| u64::try_from(d.as_millis()).ok());
-    let signature = meta.as_ref().map_or_else(
-        || "none".to_string(),
-        |m| format!("{}-{}", m.len(), changed.unwrap_or(0)),
+    let last = audit.as_ref().and_then(ms);
+    let other = |p: &std::path::Path| std::fs::metadata(p).ok().as_ref().and_then(ms).unwrap_or(0);
+    let signature = format!(
+        "{}-{}-{}-{}",
+        audit.as_ref().map_or(0, std::fs::Metadata::len),
+        last.unwrap_or(0),
+        other(&config.policy),
+        other(&config.keys)
     );
+    (signature, last)
+}
+
+fn not_signed_in() -> Response {
+    let body = serde_json::json!({ "error": { "code": "not_signed_in", "message": "Sign in to the console again." } });
     (
-        json,
-        serde_json::json!({ "signature": signature, "last_request_ms": changed }).to_string(),
+        StatusCode::UNAUTHORIZED,
+        [(header::CONTENT_TYPE, "application/json")],
+        body.to_string(),
     )
+        .into_response()
+}
+
+/// What the server-rendered pages ask every 2 seconds. The console app listens to /console/events instead.
+async fn live_json(State(console): State<Console>, headers: HeaderMap) -> Response {
+    if console.admin(&headers).await.is_none() {
+        return not_signed_in();
+    }
+    let (signature, last) = live_state(console.config());
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::json!({ "signature": signature, "last_request_ms": last }).to_string(),
+    )
+        .into_response()
+}
+
+/// The console app's live feed, as server-sent events: a `change` event at once, then one each time a request is
+/// recorded or the policy or keys change, so open pages reload the moment there is something new. A comment every
+/// 15 seconds keeps proxies from closing it; the browser reconnects by itself when it drops.
+// ponytail: each open stream stats three files every 500 ms. A notification from the audit writer is the upgrade if
+// streams are counted in hundreds.
+async fn events(State(console): State<Console>, headers: HeaderMap) -> Response {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    if console.admin(&headers).await.is_none() {
+        return not_signed_in();
+    }
+    let stream =
+        futures_util::stream::unfold((console, String::new()), |(console, seen)| async move {
+            loop {
+                let (signature, last) = live_state(console.config());
+                if signature != seen {
+                    let data =
+                        serde_json::json!({ "signature": signature, "last_request_ms": last })
+                            .to_string();
+                    let event = Event::default().event("change").data(data);
+                    return Some((
+                        Ok::<_, std::convert::Infallible>(event),
+                        (console, signature),
+                    ));
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        });
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
         .into_response()
 }
 

@@ -25,6 +25,8 @@ ring = "0.17"
 roxmltree = "0.21.2"
 # SAML instants are xs:dateTime; already in the build through enterplace-core.
 jiff.workspace = true
+# The live event stream is a futures Stream (stream::unfold); already in the build through axum and the server.
+futures-util.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

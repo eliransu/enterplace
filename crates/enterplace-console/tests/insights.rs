@@ -729,3 +729,46 @@ async fn live_json_changes_when_a_record_is_written_and_needs_a_session() -> Tes
     assert!(before["last_request_ms"].is_u64() && after["last_request_ms"].is_u64());
     Ok(())
 }
+
+#[tokio::test]
+async fn events_stream_sends_a_change_when_a_record_is_written_and_needs_a_session() -> TestResult {
+    // The console app keeps one /console/events stream open and reloads the open page on each change event, so a
+    // request shows on the page the moment it is recorded.
+    let s = setup("events")?;
+    let (status, _, _) = send(&s.app, get("/console/events", "")?).await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let cookie = sign_in(&s.app, NOA).await?;
+    let response = s
+        .app
+        .clone()
+        .oneshot(get("/console/events", &cookie)?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let kind = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(kind.starts_with("text/event-stream"), "{kind}");
+    let mut body = response.into_body();
+    let mut next = async || -> Result<String, Error> {
+        let wait = std::time::Duration::from_secs(5);
+        let frame = tokio::time::timeout(wait, body.frame())
+            .await?
+            .ok_or("the stream ended")??;
+        Ok(
+            String::from_utf8_lossy(&frame.into_data().map_err(|_| "not a data frame")?)
+                .into_owned(),
+        )
+    };
+    let first = next().await?;
+    assert!(first.contains("event: change"), "{first}");
+    s.log.append_record(&object(json!({"event": "usage", "id": "01EVNT000000000000000000001", "provider": "openai", "model": "gpt-4o-mini", "status": 200, "input_tokens": 1, "output_tokens": 1})))?;
+    s.log.flush();
+    let second = next().await?;
+    assert!(
+        second.contains("event: change") && second != first,
+        "{first} then {second}"
+    );
+    Ok(())
+}

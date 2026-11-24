@@ -49,7 +49,12 @@ function SidebarProvider({ className, children, ...props }: React.ComponentProps
   }, [toggle]);
   return (
     <SidebarContext.Provider value={{ collapsed, toggle, mobileOpen, setMobileOpen }}>
-      <div data-slot="sidebar-wrapper" data-collapsed={collapsed || undefined} className={cn("group/sidebar flex min-h-screen w-full", className)} {...props}>
+      <div
+        data-slot="sidebar-wrapper"
+        data-collapsed={collapsed || undefined}
+        className={cn("group/sidebar flex min-h-screen w-full", className)}
+        {...props}
+      >
         {children}
       </div>
     </SidebarContext.Provider>
@@ -77,10 +82,15 @@ function Sidebar({ className, children, label = "Console" }: { className?: strin
       <DialogPrimitive.Root open={mobileOpen} onOpenChange={setMobileOpen}>
         <DialogPrimitive.Portal>
           <DialogPrimitive.Overlay className="fixed inset-0 bg-overlay md:hidden" />
-          <DialogPrimitive.Content aria-describedby={undefined} className={cn(panel, "fixed inset-y-0 left-0 w-nav border-r border-border md:hidden")}>
+          <DialogPrimitive.Content
+            aria-describedby={undefined}
+            className={cn(panel, "fixed inset-y-0 left-0 w-nav border-r border-border md:hidden")}
+          >
             <DialogPrimitive.Title className="sr-only">{label}</DialogPrimitive.Title>
             {/* The sheet never collapses to icons, whatever the desktop state. */}
-            <div data-mobile className="contents">{children}</div>
+            <div data-mobile className="contents">
+              {children}
+            </div>
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>
@@ -97,7 +107,10 @@ function SidebarTrigger({ className, ...props }: React.ComponentProps<"button">)
       onClick={toggle}
       aria-label="Toggle the sidebar (Ctrl or Cmd+B)"
       title="Toggle the sidebar (Ctrl or Cmd+B)"
-      className={cn("inline-flex size-8 flex-none items-center justify-center rounded-box bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground [&_svg]:size-4", className)}
+      className={cn(
+        "inline-flex size-8 flex-none items-center justify-center rounded-box bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground [&_svg]:size-4",
+        className,
+      )}
       {...props}
     >
       <PanelLeft aria-hidden="true" />
@@ -121,7 +134,10 @@ function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="sidebar-content"
-      className={cn("flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden px-3 [scrollbar-color:var(--line)_transparent] [scrollbar-width:thin]", className)}
+      className={cn(
+        "flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overflow-x-hidden px-3 [scrollbar-color:var(--line)_transparent] [scrollbar-width:thin]",
+        className,
+      )}
       {...props}
     />
   );
