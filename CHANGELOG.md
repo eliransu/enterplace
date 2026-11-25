@@ -26,6 +26,15 @@ one repository. How a release is made: RELEASING.md.
   `rollback_policy`.
 - Prices are editable in file mode: adding a model or changing a price rewrites the file through the same checked save.
 
+### People import from a list
+
+- People has **Import a list**: pasted CSV or a file, one `name,team[,budget[,kind]]` per line. Every line is checked
+  first and each wrong one is shown with what to fix; nothing is issued while one is wrong. Then the keys and person
+  tokens are shown once, with one "Copy all" and a CSV download of name, team and key. The import is one `import_keys`
+  record in the audit log with the count. "Copy for your agent" hands it to a coding agent.
+- `enterplace key import <people.csv> [--out <file>]` does the same on the gateway's machine and writes the keys once
+  to a file readable by its owner only.
+
 ### The dry run replays limits
 
 - A policy dry run (Policy, Edit, "Dry run", and `POST /admin/policy/dry-run`) replays the draft's budgets, tokens per

@@ -377,7 +377,7 @@ enterplace key prune --keys enterplace.keys.yaml
 
 1. Make the first admin key with `--admin`, on the machine that holds the keys file.
 
-2. Issue each person's key with the admin API in a loop, or `enterplace key new <name> --team <team> --quiet` per person, straight into your secret manager. Or turn on [self-service keys](/governance/single-sign-on/#developer-keys-with-enterplace-login).
+2. Import the list: on People, **Import a list** takes pasted CSV or a file, one `name,team[,budget[,kind]]` per line (`kind` is `key` or `person` for a person token). Every line is checked first and the errors are shown per line; nothing is issued while one is wrong. Then the keys are shown once, with **Copy all** and a CSV download of name, team and key, and the import is one `import_keys` record in the audit log with the count. `enterplace key import people.csv` does the same on the gateway's machine ([CLI](/reference/cli/#key-import)), and **Copy for your agent** hands the task to a coding agent. Or turn on [self-service keys](/governance/single-sign-on/#developer-keys-with-enterplace-login).
 
 3. Give each workload (CI job, agent) its own key with `--expires` and `--budget`.
 

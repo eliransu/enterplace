@@ -789,6 +789,26 @@ pub(crate) fn limit_prompt(base: &str, policy: &str, in_store: bool) -> String {
     )
 }
 
+/// "Copy for your agent" on Import a list: `enterplace key import` on a CSV, so an agent issues a team's keys alone.
+pub(crate) fn import_prompt(base: &str, keys: &str) -> String {
+    task_prompt(
+        base,
+        "Issue Enterplace keys and person tokens for a list of people",
+        &[("Keys file", keys.to_string())],
+        &[
+            "1. Ask me for the list if I have not given it: each person's name and team, and optionally a monthly budget in US dollars and the kind (key, or person for a person token that names someone using their own Claude login).".into(),
+            "2. Write it as people.csv, one person per line, with this header:".into(),
+            "```csv\nname,team,budget,kind\nana.silva,payments,50,key\nomer.katz,payments,,person\n```".into(),
+            format!("3. Run `enterplace key import people.csv --keys {keys}` (add `--policy <policy file>` when the keys are kept in a store). It checks every line first and issues nothing while one is wrong; fix the lines it names and run it again."),
+            "4. It writes the keys once, as name,team,key, to the file named by --out (people-keys.csv by default). Do not print, log or commit that file: tell me where it is, so I hand each key over through our secret manager and delete the file.".into(),
+        ],
+        &format!(
+            "Each person is listed at {base}/console/app/#/people with their team, and the audit log at {base}/console/app/#/audit has one import_keys record with the count."
+        ),
+        "/governance/keys/",
+    )
+}
+
 /// "Copy for your agent" on Bring everyone in: single sign-on with `enterplace login`, so each developer gets their own
 /// key named by their email, and an agent sets it up alone.
 pub(crate) fn sign_on_prompt(base: &str, policy: &str, in_store: bool) -> String {

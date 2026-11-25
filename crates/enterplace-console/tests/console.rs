@@ -3547,3 +3547,85 @@ async fn a_good_sign_in_forgets_the_failures_before_it_and_an_empty_form_counts_
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn people_import_checks_every_line_first_then_issues_each_key_once() -> TestResult {
+    let s = setup("import")?;
+    let cookie = sign_in(&s.app).await?;
+    // Every wrong line comes back with what to fix, and nothing is issued.
+    let (status, _, body) = call(
+        &s.app,
+        "POST",
+        "/console/api/people/import",
+        &cookie,
+        serde_json::json!({ "text": "name,team,budget,kind\nlee.park,payments,lots\nlee.park,payments\nnoa,ops,,robot\n" }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let errors = body["errors"].as_array().cloned().unwrap_or_default();
+    let lines: Vec<u64> = errors.iter().filter_map(|e| e["line"].as_u64()).collect();
+    assert_eq!(lines, [2, 3, 4], "{body}");
+    assert!(
+        errors[0]["error"].as_str().unwrap_or("").contains("lots"),
+        "{body}"
+    );
+    let before = std::fs::read_to_string(s.keys())?;
+    assert!(!before.contains("lee.park"), "{before}");
+
+    // A clean list: two keys and a person token, shown once, with one Copy all and a CSV.
+    let (status, _, body) = call(
+        &s.app,
+        "POST",
+        "/console/api/people/import",
+        &cookie,
+        serde_json::json!({ "text": "lee.park,payments,50\nnoa.tal,ops\ndana.levi,ops,,person\n" }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let issued = body["issued"].as_array().cloned().unwrap_or_default();
+    assert_eq!(issued.len(), 3, "{body}");
+    assert!(
+        issued[2]["key"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("enterplace_u_"),
+        "{body}"
+    );
+    let csv = body["csv"].as_str().unwrap_or("");
+    assert!(
+        csv.starts_with("name,team,key\nlee.park,payments,enterplace_"),
+        "{csv}"
+    );
+    assert_eq!(body["lines"].as_str().unwrap_or("").lines().count(), 3);
+    let keys = std::fs::read_to_string(s.keys())?;
+    assert!(
+        keys.contains("lee.park") && keys.contains("dana.levi"),
+        "{keys}"
+    );
+    // No key reaches the keys file or the audit chain; the import is one record with the count.
+    let log = std::fs::read_to_string(s.audit())?;
+    for made in &issued {
+        let key = made["key"].as_str().unwrap_or("none");
+        assert!(!log.contains(key) && !keys.contains(key));
+    }
+    let imports: Vec<&str> = log
+        .lines()
+        .filter(|l| l.contains("\"action\":\"import_keys\""))
+        .collect();
+    assert_eq!(imports.len(), 1, "{log}");
+    assert!(imports[0].contains("\"count\":3"), "{}", imports[0]);
+    // The same list again: each name already has a key, so nothing is issued.
+    let (_, _, body) = call(
+        &s.app,
+        "POST",
+        "/console/api/people/import",
+        &cookie,
+        serde_json::json!({ "text": "lee.park,payments,50\n" }),
+    )
+    .await?;
+    assert!(
+        body["errors"].to_string().contains("already has a key"),
+        "{body}"
+    );
+    Ok(())
+}

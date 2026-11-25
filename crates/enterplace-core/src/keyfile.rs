@@ -94,6 +94,148 @@ pub fn issue_person_token(name: &str, team: &str, keys: &Path) -> Result<Issued,
     })
 }
 
+/// One line of a people list to import: who gets a key, and what kind.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportRow {
+    /// The line it came from, counted from 1.
+    pub line: usize,
+    pub name: String,
+    pub team: String,
+    /// A monthly budget in US dollars for the key.
+    pub budget: Option<f64>,
+    /// A person token (`enterplace_u_...`) in place of a key.
+    pub person_token: bool,
+}
+
+/// Reads a people list, one `name,team[,budget[,kind]]` per line (`kind` is `key`, the default, or `person`),
+/// a header line and blank or `#` lines skipped. Every line is checked before anything is issued: the rows, or
+/// each line that is wrong with what to fix. `taken` are the names that already have a key.
+pub fn import_rows(text: &str, taken: &[String]) -> Result<Vec<ImportRow>, Vec<(usize, String)>> {
+    let mut rows = Vec::new();
+    let mut errors = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (i, raw) in text.lines().enumerate() {
+        let line = i + 1;
+        let raw = raw.trim().trim_start_matches('\u{feff}');
+        if raw.is_empty() || raw.starts_with('#') {
+            continue;
+        }
+        let cells: Vec<&str> = raw.split(',').map(|c| c.trim().trim_matches('"')).collect();
+        if rows.is_empty() && errors.is_empty() && cells[0].eq_ignore_ascii_case("name") {
+            continue;
+        }
+        let cell = |n: usize| cells.get(n).copied().unwrap_or("");
+        let (name, team, budget, kind) = (cell(0), cell(1), cell(2), cell(3));
+        let mut wrong = Vec::new();
+        if cells.len() > 4 {
+            wrong.push("It has more than 4 columns: write name,team,budget,kind".to_string());
+        }
+        if name.is_empty() || team.is_empty() {
+            wrong.push("It needs a name and a team, for example maya.cohen,payments".to_string());
+        } else if !config::valid_name(name) || !config::valid_name(team) {
+            wrong.push(
+                "A name and a team use letters, digits, dots, dashes and underscores only"
+                    .to_string(),
+            );
+        } else if taken.iter().any(|t| t == name) {
+            wrong.push(format!(
+                "The name {name} already has a key: rotate or revoke it on People, or leave this line out"
+            ));
+        } else if !seen.insert(name.to_string()) {
+            wrong.push(format!(
+                "The name {name} is on the list twice: keep one line"
+            ));
+        }
+        let budget = match budget {
+            "" => None,
+            b => match b.trim_start_matches('$').parse::<f64>() {
+                Ok(usd) if usd.is_finite() && usd >= 0.0 => Some(usd),
+                _ => {
+                    wrong.push(format!(
+                        "The budget \"{b}\" is not a number of US dollars a month, such as 50"
+                    ));
+                    None
+                }
+            },
+        };
+        let person_token = match kind.to_ascii_lowercase().as_str() {
+            "" | "key" => false,
+            "person" | "person token" | "person_token" | "person-token" => true,
+            other => {
+                wrong.push(format!(
+                    "The kind \"{other}\" is not one: write key or person"
+                ));
+                false
+            }
+        };
+        if person_token && budget.is_some() {
+            wrong.push("A person token reaches no model on its own, so it takes no budget: leave the budget out or make it a key".to_string());
+        }
+        if wrong.is_empty() {
+            rows.push(ImportRow {
+                line,
+                name: name.to_string(),
+                team: team.to_string(),
+                budget,
+                person_token,
+            });
+        } else {
+            errors.push((line, wrong.join("; ")));
+        }
+    }
+    if rows.is_empty() && errors.is_empty() {
+        errors.push((
+            0,
+            "The list has no people: write one name,team per line, for example maya.cohen,payments"
+                .into(),
+        ));
+    }
+    if errors.is_empty() {
+        Ok(rows)
+    } else {
+        Err(errors)
+    }
+}
+
+/// What the key of one import row carries: its monthly budget, or the mark of a person token.
+pub fn row_attributes(row: &ImportRow, org: &str) -> Attributes {
+    let mut attributes = Attributes {
+        budget: row.budget.map(|usd| Budget {
+            usd,
+            per: crate::policy::Period::Month,
+        }),
+        org: org.to_string(),
+        ..Attributes::default()
+    };
+    if row.person_token {
+        attributes
+            .options
+            .metadata
+            .insert("kind".into(), PERSON_TOKEN_KIND.into());
+    }
+    attributes
+}
+
+/// Makes the key or person token of one import row and adds its entry. Returns the key, shown once.
+pub fn issue_row(row: &ImportRow, attributes: &Attributes, keys: &Path) -> Result<String, String> {
+    let key = if row.person_token {
+        id::new_person_token()?
+    } else {
+        id::new_key()?
+    };
+    add_with(&row.name, &row.team, &key, attributes, keys)?;
+    Ok(key)
+}
+
+/// The issued keys as CSV, `name,team,key`, for the one download that shows them.
+pub fn import_csv(issued: &[(String, String, String)]) -> String {
+    let mut out = String::from("name,team,key\n");
+    for (name, team, key) in issued {
+        out.push_str(&format!("{name},{team},{key}\n"));
+    }
+    out
+}
+
 /// Adds the entry of a key made by the caller. Returns whether the name already had a key.
 /// A save or another writer landing in the middle is retried for about a second: the key has not been shown yet,
 /// so trying again is safe. Anything else stops at once.

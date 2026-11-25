@@ -366,6 +366,26 @@ noa.bar	platform	9b74c2e1	admin	-	-	-	-
 
 Columns are tab separated: name, team, the first 8 hex characters of the key's hash, admin, expiry (with `(expired)` when passed), budget, models and tokens per minute.
 
+## key import
+
+Issues a key or a person token for each line of a CSV list, `name,team[,budget[,kind]]`: an optional monthly budget in US dollars, and `kind` `key` (the default) or `person` for a person token. A header line and blank or `#` lines are skipped. Every line is checked first (the name and team, the budget, the kind, a name listed twice or that already has a key), and while one is wrong nothing is issued: each wrong line is printed as `people.csv:<line>: <what to fix>`. Then each key is issued and written once, as `name,team,key`, to the `--out` file, readable by its owner only. An existing `--out` file is never overwritten.
+
+```text
+enterplace key import <people.csv> [--out <people-keys.csv>] [--keys <file>] [--policy <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--out <file>` | `people-keys.csv` | Where the keys are written, once |
+| `--keys <file>` | `enterplace.keys.yaml` | The keys file |
+| `--policy <file>` | none | The policy with the `store:` section, when keys are kept in a store |
+
+```bash
+enterplace key import people.csv --keys /var/lib/enterplace/enterplace.keys.yaml
+```
+
+Hand each key over through your secret manager, then delete the file. The console's People page does the same with **Import a list**.
+
 ## key prune
 
 Removes the entries whose expiry has passed, such as old `enterplace login` keys. Each is removed as `DELETE /admin/keys` removes one, safe while Enterplace runs. Every other line is kept.

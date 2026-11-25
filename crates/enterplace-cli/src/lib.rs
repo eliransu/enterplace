@@ -411,6 +411,20 @@ pub async fn run(args: &[String]) -> ExitCode {
             }
             _ => None,
         },
+        ["key", "import", rest @ ..] => match options(rest, &["--keys", "--policy", "--out"]) {
+            Some((positional, named)) if positional.len() == 1 => {
+                let keys = named
+                    .get("--keys")
+                    .map_or_else(|| PathBuf::from("enterplace.keys.yaml"), PathBuf::from);
+                let out = named
+                    .get("--out")
+                    .map_or_else(|| PathBuf::from("people-keys.csv"), PathBuf::from);
+                let imported = store_for(&keys, named.get("--policy").copied())
+                    .and_then(|_store| key_import(Path::new(positional[0]), &keys, &out));
+                Some(imported.map_or_else(fail, |()| ExitCode::SUCCESS))
+            }
+            _ => None,
+        },
         ["key", "list", rest @ ..] => match options(rest, &["--keys", "--policy"]) {
             Some((positional, named)) if positional.is_empty() => {
                 let keys = named
@@ -773,6 +787,9 @@ pub async fn run(args: &[String]) -> ExitCode {
             }
             ["budget", ..] => Some(
                 "enterplace budget raise request --usd <n> --until <date> --reason <text> [--scope team|person|key] | list | approve <id> [--usd <n>] [--until <date>] | reject <id> | add --scope <team:payments> --usd <n> --until <date> --reason <text>, each with [--url <enterplace url>]",
+            ),
+            ["key", "import", ..] => Some(
+                "enterplace key import <people.csv> [--out <people-keys.csv>] [--keys <file>] [--policy <file>] (one name,team[,budget[,kind]] per line; kind is key or person)",
             ),
             ["key", "list", ..] => Some("enterplace key list [--keys <file>] [--policy <file>]"),
             ["key", "prune", ..] => Some("enterplace key prune [--keys <file>] [--policy <file>]"),
@@ -1851,6 +1868,86 @@ fn store_import(keys: &Path, policy: &Path) -> Result<(), String> {
         keys.display()
     );
     Ok(())
+}
+
+/// `enterplace key import`: checks every line of a people list, issues nothing while one is wrong, then issues each
+/// key or person token and writes them once, as name,team,key, to `out` (readable by its owner only).
+fn key_import(list: &Path, keys: &Path, out: &Path) -> Result<(), String> {
+    let text = std::fs::read_to_string(list).map_err(|err| {
+        format!(
+            "{} cannot be read: {err}. Name the CSV file with one name,team[,budget[,kind]] per line.",
+            list.display()
+        )
+    })?;
+    if out.exists() {
+        return Err(format!(
+            "{} exists already, and the keys are written only once. Move it away, or name another file with --out.",
+            out.display()
+        ));
+    }
+    let existing = enterplace_core::store::attached(keys)
+        .map(|s| s.keys_text())
+        .or_else(|| config::read_keys(keys).ok().flatten())
+        .unwrap_or_default();
+    let taken: Vec<String> = config::key_entries(keys, &existing)
+        .map_err(|problems| problems.join("\n"))?
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    let rows = keyfile::import_rows(&text, &taken).map_err(|errors| {
+        let lines: Vec<String> = errors
+            .iter()
+            .map(|(line, why)| format!("{}:{line}: {why}.", list.display()))
+            .collect();
+        format!(
+            "{}\nNothing was issued: fix {} and run it again.",
+            lines.join("\n"),
+            enterplace_core::count(errors.len(), "line")
+        )
+    })?;
+    let mut issued = Vec::new();
+    let mut failed = None;
+    for row in &rows {
+        match keyfile::issue_row(row, &keyfile::row_attributes(row, ""), keys) {
+            Ok(key) => issued.push((row.name.clone(), row.team.clone(), key)),
+            Err(why) => {
+                failed = Some(format!("{}:{}: {why}", list.display(), row.line));
+                break;
+            }
+        }
+    }
+    let csv = keyfile::import_csv(&issued);
+    let written = {
+        use std::io::Write as _;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        options
+            .open(out)
+            .and_then(|mut file| file.write_all(csv.as_bytes()))
+    };
+    if let Err(err) = written {
+        // The keys are made and shown nowhere else: print them rather than lose them.
+        print!("{csv}");
+        return Err(format!(
+            "{} could not be written ({err}), so the keys are printed above, once. Hand them over and clear the terminal.",
+            out.display()
+        ));
+    }
+    println!(
+        "Issued {} for the people in {}. The keys are in {}, once, as name,team,key: hand each over through your secret manager, then delete the file.",
+        enterplace_core::count(issued.len(), "key"),
+        list.display(),
+        out.display()
+    );
+    match failed {
+        Some(why) => Err(format!(
+            "{why}. The keys before it were issued and are in {}; remove those lines from the list and run it again for the rest.",
+            out.display()
+        )),
+        None => Ok(()),
+    }
 }
 
 fn key_list(keys: &Path) -> Result<(), String> {

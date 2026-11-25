@@ -39,6 +39,7 @@ pub(crate) fn routes() -> Router<Console> {
         )
         .route("/api/people", get(list))
         .route("/api/people/issue", post(issue))
+        .route("/api/people/import", post(import))
         .route("/api/people/revoke", post(revoke))
         .route("/api/people/edit", post(edit_key))
         .route("/api/people/rotate", post(rotate))
@@ -290,6 +291,7 @@ fn bring(policy: &std::path::Path, keys: &std::path::Path) -> Value {
         ),
         "docs": format!("{}/governance/single-sign-on/", crate::start::DOCS),
         "scim_docs": format!("{}/operations/scim/", crate::start::DOCS),
+        "import_agent": crate::start::import_prompt(&base, &keys.display().to_string()),
     })
 }
 
@@ -466,6 +468,116 @@ async fn issue(State(console): State<Console>, headers: HeaderMap, bytes: Bytes)
                 "person_token": person_token,
                 "keys_path": console.config().keys.display().to_string(),
                 "lines": lines,
+            })))
+        }
+        .await,
+    )
+}
+
+/// Imports a list of people (`name,team[,budget[,kind]]` per line, pasted or from a CSV file): every line is
+/// checked first, and while one is wrong nothing is issued and each wrong line comes back with what to fix. Then
+/// each key or person token is issued, recorded once as `import_keys` with the count, and the keys are in this
+/// answer once, with a CSV of name, team and key.
+async fn import(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            if !admin.may(Permission::IssueKeys) || admin.read_only {
+                read_only(&console, &admin, "import_keys").await;
+                return Err(Fail(
+                    StatusCode::FORBIDDEN,
+                    "You are signed in read only: you can see the keys, not issue them. Ask an admin.".into(),
+                ));
+            }
+            let body = body_of(&bytes)?;
+            let keys = console.config().keys.clone();
+            let text = enterplace_core::store::attached(&keys)
+                .map(|s| s.keys_text())
+                .or_else(|| config::read_keys(&keys).ok().flatten())
+                .unwrap_or_default();
+            let taken: Vec<String> = config::key_entries(&keys, &text)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| e.name)
+                .collect();
+            let wrong = |errors: Vec<(usize, String)>| {
+                let rows: Vec<Value> = errors
+                    .iter()
+                    .map(|(line, why)| json!({ "line": line, "error": format!("{why}.") }))
+                    .collect();
+                ok(json!({
+                    "message": format!("Nothing was issued: {} to fix.", enterplace_core::count(rows.len(), "line")),
+                    "errors": rows,
+                }))
+            };
+            let rows = match keyfile::import_rows(field(&body, "text"), &taken) {
+                Ok(rows) => rows,
+                Err(errors) => return Ok(wrong(errors)),
+            };
+            let org = admin.org.clone().unwrap_or_default();
+            let customer = match admin.customers.as_slice() {
+                [one] => Some(one.clone()),
+                _ => None,
+            };
+            let mut planned = Vec::new();
+            let mut errors = Vec::new();
+            for row in rows {
+                if !admin.covers(&org, &row.team, customer.as_deref()) {
+                    errors.push((row.line, format!("Your role keeps you to team{} {}: issue keys in one of them", if admin.teams.len() == 1 { "" } else { "s" }, admin.teams.join(", "))));
+                    continue;
+                }
+                let mut attributes = keyfile::row_attributes(&row, &org);
+                attributes.customer.clone_from(&customer);
+                // What the person's role may grant (`key_bounds:`), as for one key.
+                if let Err(why) = crate::bound(&console, Some(&admin.role), &mut attributes).await {
+                    errors.push((row.line, why));
+                    continue;
+                }
+                planned.push((row, attributes));
+            }
+            if !errors.is_empty() {
+                return Ok(wrong(errors));
+            }
+            let act = Act {
+                action: "import_keys",
+                by: Some((&admin.name, &admin.team)),
+                key: None,
+                target: json!({
+                    "count": planned.len(),
+                    "people": planned.iter().map(|(r, _)| json!({ "name": r.name, "team": r.team, "person_token": r.person_token })).collect::<Vec<_>>(),
+                }),
+            };
+            if record(&console, &act, None, None).await.is_err() {
+                return Err(Fail(StatusCode::SERVICE_UNAVAILABLE, NOT_RECORDED.into()));
+            }
+            let made = tokio::task::spawn_blocking(move || {
+                let mut issued = Vec::new();
+                for (row, attributes) in &planned {
+                    match keyfile::issue_row(row, attributes, &keys) {
+                        Ok(key) => issued.push((row.name.clone(), row.team.clone(), key)),
+                        Err(why) => return (issued, Some(format!("line {}: {why}", row.line))),
+                    }
+                }
+                (issued, None)
+            })
+            .await
+            .unwrap_or_else(|err| (Vec::new(), Some(format!("the import stopped: {err}"))));
+            let (issued, failed) = made;
+            if let Some(why) = &failed {
+                let _ = record(&console, &act, Some("keys_file"), Some(why)).await;
+            }
+            let shown: Vec<Value> = issued
+                .iter()
+                .map(|(name, team, key)| json!({ "name": name, "team": team, "key": key }))
+                .collect();
+            Ok(ok(json!({
+                "message": match &failed {
+                    None => format!("Issued {}. Each is shown once: copy them or download the CSV now.", enterplace_core::count(issued.len(), "key")),
+                    Some(why) => format!("Issued {} before one failed ({why}). They are shown once below; fix the cause and import the rest.", enterplace_core::count(issued.len(), "key")),
+                },
+                "issued": shown,
+                "lines": issued.iter().map(|(name, team, key)| format!("{name},{team},{key}")).collect::<Vec<_>>().join("\n"),
+                "csv": keyfile::import_csv(&issued),
             })))
         }
         .await,

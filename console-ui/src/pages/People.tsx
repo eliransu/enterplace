@@ -123,6 +123,7 @@ export const isService = (e: Entry) => e.kind === "workload key";
 export function useKeys(query: URLSearchParams) {
   const dialog =
     query.get("issue") ||
+    query.get("import") ||
     query.get("revoke") ||
     query.get("edit") ||
     query.get("stop");
@@ -184,6 +185,14 @@ export function People({ query }: PageProps) {
               </Button>
             ) : null}
             {data?.may.issue ? (
+              <Button
+                variant="outline"
+                onClick={() => goTo("/people", { import: "1" })}
+              >
+                Import a list
+              </Button>
+            ) : null}
+            {data?.may.issue ? (
               <Button onClick={() => goTo("/people", { issue: "1" })}>
                 Issue a key
               </Button>
@@ -193,6 +202,15 @@ export function People({ query }: PageProps) {
       />
       <ReadOnly data={data} />
       {data?.bring ? <Bring bring={data.bring} /> : null}
+      {data?.may.issue && query.get("import") ? (
+        <ImportDialog
+          agent={data.bring?.import_agent ?? ""}
+          close={() => {
+            goTo("/people");
+            reload();
+          }}
+        />
+      ) : null}
       {error ? <Problem text={error} retry={reload} /> : null}
       {data?.error ? <Problem text={data.error} retry={reload} /> : null}
       {!data && !error ? <Loading rows={5} /> : null}
@@ -947,7 +965,113 @@ const STOP_SCOPES: Record<string, string> = {
   all: "Everyone",
 };
 
-type Bring = { on: boolean; state: string; agent: string; docs: string; scim_docs: string };
+type Bring = { on: boolean; state: string; agent: string; docs: string; scim_docs: string; import_agent?: string };
+
+type Imported = {
+  message: string;
+  errors?: { line: number; error: string }[];
+  issued?: { name: string; team: string; key: string }[];
+  lines?: string;
+  csv?: string;
+};
+
+/// Import a list of people: every line is checked first and nothing is issued while one is wrong; then the keys are
+/// shown once, with one Copy all and a CSV download.
+function ImportDialog({ agent, close }: { agent: string; close: () => void }) {
+  const [text, setText] = useState("");
+  const [result, setResult] = useState<Imported | null>(null);
+  const [refused, setRefused] = useState("");
+  const load = (file: File | undefined) => {
+    if (!file) return;
+    file.text().then(setText, () => toast.error("The file could not be read. Pick a CSV file and try again."));
+  };
+  const submit = async () => {
+    try {
+      const done = (await api.post("people/import", { text })) as unknown as Imported;
+      setResult(done);
+      setRefused("");
+    } catch (e) {
+      if (e instanceof Refused) setRefused(e.message);
+      else throw e;
+    }
+  };
+  const download = () => {
+    if (!result?.csv) return;
+    const url = URL.createObjectURL(new Blob([result.csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "enterplace-keys.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  const issued = result?.issued;
+  return (
+    <Dialog open onOpenChange={(open) => !open && close()}>
+      <DialogContent>
+        <DialogTitle>{issued ? "The new keys" : "Import a list"}</DialogTitle>
+        <DialogDescription>
+          {issued
+            ? `${result?.message} Enterplace keeps only their hashes.`
+            : "One person per line: name, team, an optional monthly budget in dollars, and an optional kind (key, or person for a person token). Every line is checked first; nothing is issued while one is wrong."}
+        </DialogDescription>
+        {issued ? (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <Copy text={result?.lines ?? ""} label="Copy all" />
+              <Button type="button" variant="outline" size="sm" onClick={download}>
+                Download CSV
+              </Button>
+            </div>
+            <pre className="t-mono-sm m-0 max-h-80 overflow-auto rounded-box bg-well px-6 py-3">{result?.lines}</pre>
+            <DialogFooter>
+              <Button onClick={close}>Done</Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <Form className="grid gap-6" onSubmit={submit}>
+            <Field id="import-file" label="A CSV file, optional" hint="Its text replaces the list below.">
+              <Input id="import-file" type="file" accept=".csv,text/csv,text/plain" className="py-2" onChange={(e) => load(e.target.files?.[0])} />
+            </Field>
+            <Field id="import-text" label="People">
+              <textarea
+                id="import-text"
+                className="t-mono min-h-24 w-full rounded-box border border-input bg-background px-6 py-3 text-foreground hover:border-foreground"
+                rows={8}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder={"name,team,budget,kind\nmaya.cohen,payments,50,key\ndana.levi,payments,,person"}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                required
+              />
+            </Field>
+            {result?.errors?.length ? (
+              <div role="alert" className="grid gap-1">
+                <p className="t-body-strong m-0">{result.message}</p>
+                <ul className="t-small m-0 grid list-disc gap-1 pl-6">
+                  {result.errors.map((e) => (
+                    <li key={`${e.line} ${e.error}`}>
+                      {e.line ? `Line ${e.line}: ` : ""}
+                      {e.error}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <Refusal text={refused} />
+            <DialogFooter>
+              {agent ? <Copy text={agent} label="Copy for your agent" /> : null}
+              <Button type="button" variant="outline" onClick={close}>
+                Cancel
+              </Button>
+              <Button type="submit">Check and issue</Button>
+            </DialogFooter>
+          </Form>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 /// How a whole company gets keys without an admin issuing each one: the paths, which is on, and the agent prompt.
 export function Bring({ bring }: { bring: Bring }) {
@@ -961,7 +1085,7 @@ export function Bring({ bring }: { bring: Bring }) {
           </li>
           <li>SCIM, in Enterplace Enterprise with a store: your identity provider adds people and teams, and removing someone revokes their keys.</li>
           <li>
-            A few people or apps: Issue a key here, or <span className="t-mono">enterplace key new &lt;name&gt; --team &lt;team&gt;</span> on the gateway's machine, once per line of a list.
+            A list of people: Import a list here (pasted or a CSV file), or <span className="t-mono">enterplace key import people.csv</span> on the gateway's machine. A few people or apps: Issue a key.
           </li>
         </ul>
         <div className="flex flex-wrap gap-2">

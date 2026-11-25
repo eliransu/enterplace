@@ -3086,3 +3086,54 @@ fn a_service_key_is_marked_as_one_and_takes_no_admin_or_identity_only() -> TestR
     }
     Ok(())
 }
+#[test]
+fn key_import_checks_the_whole_list_then_writes_each_key_once() -> TestResult {
+    let dir = workdir("import")?;
+    let keys = path(&dir, "enterplace.keys.yaml");
+    let list = path(&dir, "people.csv");
+    let out_file = path(&dir, "people-keys.csv");
+    std::fs::write(
+        &list,
+        "name,team,budget,kind\nmaya.cohen,payments,50\nbad name,payments\n",
+    )?;
+    let out = enterplace(
+        &["key", "import", &list, "--keys", &keys, "--out", &out_file],
+        &[],
+    )?;
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr)?;
+    assert!(
+        stderr.contains("people.csv:3") && stderr.contains("Nothing was issued"),
+        "{stderr}"
+    );
+    assert!(!std::path::Path::new(&out_file).exists());
+
+    std::fs::write(
+        &list,
+        "maya.cohen,payments,50\ndana.levi,payments,,person\n",
+    )?;
+    let out = enterplace(
+        &["key", "import", &list, "--keys", &keys, "--out", &out_file],
+        &[],
+    )?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(stdout.contains("Issued 2 keys"), "{stdout}");
+    let csv = std::fs::read_to_string(&out_file)?;
+    let rows: Vec<&str> = csv.lines().collect();
+    assert_eq!(rows.len(), 3, "{csv}");
+    assert!(
+        rows[2].starts_with("dana.levi,payments,enterplace_u_"),
+        "{csv}"
+    );
+    let saved = std::fs::read_to_string(&keys)?;
+    let key = rows[1].rsplit(',').next().unwrap_or("none");
+    assert!(!saved.contains(key) && !stdout.contains(key));
+    // The keys are written once: an existing file is never overwritten.
+    let out = enterplace(
+        &["key", "import", &list, "--keys", &keys, "--out", &out_file],
+        &[],
+    )?;
+    assert_eq!(out.status.code(), Some(2));
+    Ok(())
+}
