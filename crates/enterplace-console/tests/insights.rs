@@ -461,6 +461,76 @@ async fn a_kept_body_is_shown_only_to_its_viewers_and_every_view_is_recorded() -
     Ok(())
 }
 
+/// Who is close to a limit covers every budget the policy sets: rules, a key's own budget from the keys file, and
+/// each scope of the `limits:` list, a `*` entry by whoever is heading out first.
+#[tokio::test]
+async fn every_budget_scope_is_forecast_rules_keys_and_the_limits_list() -> TestResult {
+    let s = setup("every-scope")?;
+    let dir = s.audit.with_file_name("");
+    std::fs::write(
+        dir.join("enterplace.policy.yaml"),
+        format!(
+            "{POLICY}limits:\n  - {{ team: search, budget: {{ usd: 5, per: month }} }}\n  - {{ person: \"*\", budget: {{ usd: 2, per: month }} }}\n  - {{ global: true, budget: {{ usd: 100, per: month }} }}\n  - {{ model: gpt-4o-mini, budget: {{ usd: 50, per: month }} }}\n  - {{ customer: acme, budget: {{ usd: 1, per: month }} }}\n"
+        ),
+    )?;
+    std::fs::write(
+        dir.join("enterplace.keys.yaml"),
+        format!(
+            "keys:\n  - name: noa.bar\n    team: platform\n    sha256: {}\n    admin: true\n  - name: lee.k\n    team: platform\n    sha256: {}\n    admin: true\n    budget: {{ usd: 3, per: month }}\n",
+            sha256_hex(NOA.as_bytes()),
+            sha256_hex(LEE.as_bytes())
+        ),
+    )?;
+    let lee_key = &sha256_hex(LEE.as_bytes())[..8];
+    s.log
+        .append_record(&enterplace_core::audit::record(&Entry {
+            id: "01LEE0000000000000000000007",
+            person: Some("lee.k"),
+            team: Some("platform"),
+            key: Some(lee_key),
+            method: "POST",
+            path: "/v1/chat/completions",
+            model: Some("gpt-4o-mini"),
+            allowed: true,
+            rule: Some("everyone-else"),
+            provider: "openai",
+            ..Entry::default()
+        }))?;
+    s.log.append_record(&object(json!({"event": "usage", "id": "01LEE0000000000000000000007", "provider": "openai", "model": "gpt-4o-mini", "status": 200, "input_tokens": 10, "output_tokens": 5, "cost_usd": 0.5, "charged_usd": 0.5, "latency_ms": 300})))?;
+    s.log.flush();
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (status, page) = analytics(&s.app, "", &cookie).await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let forecasts = page["forecasts"].as_array().ok_or("no forecasts")?;
+    let text = |label: &str| {
+        forecasts
+            .iter()
+            .find(|f| f["label"] == label)
+            .map(|f| f["text"].as_str().unwrap_or_default().to_string())
+    };
+    for (label, expected) in [
+        ("team payments", "$4.00 of $10.00 per month"),
+        ("lee.k's key", "$0.50 of $3.00 per month"),
+        ("team search", "$0.01 of $5.00 per month"),
+        ("maya.cohen (each person)", "$4.00 of $2.00 per month"),
+        ("everything", "$4.51 of $100.00 per month"),
+        ("model gpt-4o-mini", "$4.51 of $50.00 per month"),
+        ("customer acme", "$0.00 of $1.00 per month"),
+    ] {
+        assert_eq!(text(label).as_deref(), Some(expected), "{label}: {page}");
+    }
+    assert_eq!(forecasts.len(), 7, "{page}");
+    // The one already past its limit leads: that is who to look at.
+    assert_eq!(forecasts[0]["label"], "maya.cohen (each person)", "{page}");
+    assert!(
+        forecasts[0]["note"]
+            .as_str()
+            .is_some_and(|n| n.starts_with("Set by limits { person: * }")),
+        "{page}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_budget_is_forecast_over_its_own_period_and_time_zone() -> TestResult {
     let s = setup("forecast-window")?;

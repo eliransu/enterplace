@@ -5,7 +5,7 @@
 //! test pins (money, latency, the lead line, the empty state, which breakdowns are offered) is worded here, so the app
 //! only lays it out.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use axum::{
     Router,
@@ -17,7 +17,7 @@ use axum::{
 use enterplace_core::{
     config,
     insights::{self, DIMENSIONS, Pace, Query, Stats},
-    policy::{Permission, Who},
+    policy::{Budget, Permission, Policy, ScopeKind, Who},
 };
 use serde_json::{Value, json};
 
@@ -406,83 +406,210 @@ pub(crate) fn uncounted_note(uncounted: f64) -> String {
     }
 }
 
-/// Each budget in the policy, what it spent this period, and when it runs out at the pace it has spent at. An empty
-/// list means the policy sets no budget; no policy that loads gives no forecasts at all.
+/// One budget a forecast is made for: whose it is, which requests it counts, and where it is set.
+struct Gauge {
+    /// Who it is for, as the forecast names it: `team payments`, `lee.k's key`, `customer acme`.
+    label: String,
+    budget: Budget,
+    /// The dimension it counts by, and the values of it it counts. `*` counts each value on its own, and the
+    /// forecast follows whichever is heading out first. No dimension counts everything (`global: true`).
+    dimension: &'static str,
+    values: Vec<String>,
+    /// A `limits:` entry confined to one organization.
+    org: Option<String>,
+    /// Where it is set, the first words of its note.
+    source: String,
+}
+
+/// Every budget of the policy, as the gateway counts them (`Policy::applied`): each rule's budget, each key's own
+/// budget from the keys file, and each entry of the `limits:` list.
+fn gauges(policy: &Policy) -> Vec<Gauge> {
+    let mut out = Vec::new();
+    for rule in policy.rule_list() {
+        // A budget for some models only counts in a counter of its own; the page has room for the one that counts
+        // every model.
+        let Some(budget) = rule.limits.budget() else {
+            continue;
+        };
+        let (label, dimension, value) = match &rule.who {
+            Who::Team(team) => (format!("team {team}"), "team", team.clone()),
+            Who::Name(name) => (name.clone(), "person", name.clone()),
+            // A budget for each person (of every key, or of the keys with a tag).
+            Who::Any | Who::Tag(_) => ("each person".into(), "person", "*".into()),
+        };
+        out.push(Gauge {
+            label,
+            budget,
+            dimension,
+            values: vec![value],
+            org: None,
+            source: format!("Rule {}.", rule.name),
+        });
+    }
+    let mut keyed: Vec<Gauge> = policy
+        .entries()
+        .filter_map(|(_, p)| {
+            Some(Gauge {
+                label: format!("{}'s key", p.name),
+                budget: p.budget?,
+                dimension: "key",
+                values: vec![p.key.clone()],
+                org: None,
+                source: "The key's own budget, from the keys file.".into(),
+            })
+        })
+        .collect();
+    keyed.sort_by(|a, b| a.label.cmp(&b.label));
+    out.extend(keyed);
+    for entry in policy.scope_limits() {
+        let (dimension, values, label) = match entry.kind {
+            ScopeKind::Global => ("", Vec::new(), "everything".to_string()),
+            // A group counts every model in it together.
+            ScopeKind::ModelGroup => (
+                "model_group",
+                policy
+                    .model_groups()
+                    .iter()
+                    .find(|(group, _)| *group == entry.name)
+                    .map(|(_, members)| members.clone())
+                    .unwrap_or_default(),
+                format!("model group {}", entry.name),
+            ),
+            kind => {
+                let word = kind.word();
+                let label = if word == "person" {
+                    entry.name.clone()
+                } else {
+                    format!("{word} {}", entry.name)
+                };
+                (word, vec![entry.name.clone()], label)
+            }
+        };
+        // `{ org: acme }` names its organization by its name, not as a confinement.
+        let org = entry.org.clone().filter(|_| entry.kind != ScopeKind::Org);
+        for budget in &entry.budgets {
+            out.push(Gauge {
+                label: label.clone(),
+                budget: *budget,
+                dimension,
+                values: values.clone(),
+                org: org.clone(),
+                source: format!("Set by {}.", entry.label()),
+            });
+        }
+    }
+    out
+}
+
+/// Each budget in the policy, what it spent this period, and when it runs out at the pace it has spent at: every
+/// scope, the closest to its limit first. An empty list means the policy sets no budget; no policy that loads gives
+/// no forecasts at all.
 async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
     let Ok(loaded) = config::load(&console.config().policy, Some(&console.config().keys)) else {
         return Value::Null;
     };
-    let budgets: Vec<_> = loaded
-        .policy
-        .rule_list()
-        .iter()
-        .filter_map(|r| r.limits.budget().map(|b| (r, b)))
-        .collect();
+    let gauges = gauges(&loaded.policy);
     // Each budget over its own window (`per:` and `tz:`), as the gateway counts it. With a store the sums come from
     // SQL over every request of the window; the local chain is folded once, from the earliest window's start.
     let now_i = i64::try_from(now).unwrap_or(i64::MAX);
-    let windows: Vec<(u64, u64)> = budgets
+    let windows: Vec<(u64, u64)> = gauges
         .iter()
-        .map(|(_, b)| {
-            let (start, end) = b.per.window(now_i);
+        .map(|g| {
+            let (start, end) = g.budget.per.window(now_i);
             (
                 u64::try_from(start).unwrap_or_default(),
                 u64::try_from(end).unwrap_or_default(),
             )
         })
         .collect();
-    let since = |start: u64| {
+    let since = |start: u64, org: &Option<String>| {
         let mut query = Query {
             from: at(start),
             ..Query::default()
         };
+        if let Some(org) = org {
+            query.labels.push(("org".into(), org.clone()));
+        }
         scoped(admin, &mut query);
         query
     };
     let index = insights::attached(&console.config().audit).index;
     let local = match &index {
         Some(_) => Vec::new(),
-        None if budgets.is_empty() => Vec::new(),
+        None if gauges.is_empty() => Vec::new(),
         None => {
             let earliest = windows.iter().map(|w| w.0).min().unwrap_or(now);
-            let mut query = since(earliest);
+            let mut query = since(earliest, &None);
             query.limit = insights::MAX_ROWS;
             rows(console, &query).await.unwrap_or_default()
         }
     };
-    let mut out: Vec<Value> = Vec::new();
-    for ((rule, budget), (start, end)) in budgets.into_iter().zip(windows) {
-        let dimension = match &rule.who {
-            Who::Team(_) => "team",
-            Who::Name(_) | Who::Any | Who::Tag(_) => "person",
+    // Budgets of the same window, dimension and organization read the same sums: counted and not counted, by value.
+    type Sums = BTreeMap<String, (f64, f64)>;
+    let mut sums: HashMap<(u64, &str, Option<String>), Sums> = HashMap::new();
+    let mut out: Vec<(bool, u32, Value)> = Vec::new();
+    for (gauge, (start, end)) in gauges.iter().zip(windows) {
+        // Everything is the sum over every model: each request that cost anything has one. A group sums its models.
+        let dimension = match gauge.dimension {
+            "" | "model_group" => "model",
+            other => other,
         };
-        let by: BTreeMap<String, (f64, f64)> = match &index {
-            Some(index) => index
-                .spent(&since(start), dimension)
-                .await
-                .unwrap_or_default(),
-            None => insights::spent(&local, dimension, start),
+        let key = (start, dimension, gauge.org.clone());
+        if !sums.contains_key(&key) {
+            let query = since(start, &gauge.org);
+            let found = match &index {
+                Some(index) => index.spent(&query, dimension).await.unwrap_or_default(),
+                None => {
+                    let rows: Vec<insights::Row> =
+                        local.iter().filter(|r| query.matches(r)).cloned().collect();
+                    insights::spent(&rows, dimension, start)
+                }
+            };
+            sums.insert(
+                key.clone(),
+                found
+                    .into_iter()
+                    .map(|(k, counted, uncounted)| (k, (counted, uncounted)))
+                    .collect(),
+            );
         }
-        .into_iter()
-        .map(|(k, counted, uncounted)| (k, (counted, uncounted)))
-        .collect();
-        let (label, (spent, uncounted)) = match &rule.who {
-            Who::Team(team) => (
-                format!("team {team}"),
-                by.get(team.as_str()).copied().unwrap_or_default(),
-            ),
-            Who::Name(name) => (
-                name.clone(),
-                by.get(name.as_str()).copied().unwrap_or_default(),
-            ),
-            // A budget for each person (of every key, or of the keys with a tag): the one heading out first.
-            Who::Any | Who::Tag(_) => by
-                .into_iter()
+        let by = sums.get(&key).cloned().unwrap_or_default();
+        let add = |a: (f64, f64), b: &(f64, f64)| (a.0 + b.0, a.1 + b.1);
+        let (label, (spent, uncounted)) = if gauge.dimension.is_empty() {
+            (gauge.label.clone(), by.values().fold((0.0, 0.0), add))
+        } else if gauge.values.first().is_some_and(|v| v == "*") {
+            // Each one on its own: the one heading out first.
+            let kind = gauge.dimension;
+            by.into_iter()
                 .max_by(|a, b| a.1.0.total_cmp(&b.1.0))
-                .map_or(("each person".into(), (0.0, 0.0)), |(p, s)| {
-                    (format!("{p} (each person)"), s)
-                }),
+                .map_or((format!("each {kind}"), (0.0, 0.0)), |(v, s)| {
+                    let v = if kind == "person" {
+                        v
+                    } else {
+                        format!("{kind} {v}")
+                    };
+                    (format!("{v} (each {kind})"), s)
+                })
+        } else if gauge.dimension == "model_group" {
+            let hits = by
+                .iter()
+                .filter(|(model, _)| gauge.values.iter().any(|m| config::model_matches(m, model)));
+            (
+                gauge.label.clone(),
+                hits.map(|(_, s)| s).fold((0.0, 0.0), add),
+            )
+        } else {
+            let one = gauge.values.first().map(String::as_str).unwrap_or_default();
+            (
+                gauge.label.clone(),
+                by.get(one).copied().unwrap_or_default(),
+            )
         };
+        let label = match &gauge.org {
+            Some(org) => format!("{label} in org {org}"),
+            None => label,
+        };
+        let budget = gauge.budget;
         let pace = insights::pace(spent, budget.usd, start, now, end);
         let note = match pace {
             Pace::Idle => "Nothing spent yet this period.".to_string(),
@@ -498,13 +625,20 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
         } else {
             0
         };
-        out.push(json!({
-            "label": label,
-            "text": format!("{} of {} per {}", money(spent), money(budget.usd), budget.per.describe()),
-            "percent": percent,
-            "over": matches!(pace, Pace::Spent | Pace::RunsOut(_)),
-            "note": format!("Rule {}. {note}{}", rule.name, uncounted_note(uncounted)),
-        }));
+        let over = matches!(pace, Pace::Spent | Pace::RunsOut(_));
+        out.push((
+            over,
+            percent,
+            json!({
+                "label": label,
+                "text": format!("{} of {} per {}", money(spent), money(budget.usd), budget.per.describe()),
+                "percent": percent,
+                "over": over,
+                "note": format!("{} {note}{}", gauge.source, uncounted_note(uncounted)),
+            }),
+        ));
     }
-    Value::Array(out)
+    // Who is close to a limit comes first: spent or running out, then the most used.
+    out.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    Value::Array(out.into_iter().map(|(_, _, v)| v).collect())
 }
