@@ -149,11 +149,17 @@ async fn the_setup_link_makes_the_first_admin_once_and_that_key_makes_a_governed
     // An Enterplace that already has an admin offers no link.
     let again = enterplace_server::governed(&path, None, &|_| Some("provider-secret".into()));
     drop(gw);
-    let again = match again {
-        Ok(g) => g,
-        // The first instance still held the audit log: start again now that it is gone.
-        Err(_) => enterplace_server::governed(&path, None, &|_| Some("provider-secret".into()))?,
-    };
+    // The first instance may still hold the audit log: its writer lets go in the background after the drop, so start
+    // again until it has (a slow runner takes a moment), and fail with the last error after 10 seconds.
+    let mut again = again;
+    for _ in 0..100 {
+        if again.is_ok() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        again = enterplace_server::governed(&path, None, &|_| Some("provider-secret".into()));
+    }
+    let again = again?;
     assert!(
         again.setup.is_none(),
         "no setup link once an admin key exists"
