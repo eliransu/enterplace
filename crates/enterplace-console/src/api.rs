@@ -215,7 +215,7 @@ fn name_ok(name: &str, what: &str, example: &str) -> Result<(), String> {
 // ---------------------------------------------------------------- the policy as a tree
 
 /// The policy as it is now and the version it is, for a change to start from.
-fn current(console: &Console) -> Result<(String, Option<i64>), Fail> {
+pub(crate) fn current(console: &Console) -> Result<(String, Option<i64>), Fail> {
     if let Some(v) = edit::live(console) {
         return Ok((v.text, Some(v.id)));
     }

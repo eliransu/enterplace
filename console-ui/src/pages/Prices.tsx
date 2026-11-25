@@ -139,7 +139,7 @@ function AddDialog(props: { providers: string[]; provider: string; model: string
       <DialogContent>
         <DialogTitle>Add a model</DialogTitle>
         <DialogDescription>
-          Saved as a new policy version. It is checked as enterplace check checks a file and every gateway serves it within 2 seconds, or after a second admin approves it.
+          Checked as enterplace check checks a file, then saved: a new policy version in the store (live, or after a second admin approves it), or the policy file rewritten. The answer says where it is in force.
         </DialogDescription>
         <Form className="grid gap-6" onSubmit={submit}>
           <Field id="model-provider" label="Provider">
@@ -191,7 +191,7 @@ function PriceDialog(props: { model: string; input: string; output: string; base
       <DialogContent>
         <DialogTitle>Change the price</DialogTitle>
         <DialogDescription>
-          What <span className="t-mono">{props.model}</span> costs, for budgets and the spend page. Saved as a new policy version.
+          What <span className="t-mono">{props.model}</span> costs, for budgets and the spend page. Saved as every policy change is, checked first.
         </DialogDescription>
         <Form className="grid gap-6" onSubmit={submit}>
           <PriceFields id="price" input={input} output={output} setInput={setInput} setOutput={setOutput} />

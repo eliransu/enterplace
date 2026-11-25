@@ -6,7 +6,8 @@
 //! A change is made only when the policy is kept in the store: each save is a new version through
 //! `edit::save_version`, recorded in the audit chain first with who made it, checked as `enterplace check` checks a
 //! file, and live on every gateway within 2 seconds, or waiting for a second admin when the live version sets
-//! `store.approval: true`. A policy kept in a file is shown read only, with where to change it.
+//! `store.approval: true`. A policy kept in a file has no editor here; its versions are the policies the gateway
+//! loaded, read from the audit chain, and an earlier one is put back through the same checked save as a form edit.
 
 use std::collections::HashMap;
 
@@ -269,15 +270,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> R
             let admin = signed_in(&console, &headers, false).await?;
             let store = match versions::store_for(&console.config().policy) {
                 Ok(store) => store,
-                Err(err) => {
-                    return Ok(ok(json!({
-                        "lead": LEAD,
-                        "file": {
-                            "title": "The policy is kept in the file",
-                            "body": sentence(&err.message()),
-                        },
-                    })));
-                }
+                Err(_) => return file_list(&console, &admin, &uri).await,
             };
             let all = store.policy_versions().unwrap_or_default();
             let selected: Option<i64> = Form::of(&uri).get("version").parse().ok();
@@ -411,6 +404,11 @@ async fn decide(
                     "You are signed in read only: ask an admin.".into(),
                 ));
             }
+            if act_name == "rollback_policy"
+                && versions::store_for(&console.config().policy).is_err()
+            {
+                return put_back(&console, &admin, id).await;
+            }
             let act = Act {
                 action: act_name,
                 by: Some((&admin.name, &admin.team)),
@@ -432,6 +430,225 @@ async fn decide(
         }
         .await,
     )
+}
+
+// ---------------------------------------------------------------- versions of a policy kept in its file
+
+const FILE_LEAD: &str = "The policy is kept in its file. Each policy the gateway loaded is a version here, read from the audit chain, which keeps every one whole. An earlier one can be put back in one click: the file is rewritten through the same checked save as any change.";
+
+/// One policy the gateway loaded from its file, or refused, as the audit chain recorded it.
+#[derive(Clone, Debug)]
+struct FileVersion {
+    id: i64,
+    sha256: String,
+    text: String,
+    time: String,
+    by: String,
+    note: String,
+    /// The reasons the gateway gave, for one it refused.
+    refused: Option<String>,
+}
+
+/// The versions of a policy kept in its file, oldest first: each text the gateway loaded that differs from the one
+/// before, and each one it refused. Who saved it and why come from the console's record of the save, made first.
+// ponytail: reads the whole chain at each look, as the dry run does. An index of the config records when chains
+// grow past what a page can read in a second.
+fn file_versions(audit_path: &std::path::Path) -> Vec<FileVersion> {
+    use std::io::BufRead as _;
+    let Ok(reader) = enterplace_core::audit::chain_reader(audit_path) else {
+        return Vec::new();
+    };
+    let mut saves: HashMap<String, (String, String, String)> = HashMap::new();
+    let mut out: Vec<FileVersion> = Vec::new();
+    let mut loaded = String::new();
+    for line in reader.lines().map_while(Result::ok) {
+        if !line.contains("\"policy\"") && !line.contains("\"config_rejected\"") {
+            continue;
+        }
+        let Ok(record) = serde_json::from_str::<Map<String, Value>>(&line) else {
+            continue;
+        };
+        let field = |name: &str| record.get(name).and_then(Value::as_str).unwrap_or("");
+        let time = field("time").to_string();
+        match field("event") {
+            "admin" => {
+                let target = record.get("target").cloned().unwrap_or_default();
+                let of = |name: &str| {
+                    target
+                        .get(name)
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string()
+                };
+                if field("verdict") == "allow" && !of("policy").is_empty() {
+                    saves.insert(
+                        of("sha256"),
+                        (field("person").to_string(), of("note"), of("policy")),
+                    );
+                }
+            }
+            "config_loaded" => {
+                let sha = field("policy_sha256").to_string();
+                if sha == loaded {
+                    continue;
+                }
+                loaded.clone_from(&sha);
+                let (by, note) = match saves.get(&sha) {
+                    Some((by, note, _)) => (by.clone(), note.clone()),
+                    None => (
+                        String::new(),
+                        format!("Loaded from the file ({})", field("trigger")),
+                    ),
+                };
+                out.push(FileVersion {
+                    id: out.len() as i64 + 1,
+                    sha256: sha,
+                    text: field("policy").to_string(),
+                    time,
+                    by,
+                    note,
+                    refused: None,
+                });
+            }
+            "config_rejected" => {
+                let sha = field("policy_sha256").to_string();
+                if out.last().is_some_and(|v| v.sha256 == sha) {
+                    continue;
+                }
+                let why: Vec<&str> = record
+                    .get("problems")
+                    .and_then(Value::as_array)
+                    .map(|p| p.iter().filter_map(Value::as_str).collect())
+                    .unwrap_or_default();
+                let (by, note, text) = saves.get(&sha).cloned().unwrap_or_default();
+                out.push(FileVersion {
+                    id: out.len() as i64 + 1,
+                    sha256: sha,
+                    text,
+                    time,
+                    by,
+                    note,
+                    refused: Some(why.join(" ")),
+                });
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The version of the file in force: the newest one loaded.
+fn file_in_force(all: &[FileVersion]) -> Option<i64> {
+    all.iter().rev().find(|v| v.refused.is_none()).map(|v| v.id)
+}
+
+fn file_tag(v: &FileVersion, live: Option<i64>) -> Value {
+    match (&v.refused, live == Some(v.id)) {
+        (Some(_), _) => json!({ "kind": "warn", "word": "Refused by the gateway", "detail": "" }),
+        (None, true) => json!({ "kind": "allow", "word": "In force", "detail": "" }),
+        (None, false) => json!({ "kind": "", "word": "Earlier", "detail": "" }),
+    }
+}
+
+async fn file_list(console: &Console, admin: &crate::Admin, uri: &Uri) -> Answer {
+    let audit = console.config().audit.clone();
+    let all = tokio::task::spawn_blocking(move || file_versions(&audit))
+        .await
+        .unwrap_or_default();
+    let live = file_in_force(&all);
+    let editable = edits_policy(admin);
+    let selected: Option<i64> = Form::of(uri).get("version").parse().ok();
+    let rows: Vec<Value> = all
+        .iter()
+        .rev()
+        .map(|v| {
+            json!({
+                "id": v.id,
+                "tag": file_tag(v, live),
+                "refusals": v.refused.iter().map(|why| format!("Refused by the gateway: {why}")).collect::<Vec<_>>(),
+                "by": if v.by.is_empty() { "the file".to_string() } else { v.by.clone() },
+                "at": time_full(&v.time),
+                "note": v.note,
+                "decided": "",
+            })
+        })
+        .collect();
+    let detail = selected
+        .and_then(|id| all.iter().find(|v| v.id == id))
+        .map(|v| {
+            let before = all
+                .iter()
+                .rev()
+                .find(|b| b.id < v.id && b.refused.is_none())
+                .map(|b| b.text.clone())
+                .unwrap_or_default();
+            let diff: Vec<Value> = versions::diff(&before, &v.text)
+                .into_iter()
+                .map(|(n, text, kind)| json!({ "n": n, "text": text, "kind": kind }))
+                .collect();
+            let mut actions = Vec::new();
+            if editable && live != Some(v.id) && !v.text.is_empty() {
+                actions.push("rollback");
+                actions.push("dry_run");
+            }
+            json!({
+                "id": v.id,
+                "tag": file_tag(v, live),
+                "refusals": v.refused.iter().map(|why| format!("Refused by the gateway: {why}")).collect::<Vec<_>>(),
+                "facts": [
+                    ["Saved by", if v.by.is_empty() { "an edit of the file" } else { v.by.as_str() }],
+                    ["Saved at", time_full(&v.time).as_str()],
+                    ["Note", v.note.as_str()],
+                    ["SHA-256", v.sha256.get(..16).unwrap_or(&v.sha256)],
+                ],
+                "from": if v.id == 1 { "nothing: the first version".to_string() } else { "the version before it".to_string() },
+                "diff": diff,
+                "own": Value::Null,
+                "actions": actions,
+                "text": v.text,
+            })
+        });
+    Ok(ok(json!({
+        "lead": FILE_LEAD,
+        "file_mode": true,
+        "edit": false,
+        "versions": rows,
+        "detail": detail,
+    })))
+}
+
+/// Puts an earlier version of a policy kept in its file back: its text is written over the file through the same
+/// checked save as any change, recorded as `rollback_policy`.
+async fn put_back(console: &Console, admin: &crate::Admin, id: i64) -> Answer {
+    let audit = console.config().audit.clone();
+    let all = tokio::task::spawn_blocking(move || file_versions(&audit))
+        .await
+        .unwrap_or_default();
+    let Some(v) = all.iter().find(|v| v.id == id && !v.text.is_empty()) else {
+        return Err(Fail(
+            StatusCode::NOT_FOUND,
+            format!(
+                "There is no version {id} of the policy file to put back. The Versions page lists them."
+            ),
+        ));
+    };
+    let (before, _) = crate::api::current(console)?;
+    if before == v.text {
+        return Ok(ok(
+            json!({ "message": format!("Nothing changed: version {id} is the policy in the file.") }),
+        ));
+    }
+    crate::api::save_text(
+        console,
+        admin,
+        "rollback_policy",
+        format!("Put back version {id}"),
+        json!({ "version": id }),
+        before,
+        v.text.clone(),
+        None,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------- the editor and the dry run

@@ -18,6 +18,14 @@ one repository. How a release is made: RELEASING.md.
 - With the policy in its file, a console save waits for the gateway to reload the file and says whether it runs it,
   or that it refused it, with the reason.
 
+### Versions, put back and prices for a policy kept in its file
+
+- Versions lists each policy the gateway loaded from its file, read from the audit chain (each console save records
+  the whole text first), with who saved it, its diff, and each text the gateway refused with the reason.
+- "Put this back" writes an earlier version over the file through the same checked save as every edit, recorded as
+  `rollback_policy`.
+- Prices are editable in file mode: adding a model or changing a price rewrites the file through the same checked save.
+
 ### Every request is named by default
 
 - `enterplace start` writes the `claude-subscriptions` provider with `identity: required` (it wrote `optional`), so a

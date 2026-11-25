@@ -36,7 +36,7 @@ type Line = { n: number; text: string; kind: string };
 type Force = { force?: string | null; refusals?: string[] };
 type Version = Force & { id: number; tag: Tag; by: string; at: string; note: string; decided: string };
 type Detail = Force & { id: number; tag: Tag; facts: [string, string][]; from: string; diff: Line[]; own: string | null; actions: string[]; text: string };
-type Versions = { lead: string; file?: { title: string; body: string }; edit?: boolean; versions?: Version[]; detail?: Detail | null };
+type Versions = { lead: string; file?: { title: string; body: string }; file_mode?: boolean; edit?: boolean; versions?: Version[]; detail?: Detail | null };
 type Draft = { lead: string; text: string; note: string; base: number; hours: number; save: string };
 type Run = { tag: Tag; summary: string; note: string; tables: { title: string; count: number; rows: Record<string, string>[] }[] };
 
@@ -297,7 +297,7 @@ export function PolicyVersions({ query }: PageProps) {
   const labels: Record<string, [string, "default" | "outline" | "destructive"]> = {
     approve: ["Approve and put live", "default"],
     reject: ["Reject", "outline"],
-    rollback: ["Roll back to this version", "outline"],
+    rollback: [data?.file_mode ? "Put this back" : "Roll back to this version", "outline"],
   };
   return (
     <>
@@ -356,10 +356,12 @@ export function PolicyVersions({ query }: PageProps) {
                   <Confirm
                     key={a}
                     label={labels[a][0]}
-                    title={a === "rollback" ? `Roll back to version ${detail.id}?` : `Reject version ${detail.id}?`}
+                    title={a === "rollback" ? (data?.file_mode ? `Put version ${detail.id} back?` : `Roll back to version ${detail.id}?`) : `Reject version ${detail.id}?`}
                     detail={
                       a === "rollback"
-                        ? `Every gateway serves version ${detail.id} within 2 seconds. The versions after it stay in the history.`
+                        ? data?.file_mode
+                          ? `Its text is written over the policy file, checked as enterplace check checks a file, and the gateway loads it within 2 seconds. The versions after it stay in the history.`
+                          : `Every gateway serves version ${detail.id} within 2 seconds. The versions after it stay in the history.`
                         : "It never goes live. Its text stays in the history, and the decision is recorded with your name."
                     }
                     onConfirm={() => act(a)}

@@ -2,10 +2,9 @@
 //! million tokens (set in the policy, else built in, else none and its spend is not counted) and its aliases; add a
 //! model with its price, or change a model's price.
 //!
-//! A change is made only when the policy is kept in the store: it is saved as a new policy version through
-//! `edit::save_version`, recorded in the audit chain first with who made it, checked as `enterplace check` checks a
-//! file, and live on every gateway within 2 seconds, or waiting for a second admin. A policy kept in a file is shown
-//! read only, with where to change it.
+//! A change goes through `api::save_text`, as every policy edit does: recorded in the audit chain first with who
+//! made it and the whole text, checked as `enterplace check` checks a file, then saved as a new policy version
+//! (policy kept in the store, live or waiting for a second admin) or written over the policy file.
 
 use axum::{
     Router,
@@ -15,12 +14,12 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use enterplace_core::{config, store, usage, versions};
+use enterplace_core::{config, usage, versions};
 use serde_json::{Map, Value, json};
 
 use crate::{
     Act, Console, Form,
-    api::{Fail, answer, bad, body_of, ok, refused, sentence, signed_in, text},
+    api::{Fail, answer, bad, body_of, ok, sentence, signed_in, text},
     edit::{self, edits_policy},
     figures::money,
     read_only, record, redirect,
@@ -65,14 +64,8 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
                 }
             };
             let live = edit::live(&console);
-            let editable = live.is_some() && edits_policy(&admin);
-            // Read only is how a file-kept policy works, nothing went wrong: the page says so in a plain line.
-            let file = live.is_none().then(|| {
-                c.policy.file_name().map_or_else(
-                    || c.policy.display().to_string(),
-                    |n| n.to_string_lossy().into_owned(),
-                )
-            });
+            // A policy kept in its file is edited here too: the file is rewritten through the same checked save.
+            let editable = edits_policy(&admin);
             let prices = loaded.policy.prices();
             let mut models = Vec::new();
             for provider in &loaded.providers {
@@ -112,7 +105,6 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
                 "lead": "Each model, its provider and its price.",
                 "editable": editable,
                 "base": live.map(|v| v.id),
-                "file": file,
                 "docs": format!("{}/operations/console-editing/", crate::start::DOCS),
                 "providers": loaded.providers.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
                 "models": models,
@@ -158,17 +150,13 @@ async fn change(
             "You are signed in read only: ask an admin to change models.".into(),
         ));
     }
-    let Some(live) = edit::live(console) else {
-        return Err(Fail(
-            StatusCode::FORBIDDEN,
-            sentence(&versions::read_only_message(&console.config().policy)),
-        ));
-    };
-    // The version the page read: a change made since is refused rather than overwritten.
-    let base = body.get("base").and_then(|v| {
+    let (before, live) = crate::api::current(console)?;
+    // The version the page read: a change made since is refused rather than overwritten. In the file, the save
+    // refuses a file that changed since it was read.
+    let base = live.and(body.get("base").and_then(|v| {
         v.as_i64()
             .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-    });
+    }));
     let model = text(&body, "model").to_string();
     let provider = text(&body, "provider");
     let edited = price_of(text(&body, "input"), text(&body, "output")).and_then(|p| {
@@ -180,10 +168,10 @@ async fn change(
             if let Some(bad) = aliases.iter().find(|a| !config::valid_name(a)) {
                 return Err(format!("The alias \"{bad}\" uses a character a model name cannot. Use letters, digits, '.', '-', '_' and '@'."));
             }
-            versions::add_model(&live.text, provider, &model, Some(p), &aliases)
+            versions::add_model(&before, provider, &model, Some(p), &aliases)
                 .map_err(|e| sentence(&e))
         } else {
-            versions::set_price(&live.text, &model, p).map_err(|e| sentence(&e))
+            versions::set_price(&before, &model, p).map_err(|e| sentence(&e))
         }
     });
     let policy = match edited {
@@ -209,17 +197,8 @@ async fn change(
     } else {
         format!("Change the price of {model}")
     };
-    match edit::save_version(console, &admin, act, policy, base, note).await {
-        Ok(v) if v.state == store::PENDING => Ok(ok(json!({
-            "message": format!("Saved as version {}. It waits for a second admin to approve it under Policy, Versions.", v.id),
-            "version": v.id,
-        }))),
-        Ok(v) => Ok(ok(json!({
-            "message": edit::in_force(console, Some(v.id), &v.sha256).await,
-            "version": v.id,
-        }))),
-        Err(err) => Err(refused(&err)),
-    }
+    let target = json!({ "model": model });
+    crate::api::save_text(console, &admin, act, note, target, before, policy, base).await
 }
 
 /// The aliases a form names, from a JSON list or a comma separated string, without blanks.

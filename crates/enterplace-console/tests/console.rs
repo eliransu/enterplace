@@ -3255,7 +3255,7 @@ async fn sign_in_says_admin_only_once_and_sign_out_is_confirmed() -> TestResult 
     Ok(())
 }
 
-/// UX #25, #26: a policy kept in a file says read only once, with no edit, export or change column to contradict it.
+/// UX #25, #26: a policy kept in a file says read only once, with no edit or export to contradict it.
 #[tokio::test]
 async fn a_file_kept_policy_offers_nothing_that_edits_it() -> TestResult {
     let s = setup("read-only-file")?;
@@ -3275,20 +3275,18 @@ async fn a_file_kept_policy_offers_nothing_that_edits_it() -> TestResult {
         serde_json::Value::Null,
     )
     .await?;
-    let text = prices.to_string();
+    // Prices are the one exception: a price is changed in the file too, through the same checked save as every
+    // other policy edit (round 3: a file-kept policy had no way to change a price).
     assert!(
-        prices["file"] == "enterplace.policy.yaml"
-            && prices["docs"]
-                .as_str()
-                .unwrap_or("")
-                .ends_with("/operations/console-editing/")
-            && prices["editable"] == false
-            && !text.contains("policy_from")
-            && !text.contains("A form edit"),
+        prices["docs"]
+            .as_str()
+            .unwrap_or("")
+            .ends_with("/operations/console-editing/")
+            && prices["editable"] == true
+            && prices["file"].is_null(),
         "{prices}"
     );
-    // A change says why it cannot be made here and changes nothing.
-    let (status, _, refused) = call(
+    let (status, _, saved) = call(
         &s.app,
         "POST",
         "/console/api/prices/price",
@@ -3296,11 +3294,9 @@ async fn a_file_kept_policy_offers_nothing_that_edits_it() -> TestResult {
         serde_json::json!({ "model": "gpt-4o", "input": "1", "output": "1" }),
     )
     .await?;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
-    assert!(
-        !refused["error"].as_str().unwrap_or("").is_empty(),
-        "{refused}"
-    );
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let file = std::fs::read_to_string(s.dir.join("enterplace.policy.yaml"))?;
+    assert!(file.contains("gpt-4o"), "{file}");
     let (_, _, policy) = call(
         &s.app,
         "GET",

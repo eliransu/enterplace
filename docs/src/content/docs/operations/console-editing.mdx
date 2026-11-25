@@ -83,6 +83,14 @@ With a [store](/operations/store/), a dry run on any gateway replays the request
 
 Saved is not the same as in force. Each gateway reports in its heartbeat the version it runs and, when it refused a newer one, why (a provider key variable unset on that gateway, a guardrail credential missing). Versions shows under each version **In force on N of M gateways** (M counts the gateways with a heartbeat in the last 10 seconds) and, for a refused one, **Refused by** the gateway with its reason. A live version no gateway runs is tagged **Saved, in force nowhere**. After a save the console waits up to 5 seconds for the heartbeats and says `Saved; in force on N of M gateways`, or names the gateway that refused it and why.
 
+## A policy kept in its file
+
+Without `policy_from: store` the console's form edits (providers, rules, budgets, guardrails, aliases, prices) rewrite the policy file in one rename, after the same check as a saved version, and record the whole new text in the audit chain first (`target.policy`, with its `sha256`). The raw editor stays read only: the file is the source.
+
+**Versions** lists each policy the gateway loaded from the file, read back from the audit chain's `config_loaded` records, newest first: who saved it from the console (or "the file" for an edit made on disk), the note, and its diff from the version before. A text the gateway refused (`config_rejected`) is listed as **Refused by the gateway** with its reason. **Put this back** writes an earlier version's text over the file through the same checked save, recorded as `rollback_policy`, and the toast says whether the gateway runs it.
+
+Versions are numbered in the order the chain holds them, so retiring old audit segments renumbers them.
+
 ## GitOps
 
 **Export YAML** downloads the live policy as `enterplace.policy.yaml`, from the console or `GET /admin/policy`. A team that reviews every change in git has two ways to work:
@@ -96,7 +104,7 @@ When the file and the live version differ, Enterplace prints it at every start a
 
 | Action | Record |
 |---|---|
-| Save a version, add a model, change a price | `propose_policy`, `add_model`, `price_model`, with the draft's whole text |
+| Save a version, add a model, change a price | `propose_policy`, `add_model`, `price_model`, with the draft's whole text (in file mode too) |
 | Approve, reject, roll back | `approve_policy`, `reject_policy`, `rollback_policy` |
 | Dry run | `dry_run_policy`, with the draft's SHA-256 and the hours replayed |
 | Edit a key | `edit_key`, with its new fields and hash prefix |

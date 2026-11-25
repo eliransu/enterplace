@@ -157,5 +157,115 @@ async fn a_file_save_the_gateway_refuses_says_so_with_the_reason() -> TestResult
     // The file holds the save, and the gateway keeps what it ran.
     let file = std::fs::read_to_string(dir.join("enterplace.policy.yaml"))?;
     assert!(file.contains(unset), "{file}");
+    // Versions lists it as refused, with the reason, and the version before it still in force.
+    let (_, body) = api(
+        &gw.router,
+        &cookie,
+        "GET",
+        "/console/api/policy/versions",
+        Value::Null,
+    )
+    .await?;
+    let rows = body["versions"].as_array().cloned().unwrap_or_default();
+    assert_eq!(rows[0]["tag"]["word"], "Refused by the gateway", "{body}");
+    assert!(rows[0]["refusals"].to_string().contains(unset), "{body}");
+    assert_eq!(rows[1]["tag"]["word"], "In force", "{body}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_policy_has_versions_put_back_and_editable_prices() -> TestResult {
+    let (gw, dir, cookie) = started("versions").await?;
+    let path = dir.join("enterplace.policy.yaml");
+    let first = std::fs::read_to_string(&path)?;
+
+    // Prices are editable in file mode, through the same checked save.
+    let (status, body) = api(
+        &gw.router,
+        &cookie,
+        "GET",
+        "/console/api/prices",
+        Value::Null,
+    )
+    .await?;
+    assert_eq!(
+        (status, body["editable"].clone()),
+        (StatusCode::OK, json!(true)),
+        "{body}"
+    );
+    let (status, body) = api(
+        &gw.router,
+        &cookie,
+        "POST",
+        "/console/api/prices/price",
+        json!({ "model": "m", "input": "1.5", "output": "6" }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["message"], "Saved; in force on the gateway.", "{body}");
+    let priced = std::fs::read_to_string(&path)?;
+    assert!(priced.contains("input: 1.5"), "{priced}");
+    // A price that is not a number changes nothing.
+    let (status, _) = api(
+        &gw.router,
+        &cookie,
+        "POST",
+        "/console/api/prices/price",
+        json!({ "model": "m", "input": "cheap", "output": "6" }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Versions, from the audit chain: the first load and the price change, newest first, who saved it.
+    let (status, body) = api(
+        &gw.router,
+        &cookie,
+        "GET",
+        "/console/api/policy/versions?version=1",
+        Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["file_mode"], true, "{body}");
+    let rows = body["versions"].as_array().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 2, "{body}");
+    assert_eq!(rows[0]["id"], 2, "{body}");
+    assert_eq!(rows[0]["tag"]["word"], "In force", "{body}");
+    assert_eq!(rows[0]["by"], "admin", "{body}");
+    assert_eq!(rows[1]["tag"]["word"], "Earlier", "{body}");
+    assert_eq!(body["detail"]["text"], first.as_str(), "{body}");
+    assert!(
+        body["detail"]["actions"]
+            .as_array()
+            .is_some_and(|a| a.contains(&json!("rollback"))),
+        "{body}"
+    );
+
+    // Put this back: version 1's text is written over the file, checked, and the gateway runs it.
+    let (status, body) = api(
+        &gw.router,
+        &cookie,
+        "POST",
+        "/console/api/policy/versions/1/rollback",
+        json!({}),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["message"], "Saved; in force on the gateway.", "{body}");
+    assert_eq!(std::fs::read_to_string(&path)?, first);
+    let (_, body) = api(
+        &gw.router,
+        &cookie,
+        "GET",
+        "/console/api/policy/versions",
+        Value::Null,
+    )
+    .await?;
+    let rows = body["versions"].as_array().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 3, "{body}");
+    assert_eq!(rows[0]["note"], "Put back version 1", "{body}");
+    let log = std::fs::read_to_string(dir.join("enterplace-audit.jsonl"))?;
+    assert!(log.contains("\"action\":\"rollback_policy\""));
+    assert!(log.contains("\"action\":\"price_model\""));
     Ok(())
 }
