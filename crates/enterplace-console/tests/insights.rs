@@ -899,6 +899,52 @@ async fn analytics_draw_one_chart_with_a_metric_switch_and_four_tabs_up_front() 
     Ok(())
 }
 
+/// One team's (or person's, app's, agent's, model's) trend: the day chart filtered to one value of a ranking, the
+/// ranking itself left whole, the filter named so it can be removed, and kept in the share link.
+#[tokio::test]
+async fn a_ranking_value_filters_the_chart_alone_and_stays_in_the_link() -> TestResult {
+    let s = setup("trend")?;
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (status, page) = analytics(&s.app, "?by=team&trend=team:search", &cookie).await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(
+        page["trend"],
+        json!({ "name": "team", "value": "search", "label": "Team search" })
+    );
+    assert_eq!(page["chart_title"], "Requests, per day, team search");
+    // Today's bar holds search's two requests, not all three.
+    let points = page["chart"]["points"].as_array().ok_or("no chart")?;
+    assert_eq!(
+        points.last().map(|p| &p["shown"]),
+        Some(&json!("2")),
+        "{page}"
+    );
+    // The ranking and the figures stay the whole window's.
+    assert_eq!(page["stats"][0]["figure"], "3");
+    assert_eq!(page["ranking"].as_array().map(Vec::len), Some(2), "{page}");
+    assert!(
+        page["link"]
+            .as_str()
+            .is_some_and(|l| l.contains("trend=team%3Asearch")),
+        "{page}"
+    );
+    // Without it, the chart is everything again.
+    let (_, all) = analytics(&s.app, "?by=team", &cookie).await?;
+    assert_eq!(all["trend"], Value::Null);
+    let points = all["chart"]["points"].as_array().ok_or("no chart")?;
+    assert_eq!(points.last().map(|p| &p["shown"]), Some(&json!("3")));
+    // A trend that does not parse says how to write it.
+    let (status, bad) = analytics(&s.app, "?trend=colour:blue", &cookie).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        bad["error"].as_str().is_some_and(
+            |e| e.contains("Write it as a dimension and a value, such as trend=team:payments")
+        ),
+        "{bad}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn live_json_changes_when_a_record_is_written_and_needs_a_session() -> TestResult {
     // The Requests, Analytics, Audit log and Spend pages ask this every 2 seconds and redraw when it changes, so

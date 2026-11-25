@@ -209,8 +209,57 @@ async fn analytics(State(console): State<Console>, headers: HeaderMap, uri: Uri)
                 return Ok(ok(json!({ "empty": empty })));
             }
 
+            // One value's trend (`trend=team:payments`, from a ranking row): the chart alone is filtered to it, so the
+            // ranking still shows what it is one of.
+            let bad_trend = || {
+                Fail(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "trend is \"{}\". Write it as a dimension and a value, such as trend=team:payments; the dimension is one of {}.",
+                        form.get("trend"),
+                        DIMENSIONS.iter().map(|d| d.name).collect::<Vec<_>>().join(", ")
+                    ),
+                )
+            };
+            let trend = match form.get("trend") {
+                "" => None,
+                text => {
+                    let (name, value) = text
+                        .split_once(':')
+                        .filter(|(_, v)| !v.is_empty())
+                        .ok_or_else(bad_trend)?;
+                    let d = DIMENSIONS
+                        .iter()
+                        .find(|d| d.name == name)
+                        .copied()
+                        .ok_or_else(bad_trend)?;
+                    Some((d, value.to_string()))
+                }
+            };
+            let series = match &trend {
+                None => summed.series,
+                Some((d, value)) => {
+                    let mut only = query.clone();
+                    only.labels.push((d.name.to_string(), value.clone()));
+                    match (&found, insights::attached(&console.config().audit).index) {
+                        (Some(found), _) => {
+                            let rows: Vec<insights::Row> =
+                                found.iter().filter(|r| only.matches(r)).cloned().collect();
+                            insights::series(&rows, window.2)
+                        }
+                        (None, Some(index)) => index
+                            .analytics(&only, window.2, dimension.name)
+                            .await
+                            .map_err(|problem| {
+                                Fail(StatusCode::SERVICE_UNAVAILABLE, format!("The request log did not load: {problem} Check that the gateway can reach its store, then reload the page."))
+                            })?
+                            .series,
+                        (None, None) => Vec::new(),
+                    }
+                }
+            };
             // Every hour or day of the window, empty ones too, so the bars keep time.
-            let had: BTreeMap<String, Stats> = summed.series.into_iter().collect();
+            let had: BTreeMap<String, Stats> = series.into_iter().collect();
             let (step, width) = if window.2 { (3600, 13) } else { (86_400, 10) };
             let mut series: Vec<(String, Stats)> = Vec::new();
             let mut t = now.saturating_sub(window.1) + step;
@@ -334,6 +383,9 @@ async fn analytics(State(console): State<Console>, headers: HeaderMap, uri: Uri)
             if metric.0 != METRICS[0].0 {
                 view.push(("metric".into(), metric.0.into()));
             }
+            if let Some((d, v)) = &trend {
+                view.push(("trend".into(), format!("{}:{v}", d.name)));
+            }
             view.extend(query.pairs().into_iter().filter(|(k, _)| pinned || k != "from"));
             let mut api: Vec<(String, String)> = vec![("group_by".into(), dimension.name.into())];
             if !then.is_empty() {
@@ -374,8 +426,14 @@ async fn analytics(State(console): State<Console>, headers: HeaderMap, uri: Uri)
                 ],
                 "metric": metric.0,
                 "metrics": METRICS.iter().map(|m| json!({ "name": m.0, "label": m.1 })).collect::<Vec<_>>(),
-                "chart_title": format!("{}, per {}", metric.1, if window.2 { "hour" } else { "day" }),
+                "chart_title": format!(
+                    "{}, per {}{}",
+                    metric.1,
+                    if window.2 { "hour" } else { "day" },
+                    trend.as_ref().map_or(String::new(), |(d, v)| format!(", {} {v}", d.label.to_lowercase()))
+                ),
                 "chart": chart,
+                "trend": trend.as_ref().map(|(d, v)| json!({ "name": d.name, "value": v, "label": format!("{} {v}", d.label) })),
                 "by": dimension.name,
                 "ranking_title": format!("By {}, most costly first", dimension.label.to_lowercase()),
                 "by_label": dimension.label,
