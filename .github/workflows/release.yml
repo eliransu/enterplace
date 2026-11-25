@@ -108,9 +108,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # The version before this one: the previous tag, or the previous commit before the first tag.
+      # The version before this one: the previous release tag, or the previous commit before the first release.
+      # Only vX.Y.Z tags count, as in scripts/version.py: the rolling `edge` tag is not a version, and an edge
+      # build from before a migration shares this version number, so it rightly refuses the newer schema.
       - run: |
-          previous=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git rev-parse HEAD^)
+          previous=$(git describe --tags --abbrev=0 --match='v[0-9]*' HEAD^ 2>/dev/null || git rev-parse HEAD^)
           echo "previous: $previous"
           git worktree add ../previous "$previous"
           # The rename to Enterplace changed the package, binary, env vars and schema names, so a version from
