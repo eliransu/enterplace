@@ -1,0 +1,64 @@
+---
+title: OpenAI Agents SDK
+description: Run OpenAI Agents SDK agents through Enterplace over the Responses API or chat completions, with tracing pointed away from the Enterplace key.
+sidebar:
+  order: 23
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The OpenAI Agents SDK takes an OpenAI client per model. Give it a client with Enterplace's address and a Enterplace key, and each model call of an agent run is identified, decided and recorded.
+
+## Send a request
+
+```bash
+pip install openai-agents
+```
+
+```python
+import asyncio
+from agents import Agent, OpenAIChatCompletionsModel, OpenAIResponsesModel, Runner, set_tracing_disabled
+from openai import AsyncOpenAI
+
+set_tracing_disabled(True)
+enterplace = AsyncOpenAI(base_url="http://127.0.0.1:8080/v1", api_key="enterplace_...")
+
+agent = Agent(
+    name="Greeter",
+    instructions="Be brief.",
+    model=OpenAIResponsesModel(model="gpt-4o-mini", openai_client=enterplace),
+)
+print(asyncio.run(Runner.run(agent, "Say hello.")).final_output)
+```
+
+- `OpenAIResponsesModel` calls `/v1/responses`. A model on an `openai` provider gets the request as sent. A model on any other kind is reached through [translation](/routing/translation/#responses-to-chat-codex-on-any-provider), which refuses hosted tools (web search, file search, code interpreter) and stored conversation state by name.
+- `OpenAIChatCompletionsModel(model=..., openai_client=enterplace)` calls `/v1/chat/completions` instead, and reaches every chat provider.
+
+<Aside type="caution">
+Turn tracing off, or give it a key of its own with `set_tracing_export_api_key`. By default the SDK uploads a trace of each run, prompts and tool calls included, to OpenAI with the key in `OPENAI_API_KEY`. If that variable holds the Enterplace key, the key is sent to OpenAI, which rejects it. If it holds an OpenAI key, the traces leave without passing the gateway.
+</Aside>
+
+## Tools and refusals
+
+Tools made with `@function_tool` are declared as function tools, so a rule's [tool permissions](/governance/tool-permissions/) apply by name. Handoffs are function tools too, named `transfer_to_<agent>`: list them in the rule's `tools:` when it has one. A refusal is raised as the OpenAI SDK's own error (`openai.PermissionDeniedError` for a 403), with `e.code` holding Enterplace's code.
+
+## Tested
+
+`scripts/sdk_check.py` starts a mock provider and `enterplace serve`, then drives the Agents SDK through it: an agent on `OpenAIResponsesModel`, one on `OpenAIChatCompletionsModel`, and a model the rule does not allow (`model_not_allowed`). It runs every framework that is installed and reports the rest as skipped.
+
+```bash
+cargo build -p enterplace-cli
+uv run --with 'pydantic-ai-slim[openai,anthropic]' --with litellm --with openai-agents \
+  --with llama-index-llms-openai-like --with autogen-agentchat --with 'autogen-ext[openai]' \
+  --with claude-agent-sdk python3 scripts/sdk_check.py target/debug/enterplace --js
+```
+
+Last run on 2026-11-15 with openai-agents 0.24.0 and openai 3.51.0 on Python 3.11. The provider is a mock, so the run shows the framework and Enterplace agree on the wire format, not what a model answers. It needs network access to install the packages, so it is not part of `scripts/ci.sh`.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="OpenAI and Anthropic SDKs" href="/integrations/sdks/" description="Base URLs, keys and error fields." />
+	<LinkCard title="Tool permissions" href="/governance/tool-permissions/" description="Allow or deny the tools an agent declares." />
+	<LinkCard title="Translation" href="/routing/translation/" description="Reach a model through another API's route." />
+</CardGrid>

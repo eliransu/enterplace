@@ -1,0 +1,66 @@
+---
+title: Dify
+description: Add Enterplace to Dify as an OpenAI-API-compatible model provider, or through the Anthropic provider's API URL.
+sidebar:
+  order: 30
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Dify reaches Enterplace as a model provider. The **OpenAI-API-compatible** provider takes Enterplace's address and a Enterplace key per model, and every app that uses the model goes through the gateway.
+
+<Aside type="note">
+Not run. The field names come from Dify's public documentation and its published provider definitions, read on 2026-11-15.
+</Aside>
+
+## Setup
+
+<Steps>
+
+1. Issue a Enterplace key for Dify, in a team of its own:
+
+   ```bash
+   enterplace key new dify --team apps
+   ```
+
+2. In Dify, open the model provider settings, install the **OpenAI-API-compatible** provider if it is not there, and click **Add Model** on its card.
+
+3. Fill in the model:
+
+   | Field | Value |
+   |---|---|
+   | Model type | LLM (or Text Embedding for an embedding model) |
+   | Model name | The model name as Enterplace's policy has it, for example `gpt-4o-mini` |
+   | **API Key** | The Enterplace key |
+   | **API Base URL** | Enterplace's address with `/v1`, for example `https://enterplace.example.com/v1` |
+   | **Completion mode** | **Chat** |
+   | **API Type** | **Chat Completions API (/chat/completions)**, the default |
+   | **Model context size** | The model's context window |
+   | **Function Call Type** | **Tool Call** for a model that calls tools; the default is **Not Support** |
+
+4. Save.
+
+   {/* the labels of the model type and model name fields are not confirmed in Dify's public docs, 2026-11 */}
+
+</Steps>
+
+Add one entry per model. A Claude model added this way needs `accept_chat: true` on its provider in Enterplace: see [Translation](/routing/translation/).
+
+## Other providers in Dify
+
+- **Anthropic**: set **API URL** to Enterplace's address and **API Key** to the Enterplace key, and Dify sends Anthropic messages requests. {/* whether the field takes the address with or without /v1 is not confirmed in Dify's public docs, 2026-11 */}
+- **OpenAI**: its **API Base URL** field takes Enterplace's address. Its **API Protocol** defaults to the Responses API; choose **Chat Completions** for a model on a provider other than `openai`.
+
+## What to know
+
+- Dify must reach Enterplace's address. With Dify in Docker and Enterplace on the host, `127.0.0.1` inside a container is the container itself: run Enterplace on an address the containers can reach.
+- A refusal shows in the app's run with Enterplace's message, code and decision ID.
+- One key covers every Dify app. For spend and records per app, add the model once per app with a key of its own.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue a Enterplace key for an app or a person." />
+	<LinkCard title="Translation" href="/routing/translation/" description="Reach a model through another API's route." />
+	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="Every code a refusal can carry." />
+</CardGrid>

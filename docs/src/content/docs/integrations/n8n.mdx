@@ -1,0 +1,49 @@
+---
+title: n8n
+description: Point n8n's OpenAI and Anthropic credentials at Enterplace by base URL, so every model call a workflow makes is governed.
+sidebar:
+  order: 29
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+n8n's model nodes read their address from the credential. Set the credential's base URL to Enterplace and its key to a Enterplace key, and every workflow that uses the credential goes through the gateway.
+
+<Aside type="note">
+Not run. The field names come from n8n's public documentation and its published credential definitions, read on 2026-11-15.
+</Aside>
+
+## Setup
+
+<Steps>
+
+1. Issue a Enterplace key for n8n, in a team of its own:
+
+   ```bash
+   enterplace key new n8n --team automation
+   ```
+
+2. In n8n, create an **OpenAI** credential. Set **API Key** to the Enterplace key and **Base URL** to Enterplace's address with `/v1`, for example `https://enterplace.example.com/v1`. The field's default is `https://api.openai.com/v1`.
+
+3. In a workflow, add an **OpenAI Chat Model** node, choose the credential, and type the model name as the policy has it.
+
+4. On the node, check **Use Responses API**. On, the node calls `/v1/responses`; off, it calls `/v1/chat/completions`. Turn it off for a model on a provider other than `openai`, unless you want the [Responses translation](/routing/translation/#responses-to-chat-codex-on-any-provider).
+
+</Steps>
+
+For the **Anthropic Chat Model** node, create an **Anthropic** credential with the Enterplace key as **API Key** and **Base URL** set to Enterplace's address without `/v1`, for example `https://enterplace.example.com`.
+
+## What to know
+
+- n8n tests a credential when you save it. The Anthropic credential's test lists models (`GET /v1/models`), which Enterplace answers with the models the key's rule allows.
+- n8n must reach Enterplace's address. With n8n in a container and Enterplace on the host, `127.0.0.1` inside the container is the container itself: run Enterplace on an address the container can reach.
+- A refusal fails the node with Enterplace's message, code and decision ID in the error. Quote the decision ID to an admin.
+- Tools attached to an **AI Agent** node are declared as function tools, so a rule's [tool permissions](/governance/tool-permissions/) apply by name.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue a Enterplace key for an app or a person." />
+	<LinkCard title="Tool permissions" href="/governance/tool-permissions/" description="Allow or deny the tools an agent declares." />
+	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="Every code a refusal can carry." />
+</CardGrid>

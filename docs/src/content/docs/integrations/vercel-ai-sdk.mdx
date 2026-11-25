@@ -1,0 +1,65 @@
+---
+title: Vercel AI SDK
+description: Point the Vercel AI SDK's OpenAI and Anthropic providers at Enterplace with baseURL, and choose between the Responses API and chat completions.
+sidebar:
+  order: 25
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The Vercel AI SDK reaches Enterplace through its provider factories. Create the provider with Enterplace's address and a Enterplace key, and `generateText`, `streamText` and the rest go through the gateway.
+
+## Send a request
+
+```bash
+npm install ai @ai-sdk/openai @ai-sdk/anthropic
+```
+
+```ts
+import { generateText, streamText } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
+import { createAnthropic } from "@ai-sdk/anthropic";
+
+const openai = createOpenAI({ baseURL: "http://127.0.0.1:8080/v1", apiKey: "enterplace_..." });
+const anthropic = createAnthropic({ baseURL: "http://127.0.0.1:8080/v1", apiKey: "enterplace_..." });
+
+const { text } = await generateText({ model: openai.chat("gpt-4o-mini"), prompt: "Say hello." });
+console.log(text);
+
+for await (const part of streamText({ model: openai.chat("gpt-4o-mini"), prompt: "Say hello." }).textStream) {
+  process.stdout.write(part);
+}
+
+const claude = await generateText({ model: anthropic("claude-sonnet-4-6"), prompt: "Say hello.", maxOutputTokens: 256 });
+console.log(claude.text);
+```
+
+- **Both base URLs end in `/v1`.** Unlike Anthropic's own SDK, `createAnthropic` expects the address with `/v1`.
+- **`openai("model")` calls the Responses API**, the SDK's default since version 5. `openai.chat("model")` calls chat completions. Use `.chat` for a model on a provider other than `openai`, unless you want the [Responses translation](/routing/translation/#responses-to-chat-codex-on-any-provider).
+- `createOpenAI` reads `OPENAI_BASE_URL` and `OPENAI_API_KEY` when you pass nothing, and `createAnthropic` reads `ANTHROPIC_API_KEY`.
+- `createOpenAICompatible` from `@ai-sdk/openai-compatible` works the same way, with the same `baseURL` and `apiKey`.
+
+## Tools and refusals
+
+Tools passed in `tools:` are declared as function tools, so a rule's [tool permissions](/governance/tool-permissions/) apply by name. A refusal is thrown as the SDK's `APICallError`: `statusCode` holds the status and `responseBody` the JSON with Enterplace's `code` and `decision`. Pass `maxRetries: 0` where a refusal should fail at once.
+
+## Tested
+
+`scripts/sdk_check.py` starts a mock provider and `enterplace serve`, then drives the AI SDK through it with `--js`: `generateText` over chat completions, the Responses API and Anthropic messages, `streamText` over chat completions, and a model the rule does not allow (`model_not_allowed`). It runs every framework that is installed and reports the rest as skipped.
+
+```bash
+cargo build -p enterplace-cli
+uv run --with 'pydantic-ai-slim[openai,anthropic]' --with litellm --with openai-agents \
+  --with llama-index-llms-openai-like --with autogen-agentchat --with 'autogen-ext[openai]' \
+  --with claude-agent-sdk python3 scripts/sdk_check.py target/debug/enterplace --js
+```
+
+Last run on 2026-11-15 with ai 7.0.173, @ai-sdk/openai 4.0.118 and @ai-sdk/anthropic 4.0.105 on Node 25. The provider is a mock, so the run shows the framework and Enterplace agree on the wire format, not what a model answers. It needs network access to install the packages, so it is not part of `scripts/ci.sh`.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="OpenAI and Anthropic SDKs" href="/integrations/sdks/" description="Base URLs, keys and error fields." />
+	<LinkCard title="Tool permissions" href="/governance/tool-permissions/" description="Allow or deny the tools an agent declares." />
+	<LinkCard title="Translation" href="/routing/translation/" description="Reach a model through another API's route." />
+</CardGrid>

@@ -1,0 +1,66 @@
+---
+title: Pydantic AI
+description: Point Pydantic AI's OpenAI and Anthropic models at Enterplace with a provider object, and read Enterplace's refusals from its errors.
+sidebar:
+  order: 21
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Pydantic AI builds its models on the official OpenAI and Anthropic SDKs. Give the model a provider with Enterplace's address and a Enterplace key, and every request an agent makes is identified, decided and recorded.
+
+## Send a request
+
+```bash
+pip install 'pydantic-ai-slim[openai,anthropic]'
+```
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.openai import OpenAIProvider
+
+gpt = OpenAIChatModel("gpt-4o-mini", provider=OpenAIProvider(base_url="http://127.0.0.1:8080/v1", api_key="enterplace_..."))
+print(Agent(gpt).run_sync("Say hello.").output)
+
+claude = AnthropicModel("claude-sonnet-4-6", provider=AnthropicProvider(base_url="http://127.0.0.1:8080", api_key="enterplace_..."))
+print(Agent(claude).run_sync("Say hello.").output)
+```
+
+`OpenAIProvider` takes the address with `/v1`; `AnthropicProvider` takes it without. `OpenAIChatModel` calls `/v1/chat/completions`. Pydantic AI streams its Anthropic requests, which Enterplace forwards as a stream.
+
+## Tools and refusals
+
+Tools registered with `@agent.tool` are declared as function tools, so a rule's [tool permissions](/governance/tool-permissions/) apply to them by name. A refusal reaches your code as one of Pydantic AI's `ModelAPIError` types (a 403 arrives as `ModelAuthenticationError`), with Enterplace's status in `status_code` and its message and code in `body`:
+
+```python
+from pydantic_ai.exceptions import ModelAPIError
+
+try:
+    Agent(gpt).run_sync("hi")
+except ModelAPIError as e:
+    print(getattr(e, "status_code", None), getattr(e, "body", e))  # 403 and Enterplace's error, when the rule does not allow the model
+```
+
+## Tested
+
+`scripts/sdk_check.py` starts a mock provider and `enterplace serve`, then drives Pydantic AI through it: a chat completions call, an Anthropic messages call, and a model the rule does not allow (`model_not_allowed`). It runs every framework that is installed and reports the rest as skipped.
+
+```bash
+cargo build -p enterplace-cli
+uv run --with 'pydantic-ai-slim[openai,anthropic]' --with litellm --with openai-agents \
+  --with llama-index-llms-openai-like --with autogen-agentchat --with 'autogen-ext[openai]' \
+  --with claude-agent-sdk python3 scripts/sdk_check.py target/debug/enterplace --js
+```
+
+Last run on 2026-11-15 with pydantic-ai-slim 2.68.0, openai 3.51.0 and anthropic 2.8.0 on Python 3.11. The provider is a mock, so the run shows the framework and Enterplace agree on the wire format, not what a model answers. It needs network access to install the packages, so it is not part of `scripts/ci.sh`.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="OpenAI and Anthropic SDKs" href="/integrations/sdks/" description="Base URLs, keys and error fields." />
+	<LinkCard title="Tool permissions" href="/governance/tool-permissions/" description="Allow or deny the tools an agent declares." />
+	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="Every code a refusal can carry." />
+</CardGrid>

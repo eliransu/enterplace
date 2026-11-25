@@ -1,0 +1,70 @@
+---
+title: Claude Agent SDK
+description: Run Anthropic's Claude Agent SDK through Enterplace by passing its bundled Claude Code the gateway address and a Enterplace key.
+sidebar:
+  order: 24
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Anthropic's Claude Agent SDK runs a bundled Claude Code and passes it environment variables. Point those at Enterplace and every model request of an agent is identified, decided and recorded, exactly as for [Claude Code](/integrations/claude-code/).
+
+## Send a request
+
+```bash
+pip install claude-agent-sdk
+```
+
+```python
+import asyncio
+from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, TextBlock, query
+
+options = ClaudeAgentOptions(
+    model="claude-sonnet-4-6",
+    tools=[],  # no built-in tools; see below
+    env={
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080",
+        "ANTHROPIC_API_KEY": "enterplace_...",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-4-6",
+    },
+)
+
+async def main():
+    async for message in query(prompt="Say hello.", options=options):
+        if isinstance(message, AssistantMessage):
+            print("".join(block.text for block in message.content if isinstance(block, TextBlock)))
+
+asyncio.run(main())
+```
+
+- In Python, `env` is added to the variables the process already has. In TypeScript (`@anthropic-ai/claude-agent-sdk`), `options.env` replaces them, so spread `process.env` first.
+- `ANTHROPIC_API_KEY` sends the key as `x-api-key`; `ANTHROPIC_AUTH_TOKEN` sends it as `Authorization: Bearer`. Enterplace reads either. Set one.
+- The rule must allow the main model and the one `ANTHROPIC_DEFAULT_HAIKU_MODEL` names, which Claude Code uses for background work.
+- Claude on Bedrock or Vertex AI needs no change here: the provider behind the model name is Enterplace's business. See [Claude Code on Bedrock and Vertex AI](/integrations/claude-code-on-bedrock-and-vertex/).
+
+## Tools and refusals
+
+The SDK declares Claude Code's built-in tools (`Bash`, `Read`, `Edit`, `Write` and the rest) on every request unless you narrow them. On a rule with a `tools:` list, a request that declares a tool the list lacks is refused with `tool_not_allowed`, naming each one. Either pass the SDK the tools you want it to declare, or add them to the rule as `function.<name>`. See [Tool permissions](/governance/tool-permissions/).
+
+A refusal ends the query with the SDK's error, and its text carries Enterplace's message, code and decision ID. Claude Code labels any 403 "Failed to authenticate"; the text after the label is Enterplace's.
+
+## Tested
+
+`scripts/sdk_check.py` starts a mock provider and `enterplace serve`, then drives the Claude Agent SDK through it: a query with no built-in tools, and one with them on a rule that allows none (`tool_not_allowed`). It runs every framework that is installed and reports the rest as skipped.
+
+```bash
+cargo build -p enterplace-cli
+uv run --with 'pydantic-ai-slim[openai,anthropic]' --with litellm --with openai-agents \
+  --with llama-index-llms-openai-like --with autogen-agentchat --with 'autogen-ext[openai]' \
+  --with claude-agent-sdk python3 scripts/sdk_check.py target/debug/enterplace --js
+```
+
+Last run on 2026-11-15 with claude-agent-sdk 0.2.182 on Python 3.11. The TypeScript package was not run. The provider is a mock, so the run shows the framework and Enterplace agree on the wire format, not what a model answers. It needs network access to install the packages, so it is not part of `scripts/ci.sh`.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="What Enterplace does with Claude Code's requests." />
+	<LinkCard title="Tool permissions" href="/governance/tool-permissions/" description="Allow or deny the tools an agent declares." />
+	<LinkCard title="Budgets and rate limits" href="/governance/budgets-and-rate-limits/" description="Cap what an agent can spend." />
+</CardGrid>

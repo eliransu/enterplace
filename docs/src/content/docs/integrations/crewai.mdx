@@ -1,0 +1,46 @@
+---
+title: CrewAI
+description: Point a CrewAI agent's LLM at Enterplace with base_url and a Enterplace key.
+sidebar:
+  order: 27
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+CrewAI agents take an `LLM` object. Give it Enterplace's address and a Enterplace key, and each model call a crew makes is identified, decided and recorded.
+
+<Aside type="note">
+Not run. This page follows CrewAI's public documentation as read on 2026-11-15; CrewAI's install is large, so it is not in `scripts/sdk_check.py`.
+</Aside>
+
+## Send a request
+
+```bash
+pip install crewai
+```
+
+```python
+from crewai import LLM, Agent, Crew, Task
+
+llm = LLM(model="openai/gpt-4o-mini", base_url="http://127.0.0.1:8080/v1", api_key="enterplace_...")
+
+greeter = Agent(role="Greeter", goal="Greet people briefly.", backstory="You say hello.", llm=llm)
+task = Task(description="Say hello.", expected_output="One short greeting.", agent=greeter)
+print(Crew(agents=[greeter], tasks=[task]).kickoff())
+```
+
+- The `openai/` prefix tells CrewAI to speak chat completions. The name after it is the model name in Enterplace's policy, whichever provider serves it.
+- Give every agent the `llm`, the manager of a hierarchical crew included (`manager_llm=llm`). An agent without one uses CrewAI's default model with whatever `OPENAI_API_KEY` it finds, past the gateway.
+- Or set `OPENAI_API_BASE=http://127.0.0.1:8080/v1` and `OPENAI_API_KEY=enterplace_...` in the environment.
+
+## Tools and refusals
+
+A crew's tools are declared as function tools, so a rule's [tool permissions](/governance/tool-permissions/) apply by name. Give each crew a Enterplace key of its own, so its spend, its rate and its records are its own: see [Keys and identity](/governance/keys/).
+
+## Related
+
+<CardGrid>
+	<LinkCard title="OpenAI and Anthropic SDKs" href="/integrations/sdks/" description="Base URLs, keys and error fields." />
+	<LinkCard title="Tool permissions" href="/governance/tool-permissions/" description="Allow or deny the tools an agent declares." />
+	<LinkCard title="Budgets and rate limits" href="/governance/budgets-and-rate-limits/" description="Cap what an agent can spend." />
+</CardGrid>

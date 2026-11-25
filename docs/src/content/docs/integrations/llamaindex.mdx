@@ -1,0 +1,64 @@
+---
+title: LlamaIndex
+description: Point LlamaIndex's OpenAILike model at Enterplace for chat completions on any model the policy serves.
+sidebar:
+  order: 26
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+LlamaIndex reaches Enterplace through `OpenAILike`, its class for OpenAI-compatible endpoints. It takes any model name, so it works for every model Enterplace serves on its chat route.
+
+## Send a request
+
+```bash
+pip install llama-index-llms-openai-like
+```
+
+```python
+from llama_index.llms.openai_like import OpenAILike
+
+llm = OpenAILike(model="gpt-4o-mini", api_base="http://127.0.0.1:8080/v1", api_key="enterplace_...", is_chat_model=True)
+print(llm.complete("Say hello.").text)
+
+for chunk in llm.stream_complete("Say hello."):
+    print(chunk.delta or "", end="")
+```
+
+- `is_chat_model=True` makes it call `/v1/chat/completions`. Without it, LlamaIndex calls the legacy completions route.
+- Set it once for a whole application with `Settings.llm = llm` (`from llama_index.core import Settings`).
+- For tool calling, also pass `is_function_calling_model=True`. Declared tools are function tools, so a rule's [tool permissions](/governance/tool-permissions/) apply by name.
+- LlamaIndex's `OpenAI` class knows a fixed list of model names. Use `OpenAILike` for names of your own, aliases included.
+
+## Claude models
+
+Reach Claude through the same class by letting chat clients use it: set `accept_chat: true` on the `anthropic`, `bedrock` or `vertex_anthropic` provider. Enterplace translates the request to messages and the answer back. See [Translation](/routing/translation/).
+
+<Aside type="note">
+LlamaIndex's own Anthropic class (`llama-index-llms-anthropic`, with `base_url="http://127.0.0.1:8080"`) was not run: on 2026-11-15, with anthropic 2.8.0 installed, it raised a `TypeError` while building its message, before any request was sent.
+</Aside>
+
+## Refusals
+
+A refusal is raised as the OpenAI SDK's error (`openai.PermissionDeniedError` for a 403), with `e.code` holding Enterplace's code. Pass `max_retries=0` where a refusal should fail at once.
+
+## Tested
+
+`scripts/sdk_check.py` starts a mock provider and `enterplace serve`, then drives LlamaIndex through it: `complete` and `stream_complete` on `OpenAILike`, and a model the rule does not allow (`model_not_allowed`). It runs every framework that is installed and reports the rest as skipped.
+
+```bash
+cargo build -p enterplace-cli
+uv run --with 'pydantic-ai-slim[openai,anthropic]' --with litellm --with openai-agents \
+  --with llama-index-llms-openai-like --with autogen-agentchat --with 'autogen-ext[openai]' \
+  --with claude-agent-sdk python3 scripts/sdk_check.py target/debug/enterplace --js
+```
+
+Last run on 2026-11-15 with llama-index-llms-openai-like 0.9.0 and llama-index-core 0.14.26 on Python 3.11. The provider is a mock, so the run shows the framework and Enterplace agree on the wire format, not what a model answers. It needs network access to install the packages, so it is not part of `scripts/ci.sh`.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="OpenAI and Anthropic SDKs" href="/integrations/sdks/" description="Base URLs, keys and error fields." />
+	<LinkCard title="Translation" href="/routing/translation/" description="Reach a model through another API's route." />
+	<LinkCard title="Tool permissions" href="/governance/tool-permissions/" description="Allow or deny the tools an agent declares." />
+</CardGrid>

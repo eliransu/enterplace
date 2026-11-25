@@ -1,0 +1,60 @@
+---
+title: LiteLLM SDK
+description: Use the LiteLLM Python SDK as a client of Enterplace, with api_base and a Enterplace key, for OpenAI and Anthropic format calls.
+sidebar:
+  order: 22
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The LiteLLM Python SDK can call Enterplace like any OpenAI-compatible or Anthropic endpoint. Your code keeps `litellm.completion`; the provider keys, the policy and the audit log move to the gateway. To replace a LiteLLM proxy rather than point the SDK at Enterplace, see [Coming from LiteLLM](/migrate/from-litellm/).
+
+## Send a request
+
+```bash
+pip install litellm
+```
+
+```python
+import litellm
+
+say = [{"role": "user", "content": "Say hello."}]
+
+answer = litellm.completion(model="openai/gpt-4o-mini", api_base="http://127.0.0.1:8080/v1", api_key="enterplace_...", messages=say)
+print(answer.choices[0].message.content)
+
+for chunk in litellm.completion(model="openai/gpt-4o-mini", api_base="http://127.0.0.1:8080/v1", api_key="enterplace_...", messages=say, stream=True):
+    print(chunk.choices[0].delta.content or "", end="")
+
+answer = litellm.completion(model="anthropic/claude-sonnet-4-6", api_base="http://127.0.0.1:8080", api_key="enterplace_...", messages=say, max_tokens=256)
+print(answer.choices[0].message.content)
+```
+
+- The prefix picks the wire format, not the vendor. `openai/<model>` sends chat completions to `<api_base>/chat/completions`, so `api_base` ends in `/v1`. `anthropic/<model>` sends Anthropic messages, and `api_base` has no `/v1`.
+- The name after the prefix is the model name in Enterplace's policy, whichever provider serves it.
+- Any model Enterplace serves on its chat route, Gemini or Bedrock Converse included, is `openai/<model>` to the SDK.
+
+## Refusals
+
+A refusal is raised as a LiteLLM exception whose `status_code` is Enterplace's status and whose text holds Enterplace's message with its code: a 403 arrives as `litellm.APIError`. Pass `num_retries=0` where a refusal should fail at once.
+
+## Tested
+
+`scripts/sdk_check.py` starts a mock provider and `enterplace serve`, then drives the LiteLLM SDK through it: a chat completions call, a streamed one, an Anthropic messages call, and a model the rule does not allow (`model_not_allowed`). It runs every framework that is installed and reports the rest as skipped.
+
+```bash
+cargo build -p enterplace-cli
+uv run --with 'pydantic-ai-slim[openai,anthropic]' --with litellm --with openai-agents \
+  --with llama-index-llms-openai-like --with autogen-agentchat --with 'autogen-ext[openai]' \
+  --with claude-agent-sdk python3 scripts/sdk_check.py target/debug/enterplace --js
+```
+
+Last run on 2026-11-15 with litellm 1.109.1 on Python 3.11. The provider is a mock, so the run shows the framework and Enterplace agree on the wire format, not what a model answers. It needs network access to install the packages, so it is not part of `scripts/ci.sh`.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="OpenAI and Anthropic SDKs" href="/integrations/sdks/" description="Base URLs, keys and error fields." />
+	<LinkCard title="Refusal codes" href="/reference/refusal-codes/" description="Every code a refusal can carry." />
+	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue a Enterplace key for an app or a person." />
+</CardGrid>

@@ -128,10 +128,11 @@ def js_checks(base):
     subprocess.run(["node", "check.mjs"], cwd=work, check=True, env={**os.environ, "ENTERPLACE_URL": base, "ENTERPLACE_KEY": KEY})
 
 
-def main():
+def main(checks=None, handler=None):
+    """Runs `checks(base)` against a Enterplace in front of the mock; scripts/sdk_check.py passes its own."""
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     enterplace = str(pathlib.Path(args[0] if args else "target/release/enterplace").resolve())
-    provider = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Provider)
+    provider = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler or Provider)
     threading.Thread(target=provider.serve_forever, daemon=True).start()
     folder = pathlib.Path(tempfile.mkdtemp(prefix="enterplace-langchain-"))
     (folder / "enterplace.policy.yaml").write_text(policy(provider.server_address[1]))
@@ -151,12 +152,16 @@ def main():
                 break
             except OSError:
                 time.sleep(0.1)
-        python_checks(base)
-        if "--js" in sys.argv:
-            js_checks(base)
+        if checks:
+            checks(base)
+        else:
+            python_checks(base)
+            if "--js" in sys.argv:
+                js_checks(base)
     finally:
         serve.terminate()
         serve.wait(timeout=10)
 
 
-main()
+if __name__ == "__main__":
+    main()

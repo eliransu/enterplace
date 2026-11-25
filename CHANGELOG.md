@@ -84,6 +84,10 @@ one repository. How a release is made: RELEASING.md.
 - Identity provider guides: Zitadel, Auth0 and Ping Identity (PingOne) for OpenID Connect and SAML 2.0, and AWS IAM
   Identity Center for SAML 2.0 (it offers no OpenID Connect sign-in to an application of your own). Written from each
   vendor's public documentation and not run against a live tenant; each page says so.
+- SDK and framework guides, each with a snippet: Pydantic AI, the LiteLLM SDK as a client, the OpenAI Agents SDK, the
+  Claude Agent SDK, the Vercel AI SDK, LlamaIndex, CrewAI, AutoGen, n8n and Dify. `scripts/sdk_check.py` (with
+  `scripts/sdk_check.mjs` for `--js`) runs seven of them against a local Enterplace and a mock provider; CrewAI, n8n
+  and Dify are marked not run. `scripts/langchain_check.py` is importable, so the new check shares its mock and gateway.
 
 ### License
 

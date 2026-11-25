@@ -1,0 +1,66 @@
+---
+title: AutoGen
+description: Point AutoGen's OpenAIChatCompletionClient at Enterplace with base_url and a Enterplace key.
+sidebar:
+  order: 28
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+AutoGen agents take a model client. `OpenAIChatCompletionClient` with Enterplace's address and a Enterplace key sends each of an agent's model calls through the gateway.
+
+## Send a request
+
+```bash
+pip install autogen-agentchat 'autogen-ext[openai]'
+```
+
+```python
+import asyncio
+from autogen_agentchat.agents import AssistantAgent
+from autogen_ext.models.openai import OpenAIChatCompletionClient
+
+client = OpenAIChatCompletionClient(model="gpt-4o-mini", base_url="http://127.0.0.1:8080/v1", api_key="enterplace_...")
+agent = AssistantAgent("greeter", model_client=client)
+
+result = asyncio.run(agent.run(task="Say hello."))
+print(result.messages[-1].content)
+```
+
+For a model name AutoGen does not know (an alias, or a model that is not OpenAI's), the client needs a `model_info` saying what the model can do. This part follows AutoGen's documentation and was not run:
+
+```python
+client = OpenAIChatCompletionClient(
+    model="claude-sonnet-4-6",
+    base_url="http://127.0.0.1:8080/v1",
+    api_key="enterplace_...",
+    model_info={"vision": True, "function_calling": True, "json_output": False, "family": "unknown", "structured_output": False},
+)
+```
+
+A Claude model reached this way needs `accept_chat: true` on its provider. See [Translation](/routing/translation/).
+
+## Tools and refusals
+
+Tools given to an agent are declared as function tools, so a rule's [tool permissions](/governance/tool-permissions/) apply by name. A refusal is raised as the OpenAI SDK's error (`openai.PermissionDeniedError` for a 403), with `e.code` holding Enterplace's code. In a team of agents, give each agent's client a Enterplace key of its own to tell their requests apart in the audit log.
+
+## Tested
+
+`scripts/sdk_check.py` starts a mock provider and `enterplace serve`, then drives AutoGen through it: an `AssistantAgent` run on `gpt-4o-mini`, and a model the rule does not allow (`model_not_allowed`). It runs every framework that is installed and reports the rest as skipped.
+
+```bash
+cargo build -p enterplace-cli
+uv run --with 'pydantic-ai-slim[openai,anthropic]' --with litellm --with openai-agents \
+  --with llama-index-llms-openai-like --with autogen-agentchat --with 'autogen-ext[openai]' \
+  --with claude-agent-sdk python3 scripts/sdk_check.py target/debug/enterplace --js
+```
+
+Last run on 2026-11-15 with autogen-agentchat 0.7.5 and autogen-ext 0.7.5 on Python 3.11. The provider is a mock, so the run shows the framework and Enterplace agree on the wire format, not what a model answers. It needs network access to install the packages, so it is not part of `scripts/ci.sh`.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="OpenAI and Anthropic SDKs" href="/integrations/sdks/" description="Base URLs, keys and error fields." />
+	<LinkCard title="Tool permissions" href="/governance/tool-permissions/" description="Allow or deny the tools an agent declares." />
+	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue a Enterplace key for an app or a person." />
+</CardGrid>
