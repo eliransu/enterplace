@@ -37,9 +37,13 @@ one repository. How a release is made: RELEASING.md.
   an admin of the whole install decides for every device; a role kept to teams alone gets `403 outside_role`.
   `GET /console/devices/mcp` adds `scope` and, for an admin of the whole install, `orgs`. Decisions made before
   stay the install's. Enterprise migration `devices` 7.
+- `enterplace diagnose [--out bundle.tar.gz]` writes a support bundle: version, the policy with secrets redacted, the
+  keys counted, store and audit chain health, refusal codes of the last 24 hours, a `/metrics` snapshot and, in
+  Enterplace Enterprise, the license status. It changes nothing and holds no key, password, token or license.
 - `tls: { cert_file, key_file }` in the policy stands in for `--tls-cert` and `--tls-key`.
 - The enterprise binary's `serve` takes every flag of the open source one. It ignored `--tls-cert` and `--tls-key`
   before and served plain HTTP; it now serves HTTPS with them, and refuses a flag it does not know.
+
 ### License
 
 - The open source part is now under the MIT License, as LiteLLM's is. The root `LICENSE` says at the top that

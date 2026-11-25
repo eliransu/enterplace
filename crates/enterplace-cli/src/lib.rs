@@ -7,7 +7,11 @@ use std::{
     process::ExitCode,
 };
 
+mod diagnose;
+/// How `enterplace diagnose` is called, here and in the enterprise binary.
+pub const DIAGNOSE_USAGE: &str = "enterplace diagnose [--policy <file>] [--keys <file>] [--out <bundle.tar.gz>] [--metrics <host:port>]";
 mod start;
+pub use diagnose::diagnose;
 
 use enterplace_core::{
     audit, config, keyfile,
@@ -146,6 +150,10 @@ Commands:
         Create or update every table of the store the policy's store: names (default enterplace.policy.yaml), then
         stop. Run it as its own step (an init container, the Helm chart's migration Job) where the serving pods
         start with --no-migrate.
+  diagnose [--policy <file>] [--keys <file>] [--out <bundle.tar.gz>] [--metrics <host:port>]
+        Write a support bundle (default enterplace-diagnose.tar.gz): version, the policy with secrets redacted,
+        store and audit health, refusals of the last 24 hours by code, and a /metrics snapshot from --metrics
+        (or admin_listen). It holds no key, password or token.
   audit verify [<file>] [--org <org>] [--expect-last <hash>]
         Check that the audit log is one unbroken chain: no record changed, inserted or reordered.
         Prints the count and the last hash, to keep elsewhere. With --expect-last, it also checks
@@ -688,6 +696,31 @@ pub async fn run(args: &[String]) -> ExitCode {
             ),
             _ => None,
         },
+        ["diagnose", rest @ ..] => {
+            match options(rest, &["--policy", "--keys", "--out", "--metrics"]) {
+                Some((positional, named)) if positional.is_empty() => Some(
+                    diagnose(
+                        Path::new(
+                            named
+                                .get("--policy")
+                                .copied()
+                                .unwrap_or("enterplace.policy.yaml"),
+                        ),
+                        named.get("--keys").map(Path::new),
+                        Path::new(
+                            named
+                                .get("--out")
+                                .copied()
+                                .unwrap_or("enterplace-diagnose.tar.gz"),
+                        ),
+                        named.get("--metrics").copied(),
+                        &[],
+                    )
+                    .map_or_else(fail, |()| ExitCode::SUCCESS),
+                ),
+                _ => None,
+            }
+        }
         ["providers"] => {
             print!("{}", enterplace_core::catalog::table());
             Some(ExitCode::SUCCESS)
@@ -747,6 +780,7 @@ pub async fn run(args: &[String]) -> ExitCode {
             ["store", "migrate", ..] => Some("enterplace store migrate [--policy <file>] [--keys <file>]"),
             ["store", ..] => Some("enterplace store import --keys <file> [--policy <file>], or enterplace store migrate [--policy <file>]"),
             ["prices", ..] => Some("enterplace prices <model> [--policy <file>]"),
+            ["diagnose", ..] => Some(DIAGNOSE_USAGE),
             ["import", ..] => Some(
                 "enterplace import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>], or enterplace import litellm --url <proxy> --master-key-env <VAR> [--out <policy file>] [--keys-out <keys file>]",
             ),

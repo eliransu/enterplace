@@ -367,6 +367,34 @@ async fn main() -> ExitCode {
                 _ => Err("Usage: enterplace store migrate [--policy <file>] [--keys <file>]".to_owned()),
             }
         }
+        // The open source bundle plus the license's status: its fields, never the token.
+        Some("diagnose") => {
+            let named = ["--policy", "--keys", "--out", "--metrics"];
+            let given: Vec<Option<&str>> = named.iter().map(|n| flag(&args, n)).collect();
+            if args.len() != 1 + 2 * given.iter().flatten().count() {
+                Err(format!("Usage: {}", enterplace_cli::DIAGNOSE_USAGE))
+            } else {
+                let status = match license::from_env() {
+                    Ok(status) => match &status.license {
+                        Some(l) => serde_json::json!({
+                            "state": format!("{:?}", status.state).to_lowercase(),
+                            "customer": l.customer, "id": l.id, "features": l.features,
+                            "seats": l.seats, "issued": l.issued, "expires": l.expires,
+                        }),
+                        None => serde_json::json!({ "state": "missing", "describe": status.describe() }),
+                    },
+                    Err(err) => serde_json::json!({ "state": "invalid", "error": err }),
+                };
+                let text = serde_json::to_string_pretty(&status).unwrap_or_default() + "\n";
+                enterplace_cli::diagnose(
+                    Path::new(given[0].unwrap_or("enterplace.policy.yaml")),
+                    given[1].map(Path::new),
+                    Path::new(given[2].unwrap_or("enterplace-diagnose.tar.gz")),
+                    given[3],
+                    &[("license.json".to_string(), text)],
+                )
+            }
+        }
         // `serve` without a policy and `help` stay here, so the open source server never starts unlicensed from this binary.
         Some(command) if !matches!(command, "serve" | "help" | "--help" | "-h") => {
             return enterplace_cli::run(&args).await;

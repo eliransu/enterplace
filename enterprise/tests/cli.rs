@@ -128,3 +128,54 @@ fn a_secret_manager_reference_without_the_secrets_feature_stops_serve_with_the_f
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+#[test]
+fn diagnose_adds_the_license_status_and_never_the_license_or_a_key() -> TestResult {
+    let dir = std::env::temp_dir().join(format!(
+        "enterplace-enterprise-diagnose-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    let policy = dir.join("enterplace.policy.yaml");
+    let keys = dir.join("enterplace.keys.yaml");
+    let (policy_s, keys_s) = (policy.to_str().ok_or("path")?, keys.to_str().ok_or("path")?);
+    assert!(run(&["init", "--out", policy_s])?.status.success());
+    let out = run(&[
+        "key", "new", "maya", "--team", "payments", "--keys", keys_s, "--quiet",
+    ])?;
+    let key = String::from_utf8(out.stdout)?.trim().to_string();
+    let bundle = dir.join("bundle.tar.gz");
+    let token = "eyJsaWNlbnNlIjoibm90LXNpZ25lZCJ9.c2VjcmV0LXNpZ25hdHVyZQ";
+    let out = Command::new(env!("CARGO_BIN_EXE_enterplace-enterprise"))
+        .args(["diagnose", "--policy", policy_s, "--keys", keys_s, "--out"])
+        .arg(&bundle)
+        .env_remove("ENTERPLACE_LICENSE_FILE")
+        .env("ENTERPLACE_LICENSE", token)
+        .output()?;
+    assert!(out.status.success(), "{out:?}");
+    let unpacked = dir.join("unpacked");
+    std::fs::create_dir_all(&unpacked)?;
+    let tar = Command::new("tar")
+        .arg("-xzf")
+        .arg(&bundle)
+        .arg("-C")
+        .arg(&unpacked)
+        .output()?;
+    assert!(tar.status.success(), "{tar:?}");
+    let mut everything = String::new();
+    for entry in std::fs::read_dir(unpacked.join("enterplace-diagnose"))? {
+        everything += &std::fs::read_to_string(entry?.path())?;
+    }
+    let license = std::fs::read_to_string(unpacked.join("enterplace-diagnose/license.json"))?;
+    assert!(license.contains("\"state\": \"invalid\""), "{license}");
+    assert!(
+        everything.contains("\"count\": 1"),
+        "the key is counted: {everything}"
+    );
+    for secret in [token, key.as_str(), "c2VjcmV0LXNpZ25hdHVyZQ"] {
+        assert!(!everything.contains(secret), "{secret} is in the bundle");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

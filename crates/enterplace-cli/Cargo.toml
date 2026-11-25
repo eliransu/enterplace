@@ -17,6 +17,11 @@ enterplace-server.workspace = true
 enterplace-console.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+# `enterplace diagnose` reads the policy as data to redact it, and times its bundle. Both already enterplace-core's.
+serde-saphyr.workspace = true
+jiff.workspace = true
+# `enterplace diagnose` writes a .tar.gz. Already in the build through enterplace-enterprise (watch mode's gzip OTLP).
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [dev-dependencies]
 # The store tests make a fresh database for each test. Already a dependency of enterplace-server.

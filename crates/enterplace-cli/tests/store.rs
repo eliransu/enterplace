@@ -485,3 +485,114 @@ fn migrate_is_a_step_of_its_own_and_serve_no_migrate_changes_no_table() -> TestR
     assert!(String::from_utf8(out.stderr)?.contains("no store: section"));
     Ok(())
 }
+
+#[test]
+fn diagnose_writes_a_bundle_with_health_and_counts_and_no_secret() -> TestResult {
+    let Some(url) = database("diagnose")? else {
+        return Ok(());
+    };
+    let dir = workdir("diagnose")?;
+    // The admin address serves /metrics, which diagnose reads when no --metrics is given.
+    let admin_port = std::net::TcpListener::bind("127.0.0.1:0")?
+        .local_addr()?
+        .port();
+    std::fs::write(
+        dir.join("enterplace.policy.yaml"),
+        format!("{POLICY}admin_listen: 127.0.0.1:{admin_port}\n"),
+    )?;
+    let db = [("DATABASE_URL", url.as_str())];
+    let keys = path(&dir, "enterplace.keys.yaml");
+    let admin = ok(
+        &[
+            "key", "new", "ops", "--team", "payments", "--admin", "--quiet", "--keys", &keys,
+        ],
+        &db,
+    )?;
+    let admin = admin.trim().to_string();
+    let (_running, addr) = serve(&dir, &url)?;
+    chat(&addr, "enterplace_not_a_key_at_all_0000000000")?;
+    chat(&addr, &admin)?;
+
+    let bundle = path(&dir, "bundle.tar.gz");
+    let said = ok(
+        &[
+            "diagnose",
+            "--policy",
+            &path(&dir, "enterplace.policy.yaml"),
+            "--out",
+            &bundle,
+        ],
+        &[
+            ("DATABASE_URL", url.as_str()),
+            ("ENTERPLACE_TEST_PROVIDER_KEY", "provider-secret"),
+        ],
+    )?;
+    assert!(said.contains("no key, password or token"), "{said}");
+    let unpacked = dir.join("unpacked");
+    std::fs::create_dir_all(&unpacked)?;
+    let tar = Command::new("tar")
+        .args(["-xzf", &bundle, "-C", &unpacked.display().to_string()])
+        .output()?;
+    assert!(
+        tar.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tar.stderr)
+    );
+    let read =
+        |name: &str| std::fs::read_to_string(unpacked.join("enterplace-diagnose").join(name));
+
+    let version: serde_json::Value = serde_json::from_str(&read("version.json")?)?;
+    assert_eq!(version["enterplace"], enterplace_core::VERSION);
+    let store: serde_json::Value = serde_json::from_str(&read("store.json")?)?;
+    assert_eq!(store["reachable"], true, "{store}");
+    assert_eq!(store["schema"], "current", "{store}");
+    assert_eq!(store["admin_keys"], 1, "{store}");
+    let audit: serde_json::Value = serde_json::from_str(&read("audit.json")?)?;
+    assert_eq!(audit["chain"]["intact"], true, "{audit}");
+    let errors: serde_json::Value = serde_json::from_str(&read("errors.json")?)?;
+    assert_eq!(errors["by_code"]["unknown_key"], 1, "{errors}");
+    let config: serde_json::Value = serde_json::from_str(&read("config.json")?)?;
+    assert_eq!(config["loaded"]["valid"], true, "{config}");
+    assert_eq!(
+        config["environment"]["ENTERPLACE_TEST_PROVIDER_KEY"], "set",
+        "{config}"
+    );
+    assert!(
+        read("metrics.txt")?.contains("enterplace_"),
+        "{}",
+        read("metrics.txt")?
+    );
+
+    // Nothing secret in any file: not a key, its hash, the provider's key or the store's password.
+    let everything: String = [
+        "version.json",
+        "config.json",
+        "store.json",
+        "audit.json",
+        "errors.json",
+        "metrics.txt",
+    ]
+    .iter()
+    .map(|f| read(f).unwrap_or_default())
+    .collect();
+    let hash = enterplace_core::id::sha256_hex(admin.as_bytes());
+    // The test store's connection string is `host=... password='...' dbname=...`.
+    let password = url
+        .split(' ')
+        .find(|part| part.starts_with("password="))
+        .unwrap_or_default()
+        .to_string();
+    for secret in [
+        admin.as_str(),
+        &hash[8..],
+        "provider-secret",
+        url.as_str(),
+        password.as_str(),
+    ] {
+        assert!(
+            !secret.is_empty() && !everything.contains(secret),
+            "{secret} is in the bundle"
+        );
+    }
+    Ok(())
+}

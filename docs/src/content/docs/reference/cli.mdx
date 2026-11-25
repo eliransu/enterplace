@@ -153,6 +153,35 @@ enterplace store migrate [--policy <file>] [--keys <file>]
 
 It reads the same environment as `serve`: the variable `postgres_url_env` names, and `ENTERPLACE_MASTER_KEY` when you use one. From the image (Enterplace Enterprise), it also makes the tables of the features the license in `ENTERPLACE_LICENSE` unlocks. Running it twice changes nothing. Exit `0` when the schema is up to date, `2` otherwise. See [Migrations as a step of their own](/operations/store/#migrations-as-a-step-of-their-own).
 
+## diagnose
+
+Writes a support bundle: one `.tar.gz` to attach to a support request. It changes nothing (a store whose schema is behind is reported, not migrated) and holds no key, password or token.
+
+```text
+enterplace diagnose [--policy <file>] [--keys <file>] [--out <bundle.tar.gz>] [--metrics <host:port>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--policy <file>` | `enterplace.policy.yaml` | The policy the gateway runs with |
+| `--keys <file>` | `enterplace.keys.yaml` beside the policy | The keys file, counted and never copied |
+| `--out <file>` | `enterplace-diagnose.tar.gz` | Where the bundle is written |
+| `--metrics <host:port>` | the policy's `admin_listen` | The address a running gateway serves `/metrics` on (`serve --metrics` or `admin_listen`) |
+
+The bundle holds, under `enterplace-diagnose/`:
+
+| File | What it holds |
+|---|---|
+| `version.json` | Version, source hash, build date, OS and architecture |
+| `config.json` | The policy with every value that may be a secret replaced by `[redacted]` (fields named like a key, secret, token or password, every header value, text that looks like a key, the login part of URLs), what it loads to (providers, store, `admin_listen`), the keys counted (total, admin, expired), and each environment variable the policy names (and every `ENTERPLACE_*`) as `set` or `not set`, never its value |
+| `store.json` | Whether the store answers and its schema is current, with key and kill switch counts |
+| `audit.json` | The audit log's size and whether its chain holds, with record counts |
+| `errors.json` | Requests of the last 24 hours and their refusal and failure codes and statuses, counted: no record, person or key |
+| `metrics.txt` | A `/metrics` snapshot, or why there is none |
+| `license.json` | Enterplace Enterprise only: the license's state, customer, ID, features, seats and dates, never the token |
+
+Read it over before you send it: it names your providers' URLs, teams and rules.
+
 ## check
 
 Checks a policy file and its keys file. Prints every problem with its file, line and fix.
