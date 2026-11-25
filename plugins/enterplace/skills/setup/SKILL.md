@@ -3,8 +3,8 @@ name: setup
 description: Point Claude Code at a local Enterplace gateway. Use when the user asks to route Claude Code through Enterplace, set up Enterplace, or check that the gateway is in use.
 ---
 
-1. Check the gateway: `curl -fsS http://127.0.0.1:8080/healthz`. If it fails, tell the user to install and start it
-   (`curl -fsSL https://enterplace.dev/install.sh | sh`, then `enterplace start`) and stop. Do not install it yourself.
+1. Check the gateway: `curl -fsS http://127.0.0.1:8080/healthz`. If it fails, tell the user to install and start it by
+   following https://docs.enterplace.dev/getting-started/quickstart/ and stop. Do not install it yourself.
 2. Say what will change and ask before editing. Then add `"ANTHROPIC_BASE_URL": "http://127.0.0.1:8080"` under `env` in
    `~/.claude/settings.json`, keeping every other key. If the file is not valid JSON, stop and say so.
 3. Check that `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are unset in the shell and in that file. With either set,

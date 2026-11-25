@@ -22,5 +22,6 @@ and the plugin installs no hook, no MCP server and no background process. To und
 /enterplace:setup
 ```
 
-The gateway itself is installed apart from the plugin: `curl -fsSL https://enterplace.dev/install.sh | sh`, then
-`enterplace start`. Guide: https://docs.enterplace.dev/integrations/claude-code/
+The gateway itself is installed apart from the plugin. Follow the quickstart at
+https://docs.enterplace.dev/getting-started/quickstart/, then start it with `enterplace start`.
+Guide: https://docs.enterplace.dev/integrations/claude-code/
