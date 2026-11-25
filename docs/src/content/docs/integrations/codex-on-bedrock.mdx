@@ -14,10 +14,6 @@ Codex CLI speaks OpenAI's Responses API and nothing else: `wire_api = "responses
 | Bedrock's own Responses endpoint | The models Bedrock serves through the Responses API, such as the OpenAI models | `openai` | Checks it, records it and forwards the original bytes |
 | Converse, translated | Every family on Bedrock: Claude, Nova, Llama, Mistral and the rest | `bedrock_converse` | Translates Responses to chat completions, then to Converse |
 
-<Aside type="caution">
-The translated way is refused with Codex CLI 0.166.0. That version sends a `client_metadata` field on every request, which has no chat equivalent, so Enterplace answers `untranslatable` and names it. Use Bedrock's Responses endpoint, which forwards the body unchanged, until Enterplace's translation takes that field. `scripts/cloud_agents_check.py` reproduces the refusal.
-</Aside>
-
 ## Bedrock's Responses endpoint
 
 <Steps>
@@ -94,14 +90,7 @@ rules:
     models: [nova-pro, claude-sonnet-4-5]
 ```
 
-Codex's side is the same `config.toml` with `model = "nova-pro"`, plus one more setting:
-
-```toml title="~/.codex/config.toml"
-[features]
-multi_agent = false
-```
-
-With `multi_agent` on, its default, Codex declares its agent tools as a tool of type `namespace`. Only function tools translate, so Enterplace refuses the request with `untranslatable` and names the type. Web search must be off for the same reason.
+Codex's side is the same `config.toml` with `model = "nova-pro"`. Fields Codex sends that only label or cache the request on OpenAI's side, such as `client_metadata`, are dropped and listed in the decision record as `dropped_on_translation`. Its `namespace` agent tools become one function tool each and come back under their own names. Web search, an OpenAI-run tool, must be off.
 
 What is carried over, refused and dropped is listed under [Responses to chat](/routing/translation/#responses-to-chat-codex-on-any-provider) and [Bedrock Converse](/providers/bedrock/#bedrock-converse). Codex prints `Model metadata for "nova-pro" not found` and assumes a context window for a model it has no description of.
 
@@ -114,10 +103,10 @@ cargo build -p enterplace-cli
 python3 scripts/cloud_agents_check.py target/debug/enterplace codex-responses codex-converse
 ```
 
-| Run | Result on 2026-11-15, Codex CLI 0.166.0 |
+| Run | Result on 2026-11-25, Codex CLI 0.166.0 |
 |---|---|
 | `codex-responses`: an `openai` provider at `/openai/v1` | Passed. The mock received `POST /openai/v1/responses` and Codex printed its answer |
-| `codex-converse`: a `bedrock_converse` provider, `multi_agent = false` | Refused with `untranslatable`, naming `client_metadata` |
+| `codex-converse`: a `bedrock_converse` provider, Codex's default config | Passed. The mock received `POST /model/amazon.nova-pro-v1%3A0/converse-stream` |
 | Either way against Amazon Bedrock itself | Not run |
 
 ## Related

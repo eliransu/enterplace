@@ -174,7 +174,7 @@ def runs(folder, base):
     sonnet, haiku = "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     return {
         "codex-responses": codex(folder, base, "us.openai.gpt-5.6-sol"),
-        "codex-converse": codex(folder, base, "nova-pro", "\n[features]\nmulti_agent = false\n"),
+        "codex-converse": codex(folder, base, "nova-pro", ""),
         "claude-bedrock": claude(folder, {"ANTHROPIC_BASE_URL": base, "ANTHROPIC_API_KEY": KEY, "ANTHROPIC_MODEL": "claude-sonnet-4-5",
                                           "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5"}),
         "claude-vertex": claude(folder, {"ANTHROPIC_BASE_URL": base, "ANTHROPIC_API_KEY": KEY, "ANTHROPIC_MODEL": "claude-sonnet-4-5@20250929",
