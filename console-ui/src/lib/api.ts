@@ -29,4 +29,22 @@ export const api = {
 
 export const part = encodeURIComponent;
 
-export type Me = { name: string; role: string; edit_policy: boolean; credentials: boolean; source: "file" | "store"; policy: string; observe: boolean; tools: { href: string; label: string }[] };
+export type Me = {
+  name: string;
+  role: string;
+  edit_policy: boolean;
+  credentials: boolean;
+  source: "file" | "store";
+  policy: string;
+  observe: boolean;
+  tools: { href: string; label: string }[];
+  /// Whether every request must name its person. Missing on an older gateway: the app then hides the control.
+  names?: Names;
+};
+
+/// `required`: a request with no person token is refused. `passthrough`: a provider takes subscription logins, the
+/// only place a request can come without a name; with none, `required` is true and there is nothing to switch.
+export type Names = { required: boolean; passthrough: boolean };
+
+/// The person the gateway records for a request that named nobody.
+export const UNNAMED = "unknown";

@@ -1,11 +1,16 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-// Dense rows separated by hairlines, inside a panel: the console's Table.
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+// Dense rows separated by hairlines, inside a panel: the console's Table. `long`: a list of up to a page of rows
+// scrolls inside its panel under a header that stays put.
+function Table({ className, long, ...props }: React.ComponentProps<"table"> & { long?: boolean }) {
   return (
-    <div className="overflow-x-auto">
-      <table data-slot="table" className={cn("w-full border-separate border-spacing-0", className)} {...props} />
+    <div className={long ? "max-h-[75vh] overflow-auto" : "overflow-x-auto"}>
+      <table
+        data-slot="table"
+        className={cn("w-full border-separate border-spacing-0", long && "[&_th]:sticky [&_th]:top-0 [&_th]:z-[1] [&_th]:bg-card", className)}
+        {...props}
+      />
     </div>
   );
 }

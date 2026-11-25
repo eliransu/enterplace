@@ -49,8 +49,21 @@ export function useData<T>(path: string, every = 0, paused = false) {
     },
     [load],
   );
-  return { data, error, change };
+  return { data, error, change, reload: load };
 }
+
+/// Moves to `route` with `next` as its query, so a dialog, a filter or a tab is a link that can be shared and reopened.
+export function goTo(route: string, next: Record<string, string> | URLSearchParams = {}) {
+  const pairs = next instanceof URLSearchParams ? [...next] : Object.entries(next);
+  const query = new URLSearchParams(pairs.filter(([, v]) => v));
+  window.location.hash = `#${route}${query.size ? `?${query}` : ""}`;
+}
+
+/// Whole numbers the one way the app writes them: 1,234.
+export const num = (n: number) => n.toLocaleString("en-US");
+
+/// "1 key", "2 keys".
+export const count = (n: number, word: string, plural = `${word}s`) => `${num(n)} ${n === 1 ? word : plural}`;
 
 export const words = (text: string) =>
   text
