@@ -194,7 +194,7 @@ def run(chrome: Chrome, base: str, key: str, enterplace: str, folder: pathlib.Pa
     chrome.js("document.getElementById('key').focus()")
     chrome.type(key)
     chrome.key("Enter")
-    chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/start')", "Start here after sign-in")
+    chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/overview')", "Overview after sign-in")
     check(True, "an admin key signs in from a real browser form")
     chrome.go(f"{base}/console/audit", f"{base}/console/app/#/audit")
     chrome.wait("document.querySelector('table a[href*=\"record=\"]')", "the audit log in the app")

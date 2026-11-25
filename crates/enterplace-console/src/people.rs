@@ -244,9 +244,9 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
                     "{} for {} in {}. A key is shown once: Enterplace keeps only its hash.",
                     enterplace_core::count(entries.len(), "key"),
                     if names.len() == 1 {
-                        "1 person or workload".to_string()
+                        "1 person or app".to_string()
                     } else {
-                        format!("{} people and workloads", names.len())
+                        format!("{} people and apps", names.len())
                     },
                     enterplace_core::count(teams.len(), "team"),
                 )
@@ -415,6 +415,11 @@ async fn issue(State(console): State<Console>, headers: HeaderMap, bytes: Bytes)
                 ));
             }
             let person_token = flag(&body, "person_token");
+            let mut attributes = attributes;
+            // A service key names an app or an agent, not a person: the app's Apps and agents page lists it by this.
+            if flag(&body, "workload") && !person_token {
+                attributes.options.metadata.insert("kind".into(), "workload".into());
+            }
             let (key, rotated) = issued_as(&console, &admin, &name, &team, attributes, person_token)
                 .await
                 .map_err(bad)?;

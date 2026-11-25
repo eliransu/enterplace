@@ -482,7 +482,7 @@ async fn every_page_needs_a_live_session_except_sign_in_and_its_assets() -> Test
         let (status, headers, _) = send(&s.app, get(path, "")?).await?;
         assert_eq!(
             (status, location(&headers)),
-            (StatusCode::SEE_OTHER, "/console/app/#/spend"),
+            (StatusCode::SEE_OTHER, "/console/app/#/usage/spend"),
             "{path}"
         );
     }
@@ -754,7 +754,7 @@ async fn people_policy_and_spend_render_from_the_files() -> TestResult {
     );
     assert_eq!(
         people["lead"],
-        "2 keys for 2 people and workloads in 2 teams. A key is shown once: Enterplace keeps only its hash."
+        "2 keys for 2 people and apps in 2 teams. A key is shown once: Enterplace keeps only its hash."
     );
     // maya.cohen sent two requests; noa.bar none.
     assert_eq!(

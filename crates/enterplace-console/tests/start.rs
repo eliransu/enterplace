@@ -248,12 +248,12 @@ async fn the_old_addresses_land_on_the_app_route() -> TestResult {
     let s = setup("moved")?;
     // No session needed: the app asks for one, and sign-in comes back to the app route.
     for (path, to) in [
-        ("/console/start", "/console/app/#/start"),
+        ("/console/start", "/console/app/#/overview"),
         (
             "/console/start?track=coding&pay=subscriptions&setup=mdm",
-            "/console/app/#/start?track=coding&pay=subscriptions&setup=mdm",
+            "/console/app/#/coding?track=coding&pay=subscriptions&setup=mdm",
         ),
-        ("/console/start?pick=1", "/console/app/#/start?pick=1"),
+        ("/console/start?pick=1", "/console/app/#/overview?pick=1"),
         (
             "/console/start/state.json?pay=api",
             "/console/api/start?pay=api",

@@ -108,7 +108,7 @@ audit: {{ path: enterplace-audit.jsonl }}
         chrome.js("document.getElementById('key').focus()")
         chrome.type(admin)
         chrome.key("Enter")
-        chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/start')", "Start here after sign-in")
+        chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/overview')", "Overview after sign-in")
 
         # Prices: add a model through the app's dialog. Approval is on, so it waits; the second admin approves it.
         # The old address still opens the dialog.

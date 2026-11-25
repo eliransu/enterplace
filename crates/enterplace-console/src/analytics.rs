@@ -1,4 +1,4 @@
-//! Analytics in the console app (`/console/app/#/analytics`): requests, cost and refusals over a window, one chart
+//! Analytics in the console app (`/console/app/#/usage`): requests, cost and refusals over a window, one chart
 //! with a metric switch, a ranking by any dimension, and each budget's forecast at the pace it has spent at.
 //!
 //! Rows come from the store's index when the gateway has one (every replica), else from the local chain. Everything a
@@ -39,8 +39,8 @@ pub(crate) fn routes() -> Router<Console> {
 /// Every parameter of the old page is a parameter of the app route, so the query goes over as it is.
 fn moved(uri: &Uri) -> Response {
     match uri.query().filter(|q| !q.is_empty()) {
-        Some(query) => redirect(&format!("/console/app/#/analytics?{query}")),
-        None => redirect("/console/app/#/analytics"),
+        Some(query) => redirect(&format!("/console/app/#/usage?{query}")),
+        None => redirect("/console/app/#/usage"),
     }
 }
 

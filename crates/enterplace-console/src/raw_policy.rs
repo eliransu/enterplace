@@ -439,7 +439,7 @@ async fn editor(State(console): State<Console>, headers: HeaderMap, uri: Uri) ->
             let (text, note) = match crate::start::change(query.get("add")) {
                 Some(change) => (
                     crate::start::apply(&live.text, &change).0,
-                    "Added from Start here",
+                    "Added from a setup step",
                 ),
                 None => (live.text.clone(), ""),
             };

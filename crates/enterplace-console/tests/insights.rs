@@ -553,7 +553,7 @@ async fn the_old_analytics_address_opens_the_app_with_its_query() -> TestResult 
             .headers()
             .get(header::LOCATION)
             .and_then(|v| v.to_str().ok()),
-        Some("/console/app/#/analytics?by=team&window=24h")
+        Some("/console/app/#/usage?by=team&window=24h")
     );
     let response = s
         .app
@@ -565,7 +565,7 @@ async fn the_old_analytics_address_opens_the_app_with_its_query() -> TestResult 
             .headers()
             .get(header::LOCATION)
             .and_then(|v| v.to_str().ok()),
-        Some("/console/app/#/analytics")
+        Some("/console/app/#/usage")
     );
     Ok(())
 }

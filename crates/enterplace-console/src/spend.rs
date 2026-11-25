@@ -1,4 +1,4 @@
-//! Spend in the console app (`/console/app/#/spend`): this month's spend (UTC) from the usage records, per day, per
+//! Spend in the console app (`/console/app/#/usage/spend`): this month's spend (UTC) from the usage records, per day, per
 //! person and per model, against every budget of the policy and every key's own budget.
 //!
 //! Everything a test pins (money, the lead, each meter's note, the chart's scale and caption) is worded here; the
@@ -31,7 +31,10 @@ use crate::{
 pub(crate) fn routes() -> Router<Console> {
     Router::new()
         // The server-rendered page moved to the app: old links and bookmarks land there.
-        .route("/spend", get(|| async { redirect("/console/app/#/spend") }))
+        .route(
+            "/spend",
+            get(|| async { redirect("/console/app/#/usage/spend") }),
+        )
         .route("/api/spend", get(spend))
 }
 

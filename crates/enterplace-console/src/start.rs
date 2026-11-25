@@ -1,4 +1,4 @@
-//! Start here, the console home, in the console app (`/console/app/#/start`): the first-run welcome, the checklist of
+//! The setup checklists in the console app (`/console/app/#/overview`, and each use case's page): the first-run welcome, the checklist of
 //! the starting choice with live done detection, the first requests, and the five steps once the choice is set up.
 //! The API computes every step and its words; the app lays them out and polls, so a step turns done as the gateway
 //! sees it happen.
@@ -1034,7 +1034,7 @@ fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         ],
     )
     .finished(if connected.is_empty() {
-        "Using the demo model: answers are sample text, free. Connect a provider any time in [Provider credentials](/console/credentials), or on this step after [changing what to start with](/console/app/#/start?pick=1).".to_string()
+        "Using the demo model: answers are sample text, free. Connect a provider any time in [Provider credentials](/console/credentials), or on this step after [changing what to start with](/console/app/#/overview?pick=1).".to_string()
     } else {
         format!("Connected: {}. Its key is sealed; requests to its models go to it.", connected.join(", "))
     });
@@ -1694,7 +1694,7 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
                 "claude mcp add --transport http enterplace {}/mcp --header \"Authorization: Bearer $ENTERPLACE_KEY\"",
                 f.base
             )),
-            actions(vec![link("No key yet? Make one", "/console/app/#/start?track=coding&pay=api")]),
+            actions(vec![link("No key yet? Make one", "/console/app/#/coding?track=coding&pay=api")]),
         ],
     )
     .listening(
@@ -2185,7 +2185,7 @@ fn stages(f: &Facts, track: Track) -> Vec<Stage> {
                 )
             },
             why: "A budget refuses a team's requests once it is spent, so no bill is a surprise.",
-            action: ("Add a budget", "/console/app/#/start?track=limit".into()),
+            action: ("Add a budget", "/console/app/#/overview?track=limit".into()),
             guide: ("Read the Limit guide", "/start/step-3-limit/"),
             when: vec![(
                 "Every team with traffic has a budget".into(),
@@ -2481,7 +2481,14 @@ fn moved(uri: &Uri) -> Response {
         .filter(|name| !query.get(name).is_empty())
         .map(|name| format!("{name}={}", enc(query.get(name))))
         .collect();
-    let mut to = "/console/app/#/start".to_string();
+    // A use case with a page of its own opens there; the other starting choices are on Overview.
+    let page = match query.get("track") {
+        "coding" => "coding",
+        "apps" => "apps",
+        "mcp" => "mcp",
+        _ => "overview",
+    };
+    let mut to = format!("/console/app/#/{page}");
     if !kept.is_empty() {
         to.push('?');
         to.push_str(&kept.join("&"));
@@ -2546,13 +2553,13 @@ async fn pick(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) 
                 kept.steps = true;
                 (
                     json!({ "steps": true }),
-                    "The five steps of a rollout are on Start here.".to_string(),
+                    "The five steps of a rollout are on Overview.".to_string(),
                 )
             } else if is_on(&body, "skip") {
                 kept.skipped = true;
                 (
                     json!({ "skipped": true }),
-                    "Skipped. Start here keeps the choice one click away.".to_string(),
+                    "Skipped. Overview keeps the choice one click away.".to_string(),
                 )
             } else {
                 let Some(track) = Track::of(text(&body, "choice")) else {
@@ -3101,7 +3108,7 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
         },
         "People and workloads" => Empty {
             title: "Only your admin key so far",
-            body: "Make a key for each person or workload, so every request carries a name.".into(),
+            body: "Make a key for each person or app, so every request carries a name.".into(),
             action: key,
             docs: "/governance/keys/",
             extra: command("empty-copy", &format!("enterplace key new sarah.miller --team platform --url {base}")),

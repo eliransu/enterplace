@@ -234,7 +234,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> R
                         "command": format!("export ANTHROPIC_BASE_URL={base}"),
                         // The Code tab of the Claude desktop app sets ANTHROPIC_BASE_URL itself, so nothing ever arrives from it.
                         "notes": [
-                            "Claude Code on a Claude subscription needs this one line and no key. Other tools take a key: Start here shows their lines.",
+                            "Claude Code on a Claude subscription needs this one line and no key. Other tools take a key: Coding agents shows their lines.",
                             "Using the Claude desktop app? Its Code tab ignores your base URL. Run claude in a terminal.",
                         ],
                     })
