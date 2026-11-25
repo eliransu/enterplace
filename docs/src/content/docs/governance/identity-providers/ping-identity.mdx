@@ -1,0 +1,135 @@
+---
+title: Ping Identity
+description: Connect the Enterplace admin console to PingOne with OpenID Connect or SAML 2.0, and give people roles from their PingOne groups.
+sidebar:
+  label: Ping Identity (PingOne)
+  order: 9
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+PingOne can sign people in to the admin console with an OIDC Web App (`console.sso`) or a SAML application (`console.saml`). In both, an attribute mapping sends the names of the person's groups, and Enterplace maps them to a console role and, at `enterplace login`, to a team.
+
+The examples use `https://enterplace.example.com` for your Enterplace address, the environment ID `0a1b2c3d-4e5f-6789-abcd-ef0123456789`, and the groups `enterplace-admins` and `enterplace-viewers`.
+
+<Aside type="note">
+These steps follow PingOne's public documentation as read on 2026-11-15. They were not run against a PingOne environment. PingFederate is not covered: connect it as any OpenID Connect or SAML 2.0 provider, with the values on the [Single sign-on](/governance/single-sign-on/) and [SAML 2.0](/governance/saml/) pages.
+</Aside>
+
+## OpenID Connect
+
+<Steps>
+
+1. In the PingOne admin console, go to **Applications** > **Applications** and click the plus icon. Enter a name, select **OIDC Web App** as the application type, and click **Save**.
+
+2. On the **Configuration** tab, click the pencil icon and set:
+   - **Response Type**: **Code**
+   - **Grant Type**: **Authorization Code**
+   - **PKCE Enforcement**: the S256 option. Enterplace always sends an S256 challenge.
+   - **Redirect URIs**: `https://enterplace.example.com/console/sso/callback`
+   - **Token Endpoint Authentication Method**: **Client Secret Basic**
+
+   {/* the PKCE Enforcement option labels, and S256 enforcement together with a client secret, are not confirmed in PingOne's public docs, 2026-11 */}
+
+3. On the **Resources** tab, add the `email` and `profile` scopes to `openid`.
+
+4. On the **Attribute Mappings** tab, click the pencil icon, then **Add**. Enter `groups` under **Attributes** and choose **Group Names** under **PingOne Mappings**. Add `email` mapped to **Email Address** the same way, and save. Mapped attributes go in the ID token whatever scopes the request asks for.
+
+5. On the **Access** tab, add the two groups under the group membership policy, so only their members reach the application.
+
+6. Copy the **Client ID**, the **Client Secret** and the **Environment ID** from the **Configuration** tab, and turn the application on with the toggle at the top.
+
+</Steps>
+
+```yaml title="enterplace.policy.yaml"
+console:
+  sso:
+    issuer: https://auth.pingone.com/0a1b2c3d-4e5f-6789-abcd-ef0123456789/as
+    client_id: 6f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b
+    client_secret_env: ENTERPLACE_SSO_SECRET
+    redirect_url: https://enterplace.example.com/console/sso/callback
+    allowed_domains: [example.com]
+    role_claim: groups
+    admin_values: [enterplace-admins]
+    read_only_values: [enterplace-viewers]
+```
+
+The issuer is `https://auth.pingone.<region domain>/<environment ID>/as`, or `https://<custom domain>/as` with a custom domain. Read the exact value from `issuer` in the discovery document at `<issuer>/.well-known/openid-configuration`. Set the secret where Enterplace runs: `ENTERPLACE_SSO_SECRET=...`.
+
+<Aside type="caution">
+Decode one ID token before you rely on this setup. Enterplace needs `email` in the ID token, and refuses a token that says `email_verified: false` with `sso_email`. PingOne's documentation does not say which of the two it puts in the ID token for the `email` scope, which is why step 4 maps `email` by hand.
+</Aside>
+
+## SAML 2.0
+
+<Steps>
+
+1. Go to **Applications** > **Applications**, click the plus icon, enter a name and select the SAML application type. Click **Configure**.
+
+2. Choose **Import from URL** and give `https://enterplace.example.com/console/saml/metadata`. Or choose **Manually Enter**:
+   - **ACS URLs**: `https://enterplace.example.com/console/saml/acs`
+   - **Entity ID**: `https://enterplace.example.com/console/saml/metadata`
+
+3. On the **Configuration** tab, check:
+   - **Sign Assertion** selected (or **Sign Assertion & Response**)
+   - **Signing Algorithm**: `RSA_SHA256`
+   - **Encryption** off: Enterplace does not read encrypted assertions
+   - **Subject NameID format**: `urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress`
+   - **Enforce Signed Authentication Request** off: Enterplace does not sign its requests
+
+4. On the **Attribute Mappings** tab, map the subject (`saml_subject`) to **Email Address** {/* the saml_subject label is not confirmed in PingOne's public docs, 2026-11 */}, and add `email` mapped to **Email Address** and `groups` mapped to **Group Names**.
+
+5. On the **Access** tab, add the two groups, and turn **Application Portal Display** off. A click on the portal tile starts the sign-in at PingOne, which Enterplace refuses. People start at `/console`.
+
+6. On the **Configuration** tab, click **Download Signing Certificate** and choose the X509 PEM format. Copy the issuer ID and the single sign-on URL from the application's connection details, or read all three from its metadata. Turn the application on.
+
+   {/* the console labels for the issuer ID, the SSO URL and the metadata link are not confirmed in PingOne's public docs, 2026-11 */}
+
+</Steps>
+
+{/* not checked: the certificate is a placeholder */}
+```yaml title="enterplace.policy.yaml"
+console:
+  saml:
+    idp_entity_id: https://auth.pingone.com/0a1b2c3d-4e5f-6789-abcd-ef0123456789
+    idp_sso_url: https://auth.pingone.com/0a1b2c3d-4e5f-6789-abcd-ef0123456789/saml20/idp/sso
+    idp_certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIDejCCAmKgAwIBAgIGAY...
+      -----END CERTIFICATE-----
+    sp_entity_id: https://enterplace.example.com/console/saml/metadata
+    acs_url: https://enterplace.example.com/console/saml/acs
+    email_attribute: email
+    role_attribute: groups
+    admin_values: [enterplace-admins]
+    read_only_values: [enterplace-viewers]
+    allowed_domains: [example.com]
+```
+
+The entity ID is `https://auth.pingone.<region domain>/<environment ID>`. Take `idp_sso_url` from the application's metadata (the `SingleSignOnService` location for the HTTP-Redirect binding) rather than from this example.
+
+## Teams and custom roles
+
+The values work beyond the two built-in roles. A custom role under `roles:` takes them in `sso_values`, and so does a team under `teams:`. At `enterplace login`, a person listed in a team's `members` gets that team, otherwise the first team whose `sso_values` match one of their values, otherwise `self_issue.team`.
+
+## Check it
+
+<Steps>
+
+1. Open `https://enterplace.example.com/console` in a private window and click the sign-in button.
+
+2. Sign in at PingOne as a member of `enterplace-admins`. The console opens with the admin role.
+
+3. Sign in as a member of `enterplace-viewers` only. The console opens read only.
+
+</Steps>
+
+A refusal with `sso_role` means the groups held no configured value. Check the `groups` mapping is **Group Names**, not **Group IDs**, and the exact group names in the policy.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Every console.sso field, check and refusal code." />
+	<LinkCard title="SAML 2.0" href="/governance/saml/" description="Every console.saml field and what Enterplace checks." />
+	<LinkCard title="Console roles" href="/governance/policy/#console-roles" description="Custom roles with sso_values." />
+</CardGrid>

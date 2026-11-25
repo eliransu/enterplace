@@ -1,0 +1,151 @@
+---
+title: Auth0
+description: Connect the Enterplace admin console to Auth0 with OpenID Connect or SAML 2.0, and give people roles from their Auth0 roles.
+sidebar:
+  order: 8
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Auth0 can sign people in to the admin console as a Regular Web Application over OpenID Connect (`console.sso`) or through the application's SAML2 Web App addon (`console.saml`). Auth0 puts no roles in its tokens or assertions by default, so both setups add a post-login Action that does.
+
+The examples use `https://enterplace.example.com` for your Enterplace address, the tenant `example.us.auth0.com`, and the Auth0 roles `enterplace-admins` and `enterplace-viewers`.
+
+<Aside type="note">
+These steps follow Auth0's public documentation as read on 2026-11-15. They were not run against an Auth0 tenant.
+</Aside>
+
+## Roles
+
+In the Auth0 Dashboard, go to **User Management** > **Roles**, create `enterplace-admins` and `enterplace-viewers`, and assign each person the one they should have.
+
+## OpenID Connect
+
+<Steps>
+
+1. Go to **Applications** > **Applications** and click **Create Application**. Enter a name, select **Regular Web Applications**, and click **Create**.
+
+2. On the **Settings** tab, add `https://enterplace.example.com/console/sso/callback` to **Allowed Callback URLs** and save. `enterplace login` comes back on the same URL.
+
+3. Copy the **Domain**, the **Client ID** and the **Client Secret** from the same tab.
+
+4. Add the roles to the ID token. Go to **Actions** > **Library**, create a custom Action on the **Login / Post Login** trigger with this code, deploy it, and add it to the post-login flow:
+
+   ```js title="Add roles to tokens"
+   exports.onExecutePostLogin = async (event, api) => {
+     const namespace = 'https://enterplace.example.com';
+     if (event.authorization) {
+       api.idToken.setCustomClaim(`${namespace}/roles`, event.authorization.roles);
+     }
+   };
+   ```
+
+   The claim needs a namespace. Auth0 keeps `roles` and `groups` for itself and leaves a custom claim with one of those names out of the token without an error. A namespace starts with `http://` or `https://` and cannot be an Auth0 domain.
+
+</Steps>
+
+```yaml title="enterplace.policy.yaml"
+console:
+  sso:
+    issuer: https://example.us.auth0.com/
+    client_id: 4f8Xq2mVb7Lw9nRt3KpYc6Zd1Hs5Ga0J
+    client_secret_env: ENTERPLACE_SSO_SECRET
+    redirect_url: https://enterplace.example.com/console/sso/callback
+    allowed_domains: [example.com]
+    role_claim: https://enterplace.example.com/roles
+    admin_values: [enterplace-admins]
+    read_only_values: [enterplace-viewers]
+```
+
+- **The issuer ends with a slash.** Auth0 writes `iss` as `https://<domain>/`, and Enterplace compares it exactly. Read the value from `issuer` in `https://example.us.auth0.com/.well-known/openid-configuration`.
+- **`role_claim` is the whole claim name**, namespace included. Enterplace reads it as one top-level claim.
+- Set the secret where Enterplace runs: `ENTERPLACE_SSO_SECRET=...`.
+
+<Aside type="caution">
+Enterplace refuses `email_verified: false` with `sso_email`. Auth0 sends `false` for a database user who has not clicked the verification link, and for a social or enterprise connection whose provider does not say the email is verified. Verify the address, or use a connection that reports it.
+</Aside>
+
+## SAML 2.0
+
+<Steps>
+
+1. Open the application (the same one, or a new Regular Web Application) and go to its **Addons** tab. Turn on **SAML2 Web App**.
+
+2. On the addon's **Settings** tab, set **Application Callback URL** to `https://enterplace.example.com/console/saml/acs`.
+
+3. Paste these settings, then click **Enable**:
+
+   ```json title="Settings"
+   {
+     "audience": "https://enterplace.example.com/console/saml/metadata",
+     "mappings": { "email": "email" },
+     "nameIdentifierFormat": "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+     "nameIdentifierProbes": ["http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"],
+     "signatureAlgorithm": "rsa-sha256",
+     "digestAlgorithm": "sha256",
+     "signResponse": false
+   }
+   ```
+
+   Set both algorithms: Auth0's documentation gives SHA-1 as the addon's default in one place, and Enterplace refuses SHA-1. `signResponse: false` signs the assertion.
+
+4. Send the roles as an attribute. Add this line to the post-login Action, inside the `if`:
+
+   ```js
+   api.samlResponse.setAttribute('roles', event.authorization.roles);
+   ```
+
+   {/* a list value giving one AttributeValue per role is not confirmed in Auth0's public docs, 2026-11 */}
+
+5. On the addon's **Usage** tab, copy the **Issuer** and the **Identity Provider Login URL**, and download the certificate.
+
+</Steps>
+
+{/* not checked: the certificate is a placeholder */}
+```yaml title="enterplace.policy.yaml"
+console:
+  saml:
+    idp_entity_id: urn:example.us.auth0.com
+    idp_sso_url: https://example.us.auth0.com/samlp/4f8Xq2mVb7Lw9nRt3KpYc6Zd1Hs5Ga0J
+    idp_certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIDDTCCAfWgAwIBAgIJ...
+      -----END CERTIFICATE-----
+    sp_entity_id: https://enterplace.example.com/console/saml/metadata
+    acs_url: https://enterplace.example.com/console/saml/acs
+    email_attribute: email
+    role_attribute: roles
+    admin_values: [enterplace-admins]
+    read_only_values: [enterplace-viewers]
+    allowed_domains: [example.com]
+```
+
+Copy `idp_entity_id` from the **Issuer** on the **Usage** tab rather than from this example. The login URL is `https://<domain>/samlp/<client ID>`.
+
+Opening that login URL directly makes Auth0 send a response nobody asked for. Enterplace refuses it with `saml_replay`: people start at `/console`.
+
+## Teams and custom roles
+
+The values work beyond the two built-in roles. A custom role under `roles:` takes them in `sso_values`, and so does a team under `teams:`. At `enterplace login`, a person listed in a team's `members` gets that team, otherwise the first team whose `sso_values` match one of their values, otherwise `self_issue.team`.
+
+## Check it
+
+<Steps>
+
+1. Open `https://enterplace.example.com/console` in a private window and click the sign-in button.
+
+2. Sign in at Auth0 as a person with the `enterplace-admins` role. The console opens with the admin role.
+
+3. Sign in as a person with `enterplace-viewers` only. The console opens read only.
+
+</Steps>
+
+A refusal with `sso_role` means no configured value arrived. Check that the Action is deployed and in the post-login flow, and that `role_claim` is the namespaced name the Action sets. A refusal with `sso_issuer` usually means the trailing slash is missing from `issuer`.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Every console.sso field, check and refusal code." />
+	<LinkCard title="SAML 2.0" href="/governance/saml/" description="Every console.saml field and what Enterplace checks." />
+	<LinkCard title="Console roles" href="/governance/policy/#console-roles" description="Custom roles with sso_values." />
+</CardGrid>

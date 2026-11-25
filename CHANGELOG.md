@@ -81,6 +81,9 @@ one repository. How a release is made: RELEASING.md.
   `scripts/cloud_agents_check.py` runs the installed `codex` and `claude` against a local Enterplace and a mock of the
   cloud endpoints. Known gap it shows: Codex CLI 0.166.0 sends `client_metadata`, which the Responses to chat
   translation refuses with `untranslatable`, so Codex reaches Bedrock only through Bedrock's own Responses endpoint.
+- Identity provider guides: Zitadel, Auth0 and Ping Identity (PingOne) for OpenID Connect and SAML 2.0, and AWS IAM
+  Identity Center for SAML 2.0 (it offers no OpenID Connect sign-in to an application of your own). Written from each
+  vendor's public documentation and not run against a live tenant; each page says so.
 
 ### License
 

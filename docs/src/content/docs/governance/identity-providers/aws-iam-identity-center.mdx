@@ -1,0 +1,110 @@
+---
+title: AWS IAM Identity Center
+description: Connect the Enterplace admin console to AWS IAM Identity Center with SAML 2.0, and give people roles from their Identity Center groups.
+sidebar:
+  order: 10
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+AWS IAM Identity Center signs people in to the admin console as a customer managed SAML 2.0 application (`console.saml`). It sends the IDs of the person's groups, and Enterplace maps those IDs to a console role and, at `enterplace login`, to a team.
+
+The examples use `https://enterplace.example.com` for your Enterplace address.
+
+<Aside type="note">
+These steps follow AWS's public documentation as read on 2026-11-15. They were not run against IAM Identity Center. The points to test first are marked below.
+</Aside>
+
+## OpenID Connect
+
+IAM Identity Center does not offer OpenID Connect sign-in to an application of your own. Its customer managed applications are SAML 2.0, or OAuth 2.0 for trusted identity propagation to AWS services, which issues no ID token to a web application. Use SAML, or put an OpenID Connect provider in front (the identity source behind Identity Center, such as [Okta](/governance/identity-providers/okta/) or [Microsoft Entra ID](/governance/identity-providers/entra-id/), connects to Enterplace directly).
+
+## SAML 2.0
+
+A SAML application needs an organization instance of IAM Identity Center.
+
+<Steps>
+
+1. In the IAM Identity Center console, choose **Applications**, open the **Customer managed** tab and choose **Add application**.
+
+2. Under **Setup preference**, choose **I have an application I want to set up**. Under **Application type**, choose **SAML 2.0**. Choose **Next**.
+
+3. Enter a **Display name**. Under **IAM Identity Center metadata**, download the **IAM Identity Center SAML metadata file** and the **IAM Identity Center certificate**.
+
+4. Under **Application properties**, set **Application start URL** to `https://enterplace.example.com/console/saml/start`. A click on the access portal tile then opens Enterplace, which starts the sign-in itself. Enterplace refuses a sign-in started at Identity Center.
+
+5. Under **Application metadata**, choose **Manually type your metadata values**:
+   - **Application ACS URL**: `https://enterplace.example.com/console/saml/acs`
+   - **Application SAML audience**: `https://enterplace.example.com/console/saml/metadata`
+
+   Choose **Submit**.
+
+6. On the application's page, choose **Actions** > **Edit attribute mapping** and add:
+
+   | Attribute in the application | Value in IAM Identity Center | Format |
+   |---|---|---|
+   | `Subject` | `${user:email}` | `emailAddress` |
+   | `email` | `${user:email}` | `unspecified` |
+   | `groups` | `${user:groups}` | `unspecified` |
+
+   Choose **Save changes**.
+
+7. Under **Assigned users**, choose **Assign users** and assign the groups that should reach the console. Nested groups are not supported: assign the group a person is a direct member of.
+
+8. Find each group's ID: choose **Groups**, open the group, and copy its group ID. {/* field label not confirmed in AWS's public docs, 2026-11 */}
+
+</Steps>
+
+{/* not checked: the certificate is a placeholder */}
+```yaml title="enterplace.policy.yaml"
+console:
+  saml:
+    idp_entity_id: https://portal.sso.us-east-1.amazonaws.com/saml/assertion/MDEyMzQ1Njc4OTAxX2lucy0x
+    idp_sso_url: https://portal.sso.us-east-1.amazonaws.com/saml/assertion/MDEyMzQ1Njc4OTAxX2lucy0x
+    idp_certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIDBzCCAe+gAwIBAgIFAJ...
+      -----END CERTIFICATE-----
+    sp_entity_id: https://enterplace.example.com/console/saml/metadata
+    acs_url: https://enterplace.example.com/console/saml/acs
+    email_attribute: email
+    role_attribute: groups
+    admin_values: ["a1b2c3d4-5678-90ab-cdef-EXAMPLE11111"]
+    read_only_values: ["a1b2c3d4-5678-90ab-cdef-EXAMPLE22222"]
+    allowed_domains: [example.com]
+```
+
+Copy `idp_entity_id` (the `entityID`) and `idp_sso_url` (the `SingleSignOnService` location for the HTTP-Redirect binding) from the metadata file you downloaded. The two URLs above are placeholders and are not the form AWS documents.
+
+- **Groups arrive as IDs.** `${user:groups}` sends each group's ID, not its name (AWS's user guide does not list this value; its OpenSearch and Client VPN guides use it), so `admin_values`, `read_only_values` and every `sso_values` list hold group IDs. Comment each with the group's name.
+- **Certificates.** Identity Center makes one certificate per application, valid five years. To rotate, generate a new one under **Manage certificate**, put both PEM blocks in `idp_certificate`, set the new one active, then remove the old block.
+
+<Aside type="caution">
+Test three things before you roll this out. Enterplace sends its request with the HTTP-Redirect binding, and AWS's documentation describes only a request sent by POST. Decode one response to see what `groups` holds. And if the downloaded certificate was made with SHA-1, generate one with SHA-256 under **Manage certificate**: Enterplace refuses SHA-1 signatures with `saml_signature`.
+</Aside>
+
+## Teams and custom roles
+
+The values work beyond the two built-in roles. A custom role under `roles:` takes them in `sso_values`, and so does a team under `teams:`. At `enterplace login`, a person listed in a team's `members` gets that team, otherwise the first team whose `sso_values` match one of their values, otherwise `self_issue.team`.
+
+## Check it
+
+<Steps>
+
+1. Open `https://enterplace.example.com/console` in a private window and click the sign-in button.
+
+2. Sign in at the AWS access portal as a member of the admin group. The console opens with the admin role.
+
+3. Sign in as a member of the read-only group only. The console opens read only.
+
+</Steps>
+
+A refusal with `sso_role` means no group ID matched. Check the IDs in the policy against **Groups** in Identity Center, and that the person is a direct member. A refusal with `saml_replay` means the sign-in started at the access portal: set the **Application start URL**.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Every console.sso field, check and refusal code." />
+	<LinkCard title="SAML 2.0" href="/governance/saml/" description="Every console.saml field and what Enterplace checks." />
+	<LinkCard title="Console roles" href="/governance/policy/#console-roles" description="Custom roles with sso_values." />
+</CardGrid>

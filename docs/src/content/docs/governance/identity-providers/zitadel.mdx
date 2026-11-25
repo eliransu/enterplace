@@ -1,0 +1,165 @@
+---
+title: Zitadel
+description: Connect the Enterplace admin console to Zitadel with OpenID Connect or SAML 2.0, and give people roles from their Zitadel project roles.
+sidebar:
+  order: 7
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Zitadel can sign people in to the admin console with an OpenID Connect application (`console.sso`) or a SAML application (`console.saml`). Zitadel sends project roles as an object, and Enterplace reads a string or a list, so both setups add a Zitadel Action that writes the role keys as a flat list.
+
+The examples use `https://enterplace.example.com` for your Enterplace address, `https://example.zitadel.cloud` for your Zitadel instance, and the project roles `enterplace-admins` and `enterplace-viewers`.
+
+<Aside type="note">
+These steps follow Zitadel's public documentation as read on 2026-11-15. They were not run against a Zitadel instance.
+</Aside>
+
+## Roles
+
+<Steps>
+
+1. In the Zitadel console, open the project that will hold the Enterplace application. On its **Roles** tab, add the roles `enterplace-admins` and `enterplace-viewers`.
+
+2. On the project's **Authorizations** tab, grant each person the role they should have. {/* tab label not confirmed in Zitadel's public docs, 2026-11 */}
+
+3. In the project's general settings, select **Assert Roles on Authentication**.
+
+</Steps>
+
+## OpenID Connect
+
+<Steps>
+
+1. In the project, click **New** and choose the application type **Web**.
+
+2. Choose the authentication method **Code**, which gives the application a client secret. Enterplace sends the secret and a PKCE challenge (S256).
+
+3. Under **Redirect URIs**, add `https://enterplace.example.com/console/sso/callback`. `enterplace login` comes back on the same URI.
+
+4. Create the application and copy the client ID and the client secret from **Client information**.
+
+5. In the application's token settings, select **User Roles Inside ID Token**. Enterplace reads the ID token only and does not call the userinfo endpoint.
+
+6. Add an Action that writes the role keys as a list. Under **Actions**, create this script, then add it to the **Complement Token** flow on the triggers **Pre Userinfo creation** and **Pre access token creation**:
+
+   ```js title="enterplaceRoles"
+   function enterplaceRoles(ctx, api) {
+     if (ctx.v1.user.grants == undefined || ctx.v1.user.grants.count == 0) {
+       return;
+     }
+     let roles = [];
+     ctx.v1.user.grants.grants.forEach(grant => {
+       grant.roles.forEach(role => {
+         roles.push(role);
+       });
+     });
+     api.v1.claims.setClaim('enterplace_roles', roles);
+   }
+   ```
+
+   This is Zitadel's documented example for custom claims, changed to push the role key alone.
+   {/* that the Pre Userinfo creation trigger also sets ID token claims is not confirmed in Zitadel's public docs, 2026-11 */}
+
+   These scripts are Zitadel Actions version 1. With Actions version 2, which call an HTTP endpoint of yours instead of running a script, return the same claim from the `preuserinfo` function's `append_claims`, and the attribute from `presamlresponse`'s `append_attribute`.
+
+</Steps>
+
+```yaml title="enterplace.policy.yaml"
+console:
+  sso:
+    issuer: https://example.zitadel.cloud
+    client_id: "284736251849302847"
+    client_secret_env: ENTERPLACE_SSO_SECRET
+    redirect_url: https://enterplace.example.com/console/sso/callback
+    allowed_domains: [example.com]
+    role_claim: enterplace_roles
+    admin_values: [enterplace-admins]
+    read_only_values: [enterplace-viewers]
+```
+
+The issuer is your instance's address. Read the exact value from `issuer` in `https://example.zitadel.cloud/.well-known/openid-configuration`. Set the secret where Enterplace runs: `ENTERPLACE_SSO_SECRET=...`.
+
+<Aside type="caution">
+Do not set `role_claim` to Zitadel's own `urn:zitadel:iam:org:project:roles`. That claim is an object keyed by role, not a string or a list, so Enterplace finds no value in it and refuses everyone with `sso_role`.
+</Aside>
+
+Zitadel sends `email_verified` with the `email` scope. Enterplace refuses `email_verified: false` with `sso_email`, so a person must verify their address in Zitadel first.
+
+## SAML 2.0
+
+<Steps>
+
+1. In the project, click **New** and choose **SAML**.
+
+2. Give Zitadel Enterplace's metadata, by URL (`https://enterplace.example.com/console/saml/metadata`) or by uploading the XML saved from that address. It carries the entity ID and the assertion consumer service URL.
+
+3. Add an Action that sends the roles as an attribute. Under **Actions**, create this script, then add it to the **Complement SAMLResponse** flow on the trigger **Pre SAMLResponse creation**:
+
+   ```js title="enterplaceSamlRoles"
+   function enterplaceSamlRoles(ctx, api) {
+     if (ctx.v1.user.grants == undefined || ctx.v1.user.grants.count == 0) {
+       return;
+     }
+     let roles = [];
+     ctx.v1.user.grants.grants.forEach(grant => {
+       grant.roles.forEach(role => {
+         roles.push(role);
+       });
+     });
+     api.v1.attributes.setCustomAttribute('Roles', '', ...roles);
+   }
+   ```
+
+4. Read the identity provider's values from `https://example.zitadel.cloud/saml/v2/metadata`: the `entityID`, the single sign-on location for the HTTP-Redirect binding, and the signing certificate. The certificate alone is at `https://example.zitadel.cloud/saml/v2/certificate`.
+
+</Steps>
+
+{/* not checked: the certificate is a placeholder */}
+```yaml title="enterplace.policy.yaml"
+console:
+  saml:
+    idp_entity_id: https://example.zitadel.cloud/saml/v2/metadata
+    idp_sso_url: https://example.zitadel.cloud/saml/v2/SSO
+    idp_certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIFIjCCAwqgAwIBAgICA...
+      -----END CERTIFICATE-----
+    sp_entity_id: https://enterplace.example.com/console/saml/metadata
+    acs_url: https://enterplace.example.com/console/saml/acs
+    email_attribute: Email
+    role_attribute: Roles
+    admin_values: [enterplace-admins]
+    read_only_values: [enterplace-viewers]
+    allowed_domains: [example.com]
+```
+
+- **`email_attribute: Email`**, with a capital E, is the attribute Zitadel sends. Keep it: Zitadel's NameID is the person's login name, which is not always their email.
+- Zitadel supports only sign-ins started by the service provider, which is the only kind Enterplace accepts.
+- Copy `idp_entity_id` from the metadata's `entityID` rather than from this example.
+
+## Teams and custom roles
+
+The values work beyond the two built-in roles. A custom role under `roles:` takes them in `sso_values`, and so does a team under `teams:`. At `enterplace login`, a person listed in a team's `members` gets that team, otherwise the first team whose `sso_values` match one of their values, otherwise `self_issue.team`.
+
+## Check it
+
+<Steps>
+
+1. Open `https://enterplace.example.com/console` in a private window and click the sign-in button.
+
+2. Sign in at Zitadel as a person granted `enterplace-admins`. The console opens with the admin role.
+
+3. Sign in as a person granted `enterplace-viewers` only. The console opens read only.
+
+</Steps>
+
+A refusal with `sso_role` means the claim or attribute held no configured value. Check that the Action is attached to its flow, that the project asserts roles, and that the person has a grant in this project.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Single sign-on" href="/governance/single-sign-on/" description="Every console.sso field, check and refusal code." />
+	<LinkCard title="SAML 2.0" href="/governance/saml/" description="Every console.saml field and what Enterplace checks." />
+	<LinkCard title="Console roles" href="/governance/policy/#console-roles" description="Custom roles with sso_values." />
+</CardGrid>
