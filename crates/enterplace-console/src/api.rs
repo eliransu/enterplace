@@ -1127,7 +1127,14 @@ async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Respo
                 })
             })
             .collect();
+        let policy = &console.config().policy;
+        let agent = crate::start::guardrail_prompt(
+            &crate::base(),
+            &policy.display().to_string(),
+            enterplace_core::store::policy_store(policy).is_some(),
+        );
         Ok(ok(json!({
+            "guard_agent": agent,
             "mode": tree.get("mode").and_then(Value::as_str).unwrap_or("enforce"),
             "rules": rules,
             "limits": limits,
@@ -1515,8 +1522,9 @@ async fn limit_remove(
 // ---------------------------------------------------------------- guardrail definitions
 
 /// The keys the guardrail form sets; any other key of an entry (a vendor's own setting) is kept on an edit.
-const GUARD_FORM_KEYS: [&str; 11] = [
+const GUARD_FORM_KEYS: [&str; 12] = [
     "type",
+    "shadow_until",
     "action",
     "on",
     "url",
@@ -1587,7 +1595,8 @@ fn guard_fields(entry: &mut Map<String, Value>, body: &Map<String, Value>) -> Re
         }
         entry.insert("on".into(), strings(&sides));
     }
-    for key in ["url", "key_env", "model", "region"] {
+    // Try first until: the check refuses a date it cannot read, naming the form it wants.
+    for key in ["url", "key_env", "model", "region", "shadow_until"] {
         let v = text(body, key);
         if !v.is_empty() {
             entry.insert(key.into(), v.into());

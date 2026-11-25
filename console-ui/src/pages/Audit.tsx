@@ -15,7 +15,7 @@ import type { PageProps } from "@/pages";
 
 type Tag = { kind: string; word: string; detail: string };
 type Row = { id: string; who: string; sub: string; verdict: Tag; time: string; open: string; model: string; title: string; selected: boolean };
-type Kill = { label: string; since: string; by: string; reason: string; scope: string; value: string; command: string };
+type Kill = { label: string; since: string; by: string; reason: string; scope: string; value: string; command: string; agent: string };
 type Verified = {
   state: "none" | "ok" | "broken";
   text: string;
@@ -47,6 +47,7 @@ type Data = {
   kills: Kill[];
   kills_error: string | null;
   may_restore: boolean;
+  stop_agent: string;
   verified?: Verified;
   stats?: { checked: string; refused: string; blocked: string } | null;
   models?: string[];
@@ -168,7 +169,7 @@ export function Audit({ query }: PageProps) {
               {data.pager ? <Pager pager={data.pager} noun={data.noun ?? "decisions"} query={query} /> : null}
             </section>
           )}
-          {data.verified ? <ChainLine verified={data.verified} verify={verify} chain={data.chain} /> : null}
+          {data.verified ? <ChainLine verified={data.verified} verify={verify} chain={data.chain} query={query} /> : null}
         </>
       ) : data && data.total === 0 && !error ? (
         <Button variant="outline" className="justify-self-start" onClick={verify}>
@@ -285,7 +286,9 @@ function Pager({ pager, noun, query }: { pager: NonNullable<Data["pager"]>; noun
 }
 
 // Verify sits with the chain's line under the records: it checks the data, it is not the page's main action.
-function ChainLine({ verified, verify, chain }: { verified: Verified; verify: () => void; chain: string }) {
+function ChainLine({ verified, verify, chain, query }: { verified: Verified; verify: () => void; chain: string; query: URLSearchParams }) {
+  // The rows download takes the filter the list shows, every page of it.
+  const rows = new URLSearchParams(["verdict", "q", "model", "chain"].flatMap((k) => (query.get(k) ? [[k, query.get(k) ?? ""]] : [])));
   const line = useRef<HTMLDivElement>(null);
   // Just after Verify chain now, focus goes to its result, so it is read out instead of the page top.
   useEffect(() => {
@@ -312,9 +315,14 @@ function ChainLine({ verified, verify, chain }: { verified: Verified; verify: ()
             Export for an auditor
           </a>
         </Button>
+        <Button variant="outline" size="sm" asChild>
+          <a href={`/console/audit/export.csv${rows.size ? `?${rows}` : ""}`} download>
+            Download these rows (CSV)
+          </a>
+        </Button>
       </div>
       <span className="t-small text-muted-foreground">
-        The export is the chain as written, one record a line, with no prompt text. The auditor checks it with enterplace audit verify and the last hash Verify chain now shows.
+        The export is the chain as written, one record a line, with no prompt text. The auditor checks it with enterplace audit verify and the last hash Verify chain now shows. The CSV holds the rows the filter above shows, on every page: time, decision, person, team, key kind, model or tool, verdict and reason. Both downloads are recorded.
       </span>
     </div>
   );
@@ -344,13 +352,16 @@ function Kills({ kills, mayRestore, change }: { kills: Kill[]; mayRestore: boole
           <span className="t-body">
             Traffic stopped for <span className="t-mono">{k.label}</span> since {k.since} by {k.by}: {k.reason}
           </span>
-          {mayRestore ? (
-            <Button size="sm" onClick={() => change(() => api.post("audit/restore", { scope: k.scope, value: k.value }))}>
-              Restore traffic
-            </Button>
-          ) : (
-            <span className="t-mono-sm">{k.command}</span>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Copy text={k.agent} label="Copy for your agent" />
+            {mayRestore ? (
+              <Button size="sm" onClick={() => change(() => api.post("audit/restore", { scope: k.scope, value: k.value }))}>
+                Restore traffic
+              </Button>
+            ) : (
+              <span className="t-mono-sm">{k.command}</span>
+            )}
+          </div>
         </div>
       ))}
     </div>

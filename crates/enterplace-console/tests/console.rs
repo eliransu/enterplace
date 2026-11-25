@@ -2183,6 +2183,45 @@ async fn a_security_lead_stops_traffic_sees_what_observe_let_through_and_exports
     )
     .await?;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // The rows the filter shows, as a CSV a spreadsheet opens: only those rows, named columns, and recorded too.
+    let (status, headers, csv) = send(
+        &s.app,
+        get("/console/audit/export.csv?verdict=refused", &cookie)?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{csv}");
+    assert!(
+        headers
+            .get(header::CONTENT_DISPOSITION)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains(".csv")),
+        "{headers:?}"
+    );
+    let mut lines = csv.lines();
+    assert_eq!(
+        lines.next(),
+        Some("time,decision,person,team,key kind,model or tool,verdict,reason")
+    );
+    let rows: Vec<&str> = lines.collect();
+    assert!(
+        rows.iter().any(|r| r.contains("01AAAAAAAAAAAAAAAAAAAAAAA2")
+            && r.contains(",maya.cohen,payments,key,gpt-4o,")
+            && r.contains("model not allowed")),
+        "{csv}"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|r| r.contains("01AAAAAAAAAAAAAAAAAAAAAAA1")),
+        "an allowed row is not in a refused view: {csv}"
+    );
+    assert!(
+        admin_records(&s)?
+            .iter()
+            .any(|r| r["action"] == "export_audit_csv" && r["target"]["verdict"] == "refused"),
+        "the CSV download is recorded"
+    );
     Ok(())
 }
 

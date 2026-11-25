@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, Head, Panel, Problem, Refusal, Form, Loading } from "@/components/page";
 import { Remove } from "@/components/confirm";
+import { Copy } from "@/components/copy";
 import { api, part, type Me } from "@/lib/api";
 import { useData, words } from "@/lib/use";
 
@@ -18,7 +19,7 @@ type Entry = Record<string, unknown>;
 type Limit = { index: number; entry: Entry };
 type Guardrail = { name: string; type: string; action: string | null; on: boolean; entry: Entry };
 type Alias = { name: string; deployments: { provider: string; model: string }[]; fallbacks: string[] };
-type Data = { mode: string; rules: Rule[]; limits: Limit[]; guardrails: Guardrail[]; aliases: Alias[] };
+type Data = { mode: string; rules: Rule[]; limits: Limit[]; guardrails: Guardrail[]; aliases: Alias[]; guard_agent: string };
 type Change = (run: () => Promise<{ message: string }>) => Promise<string>;
 
 const WHO: Record<string, string> = { any: "Everyone", team: "A team", name: "A person", tag: "A tag" };
@@ -161,11 +162,14 @@ export function PolicyBasics({ me }: { me: Me | null }) {
 
           <Panel
             title="Guardrails"
-            note="On: runs on every request, before the rule's own guardrails. Off: runs only for rules that name it. To try one before it refuses anything, keep the mode on observe or set its action to warn: what it would block shows as Would block in the Audit log."
+            note="On: runs on every request, before the rule's own guardrails. Off: runs only for rules that name it. To try one before it refuses anything, set Try first until on it: until that day what it would block shows as Would block in the Audit log."
             actions={
-              <Button size="sm" disabled={!may} onClick={() => setGuard("new")}>
-                Add a guardrail
-              </Button>
+              <>
+                <Copy text={data.guard_agent} label="Copy for your agent" />
+                <Button size="sm" disabled={!may} onClick={() => setGuard("new")}>
+                  Add a guardrail
+                </Button>
+              </>
             }
           >
             {data.guardrails.length === 0 ? (
@@ -194,7 +198,10 @@ export function PolicyBasics({ me }: { me: Me | null }) {
                       </TableCell>
                       <TableCell>{g.name}</TableCell>
                       <TableCell>{g.type}</TableCell>
-                      <TableCell>{g.action ?? "block"}</TableCell>
+                      <TableCell>
+                        {g.action ?? "block"}
+                        {trying(g) ? <span className="text-muted-foreground">, trying until {trying(g)}</span> : null}
+                      </TableCell>
                       <TableCell>
                         <div className="flex gap-2">
                           <Button variant="outline" size="sm" onClick={() => setTesting(g)}>
@@ -269,6 +276,12 @@ export function PolicyBasics({ me }: { me: Me | null }) {
     </>
   );
 }
+
+/// The day a guardrail on trial starts to act, while that day is still ahead.
+const trying = (g: Guardrail) => {
+  const until = typeof g.entry.shadow_until === "string" ? g.entry.shadow_until.slice(0, 10) : "";
+  return until && until > new Date().toISOString().slice(0, 10) ? until : "";
+};
 
 function Actions({ onClose, label }: { onClose: () => void; label: string }) {
   return (
@@ -486,7 +499,7 @@ const GUARD_TYPES = [
   "lasso", "guardrails_ai", "aporia", "prisma_airs", "enkrypt", "grayswan", "cisco_ai_defense", "mistral_moderation",
   "judge", "transform", "events",
 ];
-const FORM_KEYS = ["name", "type", "action", "on", "url", "key_env", "model", "timeout_ms", "on_failure", "patterns", "keywords", "region"];
+const FORM_KEYS = ["name", "type", "action", "shadow_until", "on", "url", "key_env", "model", "timeout_ms", "on_failure", "patterns", "keywords", "region"];
 
 function GuardForm({ guard, onClose, change }: { guard: Guardrail | null; onClose: () => void; change: Change }) {
   const e = guard?.entry ?? {};
@@ -510,6 +523,7 @@ function GuardForm({ guard, onClose, change }: { guard: Guardrail | null; onClos
     key_env: str("key_env"),
     model: str("model"),
     region: str("region"),
+    shadow_until: str("shadow_until").slice(0, 10),
     timeout_ms: str("timeout_ms"),
     on_failure: str("on_failure"),
     patterns: map("patterns", String),
@@ -565,6 +579,13 @@ function GuardForm({ guard, onClose, change }: { guard: Guardrail | null; onClos
                 ))}
               </SelectContent>
             </Select>
+          </Field>
+          <Field
+            id="guard-shadow"
+            label="Try first until, optional"
+            hint="Until this day (UTC) it records what it would do, shown as Would block in the Audit log, and blocks or masks nothing. Empty: it acts now."
+          >
+            <Input id="guard-shadow" type="date" className="t-mono" value={fields.shadow_until} onChange={set("shadow_until")} />
           </Field>
           <fieldset className="grid gap-2 border-0 p-0">
             <legend className="t-tag mb-2 uppercase">Checks</legend>

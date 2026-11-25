@@ -406,6 +406,20 @@ async fn policy_basics_change_rules_limits_guardrails_aliases_and_mode() -> Test
     let (_, policy) = call(&s, "GET", "/console/api/policy", &cookie, None).await?;
     assert_eq!(policy["rules"][0]["name"], "payments");
     assert_eq!(policy["rules"][1]["name"], "everyone");
+    // Copy for your agent on Guardrails: the lines, the file they go in, the check, and the docs page.
+    let agent = policy["guard_agent"].as_str().unwrap_or("");
+    for part in [
+        "guardrails:",
+        "shadow_until:",
+        "default_guardrails:",
+        &format!(
+            "enterplace check {}",
+            s.dir.join("enterplace.policy.yaml").display()
+        ),
+        "https://docs.enterplace.dev/governance/guardrails.md",
+    ] {
+        assert!(agent.contains(part), "{part}: {agent}");
+    }
     let (status, done) = call(
         &s,
         "PUT",
@@ -551,6 +565,42 @@ async fn policy_basics_change_rules_limits_guardrails_aliases_and_mode() -> Test
         .ok_or("no guardrail")?;
     assert_eq!(guard["entry"]["action"], "block");
     assert!(guard["entry"]["patterns"]["iban"].is_string(), "{guard}");
+    // Try first: until the date it records what it would do and blocks nothing; an edit without it ends the trial,
+    // and a date the check cannot read is refused.
+    let (status, done) = call(
+        &s,
+        "PUT",
+        "/console/api/policy/guardrails/card-numbers",
+        &cookie,
+        Some(json!({ "type": "regex", "action": "block", "patterns": "card: \\b\\d{16}\\b", "shadow_until": "2026-12-31" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(
+        s.policy()?.contains("shadow_until: 2026-12-31"),
+        "{}",
+        s.policy()?
+    );
+    let (status, refused) = call(
+        &s,
+        "PUT",
+        "/console/api/policy/guardrails/card-numbers",
+        &cookie,
+        Some(json!({ "type": "regex", "action": "block", "patterns": "card: \\b\\d{16}\\b", "shadow_until": "next week" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(error(&refused).contains("shadow_until"), "{refused}");
+    let (status, done) = call(
+        &s,
+        "PUT",
+        "/console/api/policy/guardrails/card-numbers",
+        &cookie,
+        Some(json!({ "type": "regex", "action": "block", "patterns": "card: \\b\\d{16}\\b" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(!s.policy()?.contains("shadow_until"), "{}", s.policy()?);
     let (status, refused) = call(
         &s,
         "POST",
@@ -1561,5 +1611,164 @@ async fn named_requests_need_no_switch_without_a_passthrough_provider() -> TestR
         "{refused}"
     );
     assert_eq!(s.policy()?, POLICY);
+    Ok(())
+}
+
+/// A store in memory that keeps keys, kill switches and sessions, as Postgres or Cloudflare keeps them for every
+/// gateway pointed at it.
+#[derive(Debug, Default)]
+struct Shared {
+    keys: String,
+    kills: std::sync::Mutex<Vec<enterplace_core::kill::Kill>>,
+    sessions: std::sync::Mutex<std::collections::HashMap<String, String>>,
+}
+
+impl enterplace_core::store::Credentials for Shared {}
+
+impl enterplace_core::store::Store for Shared {
+    fn keys_text(&self) -> String {
+        self.keys.clone()
+    }
+    fn kills(&self) -> Arc<Vec<enterplace_core::kill::Kill>> {
+        Arc::new(self.kills.lock().map(|k| k.clone()).unwrap_or_default())
+    }
+    fn add_key(&self, _: &enterplace_core::config::KeyEntry) -> Result<bool, String> {
+        Ok(false)
+    }
+    fn revoke(&self, _: &str) -> Result<Option<enterplace_core::keyfile::Revoked>, String> {
+        Ok(None)
+    }
+    fn set_kill(
+        &self,
+        kill: &enterplace_core::kill::Kill,
+    ) -> Result<Option<enterplace_core::kill::Kill>, String> {
+        let mut kills = self.kills.lock().map_err(|e| e.to_string())?;
+        let old = kills
+            .iter()
+            .position(|k| k.scope == kill.scope && k.value == kill.value)
+            .map(|at| kills.remove(at));
+        kills.push(kill.clone());
+        Ok(old)
+    }
+    fn clear_kill(
+        &self,
+        scope: &str,
+        value: &str,
+    ) -> Result<Option<enterplace_core::kill::Kill>, String> {
+        let mut kills = self.kills.lock().map_err(|e| e.to_string())?;
+        Ok(kills
+            .iter()
+            .position(|k| k.scope == scope && k.value == value)
+            .map(|at| kills.remove(at)))
+    }
+    fn reserve(
+        &self,
+        _: enterplace_core::store::Bucket,
+        _: f64,
+        _: f64,
+    ) -> enterplace_core::store::Pending<enterplace_core::store::Reserve> {
+        Box::pin(async { Ok(enterplace_core::store::Reserve::Done) })
+    }
+    fn settle(&self, _: Vec<enterplace_core::store::Change>) {}
+    fn lease(
+        &self,
+        _: String,
+        _: u64,
+        _: u64,
+        _: u64,
+    ) -> enterplace_core::store::Pending<enterplace_core::store::Lease> {
+        Box::pin(async { Ok(enterplace_core::store::Lease::Over { wait: 1 }) })
+    }
+    fn give_back(&self, _: i64, _: i64) {}
+    fn cooling(&self) -> Arc<std::collections::HashMap<String, std::time::Instant>> {
+        Arc::default()
+    }
+    fn cooled(&self, _: &str, _: std::time::Duration) {}
+    fn warmed(&self, _: &str) {}
+    fn open_session(
+        &self,
+        id: String,
+        who: String,
+        _: std::time::Duration,
+    ) -> enterplace_core::store::Pending<()> {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.insert(id, who);
+        }
+        Box::pin(async { Ok(()) })
+    }
+    fn session(&self, id: String) -> enterplace_core::store::Pending<Option<String>> {
+        let who = self.sessions.lock().ok().and_then(|s| s.get(&id).cloned());
+        Box::pin(async move { Ok(who) })
+    }
+    fn end_session(&self, _: String) {}
+}
+
+/// Stop traffic and Restore traffic in the console go through the store when one is configured, as
+/// `enterplace kill` and /admin/kills do: every gateway sees the switch, the file beside the keys is not written,
+/// and the Audit log and People list the switches the store holds.
+#[tokio::test]
+async fn stop_and_restore_traffic_go_through_the_store_when_one_is_configured() -> TestResult {
+    let s = setup("kills-store")?;
+    let keys = s.dir.join("enterplace.keys.yaml");
+    let shared = Shared {
+        keys: std::fs::read_to_string(&keys)?,
+        ..Shared::default()
+    };
+    let store: Arc<dyn enterplace_core::store::Store> = Arc::new(shared);
+    enterplace_core::store::attach(&keys, &store);
+    let cookie = sign_in(&s, ADMIN_KEY).await?;
+    let (status, done) = call(
+        &s,
+        "POST",
+        "/console/api/audit/stop",
+        &cookie,
+        Some(json!({ "scope": "team", "value": "platform", "reason": "runaway agent" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let on = store.kills();
+    assert!(
+        on.len() == 1 && on[0].value == "platform" && on[0].reason == "runaway agent",
+        "{on:?}"
+    );
+    assert!(
+        !enterplace_core::kill::path_beside(&keys).exists(),
+        "the file beside the keys was written while a store holds the switches"
+    );
+    let (_, page) = call(&s, "GET", "/console/api/audit", &cookie, None).await?;
+    assert_eq!(page["kills"][0]["value"], "platform", "{page}");
+    // Copy for your agent: the restore command of this switch, and stopping traffic with every flag.
+    let restore = page["kills"][0]["agent"].as_str().unwrap_or("");
+    assert!(
+        restore.contains("enterplace unkill --team platform")
+            && restore.contains("ENTERPLACE_ADMIN_KEY"),
+        "{restore}"
+    );
+    let stop = page["stop_agent"].as_str().unwrap_or("");
+    for flag in [
+        "--person",
+        "--team",
+        "--key-prefix",
+        "--model",
+        "--all",
+        "--reason",
+        "unkill",
+    ] {
+        assert!(stop.contains(flag), "{flag}: {stop}");
+    }
+    assert!(page["kills_error"].is_null(), "{page}");
+
+    let (status, done) = call(
+        &s,
+        "POST",
+        "/console/api/audit/restore",
+        &cookie,
+        Some(json!({ "scope": "team", "value": "platform" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(store.kills().is_empty(), "{:?}", store.kills());
+    let (_, page) = call(&s, "GET", "/console/api/audit", &cookie, None).await?;
+    assert_eq!(page["kills"], json!([]), "{page}");
     Ok(())
 }

@@ -50,7 +50,7 @@ Commands:
         rule that decides, and every limit that applies (rule, key, organization, team, person, customer, tag,
         model, global) with where it is written and what it overrides. A running gateway adds what each budget
         has spent: GET /admin/explain.
-  key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>] [--rpm <n>]
+  key new <name> --team <team> [--admin | --identity-only | --service] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>] [--rpm <n>]
           [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>]
           [--url <gateway url>] [--quiet] [--keys <file>]
         Make a key for a person or a workload. The key is printed once, with the lines that point
@@ -63,6 +63,7 @@ Commands:
         for a time zone: --budget 100/month@America/New_York. --org puts the key in an organization the
         policy lists; --customer makes every request with it for that end customer; --tags tags them;
         --parallel 4 caps its requests in flight; --role names a console role from the policy.
+        --service marks the key as an app's or an agent's (the console lists it under Apps and agents).
         --quiet prints the key alone. --identity-only makes a person token (enterplace_u_...) in place of a key:
         it names the person for Claude subscription passthrough (in Claude Code's
         ANTHROPIC_CUSTOM_HEADERS as x-enterplace-user: <token>) and reaches no model on its own.
@@ -268,7 +269,7 @@ pub async fn run(args: &[String]) -> ExitCode {
             let rest: Vec<&str> = rest
                 .iter()
                 .copied()
-                .filter(|a| !matches!(*a, "--admin" | "--quiet" | "--identity-only"))
+                .filter(|a| !matches!(*a, "--admin" | "--quiet" | "--identity-only" | "--service"))
                 .collect();
             match options(
                 &rest,
@@ -295,7 +296,17 @@ pub async fn run(args: &[String]) -> ExitCode {
                     let keys = named
                         .get("--keys")
                         .map_or_else(|| PathBuf::from("enterplace.keys.yaml"), PathBuf::from);
-                    let made = attributes(flag("--admin"), &named).and_then(|attributes| {
+                    let made = attributes(flag("--admin"), &named).and_then(|mut attributes| {
+                        if flag("--service") {
+                            if flag("--admin") || flag("--identity-only") {
+                                return Err("--service makes a key for an app or agent, not a person, so it takes no --admin or --identity-only. Leave out --service for an admin key or a person token.".into());
+                            }
+                            // The same mark the console's Apps and agents page gives the keys it makes.
+                            attributes
+                                .options
+                                .metadata
+                                .insert("kind".into(), "workload".into());
+                        }
                         let _store = store_for(&keys, named.get("--policy").copied())?;
                         if flag("--identity-only") {
                             return person_token_new(
@@ -786,7 +797,7 @@ pub async fn run(args: &[String]) -> ExitCode {
                 "enterplace import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>], or enterplace import litellm --url <proxy> --master-key-env <VAR> [--out <policy file>] [--keys-out <keys file>]",
             ),
             ["key", ..] => Some(
-                "enterplace key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>] [--rpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]",
+                "enterplace key new <name> --team <team> [--admin | --identity-only | --service] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>] [--rpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]",
             ),
             ["serve", ..] => Some(
                 "enterplace serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>] [--admin-listen <host:port>] [--no-migrate]",
@@ -1220,7 +1231,13 @@ fn key_new(
         println!("{}", issued.key);
         return Ok(());
     }
-    let what = if attributes.admin { "Admin key" } else { "Key" };
+    let what = if attributes.admin {
+        "Admin key"
+    } else if attributes.options.metadata.get("kind").map(String::as_str) == Some("workload") {
+        "Service key"
+    } else {
+        "Key"
+    };
     println!(
         "{what} for {name}, team {team}. It is shown once and is not stored anywhere:\n\n  {}\n",
         issued.key

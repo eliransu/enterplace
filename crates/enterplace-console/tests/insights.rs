@@ -772,3 +772,52 @@ async fn events_stream_sends_a_change_when_a_record_is_written_and_needs_a_sessi
     );
     Ok(())
 }
+
+/// A request a guardrail let through under warn or mask says what it found, as the Audit log does.
+#[tokio::test]
+async fn a_warned_request_says_what_the_guardrail_found() -> TestResult {
+    let s = setup("warned")?;
+    for (id, action, kind) in [
+        ("01WRN0000000000000000000004", "warn", "credit_card"),
+        ("01MSK0000000000000000000005", "mask", "email"),
+    ] {
+        let mut r = enterplace_core::audit::record(&Entry {
+            id,
+            person: Some("maya.cohen"),
+            team: Some("payments"),
+            method: "POST",
+            path: "/v1/chat/completions",
+            model: Some("gpt-4o-mini"),
+            allowed: true,
+            rule: Some("payments-team"),
+            provider: "openai",
+            ..Entry::default()
+        });
+        r.insert(
+            "guardrails".into(),
+            json!([{ "guardrail": "cards", "detector": "pii", "kind": kind, "action": action, "count": 1 }]),
+        );
+        s.log.append_record(&r)?;
+    }
+    s.log.flush();
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (_, list) = api(&s.app, "/console/api/requests", &cookie).await?;
+    let outcome = |id: &str| {
+        list["rows"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|r| r["id"] == id))
+            .map(|r| r["outcome"].clone())
+            .unwrap_or(Value::Null)
+    };
+    assert_eq!(
+        outcome("01WRN0000000000000000000004"),
+        json!({ "kind": "warn", "text": "Found: credit_card" }),
+        "{list}"
+    );
+    assert_eq!(
+        outcome("01MSK0000000000000000000005"),
+        json!({ "kind": "warn", "text": "Masked: email" }),
+        "{list}"
+    );
+    Ok(())
+}

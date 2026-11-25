@@ -200,6 +200,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
                 "keys_path": config.keys.display().to_string(),
                 "read_only": admin.read_only,
                 "may": may,
+                "stop_agent": crate::start::kill_prompt(&crate::base(), None),
                 "start_command": format!("enterplace key new sarah.miller --team platform --url {}", crate::base()),
                 "docs": format!("{}/governance/keys/", crate::start::DOCS),
                 // What fills an empty page, as Start here words it for every page.

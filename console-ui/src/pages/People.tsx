@@ -87,6 +87,7 @@ export type Keys = {
     full_admin: boolean;
   };
   start_command: string;
+  stop_agent: string;
   docs: string;
   empty: {
     title: string;
@@ -427,6 +428,7 @@ export function KeyDialogs({
       ) : null}
       {data?.may.restore && query.get("stop") ? (
         <StopDialog
+          agent={data.stop_agent}
           scope={query.get("scope") ?? "person"}
           value={query.get("value") ?? ""}
           change={change}
@@ -939,6 +941,7 @@ const STOP_SCOPES: Record<string, string> = {
 /// A kill switch: refuses every request of a person, a team, a key or a model, or all of them, within 2 seconds,
 /// until Restore traffic on the Audit log. Recorded with the reason, which the people stopped see in their tool.
 function StopDialog(props: {
+  agent: string;
   scope: string;
   value: string;
   change: Change;
@@ -1026,6 +1029,7 @@ function StopDialog(props: {
           </Field>
           <Refusal text={refused} />
           <DialogFooter>
+            <Copy text={props.agent} label="Copy for your agent" />
             <Button type="button" variant="outline" onClick={close}>
               Cancel
             </Button>

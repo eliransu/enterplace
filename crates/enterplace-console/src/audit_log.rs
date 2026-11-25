@@ -47,6 +47,7 @@ pub(crate) fn routes() -> Router<Console> {
         .route("/api/audit/restore", post(restore))
         .route("/api/audit/stop", post(stop))
         .route("/audit/export", get(export))
+        .route("/audit/export.csv", get(export_csv))
 }
 
 /// The app's audit route for an old address, keeping its filters, chain and open record. A role that may not read
@@ -149,6 +150,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> R
             let mut out = page(&view);
             out["chains"] = Value::Array(chains);
             out["may_restore"] = admin.may(Permission::Kill).into();
+            out["stop_agent"] = crate::start::kill_prompt(&crate::base(), None).into();
             out["kills_error"] = kills.as_ref().err().map_or(Value::Null, |err| {
                 format!("Every request is refused: the kill switch list cannot be read. {err}").into()
             });
@@ -167,6 +169,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> R
                                 "value": k.value,
                                 // Without the right to restore, the command an admin runs.
                                 "command": crate::pages::unkill_command(k),
+                                "agent": crate::start::kill_prompt(&crate::base(), Some(k)),
                             })
                         })
                         .collect()
@@ -320,43 +323,9 @@ async fn stop(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) 
 /// The chain as an auditor takes it: the records as written, one JSON object a line, so `enterplace audit verify`
 /// checks the file itself. Someone kept to an organization gets only the records they may read.
 async fn export(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
-    let fail = |status: StatusCode, text: String| {
-        Response::builder()
-            .status(status)
-            .header("content-type", "text/plain; charset=utf-8")
-            .body(axum::body::Body::from(text))
-            .unwrap_or_default()
-    };
-    let admin = match signed_in(&console, &headers, false).await {
-        Ok(admin) => admin,
-        Err(Fail(status, text)) => return fail(status, text),
-    };
-    if !admin.may(Permission::SeeRecords) {
-        return fail(
-            StatusCode::FORBIDDEN,
-            format!(
-                "Your role, {}, does not have the {} permission an export needs. Ask an Enterplace admin to add it to the role under roles: in the policy.",
-                admin.role,
-                Permission::SeeRecords.word()
-            ),
-        );
-    }
-    let (chain, path) = chain_for(&admin, &console.config().audit, &Form::of(&uri));
-    let log = if chain.is_empty() {
-        log_for(&admin, read(&path))
-    } else {
-        read(&path)
-    };
-    let text = match log {
-        Ok(text) => text.unwrap_or_default(),
-        Err(err) => {
-            return fail(
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!(
-                    "The audit log did not load: {err} Check that the file is there and Enterplace may read it, then try again."
-                ),
-            );
-        }
+    let (admin, chain, text) = match exportable(&console, &headers, &uri).await {
+        Ok(got) => got,
+        Err(refused) => return refused,
     };
     let act = Act {
         action: "export_audit",
@@ -365,7 +334,7 @@ async fn export(State(console): State<Console>, headers: HeaderMap, uri: Uri) ->
         target: json!({ "chain": chain, "records": text.lines().count() }),
     };
     if record(&console, &act, None, None).await.is_err() {
-        return fail(StatusCode::SERVICE_UNAVAILABLE, NOT_RECORDED.into());
+        return plain_fail(StatusCode::SERVICE_UNAVAILABLE, NOT_RECORDED.into());
     }
     let name = if chain.is_empty() {
         "enterplace-audit.jsonl".to_string()
@@ -380,6 +349,170 @@ async fn export(State(console): State<Console>, headers: HeaderMap, uri: Uri) ->
         )
         .header("cache-control", "no-store")
         .body(axum::body::Body::from(text))
+        .unwrap_or_default()
+}
+
+fn plain_fail(status: StatusCode, text: String) -> Response {
+    Response::builder()
+        .status(status)
+        .header("content-type", "text/plain; charset=utf-8")
+        .body(axum::body::Body::from(text))
+        .unwrap_or_default()
+}
+
+/// The person asking for an export, the chain they asked for, and the records of it they may read.
+async fn exportable(
+    console: &Console,
+    headers: &HeaderMap,
+    uri: &Uri,
+) -> Result<(crate::Admin, String, String), Response> {
+    let admin = signed_in(console, headers, false)
+        .await
+        .map_err(|Fail(status, text)| plain_fail(status, text))?;
+    if !admin.may(Permission::SeeRecords) {
+        return Err(plain_fail(
+            StatusCode::FORBIDDEN,
+            format!(
+                "Your role, {}, does not have the {} permission an export needs. Ask an Enterplace admin to add it to the role under roles: in the policy.",
+                admin.role,
+                Permission::SeeRecords.word()
+            ),
+        ));
+    }
+    let (chain, path) = chain_for(&admin, &console.config().audit, &Form::of(uri));
+    let log = if chain.is_empty() {
+        log_for(&admin, read(&path))
+    } else {
+        read(&path)
+    };
+    match log {
+        Ok(text) => Ok((admin, chain, text.unwrap_or_default())),
+        Err(err) => Err(plain_fail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "The audit log did not load: {err} Check that the file is there and Enterplace may read it, then try again."
+            ),
+        )),
+    }
+}
+
+/// One CSV field. A field a spreadsheet would run as a formula starts with a quote mark, so a person name or a
+/// reason sent by a caller cannot become one.
+fn csv_field(text: &str) -> String {
+    let text = if text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{text}")
+    } else {
+        text.to_string()
+    };
+    if text.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        text
+    }
+}
+
+/// The rows the Audit log's current filter shows, newest first, as a CSV: what a reviewer takes into a spreadsheet.
+/// The full chain stays the export an auditor verifies. Taking it is recorded with the filter it was taken under.
+async fn export_csv(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
+    let (admin, chain, text) = match exportable(&console, &headers, &uri).await {
+        Ok(got) => got,
+        Err(refused) => return refused,
+    };
+    let query = Form::of(&uri);
+    let filter = Filter {
+        show: query.get("verdict"),
+        q: query.get("q").trim(),
+        model: query.get("model"),
+    };
+    let records = fold_answers(
+        text.lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|r| !matches!(s(r, "event"), "attempts" | "usage"))
+            .collect(),
+    );
+    let keys = &console.config().keys;
+    let entries = config::read_keys(keys)
+        .ok()
+        .flatten()
+        .and_then(|t| config::key_entries(keys, &t).ok())
+        .unwrap_or_default();
+    let kind = |record: &Value| {
+        let key = s(record, "key");
+        if key.is_empty() {
+            return "";
+        }
+        entries
+            .iter()
+            .find(|e| e.sha256.starts_with(key))
+            .map_or("unknown key", |e| {
+                match e.options.metadata.get("kind").map(String::as_str) {
+                    _ if e.admin => "admin key",
+                    Some(crate::PERSON_TOKEN_KIND) => "person token",
+                    Some("workload") => "service key",
+                    _ => "key",
+                }
+            })
+    };
+    let mut out = String::from("time,decision,person,team,key kind,model or tool,verdict,reason\n");
+    let mut rows = 0;
+    for record in records.iter().rev().filter(|r| filter.keeps(r)) {
+        let tag = verdict(record);
+        let verdict = format!(
+            "{} {}",
+            tag["word"].as_str().unwrap_or(""),
+            tag["detail"].as_str().unwrap_or("")
+        );
+        let what = [s(record, "model"), s(record, "tool"), s(record, "prompt")]
+            .into_iter()
+            .find(|v| !v.is_empty())
+            .unwrap_or("");
+        let reason = match s(record, "code") {
+            "" => s(record, "action").replace('_', " "),
+            code => code_words(code),
+        };
+        let fields = [
+            s(record, "time").to_string(),
+            rid(record),
+            who(record),
+            s(record, "team").to_string(),
+            kind(record).to_string(),
+            what.to_string(),
+            verdict.trim().to_string(),
+            reason,
+        ];
+        let line: Vec<String> = fields.iter().map(|f| csv_field(f)).collect();
+        out.push_str(&line.join(","));
+        out.push('\n');
+        rows += 1;
+    }
+    let act = Act {
+        action: "export_audit_csv",
+        by: Some((&admin.name, &admin.team)),
+        key: None,
+        target: json!({
+            "chain": chain,
+            "rows": rows,
+            "verdict": filter.show,
+            "q": filter.q,
+            "model": filter.model,
+        }),
+    };
+    if record(&console, &act, None, None).await.is_err() {
+        return plain_fail(StatusCode::SERVICE_UNAVAILABLE, NOT_RECORDED.into());
+    }
+    let name = if chain.is_empty() {
+        "enterplace-audit-rows.csv".to_string()
+    } else {
+        format!("enterplace-audit-{chain}-rows.csv")
+    };
+    Response::builder()
+        .header("content-type", "text/csv; charset=utf-8")
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{name}\""),
+        )
+        .header("cache-control", "no-store")
+        .body(axum::body::Body::from(out))
         .unwrap_or_default()
 }
 
@@ -1161,6 +1294,7 @@ fn action_word(action: &str) -> (&str, &str) {
         "clear_kill" => ("restored traffic", "traffic restore"),
         "list_kills" => ("listed switches", "switch list"),
         "export_audit" => ("exported the audit log", "audit export"),
+        "export_audit_csv" => ("downloaded audit rows", "audit rows download"),
         "start_choice" => ("chose a track", "track choice"),
         "self_issue_key" => ("enterplace login key", "enterplace login"),
         "revoke_own_key" => ("enterplace logout", "enterplace logout"),

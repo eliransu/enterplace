@@ -696,6 +696,27 @@ fn prompt(
     verify: &str,
     doc: &str,
 ) -> String {
+    task_prompt(
+        base,
+        goal,
+        values,
+        todo,
+        &format!(
+            "{verify} The step on {base}/console/start turns done by itself; requests show at {base}/console/requests."
+        ),
+        doc,
+    )
+}
+
+/// An agent prompt for a task outside Start here: the same parts, with a check of the task's own.
+pub(crate) fn task_prompt(
+    base: &str,
+    goal: &str,
+    values: &[(&str, String)],
+    todo: &[String],
+    verify: &str,
+    doc: &str,
+) -> String {
     let mut out = format!(
         "Goal: {goal}, for the Enterplace AI gateway at {base}.\n\nValues:\n- Enterplace URL: {base}\n"
     );
@@ -708,10 +729,75 @@ fn prompt(
     }
     let _ = write!(
         out,
-        "\nVerify: {verify} The step on {base}/console/start turns done by itself; requests show at {base}/console/requests.\n\nDocs (Markdown, read it for anything not covered here): {}\n\nDo not print, log or commit any key or token other than the values above, and ask me before changing anything else.\n",
+        "\nVerify: {verify}\n\nDocs (Markdown, read it for anything not covered here): {}\n\nDo not print, log or commit any key or token other than the values above, and ask me before changing anything else.\n",
         md(doc)
     );
     out
+}
+
+/// "Copy for your agent" on Guardrails: the policy lines of a guardrail and the check, so an agent adds one alone.
+pub(crate) fn guardrail_prompt(base: &str, policy: &str, in_store: bool) -> String {
+    let edit = if in_store {
+        format!(
+            "This policy is kept in the store, so the file is not read. Paste the lines into the policy editor at {base}/console/app/#/policy/raw as a new version, after the check below passes on a copy of the file with them."
+        )
+    } else {
+        "Add the lines to the policy file. The gateway reads it within 2 seconds of a save that passes the check.".into()
+    };
+    task_prompt(
+        base,
+        "Add a guardrail to the Enterplace policy",
+        &[("Policy file", policy.to_string())],
+        &[
+            "1. Ask me, if I have not said them: what to catch (secrets, pii, regex with its patterns, or keywords with their words), whether to block, mask or warn, and whether to try it first until a date.".into(),
+            "2. Under `guardrails:` in the policy file, add an entry like this one (a name of your choosing, the type and action I picked; leave out shadow_until to act now):".into(),
+            "```yaml\nguardrails:\n  - name: no-secrets\n    type: secrets\n    action: block\n    on: [request, answer]\n    shadow_until: 2026-12-31   # until this UTC day it records what it would do and blocks nothing\ndefault_guardrails: [no-secrets]   # runs on every request; or name it under a rule's guardrails:\n```".into(),
+            format!("3. Run `enterplace check {policy}` and fix every problem it names, by its line."),
+            format!("4. {edit}"),
+        ],
+        &format!(
+            "`enterplace check` passes, and the guardrail is listed at {base}/console/app/#/policy. Its Test button there runs it on a sample; hits show in the Audit log as Blocked, Masked, Warned or Would block."
+        ),
+        "/governance/guardrails/",
+    )
+}
+
+/// "Copy for your agent" on Stop traffic and Restore traffic: `enterplace kill` and `unkill` with every flag, so an
+/// agent stops or restores traffic alone. `stopped`: the switch to turn off, else the prompt stops traffic.
+pub(crate) fn kill_prompt(base: &str, stopped: Option<&enterplace_core::kill::Kill>) -> String {
+    let setup = format!(
+        "1. In the shell you run commands in: `export ENTERPLACE_URL={base}`. Ask me to set ENTERPLACE_ADMIN_KEY to an admin key myself (`export ENTERPLACE_ADMIN_KEY=...`); never ask me to paste it to you, and never print it."
+    );
+    match stopped {
+        Some(kill) => task_prompt(
+            base,
+            &format!("Restore traffic for {}", kill.label()),
+            &[("Switch", kill.label()), ("Stopped because", kill.reason.clone())],
+            &[
+                setup,
+                format!("2. Run `{}`.", crate::pages::unkill_command(kill)),
+            ],
+            &format!(
+                "The command says the switch is off, and the banner on {base}/console/app/#/audit no longer lists it. Requests are let through again within 2 seconds on every gateway."
+            ),
+            "/governance/kill-switches/",
+        ),
+        None => task_prompt(
+            base,
+            "Stop traffic through Enterplace with a kill switch",
+            &[],
+            &[
+                "1. Ask me, if I have not said them: what to stop (a person, a team, one key by its hash prefix, a model, or everything) and the reason. The people stopped see the reason in their tool.".into(),
+                setup.replacen("1.", "2.", 1),
+                "3. Run exactly one of these, with my answers:\n`enterplace kill --person <name> --reason \"<reason>\"`\n`enterplace kill --team <team> --reason \"<reason>\"`\n`enterplace kill --key-prefix <first 8 hex of the key hash> --reason \"<reason>\"`\n`enterplace kill --model <model> --reason \"<reason>\"`\n`enterplace kill --all --reason \"<reason>\"`\nIf it answers that the name matches nothing, show me the names it suggests; add --force only if I say so.".into(),
+                "4. To undo it later: the same command as `enterplace unkill` with the same flag and no --reason.".into(),
+            ],
+            &format!(
+                "The command says the switch is on; the banner on {base}/console/app/#/audit lists it with the reason. Every gateway refuses that traffic within 2 seconds."
+            ),
+            "/governance/kill-switches/",
+        ),
+    }
 }
 
 /// The `enterplace key new` line of an agent prompt: with the keys file named, so it works from any folder on the
@@ -1630,8 +1716,8 @@ fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         "Make a key for the app",
         app.is_some(),
         vec![
-            p("A workload key names the app, not a person. Give it the team that owns it."),
-            c.key_form("Workload", ("support-bot", "support"), true),
+            p("A service key names the app or agent, not a person. Give it the team that owns it."),
+            c.key_form("App or agent", ("support-bot", "support"), true),
         ],
     )
     .finished(made_text(c, app));
@@ -1693,11 +1779,11 @@ fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let budget = plain(c, &format!("budget-team:{team}"));
     let s1 = s1.agent(prompt(
         base,
-        "Make an Enterplace workload key for the app",
+        "Make an Enterplace service key for the app",
         &[],
         &[format!(
             "{} Keep the key in the app's secret store, never in code.",
-            key_new(f, "app name", "")
+            key_new(f, "app name", " --service")
         )],
         "`enterplace key list` shows the key.",
         "/integrations/connect-a-project/",

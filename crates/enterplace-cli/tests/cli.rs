@@ -3026,3 +3026,63 @@ fn start_on_a_taken_port_writes_nothing_and_stop_stops_the_gateway_of_a_folder()
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+#[test]
+fn a_service_key_is_marked_as_one_and_takes_no_admin_or_identity_only() -> TestResult {
+    let dir = workdir("service-key")?;
+    let keys = path(&dir, "enterplace.keys.yaml");
+    let out = enterplace(
+        &[
+            "key",
+            "new",
+            "support-bot",
+            "--team",
+            "support",
+            "--service",
+            "--keys",
+            &keys,
+        ],
+        &[],
+    )?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(
+        stdout.starts_with("Service key for support-bot, team support."),
+        "{stdout}"
+    );
+    // The console's Apps and agents page lists it by the same mark the console's own service keys carry.
+    let entries = enterplace_core::config::key_entries(
+        std::path::Path::new(&keys),
+        &std::fs::read_to_string(&keys)?,
+    )
+    .map_err(|p| p.join("\n"))?;
+    let entry = entries
+        .iter()
+        .find(|e| e.name == "support-bot")
+        .ok_or("no entry")?;
+    assert_eq!(
+        entry.options.metadata.get("kind").map(String::as_str),
+        Some("workload")
+    );
+    for other in ["--admin", "--identity-only"] {
+        let out = enterplace(
+            &[
+                "key",
+                "new",
+                "etl-job",
+                "--team",
+                "data",
+                "--service",
+                other,
+                "--keys",
+                &keys,
+            ],
+            &[],
+        )?;
+        assert!(!out.status.success(), "{other}");
+        assert!(
+            String::from_utf8(out.stderr)?.contains("--service makes a key for an app or agent"),
+            "{other}"
+        );
+    }
+    Ok(())
+}

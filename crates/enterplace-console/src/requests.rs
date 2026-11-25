@@ -82,7 +82,12 @@ fn outcome(row: &Row) -> Value {
                 "warn",
                 format!("Would refuse: {}", crate::pages::code_words(&code)),
             ),
-            None => ("allow", "Allowed".to_string()),
+            // A guardrail under warn or mask let it through: the row names what it found, as the Audit log does.
+            None => match acted(&row.line) {
+                Some((action, kind)) if action == "mask" => ("warn", format!("Masked: {kind}")),
+                Some((_, kind)) => ("warn", format!("Found: {kind}")),
+                None => ("allow", "Allowed".to_string()),
+            },
         },
         Outcome::Refused if row.code == "guardrail_blocked" => ("block", "Blocked".to_string()),
         Outcome::Refused => (
@@ -115,6 +120,24 @@ fn would_refuse(line: &str) -> Option<String> {
             .unwrap_or("")
             .to_string(),
     )
+}
+
+/// The first finding a guardrail masked, else the first it warned of, as (action, kind), read from the decision record.
+fn acted(line: &str) -> Option<(String, String)> {
+    if !line.contains("\"guardrails\"") {
+        return None;
+    }
+    let record: Value = serde_json::from_str(line).ok()?;
+    let findings = record.get("guardrails")?.as_array()?;
+    ["mask", "warn"].into_iter().find_map(|action| {
+        findings
+            .iter()
+            .find(|f| f.get("action").and_then(Value::as_str) == Some(action))
+            .map(|f| {
+                let kind = f.get("kind").and_then(Value::as_str).unwrap_or("guardrail");
+                (action.to_string(), kind.to_string())
+            })
+    })
 }
 
 /// Proof shows only where it fails: a row that checks out needs no tag saying so.

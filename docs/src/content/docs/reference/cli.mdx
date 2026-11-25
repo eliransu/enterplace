@@ -210,7 +210,7 @@ Exit `0` when valid, `1` with every problem otherwise. Warnings that do not fail
 Makes a key for a person or a workload. The key is printed once, with the lines that point coding agents and SDKs at Enterplace (OpenAI-compatible tools, Gemini CLI, Claude Code). Only its SHA-256 is saved.
 
 ```text
-enterplace key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>[@<tz>]]
+enterplace key new <name> --team <team> [--admin | --identity-only | --service] [--expires <date>] [--budget <usd>/<period>[@<tz>]]
   [--models <a,b>] [--tpm <n>] [--rpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>]
   [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]
 ```
@@ -221,6 +221,7 @@ enterplace key new <name> --team <team> [--admin | --identity-only] [--expires <
 | `--team <team>` | required | The team, same characters |
 | `--admin` | off | The key may sign in to the console and call the admin API. The first admin starts here |
 | `--identity-only` | off | Make a person token (`enterplace_u_...`) in place of a key: it names the person for [Claude subscription passthrough](/governance/subscriptions/) in `x-enterplace-user` and reaches no model on its own. Prints the two Claude Code lines. Takes no `--admin`, `--budget`, `--models` or `--tpm` |
+| `--service` | off | Mark the key as an app's or an agent's, not a person's: the console lists it under Apps and agents as a service key, the same kind the console makes there. Takes no `--admin` or `--identity-only` |
 | `--expires <date>` | none | Refused from that UTC day on (`2026-12-31`) or that time (`2026-12-31T18:00:00Z`), with `key_expired` |
 | `--budget <usd>/<period>[@<tz>]` | none | Caps this key's spend. Use `day`, `week`, `month`, `year`, `hour`, `minute`, or an interval such as `6h`. A period can include a time zone, as in `100/month@America/New_York`. Refused with `key_budget_exceeded` |
 | `--models <a,b>` | none | Narrows the rule's models for this key, comma separated |

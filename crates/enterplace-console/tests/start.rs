@@ -1321,6 +1321,29 @@ async fn every_agent_prompt_links_a_docs_page_that_exists() -> TestResult {
     }
     // Only the current step of each holds its prompt.
     assert!(prompts >= 6, "{prompts}");
+    // The app's key is made a service key, the kind Apps and agents lists, not a person's. Once a first request
+    // is in, making the app's key is the current step and holds its prompt.
+    s.log.append(&Entry {
+        id: "01FIRSTCALL000000000000000",
+        person: Some("noa.bar"),
+        team: Some("platform"),
+        method: "POST",
+        path: "/v1/chat/completions",
+        model: Some("gpt-4o-mini"),
+        allowed: true,
+        rule: Some("everyone"),
+        provider: "openai",
+        policy_sha256: "x",
+        ..Entry::default()
+    })?;
+    let apps = start(&s.app, &cookie, "track=apps").await?;
+    let made = step(&apps, "Make a key for the app")["agent"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        made.contains("enterplace key new <app name> --team <team> --service"),
+        "{apps}"
+    );
     Ok(())
 }
 
