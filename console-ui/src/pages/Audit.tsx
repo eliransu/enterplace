@@ -91,11 +91,20 @@ export function Audit({ query }: PageProps) {
       <Head
         title="Audit log"
         lead={data?.lead ?? "Every decision and admin change, in one chain."}
-        actions={data?.chains.map((c) => (
-          <Button key={c.label} variant={c.shown ? "default" : "outline"} size="sm" onClick={() => setQuery(new URLSearchParams(), { chain: c.chain })}>
-            {c.label}
-          </Button>
-        ))}
+        actions={
+          <>
+            {data?.chains.map((c) => (
+              <Button key={c.label} variant={c.shown ? "default" : "outline"} size="sm" onClick={() => setQuery(new URLSearchParams(), { chain: c.chain })}>
+                {c.label}
+              </Button>
+            ))}
+            {data?.may_restore ? (
+              <Button variant="outline" size="sm" asChild>
+                <a href="#/people?stop=1">Stop traffic</a>
+              </Button>
+            ) : null}
+          </>
+        }
       />
       {error ? <Problem text={error} retry={reload} /> : null}
       {!data && !error ? <Loading rows={8} /> : null}
@@ -159,7 +168,7 @@ export function Audit({ query }: PageProps) {
               {data.pager ? <Pager pager={data.pager} noun={data.noun ?? "decisions"} query={query} /> : null}
             </section>
           )}
-          {data.verified ? <ChainLine verified={data.verified} verify={verify} /> : null}
+          {data.verified ? <ChainLine verified={data.verified} verify={verify} chain={data.chain} /> : null}
         </>
       ) : data && data.total === 0 && !error ? (
         <Button variant="outline" className="justify-self-start" onClick={verify}>
@@ -276,7 +285,7 @@ function Pager({ pager, noun, query }: { pager: NonNullable<Data["pager"]>; noun
 }
 
 // Verify sits with the chain's line under the records: it checks the data, it is not the page's main action.
-function ChainLine({ verified, verify }: { verified: Verified; verify: () => void }) {
+function ChainLine({ verified, verify, chain }: { verified: Verified; verify: () => void; chain: string }) {
   const line = useRef<HTMLDivElement>(null);
   // Just after Verify chain now, focus goes to its result, so it is read out instead of the page top.
   useEffect(() => {
@@ -294,9 +303,19 @@ function ChainLine({ verified, verify }: { verified: Verified; verify: () => voi
         </div>
       ) : null}
       {verified.note ? <span className="t-small text-muted-foreground">{verified.note}</span> : null}
-      <Button variant="outline" size="sm" onClick={verify}>
-        Verify chain now
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" onClick={verify}>
+          Verify chain now
+        </Button>
+        <Button variant="outline" size="sm" asChild>
+          <a href={`/console/audit/export${chain ? `?chain=${encodeURIComponent(chain)}` : ""}`} download>
+            Export for an auditor
+          </a>
+        </Button>
+      </div>
+      <span className="t-small text-muted-foreground">
+        The export is the chain as written, one record a line, with no prompt text. The auditor checks it with enterplace audit verify and the last hash Verify chain now shows.
+      </span>
     </div>
   );
 }

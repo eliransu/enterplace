@@ -223,6 +223,8 @@ pub(crate) struct Facts {
     /// The policy is kept in the store, so a policy line can open a draft.
     pub draft: bool,
     pub policy_path: String,
+    /// The keys file `enterplace key new` writes to, named in agent prompts so the command works from any folder.
+    pub keys_path: String,
     /// Keys that are not admin keys, within the person's reach, in file order.
     pub people: Vec<KeyEntry>,
     /// The first 8 characters of each admin key's hash, as requests record their key.
@@ -341,6 +343,7 @@ pub(crate) async fn facts(console: &Console, admin: &Admin, base: String) -> Fac
     let mut f = Facts {
         base,
         policy_path: c.policy.display().to_string(),
+        keys_path: c.keys.display().to_string(),
         draft: edit::live(console).is_some(),
         watch_on: console.0.watch.is_some(),
         verified: console
@@ -709,6 +712,15 @@ fn prompt(
         md(doc)
     );
     out
+}
+
+/// The `enterplace key new` line of an agent prompt: with the keys file named, so it works from any folder on the
+/// gateway's machine, and with the names it still needs asked for, not made up.
+fn key_new(f: &Facts, who: &str, flags: &str) -> String {
+    format!(
+        "Ask me for the {who} and the team if I have not said them. Then, on the machine that runs the gateway, run: `enterplace key new <{who}> --team <team>{flags} --keys {}`. It prints the key once.",
+        f.keys_path
+    )
 }
 
 /// A docs page's Markdown twin, which the docs site serves beside every page.
@@ -1245,7 +1257,10 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         base,
         "Make an Enterplace key for the first developer",
         &[],
-        &["On the machine that runs the gateway, in the folder of its policy, run: `enterplace key new <name> --team <team>`. It prints the key once; send it to the developer through the company's secret manager.".into()],
+        &[format!(
+            "{} Send it to the developer through the company's secret manager, never in chat.",
+            key_new(f, "name", "")
+        )],
         "`enterplace key list` shows the new key.",
         "/integrations/coding-tools/",
     ));
@@ -1264,7 +1279,7 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         base,
         "Make an Enterplace key for one more developer",
         &[],
-        &["On the gateway's machine, run `enterplace key new <name> --team <team>` and send the printed lines through the company's secret manager.".into()],
+        &[format!("{} Send the printed lines to the developer through the company's secret manager, never in chat.", key_new(f, "name", ""))],
         "Their first request shows in Requests.",
         "/integrations/coding-tools/",
     ));
@@ -1548,7 +1563,7 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         "Make an Enterplace person token for one more developer",
         &[],
         &[
-            "1. On the machine that runs the gateway, in the folder of its policy, run: `enterplace key new <name> --team <team> --identity-only`.".into(),
+            format!("1. {}", key_new(f, "name", " --identity-only")),
             "2. It prints the person token once with the two lines for Claude Code. Send them to the developer through the company's secret manager, not in chat.".into(),
         ],
         "The developer's first prompt shows under their name in Requests.",
@@ -1680,7 +1695,10 @@ fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         base,
         "Make an Enterplace workload key for the app",
         &[],
-        &["On the gateway's machine, run `enterplace key new <app name> --team <owning team>`. Keep the printed key in the app's secret store, never in code.".into()],
+        &[format!(
+            "{} Keep the key in the app's secret store, never in code.",
+            key_new(f, "app name", "")
+        )],
         "`enterplace key list` shows the key.",
         "/integrations/connect-a-project/",
     ));
@@ -1868,7 +1886,7 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         base,
         "Make an Enterplace key",
         &[],
-        &["On the gateway's machine, run `enterplace key new <name> --team <team>`.".into()],
+        &[key_new(f, "name", "")],
         "`enterplace key list` shows the key.",
         "/governance/budgets-and-rate-limits/",
     ));

@@ -75,7 +75,15 @@ fn not_for(admin: &Admin, permission: Permission) -> Fail {
 /// The outcome in the Audit log's words ("Allowed", "Refused: unknown key") and the tag kind that colors it.
 fn outcome(row: &Row) -> Value {
     let (kind, text) = match row.outcome() {
-        Outcome::Allowed => ("allow", "Allowed".to_string()),
+        // Observe mode or a shadow period let it through: the row says what would have stopped it.
+        Outcome::Allowed => match would_refuse(&row.line) {
+            Some(code) if code == "guardrail_blocked" => ("warn", "Would block".to_string()),
+            Some(code) => (
+                "warn",
+                format!("Would refuse: {}", crate::pages::code_words(&code)),
+            ),
+            None => ("allow", "Allowed".to_string()),
+        },
         Outcome::Refused if row.code == "guardrail_blocked" => ("block", "Blocked".to_string()),
         Outcome::Refused => (
             "refused",
@@ -91,6 +99,22 @@ fn outcome(row: &Row) -> Value {
         ),
     };
     json!({ "kind": kind, "text": text })
+}
+
+/// The code of the first refusal observe mode or a shadow period let through, read from the decision record.
+fn would_refuse(line: &str) -> Option<String> {
+    if !line.contains("\"would_refuse\"") {
+        return None;
+    }
+    let record: Value = serde_json::from_str(line).ok()?;
+    let first = record.get("would_refuse")?.as_array()?.first()?;
+    Some(
+        first
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    )
 }
 
 /// Proof shows only where it fails: a row that checks out needs no tag saying so.

@@ -60,6 +60,7 @@ pub(crate) fn routes() -> Router<Console> {
             put(guard_edit).delete(guard_remove),
         )
         .route("/api/policy/guardrails/{name}/on", put(guardrail_set))
+        .route("/api/policy/guardrails/{name}/test", post(guardrail_test))
         .route("/api/policy/aliases", post(alias_add))
         .route(
             "/api/policy/aliases/{name}",
@@ -1662,6 +1663,12 @@ async fn guard_add(State(console): State<Console>, headers: HeaderMap, bytes: By
             entry.insert("name".into(), name.clone().into());
             guard_fields(&mut entry, &body)?;
             guards.push(Value::Object(entry));
+            // A guardrail no rule names runs nowhere: the form adds it to every request unless the admin says not to.
+            if body.get("every").and_then(Value::as_bool) == Some(true) {
+                let mut defaults = str_list(tree.get("default_guardrails"));
+                defaults.push(name.clone());
+                tree.insert("default_guardrails".into(), strings(&defaults));
+            }
             Ok(())
         })
         .await
@@ -1773,6 +1780,56 @@ async fn guardrail_set(
         })
         .await
     }.await)
+}
+
+/// Runs a guardrail of the policy over a sample the admin types, as its rule would on a request. Nothing is sent
+/// anywhere and the sample is not kept: the answer gives each kind found and a masked span, never the text.
+async fn guardrail_test(
+    State(console): State<Console>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Response {
+    answer(
+        async {
+            signed_in(&console, &headers, true).await?;
+            let body = body_of(&bytes)?;
+            let sample = text(&body, "text");
+            if sample.trim().is_empty() {
+                return Err(bad("Type a sample prompt to test the guardrail on."));
+            }
+            let tree = read_tree(&console)?;
+            let entry = str_objects(tree.get("guardrails"))
+                .find(|g| g.get("name").and_then(Value::as_str) == Some(name.as_str()))
+                .ok_or_else(|| bad(format!("There is no guardrail named \"{name}\" in the policy. Reload the page.")))?;
+            let def: enterplace_core::guard::GuardrailFile = serde_json::from_value(Value::Object(entry.clone()))
+                .map_err(|err| bad(format!("Guardrail {name} does not read: {err}. Fix it with Edit, then test again.")))?;
+            let action = def.action.map_or("block".to_string(), |a| format!("{a:?}").to_lowercase());
+            let guard = enterplace_core::guard::guardrails(&[def])
+                .map_err(|errors| bad(errors.join(" ")))?
+                .pop()
+                .ok_or_else(|| bad(format!("Guardrail {name} holds no check.")))?;
+            let sample = enterplace_core::guard::sample(&json!({ "text": sample }), 1).map_err(bad)?;
+            let report = enterplace_core::guard::backtest(&guard, &[sample]).map_err(bad)?;
+            let message = if report.hits == 0 {
+                format!("{name} finds nothing in this sample: a request like it goes through.")
+            } else {
+                let kinds: Vec<String> = report.kinds.iter().map(|(k, n)| format!("{k} ({n})")).collect();
+                let does = match action.as_str() {
+                    "mask" => "masks each finding and sends the request on",
+                    "warn" => "sends it on and records the finding",
+                    _ => "refuses a request like it",
+                };
+                format!("{name} finds {} in this sample. With action {action}, it {does} once the policy enforces.", kinds.join(", "))
+            };
+            Ok(ok(json!({
+                "message": message,
+                "hits": report.hits,
+                "masked": report.samples.iter().map(|s| json!({ "kind": s.kind, "masked": s.masked })).collect::<Vec<_>>(),
+            })))
+        }
+        .await,
+    )
 }
 
 /// Sets what the alias form changes: where the alias sends a request, and the fallbacks tried after.

@@ -45,6 +45,8 @@ pub(crate) fn routes() -> Router<Console> {
         .route("/api/audit", get(list))
         .route("/api/audit/verify", post(verify))
         .route("/api/audit/restore", post(restore))
+        .route("/api/audit/stop", post(stop))
+        .route("/audit/export", get(export))
 }
 
 /// The app's audit route for an old address, keeping its filters, chain and open record. A role that may not read
@@ -268,6 +270,117 @@ async fn restore(State(console): State<Console>, headers: HeaderMap, bytes: Byte
         }
         .await,
     )
+}
+
+/// Stop traffic: turns a kill switch on, as `enterplace kill` and `POST /admin/kills` do, recorded first.
+async fn stop(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            if !admin.may(Permission::Kill) {
+                crate::read_only(&console, &admin, "set_kill").await;
+                return Err(Fail(
+                    StatusCode::FORBIDDEN,
+                    format!(
+                        "Your role, {}, does not have the kill permission, so traffic was not stopped. Ask an admin whose role has it.",
+                        admin.role
+                    ),
+                ));
+            }
+            let body = body_of(&bytes)?;
+            let (scope, reason) = (text(&body, "scope").to_string(), text(&body, "reason").trim().to_string());
+            let value = enterplace_core::kill::checked(&scope, text(&body, "value"), &reason)
+                .map_err(|err| bad(format!("{} Fix it and press Stop traffic again.", crate::api::sentence(&err))))?;
+            let act = Act {
+                action: "set_kill",
+                by: Some((&admin.name, &admin.team)),
+                key: None,
+                target: json!({ "scope": scope, "value": value, "reason": reason }),
+            };
+            if record(&console, &act, None, None).await.is_err() {
+                return Err(Fail(StatusCode::SERVICE_UNAVAILABLE, NOT_RECORDED.into()));
+            }
+            let switches = enterplace_core::kill::Switches::open(enterplace_core::kill::path_beside(
+                &console.config().keys,
+            ));
+            let kill = Kill { scope, value, reason, by: admin.name.clone(), at: audit::timestamp() };
+            let label = kill.label();
+            tokio::task::spawn_blocking(move || switches.set(kill))
+                .await
+                .map_err(|_| Fail(StatusCode::SERVICE_UNAVAILABLE, "Traffic was not stopped: the task stopped. Try again.".into()))?
+                .map_err(|err| Fail(StatusCode::SERVICE_UNAVAILABLE, format!("Traffic was not stopped: {err} Try again, or run enterplace kill on the gateway's host.")))?;
+            Ok(ok(json!({
+                "message": format!("Traffic stopped for {label}. Every gateway refuses it within 2 seconds. Restore traffic is on the Audit log."),
+            })))
+        }
+        .await,
+    )
+}
+
+/// The chain as an auditor takes it: the records as written, one JSON object a line, so `enterplace audit verify`
+/// checks the file itself. Someone kept to an organization gets only the records they may read.
+async fn export(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
+    let fail = |status: StatusCode, text: String| {
+        Response::builder()
+            .status(status)
+            .header("content-type", "text/plain; charset=utf-8")
+            .body(axum::body::Body::from(text))
+            .unwrap_or_default()
+    };
+    let admin = match signed_in(&console, &headers, false).await {
+        Ok(admin) => admin,
+        Err(Fail(status, text)) => return fail(status, text),
+    };
+    if !admin.may(Permission::SeeRecords) {
+        return fail(
+            StatusCode::FORBIDDEN,
+            format!(
+                "Your role, {}, does not have the {} permission an export needs. Ask an Enterplace admin to add it to the role under roles: in the policy.",
+                admin.role,
+                Permission::SeeRecords.word()
+            ),
+        );
+    }
+    let (chain, path) = chain_for(&admin, &console.config().audit, &Form::of(&uri));
+    let log = if chain.is_empty() {
+        log_for(&admin, read(&path))
+    } else {
+        read(&path)
+    };
+    let text = match log {
+        Ok(text) => text.unwrap_or_default(),
+        Err(err) => {
+            return fail(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!(
+                    "The audit log did not load: {err} Check that the file is there and Enterplace may read it, then try again."
+                ),
+            );
+        }
+    };
+    let act = Act {
+        action: "export_audit",
+        by: Some((&admin.name, &admin.team)),
+        key: None,
+        target: json!({ "chain": chain, "records": text.lines().count() }),
+    };
+    if record(&console, &act, None, None).await.is_err() {
+        return fail(StatusCode::SERVICE_UNAVAILABLE, NOT_RECORDED.into());
+    }
+    let name = if chain.is_empty() {
+        "enterplace-audit.jsonl".to_string()
+    } else {
+        format!("enterplace-audit-{chain}.jsonl")
+    };
+    Response::builder()
+        .header("content-type", "application/x-ndjson")
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{name}\""),
+        )
+        .header("cache-control", "no-store")
+        .body(axum::body::Body::from(text))
+        .unwrap_or_default()
 }
 
 /// What the page reads besides the person: the query, the chain's text, and what the sheets explain records with.
@@ -605,6 +718,9 @@ fn record_sheet(record: &Value, ctx: &Context<'_>) -> Value {
             match (s(record, "verdict"), answer_verdict(record)) {
                 (_, "block") => "Allowed, answer withheld".to_string(),
                 (_, "mask") => "Allowed, answer masked".to_string(),
+                ("allow", _) if !would_refuse(record).is_empty() => {
+                    "Allowed, would have been refused".to_string()
+                }
                 ("allow", _) => "Allowed".to_string(),
                 ("refused", _) => format!("Refused: {}", code_words(s(record, "code"))),
                 (verdict, _) => both(verdict, s(record, "code")),
@@ -865,10 +981,11 @@ fn killed_story(record: &Value, ctx: &Context<'_>) -> Story {
 }
 
 /// The filters of the AuditLog design, by their query value.
-const SHOW: [(&str, &str); 6] = [
+const SHOW: [(&str, &str); 7] = [
     ("all", "All"),
     ("blocked", "Blocked"),
     ("refused", "Refused"),
+    ("would", "Would refuse"),
     ("masked", "Masked"),
     ("warned", "Warned"),
     ("changes", "Changes"),
@@ -917,6 +1034,14 @@ fn answer_findings(record: &Value) -> &[Value] {
     record
         .get("answer")
         .and_then(|a| a.get("guardrails"))
+        .and_then(Value::as_array)
+        .map_or(&[], Vec::as_slice)
+}
+
+/// What observe mode or a shadow period let through that the policy would have refused.
+fn would_refuse(record: &Value) -> &[Value] {
+    record
+        .get("would_refuse")
         .and_then(Value::as_array)
         .map_or(&[], Vec::as_slice)
 }
@@ -997,7 +1122,8 @@ impl Filter<'_> {
                     || s(record, "event") == "config_rejected"
             }
             "masked" => found(record, "mask").is_some() || answer_verdict(record) == "mask",
-            "warned" => found(record, "warn").is_some(),
+            "warned" => found(record, "warn").is_some() || found(record, "shadow").is_some(),
+            "would" => !would_refuse(record).is_empty(),
             "changes" => is_change(record),
             _ => true,
         };
@@ -1034,6 +1160,7 @@ fn action_word(action: &str) -> (&str, &str) {
         "set_kill" => ("stopped traffic", "traffic stop"),
         "clear_kill" => ("restored traffic", "traffic restore"),
         "list_kills" => ("listed switches", "switch list"),
+        "export_audit" => ("exported the audit log", "audit export"),
         "start_choice" => ("chose a track", "track choice"),
         "self_issue_key" => ("enterplace login key", "enterplace login"),
         "revoke_own_key" => ("enterplace logout", "enterplace logout"),
@@ -1084,7 +1211,19 @@ fn verdict(record: &Value) -> Value {
         ("allow", _) => match (found(record, "mask"), found(record, "warn")) {
             (Some(kind), _) => badge("mask", kind),
             (None, Some(kind)) => badge("warn", kind),
-            (None, None) => tag("allow", "Allowed", ""),
+            // Observe mode or a shadow period let it through: the list says what would have stopped it.
+            (None, None) => match would_refuse(record).first() {
+                Some(w) if s(w, "code") == "guardrail_blocked" => tag(
+                    "warn",
+                    "Would block:",
+                    found(record, "shadow").unwrap_or("guardrail"),
+                ),
+                Some(w) => tag("warn", "Would refuse:", &code_words(s(w, "code"))),
+                None => match found(record, "shadow") {
+                    Some(kind) => tag("warn", "Found:", kind),
+                    None => tag("allow", "Allowed", ""),
+                },
+            },
         },
         _ => tag("", "Change", s(record, "event")),
     }
@@ -1497,6 +1636,20 @@ fn story(record: &Value, ctx: &Context<'_>) -> Story {
                 }
                 _ => {}
             }
+            if let Some(first) = would_refuse(record).first() {
+                let why: Vec<&str> = would_refuse(record).iter().map(|w| s(w, "message")).collect();
+                return plain(
+                    if s(first, "by") == "observe" {
+                        "Let through by observe mode, would have been refused"
+                    } else {
+                        "Let through by a shadow period, would have been refused"
+                    },
+                    format!(
+                        "{person} asked for {model}, and it was sent to {provider}. {} Turn on enforcement on Policy to refuse requests like it.",
+                        why.join(" ")
+                    ),
+                );
+            }
             if masked > 0 {
                 let n = enterplace_core::count(usize::try_from(masked).unwrap_or(0), "finding");
                 return plain(
@@ -1513,6 +1666,12 @@ fn story(record: &Value, ctx: &Context<'_>) -> Story {
                 ),
             )
         }
+        (_, "person_needed") => plain(
+            "The request named no person",
+            format!(
+                "It came with a login that is not an Enterplace key and no person token, and Every request needs a name is on, so Enterplace refused it. {none_sent} Hand its sender a person token (Coding agents, Hand out a person token) and have them set it as x-enterplace-user."
+            ),
+        ),
         (_, "no_key") => plain(
             "The request carried no Enterplace key",
             format!("Enterplace refuses a request it cannot put a name on. {none_sent}"),

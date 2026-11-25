@@ -2077,6 +2077,116 @@ async fn the_console_styles_stack_tables_below_1100px_and_keep_identifiers_whole
 }
 
 #[tokio::test]
+async fn a_security_lead_stops_traffic_sees_what_observe_let_through_and_exports_the_chain()
+-> TestResult {
+    let s = setup("security-lead")?;
+    let cookie = sign_in(&s.app).await?;
+    // Stop traffic from the console: the switch is on, with the reason, and recorded first.
+    let (status, _, answer) = call(
+        &s.app,
+        "POST",
+        "/console/api/audit/stop",
+        &cookie,
+        serde_json::json!({ "scope": "person", "value": "maya.cohen", "reason": "leaked key" }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let on = enterplace_core::kill::read(&enterplace_core::kill::path_beside(&s.keys()))?;
+    assert!(
+        on.len() == 1 && on[0].value == "maya.cohen" && on[0].reason == "leaked key",
+        "{on:?}"
+    );
+    assert!(
+        admin_records(&s)?.iter().any(|r| r["action"] == "set_kill"
+            && r["target"]["value"] == "maya.cohen"
+            && r["target"]["reason"] == "leaked key"),
+        "recorded"
+    );
+    // No reason, no switch: the refusal says what to fix.
+    let (status, _, refused) = call(
+        &s.app,
+        "POST",
+        "/console/api/audit/stop",
+        &cookie,
+        serde_json::json!({ "scope": "team", "value": "payments", "reason": " " }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap_or("").contains("reason"),
+        "{refused}"
+    );
+
+    // A request observe mode let through says what would have stopped it, in the list, its filter and its sheet.
+    let mut record = serde_json::Map::new();
+    for (k, v) in [
+        ("id", serde_json::json!("01AAAAAAAAAAAAAAAAAAAAAAW1")),
+        ("time", serde_json::json!("2026-11-13T13:50:00.000Z")),
+        ("person", serde_json::json!("maya.cohen")),
+        ("team", serde_json::json!("payments")),
+        ("method", serde_json::json!("POST")),
+        ("path", serde_json::json!("/v1/chat/completions")),
+        ("model", serde_json::json!("gpt-4o-mini")),
+        ("verdict", serde_json::json!("allow")),
+        ("provider", serde_json::json!("openai")),
+        ("outcome", serde_json::json!("would_refuse")),
+        (
+            "guardrails",
+            serde_json::json!([{ "guardrail": "no-secrets", "detector": "secrets", "kind": "aws_access_key", "action": "shadow", "count": 1 }]),
+        ),
+        (
+            "would_refuse",
+            serde_json::json!([{ "code": "guardrail_blocked", "by": "observe", "message": "Refused: guardrail \"no-secrets\" would block this request.", "guardrail": "no-secrets" }]),
+        ),
+    ] {
+        record.insert(k.into(), v);
+    }
+    s.log.append_record(&record)?;
+    let page = audit(&s.app, &cookie, "verdict=would").await?;
+    let rows = page["rows"].as_array().cloned().unwrap_or_default();
+    assert!(
+        rows.len() == 1
+            && rows[0]["verdict"]["word"] == "Would block:"
+            && rows[0]["verdict"]["detail"] == "aws_access_key",
+        "{page}"
+    );
+    let opened = sheet(&s.app, &cookie, "01AAAAAAAAAAAAAAAAAAAAAAW1").await?;
+    assert!(
+        opened["title"]
+            .as_str()
+            .unwrap_or("")
+            .contains("would have been refused")
+            && fact(&opened, "Verdict") == "Allowed, would have been refused",
+        "{opened}"
+    );
+
+    // The export is the chain as written, a file the auditor verifies, and taking it is recorded.
+    let (status, headers, body) = send(&s.app, get("/console/audit/export", &cookie)?).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        headers
+            .get(header::CONTENT_DISPOSITION)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("enterplace-audit.jsonl")),
+        "{headers:?}"
+    );
+    assert!(body.contains("01AAAAAAAAAAAAAAAAAAAAAAW1"), "{body}");
+    assert!(
+        admin_records(&s)?
+            .iter()
+            .any(|r| r["action"] == "export_audit"),
+        "recorded"
+    );
+    let (status, _, _) = send(
+        &s.app,
+        get("/console/audit/export", "enterplace_console=forged")?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_kill_switch_shows_a_banner_on_audit_and_in_the_sheet_of_a_request_it_stopped()
 -> TestResult {
     let s = setup("kills")?;

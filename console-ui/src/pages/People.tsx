@@ -119,7 +119,8 @@ export const isService = (e: Entry) => e.kind === "workload key";
 
 /// The keys file, read again every 5 seconds unless a dialog on `query` is open, and the key shown once after a change.
 export function useKeys(query: URLSearchParams) {
-  const dialog = query.get("issue") || query.get("revoke") || query.get("edit");
+  const dialog =
+    query.get("issue") || query.get("revoke") || query.get("edit") || query.get("stop");
   const [made, setMade] = useState<Made | null>(null);
   const keys = useData<Keys>("people", 5000, !!dialog || !!made);
   return { ...keys, made, setMade };
@@ -168,11 +169,21 @@ export function People({ query }: PageProps) {
           "Everyone and everything with a key: people, their person tokens, and service keys."
         }
         actions={
-          data?.may.issue ? (
-            <Button onClick={() => goTo("/people", { issue: "1" })}>
-              Issue a key
-            </Button>
-          ) : null
+          <>
+            {data?.may.restore ? (
+              <Button
+                variant="outline"
+                onClick={() => goTo("/people", { stop: "1" })}
+              >
+                Stop traffic
+              </Button>
+            ) : null}
+            {data?.may.issue ? (
+              <Button onClick={() => goTo("/people", { issue: "1" })}>
+                Issue a key
+              </Button>
+            ) : null}
+          </>
         }
       />
       <ReadOnly data={data} />
@@ -364,7 +375,8 @@ export function KeyTable({
 }
 
 /// The dialogs a key list opens from its route's query: issue (`?issue=1`, with `name`, `team` and `token` to fill
-/// it), edit (`?edit=<sha256>`), revoke (`?revoke=<sha256>`), and the new key, shown once.
+/// it), edit (`?edit=<sha256>`), revoke (`?revoke=<sha256>`), stop traffic (`?stop=1`, with `scope` and `value`),
+/// and the new key, shown once.
 export function KeyDialogs({
   route,
   query,
@@ -399,6 +411,7 @@ export function KeyDialogs({
           entry={editing}
           route={route}
           mayRevoke={!!data.may.revoke}
+          mayStop={!!data.may.restore}
           onMade={setMade}
           change={change}
           close={close}
@@ -408,6 +421,14 @@ export function KeyDialogs({
         <RevokeDialog
           entry={revoking}
           keysPath={data.keys_path}
+          change={change}
+          close={close}
+        />
+      ) : null}
+      {data?.may.restore && query.get("stop") ? (
+        <StopDialog
+          scope={query.get("scope") ?? "person"}
+          value={query.get("value") ?? ""}
           change={change}
           close={close}
         />
@@ -714,6 +735,7 @@ function EditDialog({
   entry,
   route,
   mayRevoke,
+  mayStop,
   onMade,
   change,
   close,
@@ -721,6 +743,7 @@ function EditDialog({
   entry: Entry;
   route: string;
   mayRevoke: boolean;
+  mayStop: boolean;
   onMade: (m: Made) => void;
   change: Change;
   close: () => void;
@@ -830,17 +853,28 @@ function EditDialog({
           </label>
           <Refusal text={refused} />
           <DialogFooter className="justify-between">
-            {mayRevoke ? (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => goTo(route, { revoke: entry.sha256 })}
-              >
-                Revoke key
-              </Button>
-            ) : (
-              <span />
-            )}
+            <div className="flex flex-wrap gap-2">
+              {mayStop ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    goTo(route, { stop: "1", scope: "person", value: entry.name })
+                  }
+                >
+                  Stop traffic now
+                </Button>
+              ) : null}
+              {mayRevoke ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => goTo(route, { revoke: entry.sha256 })}
+                >
+                  Revoke key
+                </Button>
+              ) : null}
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" onClick={close}>
                 Cancel
@@ -889,6 +923,115 @@ function EditDialog({
             </Button>
           </Form>
         )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const STOP_SCOPES: Record<string, string> = {
+  person: "A person",
+  team: "A team",
+  model: "A model",
+  key_prefix: "A key (first 8 hex of its hash)",
+  all: "Everyone",
+};
+
+/// A kill switch: refuses every request of a person, a team, a key or a model, or all of them, within 2 seconds,
+/// until Restore traffic on the Audit log. Recorded with the reason, which the people stopped see in their tool.
+function StopDialog(props: {
+  scope: string;
+  value: string;
+  change: Change;
+  close: () => void;
+}) {
+  const { change, close } = props;
+  const [scope, setScope] = useState(
+    STOP_SCOPES[props.scope] ? props.scope : "person",
+  );
+  const [value, setValue] = useState(props.value);
+  const [reason, setReason] = useState("");
+  const [refused, setRefused] = useState("");
+  const submit = async () => {
+    const answer = await change(() =>
+      api.post("audit/stop", {
+        scope,
+        value: scope === "all" ? "" : value,
+        reason,
+      }),
+    );
+    if (answer) setRefused(answer);
+    else close();
+  };
+  return (
+    <Dialog open onOpenChange={(open) => !open && close()}>
+      <DialogContent>
+        <DialogTitle>Stop traffic now</DialogTitle>
+        <DialogDescription>
+          Every gateway refuses the requests within 2 seconds, with the reason
+          below, until someone presses Restore traffic on the Audit log. The
+          stop is recorded with your name.
+        </DialogDescription>
+        <Form className="grid gap-6" onSubmit={submit}>
+          <Field id="stop-scope" label="Stop">
+            <Select value={scope} onValueChange={setScope}>
+              <SelectTrigger id="stop-scope">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(STOP_SCOPES).map(([k, v]) => (
+                  <SelectItem key={k} value={k}>
+                    {v}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          {scope === "all" ? null : (
+            <Field
+              id="stop-value"
+              label={
+                scope === "model"
+                  ? "Model, as callers send it"
+                  : scope === "key_prefix"
+                    ? "Key hash"
+                    : scope === "team"
+                      ? "Team"
+                      : "Person or app"
+              }
+            >
+              <Input
+                id="stop-value"
+                className="t-mono"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                required
+                autoComplete="off"
+              />
+            </Field>
+          )}
+          <Field
+            id="stop-reason"
+            label="Reason"
+            hint="The people stopped see it in their tool, and the audit log keeps it."
+          >
+            <Input
+              id="stop-reason"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Key leaked in a public repository"
+              maxLength={500}
+              required
+              autoComplete="off"
+            />
+          </Field>
+          <Refusal text={refused} />
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={close}>
+              Cancel
+            </Button>
+            <Button type="submit">Stop traffic</Button>
+          </DialogFooter>
+        </Form>
       </DialogContent>
     </Dialog>
   );

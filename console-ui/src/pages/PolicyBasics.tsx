@@ -31,6 +31,7 @@ export function PolicyBasics({ me }: { me: Me | null }) {
   const [limit, setLimit] = useState<Limit | "new" | null>(null);
   const [guard, setGuard] = useState<Guardrail | "new" | null>(null);
   const [alias, setAlias] = useState<Alias | "new" | null>(null);
+  const [testing, setTesting] = useState<Guardrail | null>(null);
   const may = !!me?.edit_policy;
   return (
     <>
@@ -160,7 +161,7 @@ export function PolicyBasics({ me }: { me: Me | null }) {
 
           <Panel
             title="Guardrails"
-            note="On: runs on every request, before the rule's own guardrails. Off: runs only for rules that name it."
+            note="On: runs on every request, before the rule's own guardrails. Off: runs only for rules that name it. To try one before it refuses anything, keep the mode on observe or set its action to warn: what it would block shows as Would block in the Audit log."
             actions={
               <Button size="sm" disabled={!may} onClick={() => setGuard("new")}>
                 Add a guardrail
@@ -196,6 +197,9 @@ export function PolicyBasics({ me }: { me: Me | null }) {
                       <TableCell>{g.action ?? "block"}</TableCell>
                       <TableCell>
                         <div className="flex gap-2">
+                          <Button variant="outline" size="sm" onClick={() => setTesting(g)}>
+                            Test
+                          </Button>
                           <Button variant="outline" size="sm" disabled={!may} onClick={() => setGuard(g)}>
                             Edit
                           </Button>
@@ -260,6 +264,7 @@ export function PolicyBasics({ me }: { me: Me | null }) {
       {data && rule ? <RuleForm rule={rule === "new" ? null : rule} guardrails={data.guardrails} onClose={() => setRule(null)} change={change} /> : null}
       {limit ? <LimitForm limit={limit === "new" ? null : limit} onClose={() => setLimit(null)} change={change} /> : null}
       {guard ? <GuardForm guard={guard === "new" ? null : guard} onClose={() => setGuard(null)} change={change} /> : null}
+      {testing ? <GuardTest guard={testing} onClose={() => setTesting(null)} /> : null}
       {alias ? <AliasForm alias={alias === "new" ? null : alias} onClose={() => setAlias(null)} change={change} /> : null}
     </>
   );
@@ -499,6 +504,7 @@ function GuardForm({ guard, onClose, change }: { guard: Guardrail | null; onClos
   const [type, setType] = useState(str("type") || "secrets");
   const [action, setAction] = useState(str("action") || "block");
   const [on, setOn] = useState<string[]>(sides);
+  const [every, setEvery] = useState(true);
   const [fields, setFields] = useState<Record<string, string>>({
     url: str("url"),
     key_env: str("key_env"),
@@ -514,7 +520,7 @@ function GuardForm({ guard, onClose, change }: { guard: Guardrail | null; onClos
   const set = (k: string) => (ev: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setFields({ ...fields, [k]: ev.target.value });
   const submit = async (ev: React.FormEvent) => {
     ev.preventDefault();
-    const body = { name, type, action, on, ...fields };
+    const body = { name, type, action, on, ...fields, ...(guard ? {} : { every }) };
     const answer = await change(() => (guard ? api.put(`policy/guardrails/${part(guard.name)}`, body) : api.post("policy/guardrails", body)));
     if (answer) setRefused(answer);
     else onClose();
@@ -569,6 +575,12 @@ function GuardForm({ guard, onClose, change }: { guard: Guardrail | null; onClos
               </label>
             ))}
           </fieldset>
+          {guard ? null : (
+            <label className="t-body flex min-h-11 items-center gap-3">
+              <Checkbox checked={every} onCheckedChange={(c) => setEvery(c === true)} />
+              Run it on every request. Off: it runs only for the rules that name it.
+            </label>
+          )}
           {type === "regex" ? (
             <Field id="patterns" label="Patterns" hint="One per line: name: regular expression. The name is the finding's kind.">
               <textarea id="patterns" className={area} value={fields.patterns} onChange={set("patterns")} placeholder="card: \b\d{16}\b" />
@@ -616,6 +628,59 @@ function GuardForm({ guard, onClose, change }: { guard: Guardrail | null; onClos
           </Field>
           <Refusal text={refused} />
           <Actions onClose={onClose} label={guard ? "Save" : "Add guardrail"} />
+        </Form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/// Runs the guardrail over a sample typed here. Nothing is sent to a model or kept; the answer names what it found.
+function GuardTest({ guard, onClose }: { guard: Guardrail; onClose: () => void }) {
+  const [sample, setSample] = useState("");
+  const [said, setSaid] = useState<{ message: string; masked: { kind: string; masked: string }[] } | null>(null);
+  const [refused, setRefused] = useState("");
+  const submit = async () => {
+    setRefused("");
+    try {
+      setSaid((await api.post(`policy/guardrails/${part(guard.name)}/test`, { text: sample })) as unknown as NonNullable<typeof said>);
+    } catch (e) {
+      setSaid(null);
+      setRefused(e instanceof Error ? e.message : String(e));
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogTitle>Test guardrail {guard.name}</DialogTitle>
+        <DialogDescription>Paste a prompt it should catch, or one it should let through. Nothing is sent to a model or kept.</DialogDescription>
+        <Form className="grid gap-6" onSubmit={submit}>
+          <Field id="guard-sample" label="Sample prompt">
+            <textarea
+              id="guard-sample"
+              className="t-mono min-h-24 w-full rounded-box border border-input bg-background px-6 py-3 text-foreground hover:border-foreground"
+              value={sample}
+              onChange={(e) => setSample(e.target.value)}
+              placeholder="Deploy with AKIAIOSFODNN7EXAMPLE"
+              required
+            />
+          </Field>
+          {said ? (
+            <div role="status" className="grid gap-2 rounded-box bg-well px-6 py-3">
+              <span className="t-body">{said.message}</span>
+              {said.masked.map((m, i) => (
+                <span key={i} className="t-mono-sm">
+                  {m.kind}: {m.masked}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <Refusal text={refused} />
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>
+              Close
+            </Button>
+            <Button type="submit">Test</Button>
+          </DialogFooter>
         </Form>
       </DialogContent>
     </Dialog>

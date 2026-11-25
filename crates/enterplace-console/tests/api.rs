@@ -606,6 +606,50 @@ async fn policy_basics_change_rules_limits_guardrails_aliases_and_mode() -> Test
     .await?;
     assert!(!s.policy()?.contains("default_guardrails"));
 
+    // A new guardrail the form asks to run on every request is on at once, not left for a rule to name.
+    let (status, done) = call(
+        &s,
+        "POST",
+        "/console/api/policy/guardrails",
+        &cookie,
+        Some(json!({ "name": "no-cards", "type": "pii", "action": "warn", "on": ["request"], "every": true })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(
+        s.policy()?.contains("default_guardrails: [no-cards]"),
+        "{}",
+        s.policy()?
+    );
+    // Tested on a sample: it names the kind it found and masks it, and nothing is sent anywhere.
+    let (status, tested) = call(
+        &s,
+        "POST",
+        "/console/api/policy/guardrails/no-secrets/test",
+        &cookie,
+        Some(json!({ "text": concat!("deploy with AKIA", "IOSFODNN7EXAMPLE") })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{tested}");
+    assert!(
+        tested["hits"] == 1
+            && tested["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("aws_access_key")
+            && !tested.to_string().contains("IOSFODNN7"),
+        "{tested}"
+    );
+    let (status, tested) = call(
+        &s,
+        "POST",
+        "/console/api/policy/guardrails/no-secrets/test",
+        &cookie,
+        Some(json!({ "text": "nothing to see" })),
+    )
+    .await?;
+    assert!(status == StatusCode::OK && tested["hits"] == 0, "{tested}");
+
     // Routing: an alias with a fallback.
     let (status, done) = call(
         &s,
