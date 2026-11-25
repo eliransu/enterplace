@@ -1,6 +1,6 @@
 ---
-title: Migrate from Bifrost
-description: Map Bifrost virtual keys, budgets, rate limits, providers and fallbacks to a Enterplace policy and keys, and move clients over step by step.
+title: Coming from Bifrost
+description: Map Bifrost concepts and config.json to a Enterplace policy and keys, translate a config by hand, move clients over step by step, and see what differs.
 sidebar:
   order: 2
 ---
@@ -11,34 +11,55 @@ This page maps each Bifrost concept to its Enterplace equivalent and walks throu
 
 Enterplace has no importer for Bifrost. You write the policy by hand from your `config.json`, which for most setups is one provider block and one rule per team.
 
-## What maps
+## Concepts
+
+| Bifrost | Enterplace | Notes |
+|---|---|---|
+| `config.json`, or configuration kept through the web UI | The [policy file](/governance/policy/), one YAML file checked by `enterplace check`. With `store: { policy_from: store }` it is kept in Postgres as versions and [edited in the console](/operations/console-editing/) | An unknown key is an error with its line |
+| Provider with one or more keys | A provider with `key_env`, or a [key pool](/routing/key-pools/) under `keys:` | |
+| Virtual key (`sk-bf-*`) | A [Enterplace key](/governance/keys/) (`enterplace_...`), stored as a hash, shown once | Each key has a name and a team |
+| Customer, above teams | An [organization](/governance/policy/#organizations) | Enterplace's "end customer" is something else: a customer of your own product, named per request |
+| Team | The key's team, and [teams](/governance/teams/) in the policy | Rules match on `principals: { team: ... }` |
+| Budgets and rate limits | `budget`, `rate` (`rpm`, `tpm`) and `parallel` on a rule, on a key, and per scope in the [`limits:` list](/governance/budgets-and-rate-limits/#scopes-and-the-limits-list) | A budget reserves a request's worst case before it is sent |
+| Routing between providers, weights | An [alias](/routing/aliases/) with weighted `deployments` and a [`balance`](/routing/strategies/) | Rules decide on the alias |
+| Fallbacks | A provider's `fallback`, or an alias's deployments | Set in the policy, not in the request |
+| Governance plugin | Built in. Every request is decided by the policy | |
+| Logging plugin, request log | The hash-chained [audit log](/governance/audit-log/) and the [request log](/operations/request-log/) | No prompt or answer text unless a rule captures it |
+| Telemetry, OpenTelemetry and other observability plugins | Prometheus [metrics](/operations/observability/), traces, and [observability integrations](/operations/observability-integrations/) | |
+| Semantic cache plugin | [`cache:` on a rule](/routing/caching/), exact or semantic | Kept per replica |
+| Custom plugins | No in-process plugins. Outside services over HTTP: a [guardrail webhook](/governance/guardrail-webhooks/), an [events plugin](/governance/plugin-events/) or a [transform](/governance/transforms/) | |
+| MCP gateway | The [MCP gateway](/governance/mcp-gateway/) | Tools, prompts and resources by rule |
+| Drop-in SDK paths (`/openai`, `/anthropic`) | OpenAI format at `/v1`, Anthropic format at the root | See [OpenAI and Anthropic SDKs](/integrations/sdks/) |
+| Web UI | The [console](/operations/console/) | |
+
+## Field by field
 
 | Bifrost | Enterplace |
 |---|---|
-| Virtual key (`sk-bf-*`), sent as `x-bf-vk` or `Authorization: Bearer` | A [Enterplace key](/governance/keys/) (`enterplace_...`), sent as `Authorization: Bearer` or `x-api-key`. Each key has a name and a team. |
-| `client.enforce_auth_on_inference` | Always on. A request without a known Enterplace key is refused before its body is read. |
-| Virtual key `is_active: false` | Revoke the key with the console, the [admin API](/reference/admin-api/), or by removing its line from `enterplace.keys.yaml`. |
+| Virtual key (`sk-bf-*`), sent as `x-bf-vk` or `Authorization: Bearer` | A Enterplace key, sent as `Authorization: Bearer` or `x-api-key` |
+| `client.enforce_auth_on_inference` | Always on. A request without a known Enterplace key is refused before its body is read |
+| Virtual key `is_active: false` | Revoke the key in the console, with the [admin API](/reference/admin-api/), or by removing its line from `enterplace.keys.yaml` |
 | Virtual key `expires_at` | `enterplace key new --expires <date>` |
-| Team | The key's `--team`. Rules match on it with `principals: { team: ... }`. |
-| Customer | No equivalent. Enterplace has one level of grouping, the team. |
-| `provider_configs[].allowed_models` | The rule's `models:` list, narrowed per key with `--models`. |
-| `allow_all_providers: true` | `models: ["*"]` on the rule. |
-| Budget on a virtual key | `enterplace key new --budget <usd>/<day\|month>` |
-| Budget on a team | `budget: { usd: ..., per: day \| month }` on a `{ team: ... }` rule. It counts the whole team. |
-| `request_max_limit` with `request_reset_duration: 1m` | `rate: { rpm: ... }` on a rule. It counts each person. |
-| `token_max_limit` with `token_reset_duration: 1m` | `rate: { tpm: ... }` on a rule (each person), or `--tpm` on a key. |
-| `providers.<name>.keys[].value: env.NAME` | `key_env: NAME` on a provider. Enterplace holds one key per provider. |
-| `keys[].models` | The provider's `models:` list. A model is listed by one provider only. |
-| `keys[].weight` across providers | An [alias](/routing/aliases/) with `deployments` and `weight`. |
-| `network_config` retries | The provider's `retries` (0 to 5). |
-| `fallbacks` in the request body | The provider's `fallback`, or an alias's deployments, between deployments that speak the same API. A fallback across APIs (OpenAI to Anthropic) has no equivalent. See [Retries and fallbacks](/routing/retries-and-fallbacks/). |
-| `provider/model` names such as `openai/gpt-4o-mini` | Bare model names. To keep clients that send the prefixed name, add an alias with that name. |
-| Governance plugin | Built in. The [policy file](/governance/policy/) holds the rules, and every decision is in the audit log. |
-| Logging plugin, `logs.db` | The [audit log](/governance/audit-log/): a hash-chained file of JSON lines with who, which model, the verdict, tokens and cost. It holds no prompt or answer text. |
-| Telemetry, `/metrics` | `enterplace serve --metrics <address>` serves Prometheus metrics on an address of its own. See [Observability](/operations/observability/). |
-| `semantic_cache` plugin | `cache: { ttl_seconds: N }` on a rule. Enterplace's cache serves only a byte-identical request. See [Caching](/routing/caching/). |
-| `/api/governance/virtual-keys` | The [admin API](/reference/admin-api/) at `/admin/keys`, or `enterplace key new`. |
-| Default port `8080`, `POST /v1/chat/completions` | The same: Enterplace listens on `127.0.0.1:8080` by default and serves `/v1/chat/completions`. |
+| `provider_configs[].allowed_models` | The rule's `models:` list, narrowed per key with `--models` |
+| `allow_all_providers: true` | `models: ["*"]` on the rule |
+| Budget on a virtual key | `enterplace key new --budget <usd>/<period>`, for example `100/month`, `20/week` or `5/6h` |
+| Budget on a team or a customer | `budget:` on a `{ team: ... }` rule, or a `{ team: ... }` or `{ org: ... }` entry in `limits:`. It counts the whole team or organization |
+| Budget `reset_duration` (`1h`, `1d`, `1w`, `1M`, `1Y`) | The budget's `per`: `hour`, `day`, `week`, `month`, `year`, or a count such as `6h` or `3mo`. See [Periods](/governance/budgets-and-rate-limits/#periods) |
+| Several budgets on one key or team | `budget:` takes a list, one per period |
+| `request_max_limit` with `request_reset_duration: 1m` | `rate: { rpm: ... }` on a rule (each person), or `rpm` on a key |
+| `token_max_limit` with `token_reset_duration: 1m` | `rate: { tpm: ... }` on a rule (each person), or `--tpm` on a key |
+| `providers.<name>.keys[].value: env.NAME` | `key_env: NAME` on the provider |
+| Several `keys[]` for one provider, with `weight` | A [key pool](/routing/key-pools/): `keys: [{ key_env: A }, { key_env: B, weight: 2 }]` |
+| `keys[].models` | The provider's `models:` list. A model name belongs to one provider; a second provider lists it under an alias |
+| `provider_configs[].weight` across providers | An alias with `deployments` and `weight` |
+| `network_config` retries | The provider's `retries` (0 to 5) |
+| `fallbacks` in the request body | The provider's `fallback`, or an alias's deployments. A fallback may speak the other API, translated. See [Retries and fallbacks](/routing/retries-and-fallbacks/) |
+| `provider/model` names such as `openai/gpt-4o-mini` | Bare model names. To keep clients that send the prefixed name, add an alias with that name |
+| `vault.<path>` key references | A [secret manager reference](/operations/secret-managers/) as the variable's value, such as `vault://secret/data/enterplace#openai` |
+| `semantic_cache` plugin | `cache: { ttl_seconds: N, semantic: { model: ..., threshold: ... } }` on a rule |
+| `/metrics` | `enterplace serve --metrics <address>` serves Prometheus metrics on an address of its own |
+| `/api/governance/virtual-keys` | The admin API at `/admin/keys`, or `enterplace key new` |
+| Default port `8080`, `POST /v1/chat/completions` | The same: Enterplace listens on `127.0.0.1:8080` by default and serves `/v1/chat/completions` |
 
 ## Example
 
@@ -159,31 +180,32 @@ Give provider keys variable names of their own, such as `ANTHROPIC_PROVIDER_KEY`
    OPENAI_PROVIDER_KEY=sk-... ANTHROPIC_PROVIDER_KEY=sk-ant-... enterplace serve enterplace.policy.yaml
    ```
 
-7. Point each client at Enterplace: the same base URL shape (`http://<host>:8080/v1`), with the Enterplace key in place of the virtual key. Replace an `x-bf-vk` header with `Authorization: Bearer enterplace_...`.
+7. Point each client at Enterplace, with the Enterplace key in place of the virtual key. A client on `http://<host>:8080/v1` keeps that shape. An OpenAI SDK pointed at Bifrost's `/openai` path takes `http://<host>:8080/v1`, and an Anthropic SDK pointed at `/anthropic` takes `http://<host>:8080`. Replace an `x-bf-vk` header with `Authorization: Bearer enterplace_...`.
 
 8. Send a test request per team, then read the records with `enterplace audit verify enterplace-audit.jsonl` and the console. Turn the Bifrost gateway off when traffic has moved.
 
 </Steps>
 
+## What differs
+
+- **No importer.** `enterplace import` reads LiteLLM configs only. A Bifrost `config.json` is translated by hand, as above.
+- **Rules, not keys, hold the policy.** A Bifrost virtual key carries its providers, models, budget and limits. A Enterplace key carries a name and a team, the first matching rule decides, and a key can only narrow its rule.
+- **A record before every request.** Each request, allowed or refused, gets a hash-chained [audit record](/governance/audit-log/) before it is forwarded, and a request that cannot be recorded is refused.
+- **No prompt text by default.** The audit log and the request log hold no prompt or answer text. A rule can [capture bodies](/operations/request-log/#bodies), redacted, for named viewers and a set number of days.
+- **Budgets reserve.** A request under a budget reserves the most it could cost before it is sent and gives the rest back when the answer ends. See [how a budget is counted](/governance/budgets-and-rate-limits/#how-a-budget-is-counted).
+- **Keys cannot be read back.** Enterplace stores a key's hash and shows the key once. Bifrost's key values cannot be reused either way: every key is issued again.
+
 ## What has no equivalent
 
 | Bifrost | In Enterplace |
 |---|---|
-| Customers above teams | One level: the team. Put a customer's budget on each of its teams' rules, or give the customer one team. |
-| Several budgets on one key or team, all checked | One budget per rule and one per key. Both apply to a request. |
-| Reset durations other than a day or a month (`1h`, `1w`, `1Q`, `1Y`) | `per: day` or `per: month`, starting at midnight UTC and on the first of the month. |
-| Rate limits over a period other than a minute | Requests and tokens per sliding minute only. |
-| A requests-per-minute limit on one key | A rule's `rate: { rpm: N }` limits each person. A key carries `--tpm` only. |
-| Several keys for one provider, weighted | One key per provider. To spread load across accounts, define one provider per account and an alias over them. |
-| `fallbacks` in the request body | Enterplace does not read it. It is forwarded to the provider with the rest of the body, so remove it from requests. Fallbacks are set in the policy. |
-| Budget overrides | Raise the budget in the policy or issue the key again. Both take effect without a restart. |
-| Semantic (embedding) cache | Byte-identical cache only. |
-| Request and answer content in logs | Enterplace never records prompt or answer text. |
-| `otel`, `maxim`, `datadog` plugins, custom plugins | Ship the audit log with Vector, Fluent Bit or the OpenTelemetry Collector. See [Observability](/operations/observability/). |
-| `vault.<path>` key references | `key_env` or `key_file`. |
+| `fallbacks` in the request body | Enterplace does not read it. On an `openai` provider it is forwarded with the rest of the body, so remove it from requests. Fallbacks are set in the policy |
+| Rate limits over a period other than a minute | `rpm` and `tpm` count any 60 seconds. For a longer period, use a budget in dollars |
+| Plugins that run inside the gateway | None. An outside service is called over HTTP: a guardrail webhook, an events plugin or a transform |
+| Request and answer content in every log row | Off unless a rule captures bodies |
 
 <Aside type="note">
-Bifrost's configuration was read from its public documentation on 2026-11-13 ([virtual keys](https://docs.getbifrost.ai/features/governance/virtual-keys), [budgets and limits](https://docs.getbifrost.ai/features/governance/budget-and-limits), [routing](https://docs.getbifrost.ai/features/governance/routing), [providers in config.json](https://docs.getbifrost.ai/deployment-guides/config-json/providers), [plugins](https://docs.getbifrost.ai/deployment-guides/config-json/plugins)). It was not tested against a running Bifrost.
+Bifrost's configuration was read from its public documentation on 2026-11-13 and 2026-11-15 ([drop-in replacement](https://docs.getbifrost.ai/features/drop-in-replacement), [virtual keys](https://docs.getbifrost.ai/features/governance/virtual-keys), [budgets and limits](https://docs.getbifrost.ai/features/governance/budget-and-limits), [routing](https://docs.getbifrost.ai/features/governance/routing), [providers in config.json](https://docs.getbifrost.ai/deployment-guides/config-json/providers), [plugins](https://docs.getbifrost.ai/deployment-guides/config-json/plugins)). No Bifrost source code was read, and the translation was not tested against a running Bifrost.
 </Aside>
 
 ## Related

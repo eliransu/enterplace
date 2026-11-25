@@ -92,6 +92,11 @@ one repository. How a release is made: RELEASING.md.
   and the agentic threats T1 to T17, each item marked addressed, partly or not covered, with the limit stated.
 - One-click deploys gain a Railway section: the image and Railway Postgres from the CLI or dashboard, with no button
   until the template is published (deploy/railway/README.md). Marked not run.
+- "Coming from LiteLLM" and "Coming from Bifrost" (migrate/from-litellm, migrate/from-bifrost, same addresses): each
+  gains a concept mapping table and a "What differs" section, and the rows that had gone stale now name key pools,
+  organizations, week and custom budget periods, a key's `rpm`, the semantic cache, fallbacks across APIs, secret
+  manager references and body capture. Known gap: the `enterplace import litellm` report still words some of these as
+  missing; the page says which.
 
 ### License
 

@@ -1,6 +1,6 @@
 ---
-title: Migrate from LiteLLM
-description: Turn a LiteLLM proxy config.yaml and its virtual key export into a Enterplace policy that passes enterplace check, plus the commands to reissue each key.
+title: Coming from LiteLLM
+description: Map LiteLLM proxy concepts to Enterplace, turn a config.yaml and its virtual keys into a Enterplace policy with enterplace import litellm, and see what differs.
 sidebar:
   order: 1
 ---
@@ -8,6 +8,36 @@ sidebar:
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 `enterplace import litellm` reads a LiteLLM proxy `config.yaml` and writes a Enterplace policy that passes `enterplace check`. Everything it cannot carry across is listed with what to do instead. Given an export of LiteLLM virtual keys, it also writes team rules and one `enterplace key new` command per key.
+
+This page is for replacing a LiteLLM proxy. To keep the LiteLLM Python SDK in your code and point it at Enterplace, see [LiteLLM SDK](/integrations/litellm-sdk/).
+
+## Concepts
+
+| LiteLLM proxy | Enterplace | Notes |
+|---|---|---|
+| `config.yaml`, plus models and settings kept in the database | The [policy file](/governance/policy/), one YAML file checked by `enterplace check`. With `store: { policy_from: store }` it is kept in Postgres as versions | An unknown key in the policy is an error with its line, not ignored |
+| `model_list` entry (a deployment) | A model under a provider's `models:` | A provider is declared once and lists its models |
+| `model_name` shared by several deployments | An [alias](/routing/aliases/) with `deployments` | Callers send the alias; rules decide on it |
+| `router_settings.routing_strategy` | The alias's [`balance`](/routing/strategies/): `round_robin`, `least_busy`, `lowest_latency`, `lowest_cost`, `adaptive` | Per alias, not global |
+| `fallbacks`, `context_window_fallbacks`, `content_policy_fallbacks` | A provider's `fallback`, an alias's deployments, and the alias's `context_window_fallback` and `content_policy_fallback` | See [Retries and fallbacks](/routing/retries-and-fallbacks/) |
+| Virtual key (`sk-...`) | A [Enterplace key](/governance/keys/) (`enterplace_...`), stored as a hash, shown once | Each key has a name and a team |
+| Master key | An admin key (`enterplace key new <name> --team <team> --admin`), or console sign-in through [single sign-on](/governance/single-sign-on/) | `ENTERPLACE_MASTER_KEY` is something else: it seals stored provider credentials |
+| Team, organization | The key's team and [organization](/governance/policy/#organizations); [teams](/governance/teams/) with owners and members in the policy | Rules match on `principals: { team: ... }` |
+| Internal user | The person a key is named for. `enterplace login` issues a personal key named by email | |
+| End user (customer) | An [end customer](/governance/budgets-and-rate-limits/#end-customers-and-tags): `customer` on a key, or the `x-enterplace-customer` header where the rule allows it | |
+| Tags | [Tags](/governance/budgets-and-rate-limits/#end-customers-and-tags) on a key or in `x-enterplace-tags`, allowed per rule | |
+| Budgets and rate limits per key, team, user | `budget`, `rate` (`rpm`, `tpm`) and `parallel` on a rule, on a key, and per scope in the [`limits:` list](/governance/budgets-and-rate-limits/#scopes-and-the-limits-list) | A budget reserves a request's worst case before it is sent |
+| Model access per key or team | A rule's `models:` list, narrowed per key with `--models` | The first matching rule decides |
+| Guardrails | [Guardrails](/governance/guardrails/) named in the policy and listed on a rule | Built-in secrets and personal data detectors, vendors, webhooks |
+| Callbacks (`success_callback`, `callbacks`) | The [audit log](/governance/audit-log/), Prometheus [metrics](/operations/observability/), and [observability integrations](/operations/observability-integrations/) such as Langfuse and Datadog | The audit log is written before a request is forwarded |
+| Spend logs | `usage` records in the audit log, and the [request log](/operations/request-log/) with its analytics | No prompt or answer text unless a rule captures it |
+| `cache`, `cache_params` | [`cache:` on a rule](/routing/caching/), exact or semantic | Kept per replica, never in the database |
+| Postgres and Redis | Files for one process, or a Postgres [store](/operations/store/) shared by replicas. No Redis | |
+| `os.environ/NAME`, secret managers | `key_env: NAME`, with a [secret manager reference](/operations/secret-managers/) as the variable's value | |
+| Credentials added in the UI | [Provider credentials](/governance/provider-credentials/) sealed under `ENTERPLACE_MASTER_KEY` | |
+| Pass-through endpoints | [Passthrough](/governance/policy/#passthrough) paths listed per rule | |
+| MCP gateway | The [MCP gateway](/governance/mcp-gateway/) | |
+| Admin UI | The [console](/operations/console/) | |
 
 ## Import a config
 
@@ -216,6 +246,18 @@ enterplace key new maya --team payments --budget 20/month --expires 2027-01-01 -
 
 Run each command and send the printed key to its owner through your secret manager. Developers can instead get their own key with `enterplace login`. See [Keys and identity](/governance/keys/).
 
+## What differs
+
+- **The policy decides, not the key.** In LiteLLM a key carries its models, budget and limits. In Enterplace a key carries a name and a team, the first matching rule decides, and a key can only narrow its rule. Start from the teams, not from the keys.
+- **A record before every request.** Each request, allowed or refused, gets a hash-chained [audit record](/governance/audit-log/) before it is forwarded. If the record cannot be written, the request is refused.
+- **Nothing is dropped.** There is no `drop_params`. A parameter Enterplace does not know is forwarded as sent, or refused by name where a translation cannot carry it.
+- **Unknown config is an error.** `enterplace check` names the file, the line and the nearest known word for every mistake, and `enterplace serve` does not start on one.
+- **Budgets reserve.** A request under a budget reserves the most it could cost before it is sent and gives the rest back when the answer ends, so a budget cannot be overrun by requests in flight. A small budget with large `max_tokens` refuses requests that would have fitted. See [how a budget is counted](/governance/budgets-and-rate-limits/#how-a-budget-is-counted).
+- **Model names.** Callers send bare model names or aliases, not `provider/model`. To keep clients that send a prefixed name, add an alias with that name.
+- **Fewer providers.** LiteLLM lists far more providers than Enterplace has kinds. Check each of yours against the [provider list](/providers/overview/) before you plan a date.
+- **No prompt text by default.** The audit log and the request log hold no prompt or answer text. A rule can [capture bodies](/operations/request-log/#bodies) for named viewers.
+- **Client changes.** Each client gets a new key and base URL. A client that sent `api_key` or `api_base` in the request body to pick a deployment must stop: see [a caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key).
+
 ## Two regions of one model
 
 Two deployments of `gpt-4o` at two OpenAI-compatible URLs become two providers and one alias `gpt-4o`. A model name belongs to one provider, so the second provider lists it as `gpt-4o@<provider>`. Callers send `gpt-4o`, and the alias sends the real name to whichever deployment it picks.
@@ -223,7 +265,7 @@ Two deployments of `gpt-4o` at two OpenAI-compatible URLs become two providers a
 For Azure and Bedrock, the `@` name is a key of `deployments` or `model_ids`, so it also works when sent directly.
 
 <Aside type="note">
-The config format was read from LiteLLM's public docs on 2026-11-13 ([configs](https://docs.litellm.ai/docs/proxy/configs), [reliability](https://docs.litellm.ai/docs/proxy/reliability), [config settings](https://docs.litellm.ai/docs/proxy/config_settings), [virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)). The import is tested against sample configs in those shapes, not against a running LiteLLM.
+The config format and the concepts above were read from LiteLLM's public docs on 2026-11-13 and 2026-11-15 ([configs](https://docs.litellm.ai/docs/proxy/configs), [reliability](https://docs.litellm.ai/docs/proxy/reliability), [config settings](https://docs.litellm.ai/docs/proxy/config_settings), [virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)). No LiteLLM source code was read. The import is tested against sample configs in those shapes, not against a running LiteLLM.
 </Aside>
 
 ## Related
