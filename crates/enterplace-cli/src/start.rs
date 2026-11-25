@@ -389,7 +389,8 @@ pub fn stop(dir: &Path) -> Result<String, String> {
                 lock.display()
             )
         })?;
-    // ponytail: ps and kill, not a signal crate (unsafe is forbidden here). Unix only; elsewhere, Ctrl-C.
+    // ponytail: the system's own tools, not a signal crate (unsafe is forbidden here): ps and kill on Unix,
+    // tasklist and taskkill on Windows.
     let run = |program: &str, args: &[&str]| {
         std::process::Command::new(program)
             .args(args)
@@ -400,24 +401,43 @@ pub fn stop(dir: &Path) -> Result<String, String> {
                 )
             })
     };
+    let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+    // Windows: tasklist prints one CSV row ("enterplace.exe","<pid>",...) while the process runs and an INFO line
+    // once it does not. A `ps` on a Windows PATH (Git ships one) does not know Windows process IDs: never asked.
+    let filter = format!("PID eq {pid}");
+    let row = format!(",\"{pid}\",");
+    let list = ["/FI", filter.as_str(), "/FO", "CSV", "/NH"];
     // The lock outlives a Enterplace that was killed, and its process number may be another program's by now.
-    let command =
-        String::from_utf8_lossy(&run("ps", &["-p", pid, "-o", "command="])?.stdout).into_owned();
-    if !command.contains("enterplace") {
+    let command = if cfg!(windows) {
+        Some(text(&run("tasklist", &list)?.stdout)).filter(|rows| rows.contains(&row))
+    } else {
+        Some(text(&run("ps", &["-p", pid, "-o", "command="])?.stdout))
+    };
+    if !command.is_some_and(|c| c.to_lowercase().contains("enterplace")) {
         return Ok(none());
     }
-    let killed = run("kill", &["-TERM", pid])?;
+    let killed = if cfg!(windows) {
+        // ponytail: /F ends the process at once, requests in flight included. Windows has no SIGTERM, and a console
+        // event for another process needs unsafe code or a new dependency: add one if the wait matters there.
+        run("taskkill", &["/F", "/PID", pid])?
+    } else {
+        run("kill", &["-TERM", pid])?
+    };
     if !killed.status.success() {
         return Err(format!(
             "could not stop process {pid}: {}. It may belong to another user: stop it as that user.",
-            String::from_utf8_lossy(&killed.stderr).trim()
+            text(&killed.stderr).trim()
         ));
     }
     for _ in 0..100 {
-        // Gone, or ended and not yet collected by the shell that started it (Z).
-        let state =
-            String::from_utf8_lossy(&run("ps", &["-p", pid, "-o", "stat="])?.stdout).into_owned();
-        if state.trim().is_empty() || state.trim().starts_with('Z') {
+        let gone = if cfg!(windows) {
+            !text(&run("tasklist", &list)?.stdout).contains(&row)
+        } else {
+            // Gone, or ended and not yet collected by the shell that started it (Z).
+            let state = text(&run("ps", &["-p", pid, "-o", "stat="])?.stdout);
+            state.trim().is_empty() || state.trim().starts_with('Z')
+        };
+        if gone {
             return Ok(format!(
                 "Stopped Enterplace (process {pid}) serving from {}.",
                 dir.display()
@@ -425,7 +445,13 @@ pub fn stop(dir: &Path) -> Result<String, String> {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    Err(format!(
-        "process {pid} is still finishing its requests after 10 seconds. Wait, or end it with: kill -9 {pid}"
-    ))
+    Err(if cfg!(windows) {
+        format!(
+            "process {pid} is still running 10 seconds after taskkill ended it. End it in Task Manager."
+        )
+    } else {
+        format!(
+            "process {pid} is still finishing its requests after 10 seconds. Wait, or end it with: kill -9 {pid}"
+        )
+    })
 }

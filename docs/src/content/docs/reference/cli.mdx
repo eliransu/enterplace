@@ -84,7 +84,7 @@ Exit `2` when a provider in `--providers` has no key or is not one `start` knows
 enterplace stop [--dir <path>]
 ```
 
-Stops the gateway that serves from this folder (or `--dir`), the one `enterplace start` or `enterplace serve` runs there. It finishes the requests in flight and ends, as Ctrl-C in its terminal does. Enterplace finds the process through the lock beside the audit log (`enterplace-audit.jsonl.lock`).
+Stops the gateway that serves from this folder (or `--dir`), the one `enterplace start` or `enterplace serve` runs there. It finishes the requests in flight and ends, as Ctrl-C in its terminal does. On Windows it ends the process at once (`taskkill /F`), requests in flight included: use Ctrl-C there to let them finish. Enterplace finds the process through the lock beside the audit log (`enterplace-audit.jsonl.lock`).
 
 ```text
 Stopped Enterplace (process 97672) serving from /Users/maya/enterplace.
