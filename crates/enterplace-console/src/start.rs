@@ -789,6 +789,58 @@ pub(crate) fn limit_prompt(base: &str, policy: &str, in_store: bool) -> String {
     )
 }
 
+/// How a policy change is saved, for an agent prompt: the editor when the policy is kept in the store, else the file.
+fn save_line(base: &str, in_store: bool) -> String {
+    if in_store {
+        format!(
+            "This policy is kept in the store, so the file is not read: paste the lines into the policy editor at {base}/console/app/#/policy/edit, press Dry run, and save, after the check passes on a copy of the file with them."
+        )
+    } else {
+        "Save the file; the gateway reads it within 2 seconds of a save that passes the check, and keeps the version it has if it refuses one.".into()
+    }
+}
+
+/// "Copy for your agent" on Providers: a provider's policy lines from the catalog, its key in an environment variable
+/// the human sets, and the check. Never the key itself.
+pub(crate) fn provider_prompt(base: &str, policy: &str, in_store: bool) -> String {
+    task_prompt(
+        base,
+        "Connect a model provider to the Enterplace gateway",
+        &[("Policy file", policy.to_string())],
+        &[
+            "1. Ask me, if I have not said them: which provider (run `enterplace providers` for the catalog ids) and which of its models people may use.".into(),
+            "2. Under `providers:` in the policy, add an entry like this one, with the catalog id as `preset` and the models I picked:".into(),
+            "```yaml\nproviders:\n  - name: groq\n    preset: groq\n    key_env: GROQ_API_KEY\n    models: [llama-3.3-70b-versatile, llama-3.1-8b-instant]\n```".into(),
+            "3. Tell me to set the key variable on every gateway myself (`export GROQ_API_KEY=...` in the gateway's environment, or its secret manager) and restart them, or to paste the key on the Providers page, which seals it. Never ask me to paste the key to you, and never write it in a file.".into(),
+            format!("4. Run `enterplace check {policy}` and fix every problem it names. {}", save_line(base, in_store)),
+        ],
+        &format!(
+            "The provider is listed at {base}/console/app/#/providers, the save's message says the gateways run it (not that one refused it), and its Test button on {base}/console/app/#/deployments answers. A request for one of its models through {base}/v1/chat/completions is answered."
+        ),
+        "/providers/overview/",
+    )
+}
+
+/// "Copy for your agent" on Prices: a model's price per million tokens in the policy's `prices:`, and the check.
+pub(crate) fn price_prompt(base: &str, policy: &str, in_store: bool) -> String {
+    task_prompt(
+        base,
+        "Set the price of a model in the Enterplace policy, so its spend counts against budgets",
+        &[("Policy file", policy.to_string())],
+        &[
+            "1. Ask me, if I have not said them: the model, and its price in US dollars per million input and output tokens (from the provider's pricing page or our contract).".into(),
+            "2. Under `prices:` in the policy, add or change its entry:".into(),
+            "```yaml\nprices:\n  llama-3.3-70b-versatile: { input: 0.59, output: 0.79 }\n```".into(),
+            format!("3. Run `enterplace check {policy}` and fix every problem it names. {}", save_line(base, in_store)),
+            format!("4. Run `enterplace prices <model> --policy {policy}` and check it shows the price from the policy."),
+        ],
+        &format!(
+            "The model shows the new price, with the source policy, at {base}/console/app/#/prices, and its next requests are counted at it on {base}/console/app/#/spend."
+        ),
+        "/governance/budgets-and-rate-limits/",
+    )
+}
+
 /// "Copy for your agent" on Import a list: `enterplace key import` on a CSV, so an agent issues a team's keys alone.
 pub(crate) fn import_prompt(base: &str, keys: &str) -> String {
     task_prompt(
@@ -3424,6 +3476,47 @@ mod tests {
         assert_eq!(fields.len(), 2, "{form}");
         assert!(fields.iter().all(|f| f.get("hint").is_none()), "{form}");
         assert_eq!(form["after"], "Stored encrypted.");
+    }
+
+    #[test]
+    fn the_provider_price_and_import_prompts_carry_the_check_and_never_ask_for_a_secret() {
+        let base = "https://ai.example.com";
+        for (prompt, yaml) in [
+            (
+                provider_prompt(base, "/etc/enterplace/enterplace.policy.yaml", false),
+                "preset: groq",
+            ),
+            (
+                price_prompt(base, "/etc/enterplace/enterplace.policy.yaml", true),
+                "prices:",
+            ),
+        ] {
+            for part in [
+                "Enterplace URL: https://ai.example.com",
+                "Policy file: /etc/enterplace/enterplace.policy.yaml",
+                "enterplace check /etc/enterplace/enterplace.policy.yaml",
+                "Verify:",
+                "Docs (Markdown",
+                yaml,
+            ] {
+                assert!(prompt.contains(part), "{part}:\n{prompt}");
+            }
+        }
+        let provider = provider_prompt(base, "p.yaml", false);
+        assert!(
+            provider.contains("set the key variable on every gateway myself")
+                && provider.contains("Never ask me to paste the key to you"),
+            "{provider}"
+        );
+        let stored = price_prompt(base, "p.yaml", true);
+        assert!(stored.contains("#/policy/edit"), "{stored}");
+        let import = import_prompt(base, "/etc/enterplace/enterplace.keys.yaml");
+        assert!(
+            import.contains(
+                "enterplace key import people.csv --keys /etc/enterplace/enterplace.keys.yaml"
+            ) && import.contains("Do not print, log or commit that file"),
+            "{import}"
+        );
     }
 
     #[test]

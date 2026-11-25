@@ -8,12 +8,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, Head, Panel, Problem, Refusal, Form, Loading } from "@/components/page";
 import { Remove } from "@/components/confirm";
+import { Copy } from "@/components/copy";
 import { api, part, type Me } from "@/lib/api";
 import { useData, words } from "@/lib/use";
 
 type Provider = { name: string; kind: string; url: string | null; key: string; models: string[]; retries: number | null; fallback: string | null };
 type Preset = { id: string; name: string; local: boolean; needs_url: boolean; models: string[] };
-type Data = { providers: Provider[]; catalog: Preset[]; sealing: boolean };
+type Data = { providers: Provider[]; catalog: Preset[]; sealing: boolean; agent?: string };
 
 export function Providers({ me }: { me: Me | null }) {
   const { data, error, change, reload } = useData<Data>("providers");
@@ -26,9 +27,12 @@ export function Providers({ me }: { me: Me | null }) {
         title="Providers"
         lead="Each provider, the models it serves, and where a failed request goes next."
         actions={
-          <Button disabled={!may || !data} onClick={() => setAdding(true)}>
-            Add a provider
-          </Button>
+          <>
+            {data?.agent ? <Copy text={data.agent} label="Copy for your agent" /> : null}
+            <Button disabled={!may || !data} onClick={() => setAdding(true)}>
+              Add a provider
+            </Button>
+          </>
         }
       />
       {error ? <Problem text={error} retry={reload} /> : null}

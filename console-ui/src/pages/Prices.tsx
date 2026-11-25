@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Head, Panel, Problem, Refusal, Form, Loading } from "@/components/page";
 import { api } from "@/lib/api";
+import { Copy } from "@/components/copy";
 import { useData } from "@/lib/use";
 import type { PageProps } from "@/pages";
 
@@ -16,6 +17,7 @@ type Data = {
   lead: string;
   editable: boolean;
   base: number | null;
+  agent?: string;
   file: string | null;
   docs: string;
   providers: string[];
@@ -45,6 +47,7 @@ export function Prices({ query }: PageProps) {
         lead={data?.lead ?? "Each model, its provider and its price."}
         actions={
           <>
+            {data?.agent ? <Copy text={data.agent} label="Copy for your agent" /> : null}
             {editable ? <Button onClick={() => setQuery({ add: "1" })}>Add a model</Button> : null}
           </>
         }

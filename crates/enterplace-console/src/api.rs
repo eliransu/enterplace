@@ -535,10 +535,12 @@ async fn providers(State(console): State<Console>, headers: HeaderMap) -> Respon
                 json!({ "id": p.id, "name": p.name, "local": p.local, "needs_url": p.needs_url(), "models": models })
             })
             .collect();
+        let policy = &console.config().policy;
         Ok(ok(json!({
             "providers": list,
             "catalog": presets,
             "sealing": store::credentials_for(&console.config().keys).is_some(),
+            "agent": crate::start::provider_prompt(&crate::base(), &policy.display().to_string(), store::policy_store(policy).is_some()),
         })))
     }.await)
 }

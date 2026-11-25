@@ -51,6 +51,12 @@ one repository. How a release is made: RELEASING.md.
 - The observe-mode banner's "Turn on enforcement" opens the enforcement confirmation on the page it is clicked on,
   the same dialog the Mode switch now shows before enforcing.
 
+### Copy for your agent on Providers and Prices
+
+- Providers and Prices have "Copy for your agent": the gateway URL, the policy path, the YAML to add, `enterplace check`,
+  how to verify and the docs page. The provider prompt has the human set the key variable or paste the key on the
+  page; it never asks for the key.
+
 ### The dry run replays limits
 
 - A policy dry run (Policy, Edit, "Dry run", and `POST /admin/policy/dry-run`) replays the draft's budgets, tokens per

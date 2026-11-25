@@ -104,11 +104,12 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
             Ok(ok(json!({
                 "lead": "Each model, its provider and its price.",
                 "editable": editable,
-                "base": live.map(|v| v.id),
+                "base": live.as_ref().map(|v| v.id),
                 "docs": format!("{}/operations/console-editing/", crate::start::DOCS),
                 "providers": loaded.providers.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
                 "models": models,
                 "note": note,
+                "agent": crate::start::price_prompt(&crate::base(), &c.policy.display().to_string(), live.is_some()),
                 "empty": {
                     "title": "No models yet",
                     "body": "Add a provider in the policy editor, then add its models here.",

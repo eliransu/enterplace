@@ -3283,7 +3283,11 @@ async fn a_file_kept_policy_offers_nothing_that_edits_it() -> TestResult {
             .unwrap_or("")
             .ends_with("/operations/console-editing/")
             && prices["editable"] == true
-            && prices["file"].is_null(),
+            && prices["file"].is_null()
+            && prices["agent"]
+                .as_str()
+                .unwrap_or("")
+                .contains("enterplace check"),
         "{prices}"
     );
     let (status, _, saved) = call(
