@@ -18,7 +18,7 @@ providers:
     kind: anthropic
     url: https://api.anthropic.com
     auth: passthrough
-    identity: optional
+    identity: required
     models: ["claude-*"]
 rules:
   - name: everyone
@@ -30,7 +30,7 @@ rules:
 | Field | Values | Default | Description |
 |---|---|---|---|
 | `auth` | `key`, `passthrough` | `key` | `passthrough`: the caller's own `Authorization` (or `x-api-key`) goes to the provider unchanged. The provider takes no `key_env`, `key_file`, `credential` or `keys`. Kind `anthropic` (Claude) or `openai` (ChatGPT) only |
-| `identity` | `required`, `optional` | `required` | `optional`: a request without `x-enterplace-user` is recorded as the person `unknown`, by session. Only with `auth: passthrough` |
+| `identity` | `required`, `optional` | `required` | `required`: a request without `x-enterplace-user` is refused with `person_needed`. `optional`: it is recorded as the person `unknown`, by session. Only with `auth: passthrough` |
 
 A passthrough provider and a keyed provider may list the same model. A request that carries a login goes to the passthrough one; a request with a Enterplace key goes to the keyed one. Neither ever falls back to the other.
 
@@ -38,7 +38,9 @@ A passthrough provider and a keyed provider may list the same model. A request t
 
 The person comes from `x-enterplace-user`, which Claude Code sends from `ANTHROPIC_CUSTOM_HEADERS` and Codex from its model provider's `http_headers`. Its value is a Enterplace person token (`enterplace_u_...`, from the console, `enterplace key new --identity-only`, or the device agent) or any Enterplace key of the person (from `enterplace login`). The token names the person and team for rules, records, guardrails, kill switches and limits. On its own it reaches no model: sent as the only credential it is refused with `person_token_only`.
 
-Without `x-enterplace-user`, on `identity: optional`, the person is `unknown` and the team `unknown`, and each Claude Code session is told apart by a hash of its session ID. A company can start with no setup per person and add tokens later.
+Every request is named by default. `enterplace start` writes `identity: required` and makes a person token for whoever runs it, printed once with the Claude Code lines, so the first request already carries a name.
+
+A company can allow unnamed requests while it rolls out tokens: on the console's **Coding agents** page, or with `identity: optional` on the provider. The console switch (`PUT /console/api/policy/identity`) sets every passthrough provider at once, as a policy edit that is checked, audited with the admin's name and used within 2 seconds. Without `x-enterplace-user`, on `identity: optional`, the person is `unknown` and the team `unknown`, and each Claude Code session is told apart by a hash of its session ID. The console warns while unnamed requests are allowed.
 
 ## What applies
 

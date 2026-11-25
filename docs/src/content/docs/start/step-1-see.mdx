@@ -74,7 +74,9 @@ providers:
   - name: claude-subscriptions
     kind: anthropic
     auth: passthrough
-    identity: optional
+    # Each request names its person with a person token in x-enterplace-user. optional lets one without in, as the
+    # person unknown.
+    identity: required
     models: ["claude-*"]
     url: https://api.anthropic.com
 rules:

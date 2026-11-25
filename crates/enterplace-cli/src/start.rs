@@ -1,6 +1,8 @@
 //! `enterplace start`: step 1 of the five steps (See). Writes an observe policy with the demo model, the passthrough
-//! provider for Claude Code on Claude subscriptions, and any provider whose key is in the environment, an admin key and a master key, then runs the gateway. The gateway prints the
-//! dashboard link that signs in once; providers are connected from the dashboard. No provider key is needed.
+//! provider for Claude Code on Claude subscriptions, and any provider whose key is in the environment, an admin key, a
+//! person token for whoever runs it (every subscription request names its person) and a master key, then runs the
+//! gateway. The gateway prints the dashboard link that signs in once and the Claude Code lines with the token;
+//! providers are connected from the dashboard. No provider key is needed.
 
 use std::{
     io::IsTerminal,
@@ -275,16 +277,27 @@ pub async fn run(options: &Options<'_>) -> Result<(), String> {
         ..Default::default()
     };
     let issued = keyfile::issue_with("admin", "admin", &admin, &keys_path)?;
+    // The subscription provider refuses a request that names no person, so whoever runs start gets a name at once:
+    // the OS user, else the admin's.
+    let person = ["USER", "USERNAME"]
+        .into_iter()
+        .filter_map(&env)
+        .map(|v| v.trim().to_string())
+        .find(|v| enterplace_core::config::valid_name(v))
+        .unwrap_or_else(|| "admin".into());
+    let token = keyfile::issue_person_token(&person, "admin", &keys_path)?;
     if !options.serve {
         let kept = if opened.is_some() {
             format!("the store named by {STORE_ENV}")
         } else {
             keys_path.display().to_string()
         };
+        let shown = options.listen.replace("0.0.0.0", "127.0.0.1");
         println!(
-            "Wrote {}.\n\nAdmin key, shown once (only its hash is kept, in {kept}):\n\n  export ENTERPLACE_KEY={}\n",
+            "Wrote {}.\n\nAdmin key, shown once (only its hash is kept, in {kept}):\n\n  export ENTERPLACE_KEY={}\n{}",
             policy_path.display(),
-            issued.key
+            issued.key,
+            enterplace_server::person_lines(&format!("http://{shown}"), &person, &token.key)
         );
         if let Some(master) = &master {
             println!(
@@ -300,7 +313,7 @@ pub async fn run(options: &Options<'_>) -> Result<(), String> {
         &policy_path,
         options.listen,
         mode,
-        Some(&issued.key),
+        Some((&issued.key, &token.key)),
         master.as_deref(),
         &env,
     )
@@ -314,7 +327,7 @@ fn serve(
     policy: &Path,
     listen: &str,
     mode: &str,
-    admin_key: Option<&str>,
+    keys: Option<(&str, &str)>,
     master: Option<&Path>,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<(), String> {
@@ -327,10 +340,15 @@ fn serve(
     let mut command = std::process::Command::new(exe);
     command.arg("serve").arg(policy).args(["--listen", listen]);
     command.env(enterplace_server::START_ENV, mode);
-    // The admin key reaches the gateway only to be printed once; the browser it opens does not get it.
-    match admin_key {
-        Some(key) => command.env(enterplace_server::START_KEY_ENV, key),
-        None => command.env_remove(enterplace_server::START_KEY_ENV),
+    // The admin key and the person token reach the gateway only to be printed once; the browser it opens does not
+    // get them.
+    match keys {
+        Some((admin, person)) => command
+            .env(enterplace_server::START_KEY_ENV, admin)
+            .env(enterplace_server::START_PERSON_ENV, person),
+        None => command
+            .env_remove(enterplace_server::START_KEY_ENV)
+            .env_remove(enterplace_server::START_PERSON_ENV),
     };
     if let Some(master) = master {
         command.env(MASTER_FILE_ENV, master);

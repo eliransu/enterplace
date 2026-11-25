@@ -87,7 +87,7 @@ Developers signed in to Codex with ChatGPT (Plus, Pro, Business, Enterprise or E
         rate: { tpd: 5000000, rpd: 2000 }
     ```
 
-    `gpt-*` covers the models Codex picks for ChatGPT logins. A request with no person token is refused (`identity: required`, the default). Add `identity: optional` to the provider to record it as the person `unknown`, told apart by Codex's `session-id`, while tokens are rolled out.
+    `gpt-*` covers the models Codex picks for ChatGPT logins. A request with no person token is refused (`identity: required`, the default). To allow unnamed requests while tokens are rolled out, use the console's **Coding agents** page (it sets every passthrough provider, Claude and ChatGPT, at once) or add `identity: optional` to the provider: such a request is recorded as the person `unknown`, told apart by Codex's `session-id`.
 
 2. **Point Codex at Enterplace with your ChatGPT login.** In `~/.codex/config.toml`:
 

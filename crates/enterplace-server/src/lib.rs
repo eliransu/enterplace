@@ -10367,6 +10367,15 @@ async fn run_connection<C: Future>(connection: C, first_request: impl Future<Out
 /// `container`. Its admin key, when it made one, comes in [`START_KEY_ENV`].
 pub const START_ENV: &str = "ENTERPLACE_START";
 pub const START_KEY_ENV: &str = "ENTERPLACE_START_ADMIN_KEY";
+/// The person token `enterplace start` made for the person running it, printed once with the Claude Code lines.
+pub const START_PERSON_ENV: &str = "ENTERPLACE_START_PERSON_TOKEN";
+
+/// The lines that put Claude Code on a subscription login behind Enterplace with `name` on every request.
+pub fn person_lines(base: &str, name: &str, token: &str) -> String {
+    format!(
+        "\nClaude Code on your Claude subscription, with {name} on every request: paste these two lines in your shell, then run claude. The person token is shown once.\n\n  export ANTHROPIC_BASE_URL={base}\n  export ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: {token}\"\n"
+    )
+}
 
 /// The block `enterplace start` prints first: Enterplace is running, the dashboard link that signs in once, the admin key.
 fn start_block(
@@ -10423,6 +10432,16 @@ fn start_block(
         )),
         None => out.push_str("The admin key was shown at the first start; the link above signs you in without it.\n"),
     }
+    if let Some(token) = std::env::var(START_PERSON_ENV)
+        .ok()
+        .filter(|t| !t.trim().is_empty())
+    {
+        let name = loaded
+            .policy
+            .identify(&token)
+            .map_or("your name", |p| p.name.as_str());
+        out.push_str(&person_lines(&format!("{scheme}://{shown}"), name, &token));
+    }
     if let Ok(master) = std::env::var(crate::credentials::MASTER_FILE_ENV) {
         out.push_str(&format!(
             "\nProvider keys pasted in the dashboard are sealed with the master key in {master}: keep it with the policy.\n"
@@ -10448,6 +10467,7 @@ fn open_browser(link: &str) {
         .arg(link)
         // The browser gets nothing of the gateway's environment that it does not need.
         .env_remove(START_KEY_ENV)
+        .env_remove(START_PERSON_ENV)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

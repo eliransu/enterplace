@@ -43,6 +43,7 @@ pub(crate) fn routes() -> Router<Console> {
         .route("/api/mcp/{name}/tools", put(mcp_tools))
         .route("/api/policy", get(policy_get))
         .route("/api/policy/mode", put(mode_set))
+        .route("/api/policy/identity", put(identity_set))
         .route("/api/policy/rules", post(rule_add))
         .route(
             "/api/policy/rules/{name}",
@@ -439,6 +440,14 @@ async fn me(State(console): State<Console>, headers: HeaderMap) -> Response {
     answer(
         async {
             let admin = signed_in(&console, &headers, false).await?;
+            let loaded = config::load(&console.config().policy, Some(&console.config().keys));
+            let passthrough = |unnamed: bool| {
+                loaded.as_ref().is_ok_and(|l| {
+                    l.providers
+                        .iter()
+                        .any(|p| p.passthrough && (!unnamed || p.identity_optional))
+                })
+            };
             Ok(ok(json!({
                 "name": admin.name,
                 "role": admin.role,
@@ -449,8 +458,15 @@ async fn me(State(console): State<Console>, headers: HeaderMap) -> Response {
                 // The pages an embedding binary adds (Members, Alerts and the like), server rendered, for the app's nav.
                 "tools": crate::html::EXTRA.try_with(|e| e.nav.iter().map(|(href, label)| json!({ "href": href, "label": label })).collect::<Vec<Value>>()).unwrap_or_default(),
             // Every page says so, as the server-rendered pages do: nothing the policy refuses is stopped.
-            "observe": config::load(&console.config().policy, Some(&console.config().keys))
+            "observe": loaded
+                .as_ref()
                 .is_ok_and(|l| l.policy.mode() == enterplace_core::policy::Mode::Observe),
+            // Whether every request carries a person's name. Only a passthrough provider with identity: optional
+            // lets one in without, recorded as the person unknown; the app warns while it does.
+            "names": {
+                "required": !passthrough(true),
+                "passthrough": passthrough(false),
+            },
             })))
         }
         .await,
@@ -1137,6 +1153,42 @@ async fn mode_set(State(console): State<Console>, headers: HeaderMap, bytes: Byt
                 _ => return Err("Mode is enforce (refuse what the policy does not allow) or observe (let it through and record it).".into()),
             }
             Ok(())
+        })
+        .await
+    }.await)
+}
+
+/// Whether a subscription request must name its person: `identity` on every passthrough provider at once, so the
+/// install answers one way for Claude Code and Codex alike.
+async fn identity_set(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Response {
+    answer(async {
+        let admin = signed_in(&console, &headers, true).await?;
+        let body = body_of(&bytes)?;
+        let required = body.get("required").and_then(Value::as_bool).ok_or_else(|| {
+            bad("Send {\"required\": true} to refuse a subscription request that names no person, or {\"required\": false} to record it as the person unknown.")
+        })?;
+        let note = if required {
+            "Require a name on every request"
+        } else {
+            "Allow unnamed requests, recorded as unknown"
+        };
+        commit(&console, &admin, "set_identity", note.into(), json!({ "required": required }), |tree| {
+            let mut found = false;
+            for p in section(tree, "providers")?.iter_mut().filter_map(Value::as_object_mut) {
+                if p.get("auth").and_then(Value::as_str) == Some("passthrough") {
+                    p.insert("identity".into(), if required { "required" } else { "optional" }.into());
+                    found = true;
+                }
+            }
+            if found {
+                Ok(())
+            } else {
+                Err("No provider takes subscription logins, so every request already carries an Enterplace key that names its person.".into())
+            }
         })
         .await
     }.await)

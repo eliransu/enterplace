@@ -2301,7 +2301,8 @@ fn start_writes_an_observe_policy_with_the_demo_model_and_the_env_keys() -> Test
     )?;
     assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
     assert!(
-        String::from_utf8(out.stdout)?.contains("1 rule, 1 key, 4 providers"),
+        // The admin key and the person token of whoever ran start.
+        String::from_utf8(out.stdout)?.contains("1 rule, 2 keys, 4 providers"),
         "check"
     );
     Ok(())
@@ -2318,7 +2319,7 @@ fn start_needs_no_provider_key() -> TestResult {
     // Claude Code on the developers' own Claude subscriptions works with no Anthropic key at all.
     for line in [
         "auth: passthrough\n",
-        "identity: optional\n",
+        "identity: required\n",
         "url: https://api.anthropic.com\n",
     ] {
         assert!(policy.contains(line), "{line}: {policy}");
@@ -2333,6 +2334,61 @@ fn start_needs_no_provider_key() -> TestResult {
     let out = start(&dir, &["--providers", "anthropic"], BOTH_KEYS[..1].as_ref())?;
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8(out.stderr)?.contains("ANTHROPIC_PROVIDER_KEY"));
+    Ok(())
+}
+
+#[test]
+fn start_names_every_request_and_hands_its_runner_a_person_token() -> TestResult {
+    let dir = start_dir("named")?;
+    let out = start(&dir, &[], &[("USER", "sarah.miller")])?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let stdout = String::from_utf8(out.stdout)?;
+    let policy = std::fs::read_to_string(dir.join("enterplace.policy.yaml"))?;
+    assert!(policy.contains("identity: required\n"), "{policy}");
+    assert!(!policy.contains("identity: optional"), "{policy}");
+
+    // The exact lines to paste before running claude: the gateway and the person token, shown once.
+    assert!(
+        stdout.contains("  export ANTHROPIC_BASE_URL=http://127.0.0.1:8080\n"),
+        "{stdout}"
+    );
+    let token = stdout
+        .lines()
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("export ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: ")
+        })
+        .and_then(|rest| rest.strip_suffix('"'))
+        .ok_or("no person token line")?
+        .to_string();
+    assert!(token.starts_with("enterplace_u_"), "{stdout}");
+    assert!(stdout.contains("sarah.miller"), "{stdout}");
+    let keys = std::fs::read_to_string(dir.join("enterplace.keys.yaml"))?;
+    assert!(
+        keys.contains("name: sarah.miller")
+            && keys.contains(&enterplace_core::id::sha256_hex(token.as_bytes()))
+            && !keys.contains(&token),
+        "only the token's hash is kept: {keys}"
+    );
+    let out = enterplace(&["check", &path(&dir, "enterplace.policy.yaml")], &[])?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+
+    // A second start keeps everything: no second token.
+    let out = start(&dir, &[], &[("USER", "sarah.miller")])?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(!stdout.contains("enterplace_u_"), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("enterplace.keys.yaml"))?,
+        keys
+    );
+
+    // No user name to take: the token is the admin's.
+    let dir = start_dir("named-admin")?;
+    let out = start(&dir, &[], &[])?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let keys = std::fs::read_to_string(dir.join("enterplace.keys.yaml"))?;
+    assert_eq!(keys.matches("name: admin").count(), 2, "{keys}");
     Ok(())
 }
 
@@ -2430,10 +2486,49 @@ fn start_prints_the_dashboard_link_first_and_it_signs_in_once() -> TestResult {
         .local_addr()?
         .port();
     let addr = format!("127.0.0.1:{port}");
+    // Anthropic, as the subscription provider reaches it: one answer to the first request.
+    let anthropic = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let anthropic_url = format!("http://{}", anthropic.local_addr()?);
+    let mock = std::thread::spawn(move || -> Option<String> {
+        use std::io::{Read, Write};
+        let (mut stream, _) = anthropic.accept().ok()?;
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = stream.read(&mut buf).ok()?;
+            seen.extend_from_slice(&buf[..n]);
+            let text = String::from_utf8_lossy(&seen).to_string();
+            if let Some(end) = text.find("\r\n\r\n") {
+                let length = text[..end]
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().to_string())
+                    })
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0);
+                if seen.len() >= end + 4 + length || n == 0 {
+                    break;
+                }
+            } else if n == 0 {
+                break;
+            }
+        }
+        let body = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":1}}"#;
+        let answer = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(answer.as_bytes()).ok()?;
+        Some(String::from_utf8_lossy(&seen).to_string())
+    });
     let mut child = Command::new(env!("CARGO_BIN_EXE_enterplace"))
         .env_clear()
         .envs(windows_root())
         .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("USER", "sarah.miller")
+        .env("ENTERPLACE_ANTHROPIC_BASE_URL", &anthropic_url)
         .args([
             "start",
             "--no-open",
@@ -2450,9 +2545,9 @@ fn start_prints_the_dashboard_link_first_and_it_signs_in_once() -> TestResult {
     let mut head = Vec::new();
     for line in lines.by_ref() {
         let line = line?;
-        let done = line.contains("export ENTERPLACE_KEY=");
+        let done = line.contains("export ANTHROPIC_CUSTOM_HEADERS=");
         head.push(line);
-        if done || head.len() > 20 {
+        if done || head.len() > 40 {
             break;
         }
     }
@@ -2477,6 +2572,16 @@ fn start_prints_the_dashboard_link_first_and_it_signs_in_once() -> TestResult {
                 .map(str::to_string)
         })
         .unwrap_or_default();
+    let token = head
+        .iter()
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("export ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: ")
+                .and_then(|rest| rest.strip_suffix('"'))
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let base_line = format!("  export ANTHROPIC_BASE_URL=http://{addr}");
     let get = |path: &str, extra: &str| {
         http(
             &addr,
@@ -2518,8 +2623,41 @@ fn start_prints_the_dashboard_link_first_and_it_signs_in_once() -> TestResult {
         "/v1/responses",
         r#"{"model":"enterplace-demo","stream":true,"input":"hi"}"#,
     );
+    // Claude Code on a Claude subscription, set up with the lines start printed: its first request carries a name.
+    let subscription = |person: &str| {
+        let body = r#"{"model":"claude-sonnet-4-5","max_tokens":50,"messages":[{"role":"user","content":"hi"}]}"#;
+        http(
+            &addr,
+            &format!(
+                "POST /v1/messages HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer sk-ant-oat01-FAKE-login\r\n{person}anthropic-version: 2023-06-01\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+        .unwrap_or_default()
+    };
+    let unnamed = subscription("");
+    let named = subscription(&format!("x-enterplace-user: {token}\r\n"));
     let _ = child.kill();
     let _ = child.wait();
+    assert!(head.contains(&base_line), "{head:?}");
+    assert!(token.starts_with("enterplace_u_"), "{head:?}");
+    assert!(
+        !unnamed.starts_with("HTTP/1.1 200") && unnamed.contains("x-enterplace-user"),
+        "a request without a name is refused: {unnamed}"
+    );
+    assert!(named.starts_with("HTTP/1.1 200"), "{named}");
+    let sent = mock.join().map_err(|_| "the mock provider failed")?;
+    assert!(
+        sent.is_some_and(|s| s.contains("sk-ant-oat01-FAKE-login") && !s.contains(&token)),
+        "the login goes on, the token does not"
+    );
+    let audit = std::fs::read_to_string(dir.join("enterplace-audit.jsonl"))?;
+    assert!(
+        audit.lines().any(|l| l.contains(r#""auth":"passthrough""#)
+            && l.contains(r#""person":"sarah.miller""#)
+            && l.contains(r#""verdict":"allow""#)),
+        "{audit}"
+    );
     assert!(claude.starts_with("HTTP/1.1 200"), "{claude}");
     assert!(claude.contains("Enterplace demo model"), "{claude}");
     let order: Vec<&str> = codex

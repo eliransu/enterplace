@@ -1410,3 +1410,112 @@ async fn a_viewer_sees_the_keys_and_changes_none() -> TestResult {
     );
     Ok(())
 }
+
+/// The policy of an install with Claude Code and Codex on subscription logins, one taking unnamed requests.
+const PASSTHROUGH_POLICY: &str = "\
+version: 1
+providers:
+  - name: openai
+    kind: openai
+    url: https://api.openai.com
+    key_env: OPENAI_API_KEY
+    models: [gpt-4o-mini]
+  - name: claude-subscriptions
+    kind: anthropic
+    url: https://api.anthropic.com
+    auth: passthrough
+    identity: optional
+    models: [\"claude-*\"]
+  - name: chatgpt-subscriptions
+    kind: openai
+    url: https://chatgpt.com/backend-api/codex
+    auth: passthrough
+    models: [gpt-5-codex]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: [\"*\"]
+roles:
+  - name: viewer
+    permissions: [see_keys, see_records, see_spend]
+";
+
+#[tokio::test]
+async fn named_requests_are_switched_for_every_passthrough_provider_and_audited() -> TestResult {
+    let s = setup("names")?;
+    std::fs::write(s.dir.join("enterplace.policy.yaml"), PASSTHROUGH_POLICY)?;
+    let cookie = sign_in(&s, ADMIN_KEY).await?;
+
+    // One provider takes unnamed requests, so the install does.
+    let (status, me) = call(&s, "GET", "/console/api/me", &cookie, None).await?;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["names"]["passthrough"], true, "{me}");
+    assert_eq!(me["names"]["required"], false, "{me}");
+
+    let path = "/console/api/policy/identity";
+    let (status, done) = call(&s, "PUT", path, &cookie, Some(json!({ "required": true }))).await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let policy = s.policy()?;
+    assert_eq!(policy.matches("identity: required").count(), 2, "{policy}");
+    assert!(!policy.contains("identity: optional"), "{policy}");
+    let audit = s.audit()?;
+    let record = audit
+        .lines()
+        .rev()
+        .find(|l| l.contains(r#""action":"set_identity""#))
+        .ok_or("no set_identity record")?;
+    assert!(record.contains(r#""person":"noa.bar""#), "{record}");
+    let (_, me) = call(&s, "GET", "/console/api/me", &cookie, None).await?;
+    assert_eq!(me["names"]["required"], true, "{me}");
+
+    let (status, done) = call(&s, "PUT", path, &cookie, Some(json!({ "required": false }))).await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let policy = s.policy()?;
+    assert_eq!(policy.matches("identity: optional").count(), 2, "{policy}");
+    let (_, me) = call(&s, "GET", "/console/api/me", &cookie, None).await?;
+    assert_eq!(me["names"]["required"], false, "{me}");
+
+    // Not a boolean: nothing changes, and the refusal names the body to send.
+    let (status, refused) =
+        call(&s, "PUT", path, &cookie, Some(json!({ "required": "yes" }))).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        error(&refused).contains("{\"required\": true}"),
+        "{refused}"
+    );
+    assert_eq!(s.policy()?, policy);
+
+    // A role without edit_policy changes nothing, and the refusal is recorded.
+    let viewer = sign_in(&s, VIEWER_KEY).await?;
+    let (status, refused) =
+        call(&s, "PUT", path, &viewer, Some(json!({ "required": true }))).await?;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert!(error(&refused).contains("edit_policy"), "{refused}");
+    assert_eq!(s.policy()?, policy);
+    assert!(s.audit()?.contains(r#""code":"read_only""#));
+    Ok(())
+}
+
+#[tokio::test]
+async fn named_requests_need_no_switch_without_a_passthrough_provider() -> TestResult {
+    let s = setup("names-none")?;
+    let cookie = sign_in(&s, ADMIN_KEY).await?;
+    let (_, me) = call(&s, "GET", "/console/api/me", &cookie, None).await?;
+    assert_eq!(me["names"]["passthrough"], false, "{me}");
+    assert_eq!(me["names"]["required"], true, "{me}");
+    let (status, refused) = call(
+        &s,
+        "PUT",
+        "/console/api/policy/identity",
+        &cookie,
+        Some(json!({ "required": false })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        error(&refused).contains("No provider takes subscription logins"),
+        "{refused}"
+    );
+    assert_eq!(s.policy()?, POLICY);
+    Ok(())
+}

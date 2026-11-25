@@ -927,12 +927,12 @@ pub fn start_provider(
 pub const SUBSCRIPTION_PROVIDER: &str = "claude-subscriptions";
 
 /// The policy lines of the passthrough provider `enterplace start` and the console's Coding agents step write: Claude
-/// Code on the developers' own Claude subscriptions, with no Anthropic key at all. `identity: optional` records a
-/// request that names no person as unknown, so it works before any person token is handed out. Its URL comes from
-/// `ENTERPLACE_ANTHROPIC_BASE_URL` as the keyed provider's does.
+/// Code on the developers' own Claude subscriptions, with no Anthropic key at all. `identity: required` refuses a
+/// request that names no person: every call carries a name, and `enterplace start` hands the first person a token.
+/// Its URL comes from `ENTERPLACE_ANTHROPIC_BASE_URL` as the keyed provider's does.
 pub fn subscription_provider(env: &dyn Fn(&str) -> Option<String>) -> String {
     let mut lines = format!(
-        "  # Claude Code on your developers' own Claude subscriptions (Pro, Max, Team, Enterprise): each request carries\n  # the person's own Claude login, sent on unchanged and never kept. Enterplace holds no Anthropic key for it.\n  - name: {SUBSCRIPTION_PROVIDER}\n    kind: anthropic\n    auth: passthrough\n    identity: optional\n    models: [\"claude-*\"]\n"
+        "  # Claude Code on your developers' own Claude subscriptions (Pro, Max, Team, Enterprise): each request carries\n  # the person's own Claude login, sent on unchanged and never kept. Enterplace holds no Anthropic key for it.\n  - name: {SUBSCRIPTION_PROVIDER}\n    kind: anthropic\n    auth: passthrough\n    # Each request names its person with a person token in x-enterplace-user. optional lets one without in, as the\n    # person unknown.\n    identity: required\n    models: [\"claude-*\"]\n"
     );
     match env(&base_url_env("anthropic")).filter(|u| !u.trim().is_empty()) {
         Some(url) => {

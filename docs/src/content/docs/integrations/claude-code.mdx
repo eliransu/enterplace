@@ -11,23 +11,22 @@ Most teams pay for Claude Code with Claude subscriptions (Pro, Max, Team or Ente
 
 ## The shortest path
 
-On a Claude subscription, with a new install, start Enterplace and add one setting to Claude Code, with no key:
+On a Claude subscription, with a new install, start Enterplace, with no key:
 
 ```bash
 enterplace start    # once, on the machine that runs Enterplace
 ```
 
-```json title="~/.claude/settings.json"
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080"
-  }
-}
+Every request carries a name, and `enterplace start` hands you yours: it makes a person token for you (your user name on that machine) and prints it once, in the two lines to paste:
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+export ANTHROPIC_CUSTOM_HEADERS="x-enterplace-user: enterplace_u_..."
 ```
 
-Then run `claude`. If you prefer a shell, `export ANTHROPIC_BASE_URL=http://127.0.0.1:8080` in the shell that runs Claude Code does the same.
+Then run `claude`. The same two keys can go in the `env` block of `~/.claude/settings.json` instead ([step 3 below](#claude-subscriptions)).
 
-Claude Code keeps your Claude login. Leave `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset. Send a prompt, and **Requests** in the console shows it, with the person `unknown` until you add a person token ([step 2 below](#claude-subscriptions)). No Enterplace yet? See the [Quickstart](/getting-started/quickstart/).
+Claude Code keeps your Claude login. Leave `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset. Send a prompt, and **Requests** in the console shows it under your name. No Enterplace yet? See the [Quickstart](/getting-started/quickstart/).
 
 <Aside type="caution" title="Not in the Claude desktop app">
 This works in Claude Code in a terminal and in the VS Code extension (`claudeCode.environmentVariables`). The Code tab of the Claude desktop app sets `ANTHROPIC_BASE_URL` to `https://api.anthropic.com` itself, over your shell profile and `settings.json`, so its sessions never reach Enterplace. Run `echo $ANTHROPIC_BASE_URL` inside a session to check. For the desktop app, use its [third-party inference setup](/integrations/claude-desktop/) with a Enterplace key.
@@ -59,7 +58,7 @@ Three ways to bring Claude Code under Enterplace, in order of preference:
         kind: anthropic
         url: https://api.anthropic.com
         auth: passthrough
-        identity: optional
+        identity: required
         models: ["claude-*"]
     rules:
       - name: everyone
@@ -69,7 +68,7 @@ Three ways to bring Claude Code under Enterplace, in order of preference:
 
     The provider holds no key. Each request carries the person's own Claude login, which Enterplace sends on unchanged and never keeps. See [Subscriptions](/governance/subscriptions/) for what Enterplace can and cannot do with that traffic.
 
-2. **Get a person token.** It names the person to Enterplace and reaches no model on its own, so it costs nothing.
+2. **Get a person token.** It names the person to Enterplace and reaches no model on its own, so it costs nothing. `enterplace start` already made one for the person who ran it.
 
     <Tabs syncKey="keysource">
     <TabItem label="From the console">
@@ -143,9 +142,16 @@ Claude Code reads `env` from its [managed settings file](https://code.claude.com
 
 The Enterplace [device agent](/operations/devices/) sets the same two keys in each person's `~/.claude/settings.json`, from the key their `enterplace login` saved.
 
-### Start with no identity
+### Allow unnamed requests while you roll out
 
-With `identity: optional`, a request without `x-enterplace-user` is recorded as the person `unknown` (team `unknown`), told apart by Claude Code's session ID. A company can point Claude Code at Enterplace first and hand out person tokens later. With `identity: required` (the default) such a request is refused with `person_needed` (403). A kill switch on the person `unknown` stops every unnamed request.
+Every request is named by default (`identity: required`): a request without `x-enterplace-user` is refused with `person_needed` (403). A company that wants to point Claude Code at Enterplace first and hand out person tokens later can allow unnamed requests for a while:
+
+| Where | How |
+|---|---|
+| Console | The **Coding agents** page: allow unnamed requests. It sets every passthrough provider at once, saved and audited like any policy edit |
+| Policy | `identity: optional` on the passthrough provider |
+
+An unnamed request is recorded as the person `unknown` (team `unknown`), told apart by Claude Code's session ID, and the console warns while unnamed requests are allowed. A kill switch on the person `unknown` stops every unnamed request. Turn the requirement back on once everyone has a token.
 
 ### What Claude Code sends
 

@@ -1080,7 +1080,7 @@ async fn claude_subscriptions_need_no_api_key_and_each_step_copies_for_an_agent(
     assert_eq!(answer["query"], "track=coding&pay=subscriptions");
     let policy = std::fs::read_to_string(s.dir.join("enterplace.policy.yaml"))?;
     assert!(
-        policy.contains("auth: passthrough") && policy.contains("identity: optional"),
+        policy.contains("auth: passthrough") && policy.contains("identity: required"),
         "{policy}"
     );
     let state = start(&s.app, &cookie, "pay=subscriptions").await?;
@@ -1171,7 +1171,18 @@ async fn the_signed_in_person_s_own_token_is_in_the_lines_and_in_the_agent_promp
         .ok_or("no Make my token")?;
     assert_eq!(mine["action"], "key");
     assert_eq!(mine["body"]["name"], "noa.bar");
-    // The provider takes unnamed requests: one line, no placeholder to paste.
+    // Named by default: the lines name the person.
+    assert!(
+        lines(&state, "lines-subscription").contains("x-enterplace-user"),
+        "{state}"
+    );
+    // An install that allows unnamed requests: one line, no placeholder to paste.
+    let policy = s.dir.join("enterplace.policy.yaml");
+    std::fs::write(
+        &policy,
+        std::fs::read_to_string(&policy)?.replace("identity: required", "identity: optional"),
+    )?;
+    let state = start(&s.app, &cookie, "pay=subscriptions").await?;
     assert!(
         !lines(&state, "lines-subscription").contains("x-enterplace-user"),
         "{state}"

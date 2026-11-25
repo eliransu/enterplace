@@ -53,7 +53,7 @@ Everything below is detail.
 
 ## What enterplace start does
 
-In the current folder it writes `enterplace.policy.yaml` in observe mode (nothing is blocked: every request is sent and recorded, and one a rule would stop is marked `would_refuse`), an admin key (its hash in `enterplace.keys.yaml`) and `enterplace-master.key`, then serves on `http://127.0.0.1:8080`. The first lines it prints:
+In the current folder it writes `enterplace.policy.yaml` in observe mode (nothing is blocked: every request is sent and recorded, and one a rule would stop is marked `would_refuse`), an admin key and a person token for you (their hashes in `enterplace.keys.yaml`) and `enterplace-master.key`, then serves on `http://127.0.0.1:8080`. The first lines it prints:
 
 ```text
 Enterplace is running. Open the dashboard:
@@ -65,17 +65,22 @@ The link signs you in once, from this machine, within 10 minutes. Opening it in 
 Admin key, shown once (Enterplace keeps only its hash). Use it for the command line and the API:
 
   export ENTERPLACE_KEY=enterplace_3f9c...
+
+Claude Code on your Claude subscription, with sarah on every request: paste these two lines in your shell, then run claude. The person token is shown once.
+
+  export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+  export ANTHROPIC_CUSTOM_HEADERS="x-enterplace-user: enterplace_u_8a2d..."
 ```
 
 The link is the sign-in: it works once, only from a browser on the same machine, for 10 minutes, and the sign-in is recorded in the audit log. On a terminal with a display, Enterplace opens it for you; `--no-open` skips that. Keep the admin key in your password manager: it signs in to the console too, and the command line and the admin API use it.
 
-**Claude subscriptions.** The policy also has a provider named `claude-subscriptions` with `auth: passthrough`: Claude Code on a Claude Pro, Max, Team or Enterprise login goes through Enterplace with no Anthropic key at all. See [Subscriptions](/governance/subscriptions/).
+**Claude subscriptions.** The policy also has a provider named `claude-subscriptions` with `auth: passthrough`: Claude Code on a Claude Pro, Max, Team or Enterprise login goes through Enterplace with no Anthropic key at all. Every request carries a person's name (`identity: required`), and the person token in the last two lines is yours (your user name on this machine, or `admin`), so your first `claude` request arrives named. A company can allow unnamed requests while it rolls out tokens, on the console's **Coding agents** page; they show as the person `unknown`. See [Subscriptions](/governance/subscriptions/).
 
 **Provider keys.** None is needed to start. A key in the environment is picked up (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or the `*_PROVIDER_KEY` form), so `OPENAI_API_KEY=sk-... enterplace start` works too. A key pasted in the dashboard's **Connect a model** is sealed with `enterplace-master.key` (AES-256-GCM) and kept in `enterplace-credentials.json`, which holds only sealed bytes: keep the master key with the policy, and out of version control. To send a provider's requests through a proxy, set `ENTERPLACE_OPENAI_BASE_URL` (or `ENTERPLACE_ANTHROPIC_BASE_URL`, `ENTERPLACE_GEMINI_BASE_URL`) before `enterplace start`.
 
 **The demo model.** The policy always has a provider named `demo` with the model `enterplace-demo`. Enterplace answers it itself with a short sample text (chat completions, responses and messages, streaming too), sends nothing anywhere and prices it at zero, so the first request works before any key is set. Its requests are recorded under the provider `demo`.
 
-**Restart and start over.** Stop it with Ctrl-C, or with `enterplace stop` in the same folder from another terminal. `enterplace start` in the same folder serves the same policy again and prints a new sign-in link (no new admin key). To start over, delete `enterplace.policy.yaml`, `enterplace.keys.yaml`, `enterplace-credentials.json`, `enterplace-master.key` and `enterplace-audit.jsonl`, or run `enterplace start --force` (which keeps the master key).
+**Restart and start over.** Stop it with Ctrl-C, or with `enterplace stop` in the same folder from another terminal. `enterplace start` in the same folder serves the same policy again and prints a new sign-in link (no new admin key or person token). To start over, delete `enterplace.policy.yaml`, `enterplace.keys.yaml`, `enterplace-credentials.json`, `enterplace-master.key` and `enterplace-audit.jsonl`, or run `enterplace start --force` (which keeps the master key).
 
 ## The install script
 

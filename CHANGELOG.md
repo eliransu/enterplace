@@ -7,6 +7,22 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Every request is named by default
+
+- `enterplace start` writes the `claude-subscriptions` provider with `identity: required` (it wrote `optional`), so a
+  subscription request that names no person is refused with `person_needed` instead of being recorded as `unknown`.
+  The console's Coding agents step writes the same.
+- `enterplace start` makes a person token for whoever runs it (the OS user name, or `admin`) and prints it once, with
+  the two lines for Claude Code: `export ANTHROPIC_BASE_URL=...` and
+  `export ANTHROPIC_CUSTOM_HEADERS="x-enterplace-user: enterplace_u_..."`. Paste them and run `claude`: the first
+  request arrives named. A second start in the same folder makes no new token.
+- A company can allow unnamed requests while it rolls out tokens: `PUT /console/api/policy/identity` with
+  `{"required": false}` (the console's Coding agents page) sets `identity: optional` on every passthrough provider,
+  `{"required": true}` sets `identity: required`. The change is checked as `enterplace check` checks a file, audited
+  as `set_identity` with the admin's name, and used within 2 seconds. Unnamed requests show as the person `unknown`.
+- `GET /console/api/me` carries `"names": {"required": bool, "passthrough": bool}`, so every console page can warn
+  while unnamed requests are allowed.
+
 ### Codex on every translated provider
 
 - Codex CLI 0.166.0 now works, with its default config, on models reached through Responses to chat translation
@@ -41,7 +57,7 @@ one repository. How a release is made: RELEASING.md.
 ### Enterprise checklist: migrations as a step, an admin address, mutual TLS
 
 - `enterplace store migrate [--policy <file>]` creates or updates every table of the store and stops. `enterplace serve
-  --no-migrate` changes no table and refuses to start on a schema that is behind, naming the command. For clusters
+--no-migrate` changes no table and refuses to start on a schema that is behind, naming the command. For clusters
   that forbid schema changes from serving pods. Helm: `migrations.job.enabled` runs it as a pre-install and
   pre-upgrade Job and starts the pods with `--no-migrate`.
 - `admin_listen:` in the policy, or `enterplace serve --admin-listen <host:port>`, serves the console, the admin API and
@@ -59,7 +75,7 @@ one repository. How a release is made: RELEASING.md.
   With a store the count is shared by every replica (new table `enterplace_sign_in_failures`, core migration 8). The
   failure that locks is recorded as `console_sign_in_locked`.
 - Identity from an authenticating proxy (enterprise, license feature `auth_proxy`): `identity_headers: { user,
-  groups, team }` names the headers in which a proxy listed in `trusted_proxies` says who the caller is. A keyless
+groups, team }` names the headers in which a proxy listed in `trusted_proxies` says who the caller is. A keyless
   request on the model routes is then that person's, and the console signs them in with the role their groups give
   through `sso_values`. Headers from any other address are ignored; a header sent twice is refused with
   `identity_invalid`. Records carry `auth: identity_headers`.
@@ -74,6 +90,7 @@ one repository. How a release is made: RELEASING.md.
 - `tls: { cert_file, key_file }` in the policy stands in for `--tls-cert` and `--tls-key`.
 - The enterprise binary's `serve` takes every flag of the open source one. It ignored `--tls-cert` and `--tls-key`
   before and served plain HTTP; it now serves HTTPS with them, and refuses a flag it does not know.
+
 ### Docs: runbooks and guides
 
 - Runbooks: Codex on Amazon Bedrock (integrations/codex-on-bedrock) and Claude Code on Bedrock and Vertex AI
@@ -154,8 +171,7 @@ one repository. How a release is made: RELEASING.md.
 
 ### First run, made shorter
 
-- `enterplace help` (and `enterplace` alone) opens with `enterplace start`, the one command a newcomer runs. It was the 23rd of
-  35.
+- `enterplace help` (and `enterplace` alone) opens with `enterplace start`, the one command a newcomer runs. It was the 23rd of 35.
 - `enterplace kill`, `enterplace unkill` and the other admin commands take the admin key from `ENTERPLACE_KEY` too, the name
   `enterplace start` prints it under. With only `ENTERPLACE_ADMIN_KEY` read, the first `enterplace kill` after a first run failed.
 - The console's Codex settings and its curl name a model this install serves (the demo model on a fresh install).
@@ -195,7 +211,7 @@ one repository. How a release is made: RELEASING.md.
   told apart by Claude Code's session ID; a kill switch can stop `unknown`. `identity: required` (the default) refuses it
   with `person_needed`. Subscription refusals are 403, never 401, which Claude Code reads as an expired login.
 - Subscription traffic is recorded with tokens and an API-equivalent cost estimate (`"cost_basis":
-  "api_equivalent_estimate"`, `"auth": "passthrough"`), shown as `~$x (est.)` in the console. Dollar budgets do not
+"api_equivalent_estimate"`, `"auth": "passthrough"`), shown as `~$x (est.)` in the console. Dollar budgets do not
   count it unless the rule sets `budget_basis: api_equivalent`.
 - `tpd`: tokens per calendar day (UTC), in a rule's `rate:` or a `limits:` entry, per person, team or any scope.
 - `enterplace start` writes the `claude-subscriptions` passthrough provider (`models: ["claude-*"]`, `identity: optional`),
@@ -234,7 +250,7 @@ one repository. How a release is made: RELEASING.md.
 - Provider credentials work without Postgres: sealed under the master key in `enterplace-credentials.json` beside the
   policy. `credential:` in a policy without `store:` loads when that file exists.
 - `ENTERPLACE_OPENAI_BASE_URL`, `ENTERPLACE_ANTHROPIC_BASE_URL` and `ENTERPLACE_GEMINI_BASE_URL` point a provider that `enterplace
-  start` or Connect a model sets up at another URL, such as a proxy.
+start` or Connect a model sets up at another URL, such as a proxy.
 - A browser at the gateway's root (`/` with `Accept: text/html`) is sent to the console; API clients keep the JSON
   `no_key` answer. A browser's own `/favicon.ico` and touch icon requests are no longer recorded as refused requests.
 - The console sign-in takes the whole `export ENTERPLACE_KEY=...` line, and says plainly when what was pasted is not a
@@ -265,7 +281,7 @@ one repository. How a release is made: RELEASING.md.
   `scripts/verify_release.sh` no longer ask for a registry token. The Terraform registry credential variables stay,
   for a private mirror, and default to none.
 - The quickstart opens with one command, `docker run --name enterplace -p 8080:8080 -v enterplace-data:/var/lib/enterplace -e
-  OPENAI_API_KEY=sk-... ghcr.io/eliransu/enterplace`, then Docker Compose with Postgres, then a build from source.
+OPENAI_API_KEY=sk-... ghcr.io/eliransu/enterplace`, then Docker Compose with Postgres, then a build from source.
 
 ### Tests that do not depend on timing
 
@@ -313,7 +329,7 @@ one repository. How a release is made: RELEASING.md.
   PostgreSQL flexible server (`deploy/azure-arm/`) and Docker Compose (`deploy/compose/compose.yaml`). Guide:
   `/deploy/one-click/`.
 - `enterplace start --container` with `DATABASE_URL` set writes `store: { postgres_url_env: DATABASE_URL,
-  policy_from: store }` and keeps the admin key in that store, made only when the store holds no admin key, so a
+policy_from: store }` and keeps the admin key in that store, made only when the store holds no admin key, so a
   redeploy on a fresh disk keeps keys and the policy and prints no second key.
 - The store reads libpq's `PGSSLMODE` when the connection string names no `sslmode`.
 
@@ -767,7 +783,7 @@ one repository. How a release is made: RELEASING.md.
   names the provider of the last try and how many tries there were (`provider`, `tries`).
 - `audit: { per_org: true }` keeps each organization's records in a hash chain of its own
   (`enterplace-audit.jsonl.orgs/<org>.jsonl`); records of no organization stay in the install's chain. `enterplace audit
-  verify` checks every chain, `--org <org>` one. People kept to an organization read its chain in the console, and
+verify` checks every chain, `--org <org>` one. People kept to an organization read its chain in the console, and
   others switch between chains. Retention, legal hold, audit export, alerts, the request log and segment shipping
   (under `orgs/<org>` in the bucket) work per chain. Enterplace checks every chain at start.
 
@@ -782,7 +798,7 @@ one repository. How a release is made: RELEASING.md.
 - `enterplace device` reports a state per tool (`not_installed`, `installed`, `enterplace`, `direct`) and looks for Codex,
   Claude Code, Cursor, GitHub Copilot (VS Code and CLI), Zed, JetBrains AI Assistant, Qwen Code, Gemini CLI, Kilo Code,
   Roo Code and Claude Desktop, from each tool's documented configuration files only. It sends the person `enterplace
-  login` saved, so the gateway answers with their team's profile. Tool names now match `enterplace audit coverage`
+login` saved, so the gateway answers with their team's profile. Tool names now match `enterplace audit coverage`
   (`github-copilot`, was `vscode`).
 - `enterplace audit coverage --devices devices.json` merges the device reports (downloaded from the Devices page) with
   the audit log: two more columns, `devices` and `direct`.
@@ -824,6 +840,7 @@ one repository. How a release is made: RELEASING.md.
   versions behind refuses the database, naming both versions. Store migration 6 adds the `enterplace_writer` table, which
   records the newest version that started on the database. Versions released before this one refuse any newer schema
   at restart, so for the upgrade to this version keep old pods from restarting during the rollout.
+
 ### Identity
 
 - SAML 2.0 sign-in to the console (`console.saml`), beside OpenID Connect: service provider metadata at
@@ -872,6 +889,7 @@ one repository. How a release is made: RELEASING.md.
   manager, never the value. Counted in `/metrics` as `enterplace_secret_rotations_total` and
   `enterplace_secret_refresh_failures_total` by manager. With the `alerts` feature, a **system** alert rule fires on a
   failed refresh.
+
 ### Operator API and metrics
 
 - `GET /admin/usage`: spend, tokens and requests grouped by `org`, `team`, `person`, `key`, `customer`, `tag`,
@@ -902,6 +920,7 @@ one repository. How a release is made: RELEASING.md.
 - `enterplace import litellm --url <proxy> --master-key-env <VAR>` reads a running LiteLLM proxy's model list, keys and
   teams through its management API, writes team budgets as `limits:`, and issues one Enterplace key per LiteLLM key into a
   new keys file, printing each beside the key it replaces.
+
 ### Cloud providers and translation
 
 - `kind: bedrock_converse`: every model family Bedrock serves through Converse and ConverseStream (Anthropic, Meta
