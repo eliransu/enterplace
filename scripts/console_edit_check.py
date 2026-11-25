@@ -112,7 +112,7 @@ audit: {{ path: enterplace-audit.jsonl }}
 
         # Prices: add a model through the app's dialog. Approval is on, so it waits; the second admin approves it.
         # The old address still opens the dialog.
-        chrome.go(f"{base}/console/models?add=1")
+        chrome.go(f"{base}/console/models?add=1", f"{base}/console/app/#/prices?add=1")
         chrome.wait("location.hash.startsWith('#/prices?add=1') && document.getElementById('model-name')", "the Add a model dialog")
         chrome.js("""(() => { const set = (id, v) => { const el = document.getElementById(id);
             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v);
@@ -136,7 +136,7 @@ audit: {{ path: enterplace-audit.jsonl }}
         chrome.size(1440)
 
         # The old address opens the app's Teams page.
-        chrome.go(f"{base}/console/teams")
+        chrome.go(f"{base}/console/teams", f"{base}/console/app/#/teams")
         chrome.wait("location.hash.startsWith('#/teams') && document.body.textContent.includes('maya.cohen')", "teams list the people")
         chrome.shot(out / "teams.png")
 
@@ -148,7 +148,7 @@ audit: {{ path: enterplace-audit.jsonl }}
 
         # A draft that narrows everyone's models: dry-run from the editor, then saved for approval. The old address
         # opens the app's editor.
-        chrome.go(f"{base}/console/policy/edit")
+        chrome.go(f"{base}/console/policy/edit", f"{base}/console/app/#/policy/edit")
         chrome.wait("location.hash.startsWith('#/policy/edit') && document.getElementById('policy-text')", "the editor")
         chrome.js("""(() => { const set = (el, v, proto) => { Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v);
             el.dispatchEvent(new Event('input', { bubbles: true })); };
@@ -164,10 +164,10 @@ audit: {{ path: enterplace-audit.jsonl }}
         chrome.wait("location.hash.startsWith('#/policy/versions?version=') && document.body.textContent.includes('Waiting for approval')", "the saved draft")
         chrome.shot(out / "policy-version-pending.png")
 
-        chrome.go(f"{base}/console/policy")
+        chrome.go(f"{base}/console/policy", f"{base}/console/app/#/policy/raw")
         chrome.wait("location.hash.startsWith('#/policy/raw') && document.getElementById('line-1')", "the raw policy")
         chrome.shot(out / "policy.png")
-        chrome.go(f"{base}/console/policy/versions?version=2")
+        chrome.go(f"{base}/console/policy/versions?version=2", f"{base}/console/app/#/policy/versions?version=2")
         chrome.wait("location.hash === '#/policy/versions?version=2' && document.body.textContent.includes('Changes from')", "version 2")
         chrome.shot(out / "policy-versions.png")
         print(f"console edit check passed; screenshots in {out}")
