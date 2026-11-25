@@ -88,6 +88,8 @@ one repository. How a release is made: RELEASING.md.
   Claude Agent SDK, the Vercel AI SDK, LlamaIndex, CrewAI, AutoGen, n8n and Dify. `scripts/sdk_check.py` (with
   `scripts/sdk_check.mjs` for `--js`) runs seven of them against a local Enterplace and a mock provider; CrewAI, n8n
   and Dify are marked not run. `scripts/langchain_check.py` is importable, so the new check shares its mock and gateway.
+- OWASP mappings (governance/owasp): the Top 10 for LLM Applications 2025, the Top 10 for Agentic Applications 2026
+  and the agentic threats T1 to T17, each item marked addressed, partly or not covered, with the limit stated.
 
 ### License
 

@@ -1,0 +1,119 @@
+---
+title: OWASP mappings
+description: Which Enterplace control addresses each item of the OWASP Top 10 for LLM Applications and of OWASP's agentic threat lists, and which items a gateway does not cover.
+sidebar:
+  order: 10
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+This page maps OWASP's lists for LLM applications and agents to what Enterplace does at the gateway. Enterplace sees the requests and answers that pass through it, and the MCP tool calls routed through it. It does not see a model's training, an application's own code or what an agent does on a machine.
+
+Each item is marked:
+
+| Mark | Means |
+|---|---|
+| Addressed | A Enterplace control acts on the item directly |
+| Partly | A control helps, with a stated limit |
+| Not covered | Outside what a gateway sees. Named so nobody assumes otherwise |
+
+<Aside type="caution">
+A mapping is not a certification. No control here removes a risk; each narrows it, and the limits are part of the answer. The lists were read from genai.owasp.org on 2026-11-15.
+</Aside>
+
+## OWASP Top 10 for LLM Applications (2025)
+
+| Item | Coverage | What Enterplace does | What it does not do |
+|---|---|---|---|
+| LLM01 Prompt Injection | Partly | Calls a detector you choose on each request: `azure_prompt_shield`, `lakera`, `llama_guard`, `model_armor`, `bedrock_guardrail`, or your own [webhook](/governance/guardrail-webhooks/) or [events plugin](/governance/plugin-events/). Tool results and documents in the conversation are sent to it, where an indirect attack would hide. [Tool permissions](/governance/tool-permissions/) and [MCP approvals](/governance/mcp-gateway/#approvals) limit what an injected instruction can make an agent do | Has no injection detector of its own: the built-in detectors find secrets and personal data. Detection is as good as the vendor. A webhook with `on_failure: fail_open` lets requests through unchecked while it is down |
+| LLM02 Sensitive Information Disclosure | Partly | Built-in `secrets` and `pii` [guardrails](/governance/guardrails/) block, mask or record findings in requests, and in answers with `on: [answer]`. `regex` and `keywords` cover your own patterns. Prompts and answers are never stored: the audit log holds who, which model, the verdict and counts | The built-in detectors are patterns: a bare password, a name, an address, or text that is encoded, split or translated is not found. Images and files are not read. A streamed answer is checked only with `buffer_stream` or `check_stream_every` |
+| LLM03 Supply Chain | Partly | Fixes which providers and models a caller can reach: a rule's `models:` list, provider URLs set by admins, private addresses refused unless allowed. [MCP tool pins](/governance/mcp-gateway/#tool-pins-and-changed-tools) record or block a tool whose description or schema changed. Enterplace's own image is signed, with an SBOM and provenance: see [Verify a release](/operations/verify-release/) | Does not vet a model's weights, a provider's training or your application's dependencies |
+| LLM04 Data and Model Poisoning | Not covered | Nothing at training time. The audit log shows who called the fine-tuning and files routes, when a rule allows them | Enterplace never sees training data or how a model was built |
+| LLM05 Improper Output Handling | Partly | Guardrails with `on: [answer]` read whole answers, and [transforms](/governance/transforms/) can rewrite them. A tool call in an answer that the rule does not allow is withheld or stripped | Does not sanitize output for the place your application puts it (HTML, SQL, a shell). A streamed answer's tool calls are not checked |
+| LLM06 Excessive Agency | Addressed | [Tool permissions](/governance/tool-permissions/) allow or deny the function tools a request declares. The [MCP gateway](/governance/mcp-gateway/) shows each person only the tools their rule allows, runs calls with the person's own credential, holds named tools for an admin's approval, and records every call. [Kill switches](/governance/kill-switches/) stop a person, a team, a key or a model at once | Governs only the tools that pass through it. A tool the agent runs locally, with the user's own rights, is declared to Enterplace by name but executed out of its sight |
+| LLM07 System Prompt Leakage | Partly | A `keywords` or `regex` guardrail with `on: [answer]` can block or mask an answer that repeats marked text from your system prompt. Provider keys are never in a prompt: callers hold Enterplace keys only | Does not stop a model from paraphrasing its instructions, and does not know which text is your system prompt unless you give it a pattern |
+| LLM08 Vector and Embedding Weaknesses | Not covered | The embeddings route is identified, decided, metered and recorded like any other | Enterplace is not a vector store and does not see retrieval, document permissions or what is kept in an index |
+| LLM09 Misinformation | Not covered | Nothing. A vendor guardrail that checks grounding can be called on answers | Enterplace does not judge whether an answer is true |
+| LLM10 Unbounded Consumption | Addressed | [Budgets](/governance/budgets-and-rate-limits/) reserve the most a request could cost before it is sent, per person, team and key. `rate:` limits requests and tokens per minute, `parallel` limits requests in flight. Body size and memory per caller are bounded. Kill switches stop a runaway key at once | Limits count what goes through Enterplace. A caller holding a provider key of their own is outside them: see [Coverage](/governance/coverage/) |
+
+## OWASP Top 10 for Agentic Applications (2026)
+
+| Item | Coverage | What Enterplace does | What it does not do |
+|---|---|---|---|
+| ASI01 Agent Goal Hijack | Partly | The injection detectors above, run on requests, tool results and, through the MCP gateway, on tool call arguments and results. An [events plugin](/governance/plugin-events/) is sent the conversation as typed events and can end a session | No detector of its own for a changed goal. An agent's plan is visible only as the requests it sends |
+| ASI02 Tool Misuse | Addressed | Tool allow and deny lists per rule, narrowed per key and per request. MCP approvals for named tools. Guardrails on tool call arguments and results. Every MCP call is recorded with who called which tool | Function tool arguments in a model's answer are not judged by the built-in detectors, and a streamed answer's tool calls are not checked. A locally executed tool runs out of Enterplace's sight |
+| ASI03 Identity and Privilege Abuse | Addressed | Every request carries a Enterplace key or a JWT from your identity provider, tied to a person and a team. The agent never holds a provider key. MCP servers with `user_auth` run each call with the caller's own credential, sealed under the master key. Keys expire and are revoked at once | A Enterplace key copied from one machine works from another, unless the rule or key lists [source address ranges](/governance/access-control/). Enterplace does not manage the rights an agent has on its own host |
+| ASI04 Agentic Supply Chain Vulnerabilities | Partly | Only MCP servers an admin lists in the policy are reachable. Tool pins record or block changed tool descriptions and schemas, and a tool has its own kill switch | Does not scan an MCP server's code, an agent framework or a plugin an agent installs itself |
+| ASI05 Unexpected Code Execution | Partly | A rule can deny the tools that run code (`!function.run_shell`, an MCP tool) or hold them for approval | Does not sandbox anything. Code an agent runs on its own machine is not seen or stopped |
+| ASI06 Memory and Context Poisoning | Partly | Guardrails read the whole conversation of each request, tool results included, so poisoned context that returns in a request passes the detectors again. Stored Responses state is refused under a budget, because the provider would add text Enterplace never saw | Does not see or clean an agent's memory store or a vector index |
+| ASI07 Insecure Inter-Agent Communication | Not covered | Model calls each agent makes are identified and recorded per key, so agents with keys of their own are told apart | Enterplace does not carry or check agent-to-agent messages. It has no A2A gateway |
+| ASI08 Cascading Failures | Partly | Rate limits, `parallel` limits and budgets cap a loop. Retries, cooldowns and fallbacks are bounded. A kill switch on a team, key or model stops a cascade at once, on every replica with a store | Does not understand a workflow, so it cannot tell a cascade from a busy hour except by the limits you set |
+| ASI09 Human-Agent Trust Exploitation | Partly | MCP approvals show the admin who asked, under which rule and with which arguments, before a held tool runs | Does not check what an agent tells its user, and cannot tell a well-founded approval from a tired one |
+| ASI10 Rogue Agents | Partly | Each key's requests, tools and spend are in the [audit log](/governance/audit-log/) and the usage reports. A kill switch stops a key within a second. [Coverage](/governance/coverage/) and, in Enterplace Enterprise, device checks show tools that send past the gateway | Detecting that an agent has gone wrong is left to whoever reads the records, or to an alert you configure |
+
+## OWASP Agentic AI: Threats and Mitigations (T1 to T17)
+
+OWASP's threat taxonomy for agents (version 1.1) names seventeen threats. Most fold into the ten items above.
+
+| Threat | Coverage | Enterplace control, or why not |
+|---|---|---|
+| T1 Memory Poisoning | Partly | As ASI06 |
+| T2 Tool Misuse | Addressed | As ASI02 |
+| T3 Privilege Compromise | Addressed | As ASI03 |
+| T4 Resource Overload | Addressed | As LLM10: budgets, `rpm`, `tpm`, `parallel`, bounded bodies and memory |
+| T5 Cascading Hallucination Attacks | Not covered | Enterplace does not judge truth. Limits cap how far a loop runs |
+| T6 Intent Breaking and Goal Manipulation | Partly | As ASI01 |
+| T7 Misaligned and Deceptive Behaviors | Not covered | A model's reasoning is not judged. An events plugin receives reasoning events and can |
+| T8 Repudiation and Untraceability | Addressed | A hash-chained [audit log](/governance/audit-log/) with a record written before each request is forwarded, and a request that cannot be recorded refused. Limit: someone who can write the log file can rewrite the chain, so keep the last hash elsewhere |
+| T9 Identity Spoofing and Impersonation | Partly | Keys named by person, single sign-on for `enterplace login`, JWT validation, source address ranges. A stolen key is that person until revoked |
+| T10 Overwhelming Human in the Loop | Partly | Approvals are per named tool, so only the calls you choose wait for a person. No batching or ranking of approvals |
+| T11 Unexpected RCE and Code Attacks | Partly | As ASI05 |
+| T12 Agent Communication Poisoning | Not covered | As ASI07 |
+| T13 Rogue Agents in Multi-Agent Systems | Partly | As ASI10 |
+| T14 Human Attacks on Multi-Agent Systems | Not covered | Enterplace does not see delegation between agents |
+| T15 Human Manipulation | Not covered | Enterplace does not check what an agent tells a person |
+| T16 Insecure Inter-Agent Protocol Abuse | Partly | For MCP: per-person sign-in, tools filtered by rule, tool pins and approvals. Nothing for A2A |
+| T17 Supply Chain Compromise | Partly | As ASI04 and LLM03 |
+
+## What to turn on
+
+A policy that uses the controls this page counts on:
+
+```yaml title="enterplace.policy.yaml"
+version: 1
+providers:
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_PROVIDER_KEY
+    models: [claude-sonnet-5-5]
+guardrails:
+  - name: no-secrets
+    type: secrets
+    action: block
+  - name: mask-pii
+    type: pii
+    action: mask
+rules:
+  - name: agents
+    principals: { team: agents }
+    models: [claude-sonnet-5-5]
+    guardrails: [no-secrets, mask-pii]
+    tools: [function.*, "!function.run_shell"]
+    budget: { usd: 200, per: month }
+    rate: { rpm: 60, tpm: 200000 }
+  - name: everyone-else
+    principals: { any: true }
+    models: []
+```
+
+Add an injection detector from the [vendor list](/governance/guardrails/#vendors), and the MCP sections from [MCP gateway](/governance/mcp-gateway/), for the items that depend on them.
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Security model" href="/operations/security/" description="The threats Enterplace is built against and what it does not protect." />
+	<LinkCard title="Guardrails" href="/governance/guardrails/" description="Detectors, vendors, actions and their limits." />
+	<LinkCard title="MCP gateway" href="/governance/mcp-gateway/" description="Tools by rule, approvals, pins and records." />
+	<LinkCard title="Tool permissions" href="/governance/tool-permissions/" description="Allow or deny the tools an agent declares." />
+</CardGrid>
