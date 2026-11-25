@@ -26,6 +26,14 @@ one repository. How a release is made: RELEASING.md.
   `rollback_policy`.
 - Prices are editable in file mode: adding a model or changing a price rewrites the file through the same checked save.
 
+### The dry run replays limits
+
+- A policy dry run (Policy, Edit, "Dry run", and `POST /admin/policy/dry-run`) replays the draft's budgets, tokens per
+  day and requests per hour and per day over the window, from each request's tokens and cost, so a new
+  `rate: { tpd }` cap lists who it would have refused under "Now refused" with the limit (`limit` in the admin API).
+  The note states the approximation: counting starts at the window, and per-minute, sliding, key and session limits
+  are not replayed.
+
 ### Every request is named by default
 
 - `enterplace start` writes the `claude-subscriptions` provider with `identity: required` (it wrote `optional`), so a

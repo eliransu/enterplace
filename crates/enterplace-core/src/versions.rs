@@ -813,6 +813,8 @@ pub struct Replayed {
     pub now: String,
     pub rule_was: String,
     pub rule_now: String,
+    /// The limit of the draft that would have refused it, as a person reads it: empty for a policy decision.
+    pub limit: String,
 }
 
 /// What replaying recent requests against a draft found.
@@ -861,7 +863,11 @@ pub fn dry_run_shared(
     keys: &Policy,
 ) -> Result<DryRun, String> {
     let since = hours_ago(hours);
-    let full = lines.len() >= DRY_RUN_ROWS;
+    let full = lines
+        .iter()
+        .filter(|l| !l.contains("\"event\":\"usage\""))
+        .count()
+        >= DRY_RUN_ROWS;
     let own = crate::audit::chain_reader(audit_path).map_err(|err| {
         format!(
             "the audit log at {} cannot be read: {err}. Check its permissions.",
@@ -871,7 +877,9 @@ pub fn dry_run_shared(
     let shared = std::io::Cursor::new(lines.join("\n") + "\n");
     let mut run = dry_run(std::io::Read::chain(shared, own), &since, draft, keys);
     run.source = "store".into();
-    run.note = "Replayed the requests of every gateway on the store, from the shared request index (copied from each gateway every 2 seconds).".into();
+    run.note = format!(
+        "Replayed the requests of every gateway on the store, from the shared request index (copied from each gateway every 2 seconds). {LIMITS_NOTE}"
+    );
     if full {
         run.note.push_str(&format!(
             " There were more than {DRY_RUN_ROWS} requests in that time: only the newest {DRY_RUN_ROWS} were replayed. Ask for fewer hours to see them all."
@@ -902,8 +910,115 @@ fn decided(draft: &Loaded, who: &Principal, model: &str) -> (String, String) {
     }
 }
 
-/// Replays the request records at or after `since` (a record timestamp) against `draft`. `keys` is the policy in
-/// force, for each key's own model list.
+/// What the dry run says about the limits it replays, appended to its note.
+pub const LIMITS_NOTE: &str = "Budgets, tokens per day and requests per hour and per day of the draft's rules are replayed from the requests in this window, counted per team for a team rule and per person otherwise: what was used before the window starts is not counted, so a request near a limit may show as allowed that the gateway would refuse. Per-minute limits, sliding budgets, key budgets and session limits are not replayed.";
+
+/// What one rule's limits have counted in the replay: by limit, scope and period.
+#[derive(Default)]
+struct Counted {
+    usd: std::collections::HashMap<String, f64>,
+    tokens: std::collections::HashMap<String, u64>,
+    requests: std::collections::HashMap<String, u64>,
+}
+
+impl Counted {
+    /// The first limit of `rule` that would refuse this request, or `None` when it passes, in which case it is
+    /// counted. `scope` is the team for a team rule and the person otherwise, as the gateway counts.
+    fn check(
+        &mut self,
+        rule: &crate::policy::Rule,
+        scope: &str,
+        model: &str,
+        time: &str,
+        used: (u64, f64),
+    ) -> Option<String> {
+        let limits = &rule.limits;
+        let key = |what: String| format!("{}|{scope}|{what}", rule.name);
+        let day = crate::policy::Period::Day.label(time);
+        let hour = time.get(..13).unwrap_or(time).to_string();
+        let mut refused = None;
+        if let Some(most) = limits.tpd {
+            if self
+                .tokens
+                .get(&key(format!("tpd {day}")))
+                .copied()
+                .unwrap_or(0)
+                >= u64::from(most)
+            {
+                refused = Some(format!("{most} tokens a day"));
+            }
+        }
+        if let Some(most) = limits.rpd {
+            if refused.is_none()
+                && self
+                    .requests
+                    .get(&key(format!("rpd {day}")))
+                    .copied()
+                    .unwrap_or(0)
+                    >= u64::from(most)
+            {
+                refused = Some(format!("{most} requests a day"));
+            }
+        }
+        if let Some(most) = limits.rph {
+            if refused.is_none()
+                && self
+                    .requests
+                    .get(&key(format!("rph {hour}")))
+                    .copied()
+                    .unwrap_or(0)
+                    >= u64::from(most)
+            {
+                refused = Some(format!("{most} requests an hour"));
+            }
+        }
+        let caps: Vec<(usize, &crate::policy::Cap)> = limits
+            .budgets
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.counts(model, model) && !c.budget.per.sliding)
+            // A budget in its trial only records what it would refuse.
+            .filter(|(_, c)| {
+                c.shadow_until
+                    .as_ref()
+                    .is_none_or(|u| crate::policy::expiry_passed(u, time))
+            })
+            .collect();
+        for (n, cap) in &caps {
+            let spent = self
+                .usd
+                .get(&key(format!("usd{n} {}", cap.budget.per.label(time))))
+                .copied()
+                .unwrap_or(0.0);
+            if refused.is_none() && spent + used.1 > cap.budget.usd {
+                refused = Some(format!(
+                    "a budget of ${} a {}",
+                    cap.budget.usd,
+                    cap.budget.per.word()
+                ));
+            }
+        }
+        if refused.is_some() {
+            return refused;
+        }
+        *self.tokens.entry(key(format!("tpd {day}"))).or_default() += used.0;
+        *self.requests.entry(key(format!("rpd {day}"))).or_default() += 1;
+        *self.requests.entry(key(format!("rph {hour}"))).or_default() += 1;
+        for (n, cap) in &caps {
+            *self
+                .usd
+                .entry(key(format!("usd{n} {}", cap.budget.per.label(time))))
+                .or_default() += used.1;
+        }
+        None
+    }
+}
+
+/// Replays the request records at or after `since` (a record timestamp) against `draft`: its rules, then the
+/// budgets and token and request limits of the rule that allows each one, counted over the window. `keys` is the
+/// policy in force, for each key's own model list.
+// ponytail: the window's records are held in memory so each request's usage (written after it) is known when it is
+// replayed; at most DRY_RUN_ROWS from the store, a day or a month of one gateway's log otherwise.
 pub fn dry_run(records: impl BufRead, since: &str, draft: &Loaded, keys: &Policy) -> DryRun {
     let mut run = DryRun {
         since: since.to_string(),
@@ -919,17 +1034,40 @@ pub fn dry_run(records: impl BufRead, since: &str, draft: &Loaded, keys: &Policy
     };
     // A request can be both in the store's index and in this gateway's log: it is replayed once.
     let mut seen = std::collections::HashSet::new();
+    let mut requests = Vec::new();
+    let mut usage: std::collections::HashMap<String, (u64, f64)> = std::collections::HashMap::new();
     for line in records.lines().map_while(Result::ok) {
         let Ok(record) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if record.get("event").is_some() || text(&record, "time").as_str() < since {
+        if text(&record, "time").as_str() < since {
+            continue;
+        }
+        if record.get("event").and_then(Value::as_str) == Some("usage") {
+            let n = |k: &str| record.get(k).and_then(Value::as_u64).unwrap_or(0);
+            usage.insert(
+                text(&record, "id"),
+                (
+                    n("input_tokens") + n("output_tokens"),
+                    record
+                        .get("cost_usd")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                ),
+            );
+            continue;
+        }
+        if record.get("event").is_some() {
             continue;
         }
         let id = text(&record, "id");
         if !id.is_empty() && !seen.insert(id) {
             continue;
         }
+        requests.push(record);
+    }
+    let mut counted = Counted::default();
+    for record in requests {
         let (person, model, key) = (
             text(&record, "person"),
             text(&record, "model"),
@@ -956,7 +1094,27 @@ pub fn dry_run(records: impl BufRead, since: &str, draft: &Loaded, keys: &Policy
                 ..Principal::default()
             });
         run.replayed += 1;
-        let (now, rule_now) = decided(draft, &who, &model);
+        let (mut now, rule_now) = decided(draft, &who, &model);
+        let mut limit = String::new();
+        if now == "allow" {
+            if let Some(rule) = draft.policy.rule_list().iter().find(|r| r.name == rule_now) {
+                let scope = match &rule.who {
+                    crate::policy::Who::Team(_) => format!("team:{}", who.team),
+                    _ => format!("person:{}", who.name),
+                };
+                let used = usage.get(&text(&record, "id")).copied().unwrap_or((0, 0.0));
+                if let Some(what) =
+                    counted.check(rule, &scope, &model, &text(&record, "time"), used)
+                {
+                    now = if what.starts_with("a budget") {
+                        "budget_exceeded".into()
+                    } else {
+                        "rate_limited".into()
+                    };
+                    limit = what;
+                }
+            }
+        }
         let rule_was = text(&record, "rule");
         let replayed = Replayed {
             id: text(&record, "id"),
@@ -968,6 +1126,7 @@ pub fn dry_run(records: impl BufRead, since: &str, draft: &Loaded, keys: &Policy
             now: now.clone(),
             rule_was: rule_was.clone(),
             rule_now: rule_now.clone(),
+            limit,
         };
         match (was == "allow", now == "allow") {
             (true, false) => run.now_refused.push(replayed),
@@ -976,6 +1135,8 @@ pub fn dry_run(records: impl BufRead, since: &str, draft: &Loaded, keys: &Policy
             _ => {}
         }
     }
+    run.note.push(' ');
+    run.note.push_str(LIMITS_NOTE);
     run
 }
 
@@ -1223,6 +1384,67 @@ prices:
         );
         assert_eq!(run.other_rule.len(), 1, "{run:?}");
         assert_eq!(run.other_rule[0].id, "r3");
+        Ok(())
+    }
+
+    #[test]
+    fn a_dry_run_replays_a_new_tokens_per_day_cap_and_budget_over_the_window() -> TestResult {
+        let live = load(POLICY)?;
+        // dana.levi sends three requests of 60 tokens on one day, maya.cohen two that cost $12 each.
+        let request = |id: &str, minute: u32, person: &str, team: &str, model: &str, rule: &str| {
+            format!(
+                r#"{{"id":"{id}","time":"2026-11-14T08:{minute:02}:00.000Z","person":"{person}","team":"{team}","key":"","model":"{model}","verdict":"allow","code":null,"rule":"{rule}"}}"#
+            )
+        };
+        let usage = |id: &str, minute: u32, tokens: u64, cost: f64| {
+            format!(
+                r#"{{"event":"usage","id":"{id}","time":"2026-11-14T08:{minute:02}:01.000Z","input_tokens":{tokens},"output_tokens":0,"cost_usd":{cost}}}"#
+            )
+        };
+        let log = [
+            request("d1", 1, "dana.levi", "interns", "gpt-4o-mini", "everyone"),
+            usage("d1", 1, 60, 0.0),
+            request("d2", 2, "dana.levi", "interns", "gpt-4o-mini", "everyone"),
+            usage("d2", 2, 60, 0.0),
+            request("d3", 3, "dana.levi", "interns", "gpt-4o-mini", "everyone"),
+            usage("d3", 3, 60, 0.0),
+            request("m1", 4, "maya.cohen", "payments", "gpt-4o", "payments"),
+            usage("m1", 4, 10, 12.0),
+            request("m2", 5, "maya.cohen", "payments", "gpt-4o", "payments"),
+            usage("m2", 5, 10, 12.0),
+        ]
+        .join("\n");
+        // The draft caps everyone at 100 tokens a day; payments' $20.50 a month budget stays.
+        let draft = load(&POLICY.replace(
+            "    principals: { any: true }\n    models: [gpt-4o-mini]",
+            "    principals: { any: true }\n    models: [gpt-4o-mini]\n    rate: { tpd: 100 }",
+        ))?;
+        let run = dry_run(
+            log.as_bytes(),
+            "2026-11-14T00:00:00.000Z",
+            &draft,
+            &live.policy,
+        );
+        assert_eq!(run.replayed, 5, "{run:?}");
+        let refused: Vec<(&str, &str, &str)> = run
+            .now_refused
+            .iter()
+            .map(|r| (r.id.as_str(), r.now.as_str(), r.limit.as_str()))
+            .collect();
+        // d3 passes 100 tokens (120 used before it); m2 would make $24 of a $20.5 budget.
+        assert_eq!(
+            refused,
+            [
+                ("d3", "rate_limited", "100 tokens a day"),
+                ("m2", "budget_exceeded", "a budget of $20.5 a month"),
+            ],
+            "{run:?}"
+        );
+        assert!(
+            run.note.contains("before the window starts"),
+            "{}",
+            run.note
+        );
         Ok(())
     }
 }

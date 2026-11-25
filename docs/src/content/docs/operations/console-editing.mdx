@@ -75,6 +75,10 @@ A dry run replays the request records of the last hours against the draft, with 
 
 Requests refused before the policy decided (an unknown key, a budget, a guardrail, a kill switch) are counted and not replayed.
 
+The limits of the draft are replayed too. For each request the draft's rules allow, the rule's budgets (`budget:`, by its period), tokens per day (`rate: { tpd }`) and requests per hour and per day (`rph`, `rpd`) are counted over the window from each request's usage record (its tokens and cost), per team for a team rule and per person otherwise, and a request that would pass one is listed under **Now refused** with `budget_exceeded` or `rate_limited` and the limit, for example `allow to rate_limited (100000 tokens a day)`. So a new tokens-per-day cap shows who it would have refused.
+
+It is an approximation, and the result's note says so: counting starts at the window, so what was used earlier the same day or month is not counted and a request near a limit may show as allowed. Per-minute limits, sliding budgets, key budgets and session limits are not replayed.
+
 With a [store](/operations/store/), a dry run on any gateway replays the requests every gateway served: it reads the shared request index (`enterplace_requests`, copied from each gateway every 2 seconds) and this gateway's own audit log for what the index has not copied yet, each request once. At most the newest 100,000 requests are replayed; the result says so when there were more. Without a store it replays this gateway's own audit log, and says so. The result names its `source` (`store` or `audit_log`) and a `note`, and the console shows the note above the lists.
 
 ## Versions and rollback

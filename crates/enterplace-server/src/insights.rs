@@ -851,10 +851,12 @@ impl Index for PgIndex {
             let rows = client
                 .query(
                     Sql::both(
-                        "SELECT line FROM (SELECT line, time, id FROM enterplace_requests WHERE time >= $1::text::timestamptz \
+                        "SELECT line, input_tokens, output_tokens, cost_usd FROM (SELECT line, time, id, input_tokens, output_tokens, cost_usd \
+                         FROM enterplace_requests WHERE time >= $1::text::timestamptz \
                          ORDER BY time DESC, id DESC LIMIT $2) newest ORDER BY time, id",
                         format!(
-                            "SELECT line FROM (SELECT line, time, id FROM enterplace_requests WHERE time >= strftime('{TIME}', ?1) \
+                            "SELECT line, input_tokens, output_tokens, cost_usd FROM (SELECT line, time, id, input_tokens, output_tokens, cost_usd \
+                             FROM enterplace_requests WHERE time >= strftime('{TIME}', ?1) \
                              ORDER BY time DESC, id DESC LIMIT ?2) newest ORDER BY time, id"
                         ),
                     ),
@@ -862,7 +864,32 @@ impl Index for PgIndex {
                 )
                 .await
                 .map_err(db)?;
-            rows.iter().map(|row| row.try_get(0).map_err(db)).collect()
+            // Each request's usage as the usage record the audit log holds after it, so a dry run counts tokens
+            // and spend the same from either source.
+            let mut out = Vec::with_capacity(rows.len() * 2);
+            for row in &rows {
+                let line: String = row.try_get(0).map_err(db)?;
+                let input: Option<i64> = row.try_get(1).map_err(db)?;
+                let output: Option<i64> = row.try_get(2).map_err(db)?;
+                let cost: Option<f64> = row.try_get(3).map_err(db)?;
+                let usage = serde_json::from_str::<serde_json::Value>(&line)
+                    .ok()
+                    .filter(|_| input.is_some() || output.is_some() || cost.is_some())
+                    .map(|r| {
+                        serde_json::json!({
+                            "event": "usage",
+                            "id": r["id"],
+                            "time": r["time"],
+                            "input_tokens": input,
+                            "output_tokens": output,
+                            "cost_usd": cost,
+                        })
+                        .to_string()
+                    });
+                out.push(line);
+                out.extend(usage);
+            }
+            Ok(out)
         })
     }
 

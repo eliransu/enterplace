@@ -833,7 +833,7 @@ fn report(run: &DryRun) -> Value {
                 "person": r.person,
                 "team": r.team,
                 "model": r.model,
-                "decision": format!("{} to {}", r.was, r.now),
+                "decision": if r.limit.is_empty() { format!("{} to {}", r.was, r.now) } else { format!("{} to {} ({})", r.was, r.now, r.limit) },
                 "rule": format!("{} to {}", none(&r.rule_was), none(&r.rule_now)),
             })).collect::<Vec<_>>(),
         })
