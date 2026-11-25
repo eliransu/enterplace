@@ -7,6 +7,37 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Codex on every translated provider
+
+- Codex CLI 0.166.0 now works, with its default config, on models reached through Responses to chat translation
+  (Anthropic, Bedrock InvokeModel and Converse, Vertex AI, Gemini, Cohere, watsonx.ai). Before, every request was
+  refused as `untranslatable` for `client_metadata`, and with the default `multi_agent` feature for its `namespace`
+  tool.
+- The Responses translation draws one line for fields with no chat equivalent: those that only label, cache or store
+  the request on OpenAI's side (`client_metadata`, `metadata`, `store`, `prompt_cache_key`, `prompt_cache_retention`,
+  `prompt_cache_options`, `stream_options`, `max_tool_calls`, `include` items for encrypted reasoning, echoed inputs
+  or OpenAI-run tools) are dropped, and each one dropped is listed in the decision record as `dropped_on_translation`.
+  Fields that change the answer (`truncation: auto`, `top_logprobs`, `include: message.output_text.logprobs`,
+  `context_management`, `moderation` and the rest) are refused by name with the fix.
+- A `namespace` tool becomes one function tool per tool inside it, named `<namespace>__<name>`; calls come back,
+  whole or streamed, with the client's `namespace` and `name`, and namespaced calls handed back in `input` are
+  flattened again. Other tool types are still refused by name.
+- Bedrock Converse accepts a function tool's `strict: false` (OpenAI's default, sent by Codex on every tool) instead of
+  refusing it.
+
+### enterplace import litellm
+
+- Carries `cohere/` and `cohere_chat/` models (kind `cohere`), Bedrock models other than Claude and
+  `bedrock/converse/` (kind `bedrock_converse`), every budget duration Enterplace counts (`7d` a calendar week, `30m`,
+  `6h`, `14d`, `3mo`, seconds in whole minutes), a key's `rpm_limit` and `max_parallel_requests` (`enterplace key new`
+  gains `--rpm`), a team's `rpm_limit`, `tpm_limit` and `max_parallel_requests` in its `limits:` entry,
+  `latency-based-routing` and `cost-based-routing`, `fallbacks` as the alias's `fallbacks` list (another API too), a
+  deployment's `rpm`, `tpm` and `max_parallel_requests` on alias deployments, and `timeout` (per deployment, router or
+  `request_timeout`) as `timeouts.total_ms`.
+- Reports the rest with the current fix: each `guardrails:` entry with its Enterplace guardrail type, `stream_timeout`,
+  `default_fallbacks`, and `redis_*` pointing at the store.
+- migrate/comparison: the LiteLLM (v1.109.1) and Bifrost (v2.5.1) cells re-read from their public docs on 2026-11-15.
+
 ### Enterprise checklist: migrations as a step, an admin address, mutual TLS
 
 - `enterplace store migrate [--policy <file>]` creates or updates every table of the store and stops. `enterplace serve

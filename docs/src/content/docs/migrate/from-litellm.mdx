@@ -46,13 +46,12 @@ Wrote enterplace.policy.yaml.
 Issued 2 keys in enterplace.keys.yaml for the LiteLLM keys. Each is shown once: hand it to its owner.
   maya (token 88dc28d0f030...) -> maya (team payments): enterplace_3f9a...
   dana (token a1b2c3d4e5f6...) -> dana (team search): enterplace_8a41...
-Not mapped, or needs a hand (1 item):
-  - team search: max_budget 10 per 7d has no Enterplace period (day or month); not mapped.
+Everything in the proxy was mapped.
 ```
 
 - Models come from `GET /model/info`; give the `config.yaml` as well to carry its router and general settings across.
 - Keys come from `GET /key/list` page by page, or `GET /key/info` for a key listed by its token. LiteLLM keeps only key hashes, so every key is issued again: the mapping prints each LiteLLM key's alias and token prefix beside the Enterplace key that replaces it, shown once. The new keys file holds only their hashes.
-- Team budgets per day or month become `limits: [{ team: payments, budget: { usd: 500, per: month } }]`. A team's `rpm_limit` is reported for a rule's `rate:`.
+- A team's budget, `rpm_limit`, `tpm_limit` and `max_parallel_requests` become one `limits:` entry, for example `{ team: payments, budget: { usd: 500, per: month }, rate: { rpm: 600, tpm: 90000 }, parallel: 8 }`. Budget durations are read as described under [Keys](#keys).
 - A route the proxy does not serve is reported and skipped; a wrong master key stops the import with the proxy's answer.
 - The master key is read from the variable, sent only to `--url`, and never printed. Plain http is refused except to `127.0.0.1` or `localhost`.
 
@@ -87,12 +86,11 @@ enterplace import litellm config.yaml --keys-from keys.json --out enterplace.pol
 
 ```text
 Wrote enterplace.policy.yaml.
-Not mapped, or needs a hand (4 items):
-  - key maya: reissue with `enterplace key new maya --team payments --budget 20/month --models gpt-4o --tpm 50000` (LiteLLM keeps only key hashes, so keys cannot move).
-  - key maya: rpm_limit 10 has no per-key equivalent; a rule's rate: { rpm: 10 } limits each person.
+Not mapped, or needs a hand (3 items):
+  - key maya: reissue with `enterplace key new maya --team payments --budget 20/month --models gpt-4o --tpm 50000 --rpm 10` (LiteLLM keeps only key hashes, so keys cannot move).
   - general_settings.master_key: Enterplace has no master key. Make an admin key: enterplace key new <name> --team <team> --admin.
   - general_settings.database_url: not needed. Enterplace keeps keys in enterplace.keys.yaml and records in its audit log.
-See docs/migrate-litellm.md. Checking it now:
+See https://docs.enterplace.dev/migrate/from-litellm/. Checking it now:
 enterplace.policy.yaml is valid: 2 rules, 0 keys, 2 providers: openai (openai) at https://api.openai.com, anthropic (anthropic) at https://api.anthropic.com.
 ```
 
@@ -147,7 +145,8 @@ The import keeps LiteLLM's variable names in `key_env`. If Claude Code will run 
 | `litellm_params.model` with `openai/`, or a bare `gpt-*` | `kind: openai`, `url: https://api.openai.com` |
 | `anthropic/`, or a bare `claude-*` | `kind: anthropic` |
 | `azure/<deployment>` with `api_base`, `api_version` | `kind: azure` with `deployments` and `api_version` |
-| `bedrock/<model id>` with `aws_region_name` | `kind: bedrock` with `region` and `model_ids`. Enterplace signs with its own `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. |
+| `bedrock/<model id>` with `aws_region_name` | For a Claude model (`anthropic.` in the ID), `kind: bedrock`; for any other model, and for `bedrock/converse/<model id>`, `kind: bedrock_converse`. Each with `region` and `model_ids`. Enterplace signs with its own `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. |
+| `cohere/`, `cohere_chat/` | `kind: cohere` at `https://api.cohere.com/v2`, key in `COHERE_API_KEY` unless the config names another variable |
 | `gemini/` | `kind: gemini` |
 | `vertex_ai/gemini-*` with `vertex_project`, `vertex_location` | `kind: vertex` with the `/publishers/google` URL |
 | `vertex_ai/claude-*` with `vertex_project`, `vertex_location` | `kind: vertex_anthropic` with the `/publishers/anthropic` URL, and an alias from the `model_name` to the Vertex model name (`claude-sonnet-4-5@20250929`) |
@@ -158,29 +157,35 @@ The import keeps LiteLLM's variable names in `key_env`. If Claude Code will run 
 | `litellm_params.weight` | The deployment's `weight` |
 | `model_info.input_cost_per_token`, `output_cost_per_token` | `prices:` in dollars per million tokens, under the name Enterplace sends |
 | A deployment named by its owner (`azure/gpt-4o-eastus`) | Priced as the model it runs: `model_info.base_model` when set, else the LiteLLM model string, else the `model_name`, written under `prices:` for the deployment's name. A team budget or a key `tpm` then works on the imported alias. |
-| `router_settings.routing_strategy` `simple-shuffle`, `least-busy` | Alias `balance: round_robin`, `least_busy` |
+| `router_settings.routing_strategy` `simple-shuffle`, `least-busy`, `latency-based-routing`, `cost-based-routing` | Alias `balance: round_robin`, `least_busy`, `lowest_latency`, `lowest_cost` |
+| `rpm`, `tpm`, `max_parallel_requests` of a deployment | The alias deployment's `rpm`, `tpm` and `max_parallel`: a deployment at its limit is passed over. A model with one deployment is listed on its provider and the limit is reported: serve it from an alias to keep it. |
+| `litellm_params.timeout` | The alias deployment's `timeouts: { total_ms }`, or its provider's for a model listed directly |
+| `router_settings.timeout`, `litellm_settings.request_timeout` | `timeouts: { total_ms }` on each provider that has none of its own |
 | `router_settings.cooldown_time` | Alias `cooldown_seconds` (up to 3600) |
 | `num_retries` (router or litellm settings) | Each provider's `retries` (up to 5) |
+| `fallbacks` | The alias's `fallbacks`, in order. A fallback may speak the other API: the request is translated as it is sent. |
 | `context_window_fallbacks`, `content_policy_fallbacks` | The alias's `context_window_fallback`, `content_policy_fallback`. Enterplace follows one target, so the first is used. |
 
 Check the price of an imported alias with `enterplace prices <alias> --policy enterplace.policy.yaml`. A deployment that none of the price sources above covers is reported, with the `prices:` line to add.
 
 ## What is reported instead
 
-These are not mapped. Each appears in the report with what to do in Enterplace.
+These are not written into the policy. Each appears in the report with the fix.
 
 | LiteLLM | What to do in Enterplace |
 |---|---|
-| Other `routing_strategy` values | The alias uses `round_robin`. |
-| `fallbacks` | Enterplace fails over between an alias's deployments, or from a provider to its `fallback` provider for the same model, only between deployments that speak the same API. Add the fallback as a deployment of the alias if it may also take a share of traffic. A fallback from an OpenAI model to an Anthropic one, or the reverse, has no equivalent: the client retries with the other model. |
-| `rpm`, `tpm` per deployment | Enterplace limits people, teams and keys: `rate:` on a rule, `tpm` on a key. See [Budgets and rate limits](/governance/budgets-and-rate-limits/). |
+| Other `routing_strategy` values (`usage-based-routing`, custom) | The alias is written with `round_robin`. Pick a `balance` by hand; `adaptive` weighs latency, errors and cost together. See [Strategies](/routing/strategies/). |
+| `default_fallbacks` | Enterplace has no fallback for every model: give each alias `fallbacks:`. |
+| `stream_timeout` | No exact equivalent. Bound a stream with `timeouts: { first_byte_ms, idle_ms }` on the provider, alias or deployment. |
 | `general_settings.master_key` | Make an admin key with `enterplace key new <name> --team <team> --admin`. |
-| `general_settings.database_url`, `redis_*` | Not needed. Keys are a file, records are the audit log, cooldowns are in memory on one node. |
+| `general_settings.database_url`, `redis_*` | Not needed for one process: keys are a file and records are the audit log. For several replicas, add a Postgres [store](/operations/store/), which shares keys, budgets, rate limits and cooldowns. There is no Redis. |
 | `litellm_settings.drop_params` | Enterplace never drops a parameter silently. |
-| `cache`, `cache_params` | Add `cache: { ttl_seconds: N }` to a rule. |
-| `success_callback`, `callbacks` | Every request is in the [audit log](/governance/audit-log/), and `/metrics` serves Prometheus. |
+| `cache`, `cache_params` | Add `cache: { ttl_seconds: N }` to a rule, with `semantic:` for matches in other words. See [Caching](/routing/caching/). |
+| `success_callback`, `callbacks` | Every request is in the [audit log](/governance/audit-log/), and `/metrics` serves Prometheus. For Langfuse, Arize Phoenix, Datadog or an OTLP endpoint, see [Observability integrations](/operations/observability-integrations/). |
+| `guardrails` | Not written, since each vendor's settings are written differently. The report names the Enterplace type of each (`presidio`, `lakera`, `aporia`, `bedrock_guardrail`, `openai_moderation`, `azure_content_safety`, `azure_prompt_shield`, `model_armor`, `pangea`, `lasso`, `guardrails_ai`, and the built-in secrets detector for `hide-secrets`), or the webhook for one with none. Define each under `guardrails:` and list it on a rule. See the [vendor reference](/governance/guardrails/#vendor-reference). |
+| `general_settings.alerting` | Not written. See [Alerting](/operations/alerting/), an enterprise feature. |
 | Vertex AI models other than Gemini and Claude | Not served by Enterplace. Left out. |
-| A provider with no Enterplace kind and no OpenAI-compatible URL | Not served by Enterplace. Left out. If it speaks the OpenAI API, add it as `kind: openai` with its `url`. |
+| A provider the import has no mapping for | Left out. Check the [provider list](/providers/overview/) before giving up on it. If the provider speaks the OpenAI API, add it as `kind: openai` with its `url`. |
 | Anything else | Reported as not mapped. |
 
 ## Keys
@@ -194,10 +199,11 @@ LiteLLM stores only the hashes of its virtual keys, as Enterplace does, so keys 
 | `key_alias` (else `user_email`, `user_id`, `key_name`) | The person's name |
 | `team_alias` (else `team_id`) | The team. A key with neither goes to team `default`. |
 | `models` | The key's `--models`, kept to models this config serves. In CSV the column may be quoted with commas inside (`"gpt-4o,gpt-4o-mini"`). |
-| `max_budget` with `budget_duration` | `--budget N/day` for `1d` or `24h`; `--budget N/month` for `30d`, `1mo` or `1m`. Any other duration is reported. |
+| `max_budget` with `budget_duration` | `--budget N/<period>`. LiteLLM resets `24h`, `7d` and `30d` on the UTC day, Monday and the 1st, so they become `day`, `week` and `month` (`1mo` too). Other durations keep their length: `30m` is `30min`, `6h`, `14d`, `3mo`; seconds count in whole minutes. A duration under a minute or over a year, or none (a lifetime budget), is reported and left off. |
 | `expires` | `--expires` with its date. A key already expired is reported and gets no command. |
 | `tpm_limit` | `--tpm` |
-| `rpm_limit` | Reported. A key has no requests-per-minute limit; a rule's `rate: { rpm: N }` limits each person. |
+| `rpm_limit` | `--rpm` |
+| `max_parallel_requests` | `--parallel` |
 
 From the export the import writes:
 

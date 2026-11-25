@@ -17,7 +17,7 @@ You need a running Enterplace and a Enterplace key. `enterplace start` gives bot
 
 <Steps>
 
-1. **Serve the model Codex asks for.** Codex speaks the Responses API. Enterplace sends it as it is to `openai` and `azure` providers and [translates it](/routing/translation/#responses-to-chat-codex-on-any-provider) for every other kind, so any model the policy serves works, the free `enterplace-demo` included. This example uses OpenAI's own models.
+1. **Serve the model Codex asks for.** Codex speaks the Responses API. Enterplace sends it as it is to `openai` and `azure` providers and [translates it](/routing/translation/#responses-to-chat-codex-on-any-provider) for every other kind, so any model the policy serves works, the free `enterplace-demo` included. Codex's default settings translate as they are: its telemetry fields (`client_metadata`, `store`, `prompt_cache_key`, `stream_options`) are dropped and listed in the request's record as `dropped_on_translation`, and its multi-agent tools are carried as plain functions and named back in the answer. This example uses OpenAI's own models.
 
     ```yaml title="enterplace.policy.yaml"
     version: 1

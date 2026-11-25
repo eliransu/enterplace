@@ -211,7 +211,7 @@ Makes a key for a person or a workload. The key is printed once, with the lines 
 
 ```text
 enterplace key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>[@<tz>]]
-  [--models <a,b>] [--tpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>]
+  [--models <a,b>] [--tpm <n>] [--rpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>]
   [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]
 ```
 
@@ -230,6 +230,7 @@ enterplace key new <name> --team <team> [--admin | --identity-only] [--expires <
 | `--tags <a,b>` | none | Comma-separated tags attached to requests |
 | `--parallel <n>` | none | Maximum in-flight requests for this key |
 | `--role <role>` | none | Console role defined by the policy |
+| `--rpm <n>` | none | Requests per minute for this key, on top of its rule's, 1 to 1000000. Refused with `rate_limited` |
 | `--url <gateway url>` | `http://127.0.0.1:8080` | The address printed in the setup lines |
 | `--quiet` | off | Print the key alone |
 | `--keys <file>` | `enterplace.keys.yaml` | The keys file to append to |

@@ -1935,9 +1935,10 @@ fn import_litellm_reads_a_running_proxy_and_reissues_its_keys() -> TestResult {
         policy.contains("team: payments") && policy.contains("usd: 500"),
         "{policy}"
     );
+    // A 7d budget is a calendar week in both.
     assert!(
-        stdout.contains("team search: max_budget 10 per 7d has no Enterplace period"),
-        "{stdout}"
+        policy.contains("team: search") && policy.contains("per: week"),
+        "{policy}"
     );
     // One Enterplace key per LiteLLM key, printed beside the key it replaces, its hash in the new keys file.
     let line = stdout

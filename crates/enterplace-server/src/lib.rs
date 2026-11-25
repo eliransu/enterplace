@@ -2018,6 +2018,8 @@ struct Seen<'a> {
     client_cert: Option<ClientCert>,
     /// Who an [`Identify`] hook says a keyless request is from.
     named: Option<Principal>,
+    /// Fields a translation dropped because they cannot change the answer (`responses::SAFE_TO_DROP`).
+    dropped: Vec<String>,
 }
 
 /// `POST /v1/guardrails/check`: runs the caller's rule's guardrails on text the caller sends, and answers with what
@@ -2745,7 +2747,8 @@ async fn check<'a>(
         let kind =
             find_provider(version, &named, login.is_some()).map(|(i, _)| version.providers[i].kind);
         if !matches!(kind, None | Some(Kind::OpenAi | Kind::Azure)) {
-            let (messages, _) = to_messages(&to_chat_from_responses(&bytes)?)?;
+            let chat = to_chat_from_responses(&bytes)?;
+            let (messages, _) = to_messages(chat.body.to_string().as_bytes())?;
             let mut messages = json_of(&messages, "a Responses request")?;
             if let Some(fields) = messages.as_object_mut() {
                 // What a count takes of a messages request.
@@ -2986,8 +2989,12 @@ async fn check<'a>(
                 ));
             }
             let mut bytes = bytes;
+            let mut namespaces = enterplace_core::responses::Namespaces::new();
             if from_responses {
-                bytes = to_chat_from_responses(&bytes)?;
+                let chat = to_chat_from_responses(&bytes)?;
+                bytes = Bytes::from(chat.body.to_string());
+                seen.dropped = chat.dropped;
+                namespaces = chat.namespaces;
             }
             if from_messages {
                 bytes = to_chat_request(&bytes)?;
@@ -3036,6 +3043,7 @@ async fn check<'a>(
                 translated,
                 from_messages,
                 from_responses,
+                namespaces,
                 as_responses,
                 sent_route,
                 chain,
@@ -3714,6 +3722,7 @@ async fn passthrough<'a>(
         translated: None,
         from_messages: false,
         from_responses: false,
+        namespaces: Default::default(),
         as_responses: None,
         sent_route: None,
         chain: vec![Hop::plain(index, model)],
@@ -3752,6 +3761,8 @@ struct Plan {
     from_messages: bool,
     /// A Responses request translated to chat completions, whose answer goes back as a response.
     from_responses: bool,
+    /// Its namespaced tools, flattened for chat, to name their calls back as declared.
+    namespaces: enterplace_core::responses::Namespaces,
     /// A chat request sent to the Responses API: whether the client asked for usage in its stream.
     as_responses: Option<bool>,
     /// The route the body now is, when it was translated to another API's: sent there.
@@ -4137,11 +4148,11 @@ fn untranslatable(err: impl std::fmt::Display) -> Refusal {
 }
 
 /// A Responses request as a chat completions request, for a provider that does not speak Responses.
-fn to_chat_from_responses(bytes: &[u8]) -> Result<Bytes, Refusal> {
+fn to_chat_from_responses(
+    bytes: &[u8],
+) -> Result<enterplace_core::responses::ChatRequest, Refusal> {
     let request = json_of(bytes, "a Responses request")?;
-    let chat =
-        enterplace_core::responses::responses_to_chat_request(&request).map_err(untranslatable)?;
-    Ok(Bytes::from(chat.to_string()))
+    enterplace_core::responses::responses_to_chat_request(&request).map_err(untranslatable)
 }
 
 /// A chat completions request as a Responses request, and whether its client asked for usage in the stream.
@@ -5532,6 +5543,12 @@ async fn decide(
         }
         if let Some(marks) = &seen.prompt_cache {
             record.insert("prompt_cache".into(), marks.clone().into());
+        }
+        if !seen.dropped.is_empty() {
+            record.insert(
+                "dropped_on_translation".into(),
+                serde_json::to_value(&seen.dropped).unwrap_or_default(),
+            );
         }
         if let Some(routing) = &seen.routing {
             record.insert("routing".into(), routing.clone());
@@ -9876,7 +9893,11 @@ async fn to_chat(
 
 /// A chat completions answer as a Responses one, streamed or whole. An error stays in OpenAI's error shape, which
 /// Responses clients read too.
-async fn to_responses(decision: &str, mut response: Response) -> Result<Response, Refusal> {
+async fn to_responses(
+    decision: &str,
+    namespaces: &enterplace_core::responses::Namespaces,
+    mut response: Response,
+) -> Result<Response, Refusal> {
     let id = format!("resp_{decision}");
     let created = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -9885,7 +9906,8 @@ async fn to_responses(decision: &str, mut response: Response) -> Result<Response
         return Ok(response);
     }
     if is_type(&response, "text/event-stream") {
-        let mut stream = enterplace_core::responses::ChatToResponsesStream::new(id, created);
+        let mut stream =
+            enterplace_core::responses::ChatToResponsesStream::new(id, created, namespaces.clone());
         return Ok(map_body(response, "text/event-stream", move |input| {
             match input {
                 Some(bytes) => stream.feed(bytes),
@@ -9896,17 +9918,16 @@ async fn to_responses(decision: &str, mut response: Response) -> Result<Response
     }
     let body = whole(std::mem::take(response.body_mut())).await?;
     let chat: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-    let out = enterplace_core::responses::chat_to_responses_response(&chat, &id, created).map_err(
-        |err| {
-            Refusal::new(
-                StatusCode::BAD_GATEWAY,
-                "untranslatable",
-                format!(
-                    "The provider's answer could not be translated to the Responses format: {err}"
-                ),
-            )
-        },
-    )?;
+    let out = enterplace_core::responses::chat_to_responses_response(
+        &chat, &id, created, namespaces,
+    )
+    .map_err(|err| {
+        Refusal::new(
+            StatusCode::BAD_GATEWAY,
+            "untranslatable",
+            format!("The provider's answer could not be translated to the Responses format: {err}"),
+        )
+    })?;
     Ok(json_body(response, out.to_string().into_bytes()))
 }
 
@@ -9959,7 +9980,7 @@ async fn for_caller(
         }
         Some(plan) if plan.from_responses => {
             let response = to_chat(kind, plan.translated, decision, model, response).await?;
-            to_responses(decision, response).await
+            to_responses(decision, &plan.namespaces, response).await
         }
         Some(Plan {
             as_responses: Some(include_usage),

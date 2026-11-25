@@ -74,6 +74,7 @@ Fields present only in some cases:
 | `prompt_cache` | array | Where `prompt_cache: auto` placed cache breakpoints: `tools`, `system`, `messages` |
 | `user_agent` | string | The caller sent a `user-agent` header, cut to 200 characters. [Coverage](/governance/coverage/) counts requests per tool from it. On MCP records too |
 | `translated` | `true` | The request was translated for the provider (`accept_chat`, `accept_messages`, Gemini, Vertex AI) |
+| `dropped_on_translation` | array | Fields a Responses request carried that the translation dropped because they cannot change the answer, such as `client_metadata`, `store`, `prompt_cache_key` or `include: reasoning.encrypted_content`. See [Responses to chat](/routing/translation/#responses-to-chat-codex-on-any-provider) |
 | `alias`, `deployment` | string | The model is an alias: the alias sent, and the deployment tried first as `provider/model` |
 | `limit` | object | Refused by a limit: `{"kind":"rpm","of":"rule","value":60}`, `{"kind":"tpm","of":"rule","value":1000,"request_could_use":1228}` or `{"kind":"parallel","of":"key","value":4}`, where `of` is `rule` or `key` |
 | `key_models` | `true` | A `model_not_allowed` refusal by the key's own `models:` list |

@@ -1,7 +1,8 @@
 //! `enterplace import litellm`: turns a LiteLLM proxy `config.yaml` into a Enterplace policy, with a report of what could
-//! not be carried across. Written from LiteLLM's public docs only (read 2026-11-13):
-//! https://docs.litellm.ai/docs/proxy/configs, https://docs.litellm.ai/docs/proxy/reliability,
-//! https://docs.litellm.ai/docs/proxy/config_settings, https://docs.litellm.ai/docs/proxy/virtual_keys.
+//! not be carried across. Written from LiteLLM's public docs only (read 2026-11-13, routing, budgets and timeouts
+//! again 2026-11-15): https://docs.litellm.ai/docs/proxy/configs, https://docs.litellm.ai/docs/proxy/reliability,
+//! https://docs.litellm.ai/docs/proxy/config_settings, https://docs.litellm.ai/docs/proxy/virtual_keys,
+//! https://docs.litellm.ai/docs/routing, https://docs.litellm.ai/docs/proxy/users.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -27,6 +28,8 @@ struct Provider {
     /// Azure deployments or Bedrock model IDs, by the model name Enterplace uses.
     upstream: BTreeMap<String, String>,
     retries: Option<u64>,
+    /// `timeouts.total_ms`, from the `timeout` of the models listed on it directly.
+    total_ms: Option<u64>,
 }
 
 /// One `model_list` entry, placed.
@@ -37,15 +40,27 @@ struct Deployment {
     weight: u64,
     /// The price the config gives (true), or the one of the model it names (false).
     price: Option<(Value, bool)>,
+    /// `rpm`, `tpm` and `max_parallel`, which Enterplace keeps on an alias's deployments.
+    limits: Vec<(&'static str, Value)>,
+    /// LiteLLM's `timeout` in milliseconds.
+    total_ms: Option<u64>,
 }
 
-/// The API an alias's deployments must share.
+/// An alias's context window fallback, content policy fallback and fallbacks.
+type Fallbacks = (Option<String>, Option<String>, Vec<String>);
+
+/// The API an alias's deployments must share: the kinds that take messages, and those that take chat completions
+/// (as sent or translated), as `config::Kind::api` has it.
 fn api(kind: &str) -> &'static str {
     match kind {
         "anthropic" | "bedrock" | "vertex_anthropic" => "messages",
-        "gemini" | "vertex" => "gemini",
         _ => "chat",
     }
+}
+
+/// The kinds that sign with AWS credentials and name models by Bedrock ID.
+fn aws(kind: &str) -> bool {
+    matches!(kind, "bedrock" | "bedrock_converse")
 }
 
 /// Default base URL and key variable of the LiteLLM provider prefixes Enterplace can serve. Base URLs as in
@@ -64,6 +79,11 @@ fn prefix(name: &str) -> Option<(&'static str, Option<&'static str>, &'static st
         ),
         "azure" => ("azure", None, "AZURE_OPENAI_API_KEY"),
         "bedrock" => ("bedrock", None, ""),
+        "cohere" | "cohere_chat" => (
+            "cohere",
+            Some("https://api.cohere.com/v2"),
+            "COHERE_API_KEY",
+        ),
         "gemini" => (
             "gemini",
             Some("https://generativelanguage.googleapis.com/v1beta"),
@@ -317,6 +337,13 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
         } else {
             kind
         };
+        // LiteLLM reaches Bedrock models other than Claude through Converse (`bedrock/converse/<id>` says so
+        // outright); Enterplace's kind bedrock serves Claude through InvokeModel, bedrock_converse every other model.
+        let (kind, upstream) = match (kind, upstream.strip_prefix("converse/")) {
+            ("bedrock", Some(id)) => ("bedrock_converse", id.to_string()),
+            ("bedrock", None) if !upstream.contains("anthropic.") => ("bedrock_converse", upstream),
+            _ => (kind, upstream),
+        };
         if kind == "vertex" && !upstream.starts_with("gemini") {
             report.push(format!(
                 "model_list[{at}] ({name}): {model} on Vertex AI is not served by Enterplace (kind: vertex serves Gemini, vertex_anthropic serves Claude); not mapped."
@@ -361,7 +388,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
             ));
             continue;
         }
-        if url.is_none() && kind != "bedrock" {
+        if url.is_none() && !aws(kind) {
             report.push(format!(
                 "model_list[{at}] ({name}): {kind} needs api_base; not mapped."
             ));
@@ -379,7 +406,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
                     Some(var)
                 }
             },
-            None if kind == "bedrock" || (allow_private && default_env.is_empty()) => None,
+            None if aws(kind) || (allow_private && default_env.is_empty()) => None,
             None => Some(if default_env.is_empty() {
                 format!("{}_PROVIDER_KEY", pre.to_ascii_uppercase())
             } else {
@@ -388,7 +415,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
         };
         let api_version = param("api_version").and_then(text);
         let region = match kind {
-            "bedrock" => Some(param("aws_region_name").and_then(text).unwrap_or_else(|| {
+            _ if aws(kind) => Some(param("aws_region_name").and_then(text).unwrap_or_else(|| {
                 report.push(format!(
                     "model_list[{at}] ({name}): no aws_region_name; region us-east-1 was written. Check it."
                 ));
@@ -396,14 +423,24 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
             })),
             _ => None,
         };
-        for limit in ["rpm", "tpm", "max_parallel_requests"] {
-            if param(limit).is_some() {
-                report.push(format!(
-                    "model_list[{at}] ({name}): {limit} is a limit per deployment in LiteLLM; Enterplace limits people, teams and keys (rate: on a rule, tpm: on a key). Not mapped."
-                ));
-            }
+        let limits: Vec<(&'static str, Value)> = [
+            ("rpm", "rpm"),
+            ("tpm", "tpm"),
+            ("max_parallel_requests", "max_parallel"),
+        ]
+        .into_iter()
+        .filter_map(|(from, to)| Some((to, Value::from(param(from)?.as_u64().filter(|n| *n > 0)?))))
+        .collect();
+        let total_ms = param("timeout")
+            .and_then(Value::as_f64)
+            .filter(|s| *s > 0.0)
+            .map(|s| (s * 1000.0).ceil() as u64);
+        if param("stream_timeout").is_some() {
+            report.push(format!(
+                "model_list[{at}] ({name}): stream_timeout has no exact equivalent. Enterplace bounds a stream with timeouts: {{ first_byte_ms, idle_ms }} (the wait for the first piece and between pieces) on the provider, alias or deployment; set them by hand."
+            ));
         }
-        if kind == "bedrock"
+        if aws(kind)
             && (param("aws_access_key_id").is_some() || param("aws_secret_access_key").is_some())
         {
             report.push(format!(
@@ -438,6 +475,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
                 models: Vec::new(),
                 upstream: BTreeMap::new(),
                 retries,
+                total_ms: None,
             });
             providers.len() - 1
         });
@@ -484,6 +522,8 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
             model: upstream,
             weight,
             price,
+            limits,
+            total_ms,
         };
         match groups.iter_mut().find(|(n, _)| *n == name) {
             Some((_, list)) => list.push(deployment),
@@ -492,7 +532,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
     }
 
     // A model name with a named fallback must be an alias: that is where Enterplace keeps them.
-    let mut named: BTreeMap<String, (Option<String>, Option<String>)> = BTreeMap::new();
+    let mut named: BTreeMap<String, Fallbacks> = BTreeMap::new();
     let served: BTreeSet<String> = groups.iter().map(|(n, _)| n.clone()).collect();
     for (field, context) in [
         ("context_window_fallbacks", true),
@@ -522,14 +562,29 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
             }
         }
     }
+    // Alias fallbacks may speak another API: the request is translated as it is sent.
     for section in ["router_settings", "litellm_settings"] {
         for (from, to) in get(section, "fallbacks")
             .map(fallback_pairs)
             .unwrap_or_default()
         {
-            report.push(format!(
-                "{section}.fallbacks: {from} -> {to:?} not mapped. Enterplace fails over only between deployments that speak the same API. If {from} and the fallback are both OpenAI-compatible (or both Anthropic), add the fallback's deployment to alias {from} (it then also takes a share of traffic), or give each provider of {from} fallback: <provider> for the same model. A fallback from an OpenAI model to an Anthropic one, or the reverse, has no equivalent: the client retries with the other model."
-            ));
+            if !served.contains(&from) {
+                report.push(format!(
+                    "{section}.fallbacks: {from} is not a model of model_list; not mapped."
+                ));
+                continue;
+            }
+            let (kept, missing): (Vec<String>, Vec<String>) =
+                to.into_iter().partition(|t| served.contains(t));
+            if !missing.is_empty() {
+                report.push(format!("{section}.fallbacks: {from} -> {missing:?} names no model of model_list; those were left out."));
+            }
+            let slot = &mut named.entry(from).or_default().2;
+            for t in kept {
+                if !slot.contains(&t) {
+                    slot.push(t);
+                }
+            }
         }
     }
     let balance = match get("router_settings", "routing_strategy")
@@ -538,11 +593,18 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
     {
         None | Some("simple-shuffle") => "round_robin",
         Some("least-busy") => "least_busy",
+        Some("latency-based-routing") => "lowest_latency",
+        Some("cost-based-routing") => "lowest_cost",
         Some(other) => {
-            report.push(format!("router_settings.routing_strategy: {other} has no Enterplace equivalent; aliases use round_robin."));
+            report.push(format!("router_settings.routing_strategy: {other} has no Enterplace equivalent; aliases use round_robin. Enterplace's balance takes round_robin, least_busy, lowest_latency, lowest_cost or adaptive (latency, errors and cost weighed together); a deployment's rpm, tpm and max_parallel pass it over at its limit."));
             "round_robin"
         }
     };
+    let total_ms = get("router_settings", "timeout")
+        .or_else(|| get("litellm_settings", "request_timeout"))
+        .and_then(Value::as_f64)
+        .filter(|s| *s > 0.0)
+        .map(|s| (s * 1000.0).ceil() as u64);
     let cooldown = get("router_settings", "cooldown_time")
         .and_then(Value::as_f64)
         .map(|s| (s.ceil() as u64).min(3600));
@@ -554,7 +616,8 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
         .filter(|(name, list)| {
             list.len() > 1
                 || named.contains_key(name)
-                || (!matches!(providers[list[0].provider].kind, "azure" | "bedrock")
+                || (!(providers[list[0].provider].kind == "azure"
+                    || aws(providers[list[0].provider].kind))
                     && list[0].model != *name)
         })
         .map(|(n, _)| n.clone())
@@ -563,10 +626,20 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
     for (name, list) in groups.iter().filter(|(n, _)| !alias_names.contains(n)) {
         let d = &list[0];
         let p = &mut providers[d.provider];
-        if matches!(p.kind, "azure" | "bedrock") {
+        if p.kind == "azure" || aws(p.kind) {
             p.upstream.insert(name.clone(), d.model.clone());
         }
         p.models.push(name.clone());
+        if !d.limits.is_empty() {
+            let names: Vec<&str> = d.limits.iter().map(|(k, _)| *k).collect();
+            report.push(format!("model {name}: {} is kept on an alias's deployments in Enterplace, and {name} has one deployment, so it is listed on its provider; not mapped. To keep the limit, serve {name} from an alias whose deployment sets it.", names.join(", ")));
+        }
+        if let Some(ms) = d.total_ms {
+            match p.total_ms {
+                Some(other) if other != ms => report.push(format!("model {name}: timeout {ms} ms differs from {other} ms of another model on provider {}; the provider keeps {other} ms. Give {name} an alias with timeouts: {{ total_ms: {ms} }} on its deployment to keep both.", p.name)),
+                _ => p.total_ms = Some(ms),
+            }
+        }
         listed.insert(name.clone(), d.provider);
         priced(&mut prices, name, d, &mut report);
     }
@@ -584,7 +657,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
                 continue;
             }
             let mut sent = d.model.clone();
-            if matches!(p.kind, "azure" | "bedrock") {
+            if p.kind == "azure" || aws(p.kind) {
                 // The name is a key of the provider's map, so a provider of its own gets a name of its own.
                 if listed.get(&sent).is_some_and(|i| *i != d.provider)
                     || alias_names.contains(&sent)
@@ -605,6 +678,10 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
             if d.weight != 1 {
                 entry.push(("weight", d.weight.into()));
             }
+            entry.extend(d.limits.iter().cloned());
+            if let Some(ms) = d.total_ms {
+                entry.push(("timeouts", map(vec![("total_ms", ms.into())])));
+            }
             deployments.push(map(entry));
         }
         let mut alias = vec![("name", Value::from(name.clone()))];
@@ -614,12 +691,15 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
         if let Some(c) = cooldown {
             alias.push(("cooldown_seconds", c.into()));
         }
-        if let Some((context, content)) = named.get(name) {
+        if let Some((context, content, fallbacks)) = named.get(name) {
             if let Some(c) = context {
                 alias.push(("context_window_fallback", c.clone().into()));
             }
             if let Some(c) = content {
                 alias.push(("content_policy_fallback", c.clone().into()));
+            }
+            if !fallbacks.is_empty() {
+                alias.push(("fallbacks", self::list(fallbacks.clone())));
             }
         }
         alias.push(("deployments", Value::Array(deployments)));
@@ -688,6 +768,9 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
         if let Some(n) = p.retries.filter(|n| *n > 0) {
             entry.push(("retries", n.into()));
         }
+        if let Some(ms) = p.total_ms.or(total_ms) {
+            entry.push(("timeouts", map(vec![("total_ms", ms.into())])));
+        }
         out_providers.push(map(entry));
     }
 
@@ -718,6 +801,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
                 "routing_strategy",
                 "num_retries",
                 "cooldown_time",
+                "timeout",
                 "fallbacks",
                 "context_window_fallbacks",
                 "content_policy_fallbacks",
@@ -727,6 +811,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
             "litellm_settings",
             &[
                 "num_retries",
+                "request_timeout",
                 "fallbacks",
                 "context_window_fallbacks",
                 "content_policy_fallbacks",
@@ -749,10 +834,30 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
                 "drop_params" => "litellm_settings.drop_params: Enterplace never drops a parameter silently; an unknown one passes through or is refused.".into(),
                 "cache" | "cache_params" => format!("{section}.{key}: Enterplace caches per rule in memory: add cache: {{ ttl_seconds: N }} to a rule."),
                 "success_callback" | "failure_callback" | "callbacks" => format!("{section}.{key}: Enterplace writes every request to its audit log and serves Prometheus metrics; see https://docs.enterplace.dev/operations/observability/."),
-                "redis_host" | "redis_port" | "redis_password" => format!("{section}.{key}: Enterplace runs on one node and keeps cooldowns in memory."),
+                "redis_host" | "redis_port" | "redis_password" => format!("{section}.{key}: Enterplace needs no Redis. Replicas share keys, budgets, rate limits and cooldowns through a Postgres store (store: in the policy)."),
+                "default_fallbacks" => format!("{section}.{key}: Enterplace has no fallback for every model; give each alias fallbacks: [<model or alias>]."),
                 _ => format!("{section}.{key}: not mapped."),
             });
         }
+    }
+    for (at, guard) in root
+        .get("guardrails")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .enumerate()
+    {
+        let name = guard
+            .get("guardrail_name")
+            .and_then(text)
+            .unwrap_or_default();
+        let kind = guard["litellm_params"]["guardrail"]
+            .as_str()
+            .unwrap_or_default();
+        report.push(match guardrail_type(kind) {
+            Some(to) => format!("guardrails[{at}] ({name}): LiteLLM's {kind} is Enterplace's guardrail type: {to}. Its settings (key, URL, mode) are written differently, so add it by hand under guardrails: and name it in a rule; see https://docs.enterplace.dev/governance/guardrails/."),
+            None => format!("guardrails[{at}] ({name}): {kind} has no built-in Enterplace type; any other service can be called as a guardrail webhook (type: webhook); see https://docs.enterplace.dev/governance/guardrail-webhooks/."),
+        });
     }
     for key in root.keys() {
         if ![
@@ -760,6 +865,7 @@ pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
             "router_settings",
             "litellm_settings",
             "general_settings",
+            "guardrails",
         ]
         .contains(&key.as_str())
         {
@@ -833,12 +939,60 @@ fn person_of(row: &BTreeMap<String, Value>) -> String {
         .unwrap_or_else(|| "unnamed".into())
 }
 
-/// A LiteLLM `budget_duration` as a Enterplace period, when it has one.
-fn period_of(duration: Option<&str>) -> Option<&'static str> {
-    match duration? {
-        "1d" | "24h" => Some("day"),
-        "30d" | "1mo" | "1m" => Some("month"),
-        _ => None,
+/// The Enterplace guardrail type of a LiteLLM `guardrail:` name, when Enterplace has one built in.
+fn guardrail_type(litellm: &str) -> Option<&'static str> {
+    Some(match litellm {
+        "presidio" => "presidio",
+        "lakera" | "lakera_v2" => "lakera",
+        "aporia" => "aporia",
+        "bedrock" => "bedrock_guardrail",
+        "openai_moderation" => "openai_moderation",
+        "azure/text_moderations" => "azure_content_safety",
+        "azure/prompt_shield" => "azure_prompt_shield",
+        "model_armor" => "model_armor",
+        "pangea" => "pangea",
+        "lasso" => "lasso",
+        "guardrails_ai" => "guardrails_ai",
+        "hide-secrets" | "hide_secrets" => "secrets (built in, no vendor)",
+        _ => return None,
+    })
+}
+
+/// A LiteLLM `budget_duration` (`30s`, `30m`, `24h`, `7d`, `1mo`) as a Enterplace budget period, when Enterplace can count
+/// it: whole minutes up to a year. LiteLLM resets `24h`, `7d` and `30d` on the UTC day, Monday and the 1st, which
+/// are Enterplace's calendar day, week and month.
+fn period_of(duration: Option<&str>) -> Option<String> {
+    let duration = duration?.trim();
+    let calendar = match duration {
+        "1d" | "24h" => "day",
+        "7d" | "1w" => "week",
+        "30d" | "1mo" => "month",
+        "365d" | "1y" => "year",
+        _ => "",
+    };
+    if !calendar.is_empty() {
+        return Some(calendar.into());
+    }
+    let digits = duration.bytes().take_while(u8::is_ascii_digit).count();
+    let (count, unit) = duration.split_at(digits);
+    let n: u64 = count.parse().ok().filter(|n| *n > 0)?;
+    let per = match unit {
+        "s" if n % 60 == 0 => format!("{}min", n / 60),
+        "m" | "min" => format!("{n}min"),
+        "h" => format!("{n}h"),
+        "d" => format!("{n}d"),
+        "w" => format!("{n}w"),
+        "mo" => format!("{n}mo"),
+        _ => return None,
+    };
+    crate::policy::Period::parse(&per, None).ok().map(|_| per)
+}
+
+/// Why a `budget_duration` was not carried, and what to do.
+fn no_period(duration: Option<&str>) -> String {
+    match duration {
+        None => "has no budget_duration (a lifetime budget), and every Enterplace budget starts again; give it a period such as per: year".into(),
+        Some(d) => format!("per {d} is not a period Enterplace counts (whole minutes up to a year, such as 30m, 6h, 7d or 3mo)"),
     }
 }
 
@@ -909,20 +1063,33 @@ pub fn from_proxy(models: &Value, keys: &[Value], teams: &[Value]) -> FromProxy 
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
         let name = team_of(&row);
+        let mut limit = vec![("team", Value::from(name.clone()))];
         if let Some(usd) = team["max_budget"].as_f64().filter(|u| *u > 0.0) {
-            match period_of(team["budget_duration"].as_str()) {
-                Some(per) => limits.push(map(vec![
-                    ("team", name.clone().into()),
-                    ("budget", map(vec![("usd", usd.into()), ("per", per.into())])),
-                ])),
+            let duration = team["budget_duration"].as_str();
+            match period_of(duration) {
+                Some(per) => limit.push((
+                    "budget",
+                    map(vec![("usd", usd.into()), ("per", per.into())]),
+                )),
                 None => report.push(format!(
-                    "team {name}: max_budget {usd} per {} has no Enterplace period (day or month); not mapped.",
-                    team["budget_duration"].as_str().unwrap_or("lifetime")
+                    "team {name}: max_budget {usd} {}; not mapped.",
+                    no_period(duration)
                 )),
             }
         }
-        if let Some(rpm) = team["rpm_limit"].as_u64() {
-            report.push(format!("team {name}: rpm_limit {rpm} is a rule's rate: {{ rpm: {rpm} }} in Enterplace; add it to rule team-{name} by hand."));
+        // A team's rate in Enterplace is shared by everyone in it, as LiteLLM's team limits are.
+        let rate: Vec<(&str, Value)> = [("rpm", "rpm_limit"), ("tpm", "tpm_limit")]
+            .into_iter()
+            .filter_map(|(to, from)| Some((to, Value::from(team[from].as_u64()?))))
+            .collect();
+        if !rate.is_empty() {
+            limit.push(("rate", map(rate)));
+        }
+        if let Some(n) = team["max_parallel_requests"].as_u64() {
+            limit.push(("parallel", n.into()));
+        }
+        if limit.len() > 1 {
+            limits.push(map(limit));
         }
     }
     let mut config = Map::new();
@@ -983,11 +1150,15 @@ pub fn reissue(export: &str, served: &[String]) -> Result<(Vec<Reissue>, Vec<Str
             .and_then(|u| u.parse::<f64>().ok())
             .filter(|u| u.is_finite() && *u > 0.0)
             .and_then(|usd| {
-                let per = period_of(field(&row, "budget_duration").as_deref());
+                let duration = field(&row, "budget_duration");
+                let per = period_of(duration.as_deref());
                 if per.is_none() {
-                    report.push(format!("key {was}: max_budget {usd} has no Enterplace period (day or month); not carried over."));
+                    report.push(format!(
+                        "key {was}: max_budget {usd} {}; not carried over.",
+                        no_period(duration.as_deref())
+                    ));
                 }
-                let per = crate::policy::Period::parse(per?, None).ok()?;
+                let per = crate::policy::Period::parse(&per?, None).ok()?;
                 Some(crate::policy::Budget { usd, per })
             });
         let models: Vec<String> = match row.get("models") {
@@ -1016,6 +1187,11 @@ pub fn reissue(export: &str, served: &[String]) -> Result<(Vec<Reissue>, Vec<Str
                 budget,
                 models: (!kept.is_empty()).then_some(kept),
                 tpm: field(&row, "tpm_limit").and_then(|t| t.parse().ok()),
+                parallel: field(&row, "max_parallel_requests").and_then(|t| t.parse().ok()),
+                options: crate::policy::KeyOptions {
+                    rpm: field(&row, "rpm_limit").and_then(|t| t.parse().ok()),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         });
@@ -1113,10 +1289,13 @@ fn key_rules(
         }
         let mut line = format!("enterplace key new {person} --team {team}");
         if let Some(usd) = s(row, "max_budget") {
-            match s(row, "budget_duration").as_deref() {
-                Some("1d" | "24h") => line.push_str(&format!(" --budget {usd}/day")),
-                Some("30d" | "1mo" | "1m") => line.push_str(&format!(" --budget {usd}/month")),
-                other => report.push(format!("key {person}: max_budget {usd} per {} has no Enterplace period (day or month); not mapped.", other.unwrap_or("lifetime"))),
+            let duration = s(row, "budget_duration");
+            match period_of(duration.as_deref()) {
+                Some(per) => line.push_str(&format!(" --budget {usd}/{per}")),
+                None => report.push(format!(
+                    "key {person}: max_budget {usd} {}; not mapped.",
+                    no_period(duration.as_deref())
+                )),
             }
         }
         if let Some(day) = s(row, "expires").and_then(|e| e.get(..10).map(str::to_string)) {
@@ -1139,10 +1318,13 @@ fn key_rules(
         if let Some(tpm) = s(row, "tpm_limit") {
             line.push_str(&format!(" --tpm {tpm}"));
         }
-        report.push(format!("key {person}: reissue with `{line}` (LiteLLM keeps only key hashes, so keys cannot move)."));
         if let Some(rpm) = s(row, "rpm_limit") {
-            report.push(format!("key {person}: rpm_limit {rpm} has no per-key equivalent; a rule's rate: {{ rpm: {rpm} }} limits each person."));
+            line.push_str(&format!(" --rpm {rpm}"));
         }
+        if let Some(n) = s(row, "max_parallel_requests") {
+            line.push_str(&format!(" --parallel {n}"));
+        }
+        report.push(format!("key {person}: reissue with `{line}` (LiteLLM keeps only key hashes, so keys cannot move)."));
     }
     Ok(teams
         .into_iter()
@@ -1218,6 +1400,7 @@ model_list:
       api_version: "2024-10-21"
       api_key: os.environ/AZURE_API_KEY
       rpm: 60
+      timeout: 45
   - model_name: smart
     litellm_params:
       model: azure/prod-gpt-4o
@@ -1248,6 +1431,24 @@ model_list:
     litellm_params:
       model: vertex_ai/claude-sonnet-5-5
       vertex_project: p
+  - model_name: command-a-03-2025
+    litellm_params:
+      model: cohere/command-a-03-2025
+      api_key: os.environ/COHERE_API_KEY
+  - model_name: nova
+    litellm_params:
+      model: bedrock/converse/amazon.nova-pro-v1:0
+      aws_region_name: us-east-1
+      timeout: 20
+      stream_timeout: 5
+guardrails:
+  - guardrail_name: pii
+    litellm_params:
+      guardrail: presidio
+      mode: pre_call
+  - guardrail_name: custom
+    litellm_params:
+      guardrail: my_own
 router_settings:
   routing_strategy: least-busy
   cooldown_time: 30
@@ -1307,10 +1508,27 @@ general_settings:
             "{p}"
         );
         assert!(p.contains("retries: 2"), "{p}");
+        // Fallbacks of the other API, deployment limits and timeouts, Cohere and Bedrock Converse are carried.
+        assert!(p.contains("fallbacks:\n  - claude"), "{p}");
+        assert!(
+            p.contains("rpm: 60") && p.contains("total_ms: 45000"),
+            "{p}"
+        );
+        assert!(
+            p.contains("kind: cohere") && p.contains("key_env: COHERE_API_KEY"),
+            "{p}"
+        );
+        assert!(
+            p.contains("kind: bedrock_converse")
+                && p.contains("nova: amazon.nova-pro-v1:0")
+                && p.contains("total_ms: 20000"),
+            "{p}"
+        );
         let report = imported.report.join("\n");
         for says in [
-            "fallbacks: gpt-4o",
-            "rpm is a limit per deployment",
+            "stream_timeout",
+            "LiteLLM's presidio is Enterplace's guardrail type: presidio",
+            "my_own has no built-in Enterplace type",
             "master_key",
             "database_url",
             "drop_params",
@@ -1481,5 +1699,56 @@ router_settings:
             .unwrap_or_default();
         assert!(err.contains("model_list"), "{err}");
         assert!(import("[1, 2]", None).is_err());
+    }
+
+    #[test]
+    fn budget_periods_key_rates_and_team_limits_are_carried() -> TestResult {
+        for (litellm, enterplace) in [
+            ("24h", Some("day")),
+            ("7d", Some("week")),
+            ("30d", Some("month")),
+            ("1mo", Some("month")),
+            ("30m", Some("30min")),
+            ("120s", Some("2min")),
+            ("6h", Some("6h")),
+            ("14d", Some("14d")),
+            ("3mo", Some("3mo")),
+            ("45s", None),
+            ("400d", None),
+            ("soon", None),
+        ] {
+            assert_eq!(period_of(Some(litellm)).as_deref(), enterplace, "{litellm}");
+        }
+        let export = r#"[{"key_alias": "maya", "team_alias": "payments", "max_budget": 5, "budget_duration": "7d",
+            "rpm_limit": 30, "max_parallel_requests": 2}, {"key_alias": "omer", "team_alias": "payments", "max_budget": 9}]"#;
+        let report = import(CONFIG, Some(export))?.report.join("\n");
+        assert!(
+            report.contains(
+                "enterplace key new maya --team payments --budget 5/week --rpm 30 --parallel 2`"
+            ),
+            "{report}"
+        );
+        assert!(
+            report.contains("key omer: max_budget 9 has no budget_duration"),
+            "{report}"
+        );
+        let (keys, _) = reissue(export, &[])?;
+        assert_eq!(
+            (keys[0].attributes.options.rpm, keys[0].attributes.parallel),
+            (Some(30), Some(2))
+        );
+        let teams = [
+            serde_json::json!({"team_id": "t1", "team_alias": "payments", "max_budget": 100,
+            "budget_duration": "1mo", "rpm_limit": 600, "tpm_limit": 90000, "max_parallel_requests": 8}),
+        ];
+        let proxy = from_proxy(&serde_json::json!({"data": []}), &[], &teams);
+        assert_eq!(
+            proxy.limits,
+            vec![
+                serde_json::json!({"team": "payments", "budget": {"usd": 100.0, "per": "month"},
+                "rate": {"rpm": 600, "tpm": 90000}, "parallel": 8})
+            ]
+        );
+        Ok(())
     }
 }

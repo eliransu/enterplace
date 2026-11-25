@@ -50,7 +50,7 @@ Commands:
         rule that decides, and every limit that applies (rule, key, organization, team, person, customer, tag,
         model, global) with where it is written and what it overrides. A running gateway adds what each budget
         has spent: GET /admin/explain.
-  key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>]
+  key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>] [--rpm <n>]
           [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>]
           [--url <gateway url>] [--quiet] [--keys <file>]
         Make a key for a person or a workload. The key is printed once, with the lines that point
@@ -285,6 +285,7 @@ pub async fn run(args: &[String]) -> ExitCode {
                     "--customer",
                     "--tags",
                     "--parallel",
+                    "--rpm",
                     "--role",
                 ],
             ) {
@@ -785,7 +786,7 @@ pub async fn run(args: &[String]) -> ExitCode {
                 "enterplace import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>], or enterplace import litellm --url <proxy> --master-key-env <VAR> [--out <policy file>] [--keys-out <keys file>]",
             ),
             ["key", ..] => Some(
-                "enterplace key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]",
+                "enterplace key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>] [--rpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]",
             ),
             ["serve", ..] => Some(
                 "enterplace serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>] [--admin-listen <host:port>] [--no-migrate]",
@@ -1067,6 +1068,17 @@ fn attributes(admin: bool, named: &HashMap<&str, &str>) -> Result<keyfile::Attri
             }
         },
     };
+    let rpm = match named.get("--rpm") {
+        None => None,
+        Some(text) => match text.parse::<u32>() {
+            Ok(n) if (1..=1_000_000).contains(&n) => Some(n),
+            _ => {
+                return Err(format!(
+                    "--rpm is \"{text}\". Give the most requests the key may send per minute, 1 to 1000000, for example --rpm 60."
+                ));
+            }
+        },
+    };
     let parallel = match named.get("--parallel") {
         None => None,
         Some(text) => match text.parse::<u32>() {
@@ -1101,7 +1113,10 @@ fn attributes(admin: bool, named: &HashMap<&str, &str>) -> Result<keyfile::Attri
             .unwrap_or_default(),
         parallel,
         role: named.get("--role").map(|r| r.to_string()),
-        options: Default::default(),
+        options: enterplace_core::policy::KeyOptions {
+            rpm,
+            ..Default::default()
+        },
     })
 }
 

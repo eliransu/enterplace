@@ -243,8 +243,15 @@ fn converse_tools(tools: &Value) -> Result<Vec<Value>> {
                         spec.insert(key.clone(), value.clone());
                     }
                     "parameters" => insert(&mut spec, "inputSchema", json!({"json": value})),
+                    // OpenAI's default, which asks for nothing (Codex sends it on every tool).
+                    "strict" if *value == false => {}
                     // Strict schemas are not a Converse option: the model may not follow them exactly.
-                    _ => return untranslatable(&format!("The tool field \"{key}\""), TO_CONVERSE),
+                    _ => {
+                        return untranslatable(
+                            &describe(&format!("function.{key}"), value),
+                            TO_CONVERSE,
+                        );
+                    }
                 }
             }
             spec.entry("inputSchema")

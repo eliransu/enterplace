@@ -26,31 +26,106 @@ use crate::usage::{Usage, sse_data};
 const TO_CHAT: &str = "the chat completions API this model's provider is reached through";
 const TO_RESPONSES: &str = "the Responses API this model is served through";
 
-/// Fields dropped on purpose, each with why dropping it cannot change the answer the client gets.
+/// Fields dropped on purpose, each with why dropping it cannot change the answer the client gets. A request that
+/// had any of them dropped lists them in its decision record as `dropped_on_translation`.
+///
+/// The line: a field that only labels, routes, caches or stores the request on OpenAI's side, or asks for nothing,
+/// is dropped. A field that changes what the model is asked or what the client gets back is translated, or refused
+/// by name with the fix. Every top-level parameter of OpenAI's Responses reference (read 2026-11-15) is one of:
+///
+/// - translated: `model`, `input`, `instructions`, `temperature`, `top_p`, `parallel_tool_calls`, `stream`,
+///   `max_output_tokens`, `tools`, `tool_choice`, `reasoning.effort`, `text`, `user`, `safety_identifier`;
+/// - dropped (below): `client_metadata` (Codex's own, not in the reference), `metadata`, `store`,
+///   `prompt_cache_key`, `prompt_cache_retention`, `prompt_cache_options`, `stream_options`, the `include` items
+///   listed below, `max_tool_calls`, and the defaults `truncation: disabled`, `service_tier: auto|default`,
+///   `background: false`, `top_logprobs: 0`;
+/// - refused by name: `previous_response_id`, `conversation`, `prompt` (state the provider does not hold),
+///   `background: true`, `truncation: auto`, `service_tier: flex|priority|scale`, `top_logprobs` above 0,
+///   `include: message.output_text.logprobs`, `context_management`, `moderation`, `access_programs`, `image`, and
+///   any field not named here.
 pub const SAFE_TO_DROP: &[(&str, &str)] = &[
+    (
+        "client_metadata (Responses request)",
+        "Labels Codex attaches to every request (installation, session and turn IDs) for its own telemetry. The model never reads them.",
+    ),
+    (
+        "metadata (Responses request)",
+        "Labels for the response object OpenAI stores. The provider stores nothing to label, and the model never reads them.",
+    ),
     (
         "store (Responses request)",
         "Asks OpenAI to keep the response for later retrieval. The provider keeps nothing either way and the answer is the same; with store: true the gateway keeps the translated response for its creator to read back.",
     ),
     (
-        "include: reasoning.encrypted_content (Responses request)",
-        "Asks for the reasoning in an encrypted form only OpenAI reads. A provider reached through chat has none to give, and the visible answer is the same.",
+        "prompt_cache_key, prompt_cache_retention and prompt_cache_options (Responses request)",
+        "Hints for OpenAI's own prompt cache. They change what a request costs at OpenAI, never the answer.",
+    ),
+    (
+        "stream_options (Responses request)",
+        "Holds only include_obfuscation, padding OpenAI adds to stream events. The text streamed is the same.",
+    ),
+    (
+        "include: reasoning.encrypted_content, message.input_image.image_url, computer_call_output.output.image_url, file_search_call.results, web_search_call.results, web_search_call.action.sources, code_interpreter_call.outputs (Responses request)",
+        "Asks for encrypted reasoning only OpenAI reads, for inputs echoed back, or for the results of tools that run at OpenAI, which are refused when declared. A provider reached through chat has none to give, and the answer is the same.",
+    ),
+    (
+        "max_tool_calls (Responses request)",
+        "Caps calls to tools that run at OpenAI. Those tools are refused when declared, so with function tools only it caps nothing.",
     ),
     (
         "reasoning items (Responses request input)",
         "Earlier reasoning handed back, which only the model that wrote it can read. Leaving it out is what Anthropic does with reasoning a model cannot read.",
     ),
     (
-        "truncation: disabled and service_tier auto or default (Responses request)",
+        "truncation: disabled, service_tier auto or default, background: false, top_logprobs: 0 (Responses request)",
         "The defaults: they ask for nothing.",
     ),
 ];
 
+/// `include` items that may be dropped (see [`SAFE_TO_DROP`]).
+const DROPPABLE_INCLUDES: &[&str] = &[
+    "reasoning.encrypted_content",
+    "message.input_image.image_url",
+    "computer_call_output.output.image_url",
+    "file_search_call.results",
+    "web_search_call.results",
+    "web_search_call.action.sources",
+    "code_interpreter_call.outputs",
+];
+
+/// Function tools declared inside a `namespace` tool (Codex's multi-agent tools), flattened for chat as
+/// `<namespace>__<name>`: each flat name with its namespace and name, to name the call back as the client declared it.
+pub type Namespaces = BTreeMap<String, (String, String)>;
+
+/// A Responses request translated to chat completions.
+#[derive(Debug, Default)]
+pub struct ChatRequest {
+    pub body: Value,
+    /// The fields dropped on the way (each in [`SAFE_TO_DROP`]), for the decision record.
+    pub dropped: Vec<String>,
+    pub namespaces: Namespaces,
+}
+
+/// The flat chat name of function `name` in namespace `namespace`.
+fn flat_name(namespace: &str, name: &str) -> String {
+    format!("{namespace}__{name}")
+}
+
+/// The name and namespace a chat tool call goes back to the client under.
+fn client_name(name: &Value, namespaces: &Namespaces) -> (Value, Option<String>) {
+    match name.as_str().and_then(|n| namespaces.get(n)) {
+        Some((namespace, name)) => (json!(name), Some(namespace.clone())),
+        None => (name.clone(), None),
+    }
+}
+
 /// A Responses request as a chat completions request.
-pub fn responses_to_chat_request(request: &Value) -> Result<Value> {
+pub fn responses_to_chat_request(request: &Value) -> Result<ChatRequest> {
     let fields = object(request, "The request body")?;
     let mut out = Map::new();
     let mut messages: Vec<Value> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut namespaces = Namespaces::new();
     for (key, value) in fields {
         if value.is_null() {
             continue;
@@ -61,9 +136,7 @@ pub fn responses_to_chat_request(request: &Value) -> Result<Value> {
             | "top_p"
             | "parallel_tool_calls"
             | "user"
-            | "safety_identifier"
-            | "prompt_cache_key"
-            | "metadata" => {
+            | "safety_identifier" => {
                 out.insert(key.clone(), value.clone());
             }
             "input" | "instructions" => {}
@@ -75,7 +148,7 @@ pub fn responses_to_chat_request(request: &Value) -> Result<Value> {
                 }
             }
             "max_output_tokens" => insert(&mut out, "max_completion_tokens", value.clone()),
-            "tools" => insert(&mut out, "tools", chat_tools(value)?),
+            "tools" => insert(&mut out, "tools", chat_tools(value, &mut namespaces)?),
             "tool_choice" => insert(&mut out, "tool_choice", chat_tool_choice(value)?),
             "reasoning" => {
                 for (field, setting) in object(value, "\"reasoning\"")? {
@@ -132,13 +205,23 @@ pub fn responses_to_chat_request(request: &Value) -> Result<Value> {
             }
             "include" => {
                 for item in array(value, "\"include\"")? {
-                    if item != "reasoning.encrypted_content" {
-                        return untranslatable(&describe("include", item), TO_CHAT);
+                    match item.as_str() {
+                        Some(name) if DROPPABLE_INCLUDES.contains(&name) => {
+                            dropped.push(format!("include: {name}"));
+                        }
+                        _ => return untranslatable(&describe("include", item), TO_CHAT),
                     }
                 }
             }
             // SAFE_TO_DROP.
-            "store" => {}
+            "client_metadata"
+            | "metadata"
+            | "store"
+            | "prompt_cache_key"
+            | "prompt_cache_retention"
+            | "prompt_cache_options"
+            | "stream_options"
+            | "max_tool_calls" => dropped.push(key.clone()),
             "truncation" if value == "disabled" => {}
             "service_tier" if matches!(value.as_str(), Some("auto" | "default")) => {}
             "background" if *value == false => {}
@@ -157,15 +240,24 @@ pub fn responses_to_chat_request(request: &Value) -> Result<Value> {
     match &request["input"] {
         Value::String(text) => messages.push(json!({"role": "user", "content": text})),
         Value::Array(items) => {
+            let mut reasoning = false;
             for item in items {
+                reasoning |= item["type"] == "reasoning";
                 input_item(item, &mut messages)?;
+            }
+            if reasoning {
+                dropped.push("input: reasoning items".into());
             }
         }
         Value::Null => {}
         _ => return fail("\"input\" must be a string or a list of items.".into()),
     }
     insert(&mut out, "messages", Value::Array(messages));
-    Ok(Value::Object(out))
+    Ok(ChatRequest {
+        body: Value::Object(out),
+        dropped,
+        namespaces,
+    })
 }
 
 /// One input item as chat messages, appended to `messages`. Consecutive tool calls join one assistant message.
@@ -242,10 +334,15 @@ fn input_item(item: &Value, messages: &mut Vec<Value>) -> Result<()> {
             messages.push(json!({"role": role, "content": content}));
         }
         "function_call" => {
+            let name = string(&item["name"], "A function call's \"name\"")?;
+            let name = match item["namespace"].as_str() {
+                Some(namespace) => flat_name(namespace, name),
+                None => name.to_string(),
+            };
             let call = json!({
                 "id": string(&item["call_id"], "A function call's \"call_id\"")?,
                 "type": "function",
-                "function": {"name": string(&item["name"], "A function call's \"name\"")?, "arguments": item["arguments"].as_str().unwrap_or("{}")},
+                "function": {"name": name, "arguments": item["arguments"].as_str().unwrap_or("{}")},
             });
             match messages.last_mut() {
                 Some(last) if last["role"] == "assistant" && last["tool_calls"].is_array() => {
@@ -275,28 +372,72 @@ fn input_item(item: &Value, messages: &mut Vec<Value>) -> Result<()> {
     Ok(())
 }
 
-fn chat_tools(tools: &Value) -> Result<Value> {
-    array(tools, "\"tools\"")?
-        .iter()
-        .map(|tool| {
-            if tool["type"] != "function" {
-                return untranslatable(&format!("A tool of type {}", tool["type"]), TO_CHAT);
-            }
-            let mut function = Map::new();
-            for (key, value) in object(tool, "Each tool")? {
-                match key.as_str() {
-                    "type" => {}
-                    _ if value.is_null() => {}
-                    "name" | "description" | "parameters" | "strict" => {
-                        function.insert(key.clone(), value.clone());
+fn chat_tools(tools: &Value, namespaces: &mut Namespaces) -> Result<Value> {
+    let mut out = Vec::new();
+    for tool in array(tools, "\"tools\"")? {
+        match tool["type"].as_str() {
+            Some("function") => out.push(chat_function(tool, None)?),
+            // Codex groups its multi-agent tools in a namespace. Chat has none, so each becomes a function named
+            // `<namespace>__<name>`, and a call to it goes back under its namespace and name.
+            Some("namespace") => {
+                let namespace = string(&tool["name"], "A namespace tool's \"name\"")?;
+                for inner in array(&tool["tools"], "A namespace tool's \"tools\"")? {
+                    if inner["type"] != "function" {
+                        return untranslatable(
+                            &format!(
+                                "A tool of type {} inside namespace \"{namespace}\"",
+                                inner["type"]
+                            ),
+                            TO_CHAT,
+                        );
                     }
-                    _ => return untranslatable(&format!("The tool field \"{key}\""), TO_CHAT),
+                    let name = string(&inner["name"], "A tool's \"name\"")?;
+                    let flat = flat_name(namespace, name);
+                    if flat.len() > 64 {
+                        return fail(format!(
+                            "The tool \"{name}\" in namespace \"{namespace}\" would be named \"{flat}\" for this model's provider, which is longer than the 64 characters chat tool names may have. Shorten the namespace or tool name."
+                        ));
+                    }
+                    namespaces.insert(flat.clone(), (namespace.to_string(), name.to_string()));
+                    out.push(chat_function(inner, Some(&flat))?);
                 }
             }
-            Ok(json!({"type": "function", "function": function}))
-        })
-        .collect::<Result<Vec<_>>>()
-        .map(Value::Array)
+            _ => {
+                return untranslatable(&format!("A tool of type {}", tool["type"]), TO_CHAT);
+            }
+        }
+    }
+    // A flattened name must not take the name of a function declared on its own.
+    let mut seen = std::collections::BTreeSet::new();
+    for function in &out {
+        if let Some(name) = function["function"]["name"].as_str()
+            && !seen.insert(name)
+        {
+            return fail(format!(
+                "Two tools are named \"{name}\" once namespaced tools are flattened as <namespace>__<name> for this model's provider. Rename one of them."
+            ));
+        }
+    }
+    Ok(Value::Array(out))
+}
+
+/// One function tool as a chat tool, under `name` when given.
+fn chat_function(tool: &Value, name: Option<&str>) -> Result<Value> {
+    let mut function = Map::new();
+    for (key, value) in object(tool, "Each tool")? {
+        match key.as_str() {
+            "type" => {}
+            _ if value.is_null() => {}
+            "name" | "description" | "parameters" | "strict" => {
+                function.insert(key.clone(), value.clone());
+            }
+            _ => return untranslatable(&format!("The tool field \"{key}\""), TO_CHAT),
+        }
+    }
+    if let Some(name) = name {
+        function.insert("name".into(), json!(name));
+    }
+    Ok(json!({"type": "function", "function": function}))
 }
 
 fn chat_tool_choice(choice: &Value) -> Result<Value> {
@@ -348,8 +489,31 @@ fn response(
     })
 }
 
-/// A chat completion as a Responses answer. `id` names the response, and its items after it.
-pub fn chat_to_responses_response(chat: &Value, id: &str, created: u64) -> Result<Value> {
+/// A function call item, under the namespace and name the client declared the tool with.
+fn call_item(
+    id: &str,
+    call_id: &Value,
+    name: &Value,
+    arguments: &Value,
+    status: &str,
+    namespaces: &Namespaces,
+) -> Value {
+    let (name, namespace) = client_name(name, namespaces);
+    let mut item = json!({"type": "function_call", "id": id, "call_id": call_id, "name": name, "arguments": arguments, "status": status});
+    if let Some(namespace) = namespace {
+        item["namespace"] = json!(namespace);
+    }
+    item
+}
+
+/// A chat completion as a Responses answer. `id` names the response, and its items after it. `namespaces` is the
+/// request's (see [`ChatRequest`]).
+pub fn chat_to_responses_response(
+    chat: &Value,
+    id: &str,
+    created: u64,
+    namespaces: &Namespaces,
+) -> Result<Value> {
     let choices = array(&chat["choices"], "The answer's \"choices\"")?;
     let [choice] = choices else {
         return fail(format!(
@@ -381,10 +545,14 @@ pub fn chat_to_responses_response(chat: &Value, id: &str, created: u64) -> Resul
         .iter()
         .enumerate()
     {
-        output.push(json!({
-            "type": "function_call", "id": format!("fc_{id}_{n}"), "call_id": call["id"],
-            "name": call["function"]["name"], "arguments": call["function"]["arguments"], "status": "completed",
-        }));
+        output.push(call_item(
+            &format!("fc_{id}_{n}"),
+            &call["id"],
+            &call["function"]["name"],
+            &call["function"]["arguments"],
+            "completed",
+            namespaces,
+        ));
     }
     let incomplete = match choice["finish_reason"].as_str() {
         Some("length") => Some("max_output_tokens"),
@@ -444,11 +612,14 @@ pub struct ChatToResponsesStream {
     finish: Option<String>,
     usage: Option<Usage>,
     done: bool,
+    namespaces: Namespaces,
 }
 
 impl ChatToResponsesStream {
-    pub fn new(id: String, created: u64) -> Self {
+    /// `namespaces` is the request's (see [`ChatRequest`]).
+    pub fn new(id: String, created: u64, namespaces: Namespaces) -> Self {
         Self {
+            namespaces,
             id,
             created,
             model: Value::Null,
@@ -534,7 +705,14 @@ impl ChatToResponsesStream {
                 );
                 (
                     at,
-                    json!({"type": "function_call", "id": item_id, "call_id": call_id, "name": name, "arguments": arguments, "status": "completed"}),
+                    call_item(
+                        &item_id,
+                        &call_id,
+                        &name,
+                        &json!(arguments),
+                        "completed",
+                        &self.namespaces,
+                    ),
                 )
             }
         };
@@ -644,7 +822,19 @@ impl ChatToResponsesStream {
                 let at = self.output.len();
                 let item_id = format!("fc_{id}_{index}");
                 self.calls.insert(index, at);
-                self.emit(out, "response.output_item.added", json!({"output_index": at, "item": {"type": "function_call", "id": item_id, "call_id": call["id"], "name": call["function"]["name"], "arguments": "", "status": "in_progress"}}));
+                let item = call_item(
+                    &item_id,
+                    &call["id"],
+                    &call["function"]["name"],
+                    &json!(""),
+                    "in_progress",
+                    &self.namespaces,
+                );
+                self.emit(
+                    out,
+                    "response.output_item.added",
+                    json!({"output_index": at, "item": item}),
+                );
                 self.open = Some(Item::Call {
                     at,
                     id: item_id,
@@ -1070,7 +1260,7 @@ mod tests {
             "tools": [{"type": "function", "name": "shell", "parameters": {"type": "object"}, "strict": false}],
             "tool_choice": "auto",
         });
-        let chat = responses_to_chat_request(&request)?;
+        let chat = responses_to_chat_request(&request)?.body;
         assert_eq!(
             chat["messages"][0],
             json!({"role": "system", "content": "You are Codex."})
@@ -1104,7 +1294,7 @@ mod tests {
         let chat = json!({"model": "m", "choices": [{"message": {"role": "assistant", "content": "Done.", "reasoning_content": "Hmm.",
             "tool_calls": [{"id": "c2", "type": "function", "function": {"name": "f", "arguments": "{}"}}]}, "finish_reason": "tool_calls"}],
             "usage": {"prompt_tokens": 10, "completion_tokens": 4}});
-        let response = chat_to_responses_response(&chat, "resp_x", 1)?;
+        let response = chat_to_responses_response(&chat, "resp_x", 1, &Namespaces::new())?;
         assert_eq!(response["object"], "response");
         assert_eq!(response["status"], "completed");
         assert_eq!(response["output"][0]["type"], "reasoning");
@@ -1125,7 +1315,7 @@ mod tests {
         ];
         let mut sse: String = chunks.iter().map(|c| format!("data: {c}\n\n")).collect();
         sse.push_str("data: [DONE]\n\n");
-        let mut stream = ChatToResponsesStream::new("resp_1".into(), 1);
+        let mut stream = ChatToResponsesStream::new("resp_1".into(), 1, Namespaces::new());
         let mut out = Vec::new();
         for piece in sse.as_bytes().chunks(11) {
             out.extend(stream.feed(piece)?);
@@ -1189,6 +1379,154 @@ mod tests {
                 && text.contains("\"prompt_tokens\":3")
                 && text.ends_with("data: [DONE]\n\n"),
             "{text}"
+        );
+        Ok(())
+    }
+    #[test]
+    fn every_documented_parameter_is_translated_dropped_or_refused() -> TestResult {
+        // (field, value, the chat field it becomes, or "" when dropped, or None when refused).
+        let cases: &[(&str, Value, Option<&str>)] = &[
+            ("temperature", json!(0.2), Some("temperature")),
+            ("top_p", json!(0.9), Some("top_p")),
+            (
+                "parallel_tool_calls",
+                json!(false),
+                Some("parallel_tool_calls"),
+            ),
+            ("user", json!("maya"), Some("user")),
+            ("safety_identifier", json!("u1"), Some("safety_identifier")),
+            (
+                "max_output_tokens",
+                json!(100),
+                Some("max_completion_tokens"),
+            ),
+            (
+                "reasoning",
+                json!({"effort": "low"}),
+                Some("reasoning_effort"),
+            ),
+            ("text", json!({"verbosity": "low"}), Some("verbosity")),
+            ("client_metadata", json!({"session_id": "s"}), Some("")),
+            ("metadata", json!({"team": "a"}), Some("")),
+            ("store", json!(true), Some("")),
+            ("prompt_cache_key", json!("k"), Some("")),
+            ("prompt_cache_retention", json!("24h"), Some("")),
+            ("prompt_cache_options", json!({"ttl": "30m"}), Some("")),
+            (
+                "stream_options",
+                json!({"include_obfuscation": false}),
+                Some(""),
+            ),
+            ("max_tool_calls", json!(3), Some("")),
+            (
+                "include",
+                json!(["message.input_image.image_url"]),
+                Some(""),
+            ),
+            ("truncation", json!("disabled"), Some("")),
+            ("service_tier", json!("auto"), Some("")),
+            ("background", json!(false), Some("")),
+            ("top_logprobs", json!(0), Some("")),
+            ("previous_response_id", json!("resp_1"), None),
+            ("conversation", json!("conv_1"), None),
+            ("prompt", json!({"id": "p"}), None),
+            ("background", json!(true), None),
+            ("truncation", json!("auto"), None),
+            ("service_tier", json!("priority"), None),
+            ("top_logprobs", json!(3), None),
+            ("include", json!(["message.output_text.logprobs"]), None),
+            ("context_management", json!([{"type": "compaction"}]), None),
+            ("moderation", json!({"policy": "block"}), None),
+            ("access_programs", json!({"cyber": true}), None),
+            ("image", json!({"context_compression": true}), None),
+            ("reasoning", json!({"mode": "x"}), None),
+            ("something_new", json!(1), None),
+        ];
+        for (field, value, becomes) in cases {
+            let request = json!({"model": "m", "input": "hi", *field: value});
+            match (responses_to_chat_request(&request), becomes) {
+                (Ok(chat), Some("")) => {
+                    let dropped = chat.dropped.iter().any(|d| d.starts_with(field));
+                    let default = is_openai_default(field, value)
+                        || matches!(*field, "truncation" | "service_tier" | "background");
+                    assert!(dropped || default, "{field} dropped without a record");
+                    assert!(chat.body.get(*field).is_none(), "{field}");
+                }
+                (Ok(chat), Some(to)) => assert!(!chat.body[*to].is_null(), "{field} -> {to}"),
+                (Err(err), None) => {
+                    let text = err.to_string();
+                    assert!(
+                        text.contains(field)
+                            && (text.contains("Remove it") || text.contains("instead")),
+                        "{text}"
+                    );
+                }
+                (result, _) => return Err(format!("{field}: {result:?}").into()),
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn namespaced_tools_are_flattened_and_named_back() -> TestResult {
+        let request = json!({"model": "m", "stream": true, "input": [
+            {"role": "user", "content": "go"},
+            {"type": "function_call", "call_id": "c0", "namespace": "multi_agent_v1", "name": "wait_agent", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c0", "namespace": "multi_agent_v1", "output": "done"},
+        ],
+        "tools": [
+            {"type": "function", "name": "exec_command", "parameters": {"type": "object"}},
+            {"type": "namespace", "name": "multi_agent_v1", "description": "Agents.", "tools": [
+                {"type": "function", "name": "spawn_agent", "strict": false, "parameters": {"type": "object"}},
+                {"type": "function", "name": "wait_agent", "parameters": {"type": "object"}},
+            ]},
+        ]});
+        let chat = responses_to_chat_request(&request)?;
+        assert_eq!(
+            chat.body["tools"][1]["function"]["name"],
+            "multi_agent_v1__spawn_agent"
+        );
+        assert_eq!(
+            chat.body["messages"][1]["tool_calls"][0]["function"]["name"],
+            "multi_agent_v1__wait_agent"
+        );
+        // Whole answer.
+        let answer = json!({"model": "m", "choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "multi_agent_v1__spawn_agent", "arguments": "{}"}},
+            {"id": "c2", "type": "function", "function": {"name": "exec_command", "arguments": "{}"}}]}, "finish_reason": "tool_calls"}]});
+        let response = chat_to_responses_response(&answer, "r", 1, &chat.namespaces)?;
+        assert_eq!(response["output"][0]["name"], "spawn_agent");
+        assert_eq!(response["output"][0]["namespace"], "multi_agent_v1");
+        assert_eq!(response["output"][1]["name"], "exec_command");
+        assert!(response["output"][1].get("namespace").is_none());
+        // Streamed answer.
+        let chunks = [
+            json!({"model": "m", "choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "multi_agent_v1__spawn_agent", "arguments": "{}"}}]}, "finish_reason": "tool_calls"}]}),
+            json!({"model": "m", "choices": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}),
+        ];
+        let mut sse: String = chunks.iter().map(|c| format!("data: {c}\n\n")).collect();
+        sse.push_str("data: [DONE]\n\n");
+        let mut stream = ChatToResponsesStream::new("r".into(), 1, chat.namespaces.clone());
+        let mut out = stream.feed(sse.as_bytes())?;
+        out.extend(stream.finish()?);
+        let text = String::from_utf8(out)?;
+        assert!(!text.contains("multi_agent_v1__"), "{text}");
+        assert_eq!(
+            text.matches("\"namespace\":\"multi_agent_v1\"").count(),
+            3,
+            "{text}"
+        );
+        // Other tool types and clashing names are refused by name.
+        let other = json!({"model": "m", "input": "hi", "tools": [{"type": "namespace", "name": "n", "tools": [{"type": "custom", "name": "c"}]}]});
+        assert!(
+            responses_to_chat_request(&other).is_err_and(|e| e.to_string().contains("\"custom\""))
+        );
+        let clash = json!({"model": "m", "input": "hi", "tools": [{"type": "function", "name": "n__f"},
+            {"type": "namespace", "name": "n", "tools": [{"type": "function", "name": "f"}]}]});
+        assert!(responses_to_chat_request(&clash).is_err_and(|e| e.to_string().contains("n__f")));
+        let shell = json!({"model": "m", "input": "hi", "tools": [{"type": "local_shell"}]});
+        assert!(
+            responses_to_chat_request(&shell).is_err_and(|e| e.to_string().contains("local_shell"))
         );
         Ok(())
     }

@@ -7,64 +7,63 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-This page compares Enterplace 0.1.0 with LiteLLM v1.109.1 and Bifrost v2.5.1 (open source editions). The measured figures come from a hands-on review run in Docker against a mock provider on 2026-11-12, on one machine, and are not benchmarks. Enterplace's capabilities are as of 0.1.0; LiteLLM's and Bifrost's are from that review and their public documentation.
+This page compares Enterplace 0.1.0 with the open source editions of LiteLLM (v1.109.1, which its release notes call the current stable release) and Bifrost (v2.5.1, released 2026-11-10). The LiteLLM and Bifrost cells were re-read from their public documentation on 2026-11-15; a claim those pages did not confirm was removed. Figures marked "review" come from a hands-on review run in Docker against a mock provider on 2026-11-12, on one machine, and are not benchmarks.
 
-Enterplace is much younger than both and has had far less production traffic. LiteLLM still lists more providers. Where Enterplace leads is governance: a verified record of every request, a policy that fails on any unknown key, and nothing dropped from a request silently.
+Enterplace is younger than both and serves fewer providers. Where it leads is governance: a verified record of every request in the open source edition, a policy that fails on any unknown key, and nothing dropped from a request silently.
 
 ## Side by side
 
-| | Enterplace 0.0.1 | LiteLLM v1.109.1 | Bifrost v2.5.1 |
+| | Enterplace 0.1.0 | LiteLLM v1.109.1 | Bifrost v2.5.1 |
 |---|---|---|---|
-| Language | Rust | Python, routing moving to Rust | Go |
-| Storage | Files for one process; Postgres (optional) for keys, kill switches, budgets, rate limits, cooldowns and console sessions shared by several | Postgres for keys and budgets, Redis for shared limits | SQLite or Postgres |
-| Image, user | A single static binary in an image built `FROM scratch`, uid 65532 | 1.33 GB, root | 286 MB, uid 1000 |
-| Memory, measured | 3.4 MiB idle | 628 to 922 MiB | 219 to 442 MiB |
-| Identity per request | Enterplace key per person or workload | Virtual key | Virtual key |
-| Policy | File, first matching rule by team, person or anyone | Per key, team, org via API | Per key, team, customer via API |
-| Budgets, rate limits | Budgets, requests and tokens per minute, hour and day, and requests in flight, per install, organization, team, person, key, end customer, tag or model | Yes | Yes |
-| Aliases, load balancing | Aliases over deployments: round robin, least busy, lowest latency, lowest cost or adaptive, session affinity for coding agents, a circuit breaker per deployment, context window and content policy fallbacks; rules decide on the alias | Yes | Yes |
-| Guardrails | Open source: built-in secrets and personal data detectors (block, mask, warn); seven vendors built in (OpenAI moderation, Presidio, Lakera Guard, Bedrock guardrails, Azure Content Safety and Prompt Shields, Llama Guard or any chat model as a classifier), each fail open or closed; any other service by webhook. On requests and on whole answers. | Yes, some enterprise | Enterprise |
-| Request audit log in open source | Yes, hash-chained, verified at start | No | No (request log, not tamper-evident) |
-| Unknown config keys | Refused with line and suggestion | Accepted silently | Accepted silently |
-| Unknown request parameters | Forwarded unchanged; unknown query refused | Some standard fields dropped | Dropped |
-| Providers | Over 120 presets and 15 native kinds: OpenAI and every OpenAI-compatible API, Anthropic, Azure OpenAI, Bedrock (Claude and Converse for every family), Vertex AI (Gemini, Claude, Model Garden), Gemini, Cohere, watsonx.ai, SageMaker, Replicate, local servers. Chat, messages and Responses translated between them; Codex reaches any provider through Responses, Claude Code any chat model with `accept_messages` | 140+, translated | Many, translated |
-| SSO, roles | Open source: console sign-in by OpenID Connect (PKCE, RS256 and ES256), or SAML 2.0 (signed assertions only), roles and teams from groups, roles kept to teams, every sign-in recorded; SCIM in the enterprise build | SSO free to 5 users, then enterprise | Enterprise |
-| Developer sign-in for coding tools | `enterplace login`: SSO in the browser, personal key named by the email, expiry from policy, recorded; `enterplace logout` revokes it | UI login, keys copied by hand | Enterprise |
-| Kill switch | Person, team, key, model or everyone; reason required and shown to the caller; within 1 second on every node sharing the files; recorded | No (block a key or team by API) | No |
-| Metrics | Prometheus `/metrics` on its own address, off by default; audit log as JSONL for any log shipper | Prometheus, many callbacks | Prometheus, OpenTelemetry |
-| Provider keys kept in the database | Store credentials sealed with AES-256-GCM under `ENTERPLACE_MASTER_KEY`, added, rotated and removed in the console or admin API, each change recorded; a rotation reaches every replica within 2 seconds; a wrong master key refused at start | Credentials encrypted with `LITELLM_SALT_KEY`, which must not change after models are added | Not reviewed |
-| Caller's own provider key | Opt-in per rule (`caller_provider_key: allowed`), header refused elsewhere; the caller still needs a Enterplace key; recorded by hash prefix, spend marked caller-paid | `api_key` in the request body, accepted on any deployment | Not reviewed |
-| Multi-node | Yes, with a Postgres store: keys, kill switches, budgets, `rpm` and `tpm` (leased, never over the limit), cooldowns and console sessions shared; each audit chain per replica, the answer cache too unless `store.answer_cache` shares it. No Redis. | Yes, Redis for shared limits | Enterprise clustering |
+| Storage | Files for one process; a store shared by replicas (optional): Postgres, or a Cloudflare Durable Object. No Redis | Postgres; Redis 7+ once more than one instance runs | SQLite or Postgres; ClickHouse also for the log store |
+| Image, user (review) | A single static binary in an image built `FROM scratch`, uid 65532 | 1.33 GB, root | 286 MB, uid 1000 |
+| Memory (review) | 3.4 MiB idle | 628 to 922 MiB | 219 to 442 MiB |
+| Identity per request | Enterplace key per person or workload, or one `enterplace login` issues after SSO | Virtual key, scoped to key, user, team, team member, customer, organization | Virtual key owned by a team or a customer |
+| Policy | A file, first matching rule by team, person or anyone | Per key, team and organization through the API | Per key, team and customer through the API |
+| Budgets | Organization, team, person, key, end customer, tag, model or the whole install; any period from a minute to a year, calendar or sliding | Key, user, team, team member, customer, global; tag budgets and per-model budgets per key are enterprise | Key (several, per provider too), team, customer; 1 minute to 1 year, calendar alignment optional |
+| Rate limits | Requests, tokens and requests in flight for the same scopes, and per deployment | RPM and TPM per key, user, team, customer; per model per key and team; requests in flight | Requests or tokens per period on keys and per provider; one limit on a team and a customer |
+| Routing | Round robin, least busy, lowest latency, lowest cost, adaptive (latency, errors and cost); a deployment at its rpm, tpm or requests-in-flight limit is passed over; cooldowns | Simple shuffle, least busy, latency, cost, usage based, priority, custom; cooldowns | Weighted key rotation; adaptive routing is enterprise |
+| Fallbacks, retries, timeouts | Alias fallbacks (another API too, translated), context window and content policy fallbacks, up to 5 retries, timeouts per provider, alias or deployment | Context window, content policy, default and ordered fallbacks; retries per error type | An ordered fallback chain; retries with backoff; request and first-token timeouts. No context window or content policy fallback |
+| Guardrails | Open source: built-in secrets and personal data detectors (block, mask, warn), 14 vendors built in, any other service by webhook; on requests, whole answers and streams | Open source: 14 or more vendors and a built-in content filter; guardrails per key, team or model and tag-based modes are enterprise | Built-in secrets, regex and prompt guardrails and 13 vendors, all enterprise |
+| Request audit log in open source | Yes, hash-chained, verified at start | No. The enterprise audit log covers admin changes, not requests | No. The enterprise audit log covers admin and config changes and sign-ins, not requests |
+| Unknown config keys (review) | Refused with line and suggestion | Accepted silently | Accepted silently |
+| Unknown or untranslatable request parameters | Forwarded unchanged. Translated to another provider's API, a field with no equivalent is refused by name; only fields that cannot change the answer are dropped, each listed in the request's record | An error by default; `drop_params` drops them, and Claude Code and Codex traffic drops unsupported ones by default | Per provider, often dropped; a compat plugin drops them against its model catalog and reports them |
+| Providers | 15 native kinds (OpenAI, Anthropic, Azure OpenAI, Bedrock InvokeModel and Converse, Vertex AI for Gemini, Claude and Model Garden, Gemini, Cohere, watsonx, SageMaker, Replicate, local servers) and over 120 presets of OpenAI-compatible APIs. `/v1/responses` translated for Anthropic, Bedrock, Vertex AI, Gemini, Cohere and watsonx | About 141. `/v1/responses` bridged for Anthropic, Bedrock, Vertex AI, Gemini and Azure; `/v1/messages` for every provider | 35. `/v1/responses` on 31 of them, native or mapped to chat; Anthropic's API routed to several |
+| SSO, roles | Open source: OpenID Connect or SAML 2.0 sign-in, roles and teams from groups; SCIM in the enterprise build | SSO free up to 5 users, then enterprise; SCIM and role-based access enterprise | SSO, roles and SCIM enterprise |
+| Answer cache | In memory per replica, exact and semantic | Redis, shared; semantic through Redis, Valkey or Qdrant | Exact and semantic on Redis or Valkey, Weaviate, Qdrant or Pinecone |
+| MCP gateway | Tools, prompts and resources per rule, deny by default; OAuth sign-in; approvals; every call recorded | Streamable HTTP, SSE and stdio; access per key, team, organization; OAuth 2 | STDIO, HTTP and SSE; tool filtering per key; OAuth; agent and code modes |
+| Kill switch (review) | Person, team, key, model or everyone; reason shown to the caller; within 1 second on every node sharing the files; recorded | No (block a key or team by API) | No |
+| Metrics, traces | Prometheus `/metrics`; OTLP traces, Langfuse and Datadog | Prometheus; an `otel` callback | Prometheus and OpenTelemetry (the docs disagree on whether Prometheus is open source) |
+| Provider keys kept in the database | Sealed with AES-256-GCM under `ENTERPLACE_MASTER_KEY`, checked at start, every change recorded | Encrypted with NaCl SecretBox, its key derived from `LITELLM_SALT_KEY` | Optional AES-256 with a key derived by Argon2id from `BIFROST_ENCRYPTION_KEY`; plain text when unset |
+| Multi-node | Yes, through the store (Postgres or Cloudflare): keys, kill switches, budgets, rate limits, cooldowns and sessions shared | Several instances with Redis and Postgres; multi-region is enterprise | Clustering is enterprise |
+| Coding-agent guides | Claude Code, Codex (also on Bedrock), Gemini CLI, Cursor, GitHub Copilot, OpenCode, Cline, Roo Code, Kilo Code, Aider, Continue, Zed, JetBrains AI, Qwen Code | Claude Code, Codex, Cursor, OpenCode, GitHub Copilot, Gemini CLI, Qwen Code | Claude Code, Codex CLI, Gemini CLI, OpenCode, Cursor |
 
 ## What LiteLLM does better
 
-- **Providers.** Over 140, against Enterplace's 120 presets and 15 native kinds.
-- **Time to a first request.** 8 seconds from `docker run` with a five-line config and no database, measured in the review. Enterplace's image needs nothing first: `docker run` with no config and no provider key writes its policy, serves the demo model and answers a first governed request within a second.
-- **Production history.** Years of real traffic across many deployments. Enterplace's first runs with real Claude Code and Codex, on 2026-11-16, found and fixed five bugs.
-- **Admin UI.** A fuller admin UI.
-- **Fails closed on a database outage** by default, as Enterplace does on an audit failure.
+- **Providers.** About 141 providers against Enterplace's 15 native kinds and its 120 presets, and `/v1/messages` accepted for every one of them.
+- **A shared cache.** One cache for every instance through Redis, semantic matching included. Enterplace's cache is per replica, since it never writes answers to its database.
+- **Routing breadth.** Usage-based, priority and custom strategies on top of the ones Enterplace has, and a retry policy per kind of error.
+- **Time to a first request (review).** 8 seconds from `docker run` with a five-line config and no database. Enterplace's image needs nothing first either: `docker run` with no config and no provider key writes its policy, serves the demo model and answers a first governed request within a second.
 
 ## What Bifrost does better
 
-- **Speed of forwarding with features on.** About 1 ms added at p50 in the review's Docker setup, with routing, budgets and logging.
-- **Governance objects in open source.** Customers, teams and virtual keys with budgets and rate limits, and immediate key deactivation through its API.
-- **Messages to any chat server by default.** It translated `/anthropic/v1/messages` to a chat-only server with no opt-in. Enterplace translates messages to a chat provider only when it sets `accept_messages`, since a translated answer can differ from Anthropic's.
-- **A latency split per request** in its log.
+- **Speed of forwarding with features on (review).** About 1 ms added at p50 in the review's Docker setup, with routing, budgets and logging.
+- **More providers behind the Responses API.** `/v1/responses` on 31 of its 35 providers.
+- **Cache and logs on external stores.** Semantic caching on Weaviate, Qdrant or Pinecone, and a ClickHouse log store.
+- **MCP agent and code modes**, beyond relaying tools.
 
 ## What Enterplace does better
 
-- **A record before every request, in the open source edition.** Every request, allowed or refused, gets a hash-chained audit record before it is forwarded, and `enterplace audit verify` checks the chain. LiteLLM writes no audit rows without an enterprise license, and its audit log covers admin changes, not requests. Bifrost's audit log, with an HMAC per row, is enterprise only.
-- **Fail closed on the record.** If the record cannot be written, the request is refused. In the review, LiteLLM kept forwarding while its per-request spend rows went missing for 6,498 load-test requests.
-- **Unknown config is an error.** `enterplace check` names the file, line and nearest known word for every mistake. Both others accept misspelled keys silently and start.
-- **Nothing dropped silently.** The body is forwarded byte for byte and an unknown query parameter is refused by name. LiteLLM removed the standard `user` and `metadata` fields; Bifrost dropped an unknown parameter.
-- **Keys shown once, stored hashed.** Bifrost's list API returns every key's full value on every read.
-- **No prompt text in the log.** Bifrost stores prompts and answers by default for 365 days.
-- **Small footprint.** A single static binary in an image built `FROM scratch`, running as a non-root user, at about 3.4 MiB of memory idle. LiteLLM's image is 1.33 GB and runs as root, using 628 to 922 MiB plus Postgres; Bifrost's is 286 MB, using 219 to 442 MiB.
-- **Provider keys under your key, and caller keys under policy.** Stored provider credentials are sealed under a master key the customer holds, checked at start, never shown after saving, and every add, rotate and remove is in the audit chain. A caller's own provider key is accepted only on rules that opt in, never in place of a Enterplace key, and the rest of the policy still applies. LiteLLM's public docs describe a request-body `api_key` accepted on any deployment.
+- **A record before every request, in the open source edition.** Every request, allowed or refused, gets a hash-chained audit record before it is forwarded, and `enterplace audit verify` checks the chain. Both others keep an audit log only in their enterprise editions, and it covers admin changes, not requests.
+- **Fail closed on the record (review).** If the record cannot be written, the request is refused. In the review, LiteLLM kept forwarding while its per-request spend rows went missing for 6,498 load-test requests.
+- **Unknown config is an error.** `enterplace check` names the file, line and nearest known word for every mistake. Both others accepted misspelled keys silently in the review.
+- **Nothing dropped silently.** The body is forwarded byte for byte, and an unknown query parameter is refused by name. Translated to another API, a field that has no equivalent is refused with the fix; the few that cannot change the answer (Codex's `client_metadata`, `store`, cache hints) are dropped and listed in the request's record. LiteLLM's docs say Claude Code and Codex traffic drops unsupported parameters by default; Bifrost's say many providers drop them.
+- **Governance features in open source.** Guardrails, SSO without a seat limit, budgets for any period, and a kill switch, where Bifrost keeps guardrails, SSO and clustering in its enterprise edition and LiteLLM caps free SSO at 5 users.
+- **Small footprint (review).** About 3.4 MiB of memory idle in an image built `FROM scratch`, running as a non-root user.
 - **Refusals a person can act on.** Each names the cause, the fix and a decision ID, in the error shape the client already shows.
 
 <Aside type="note">
-No source code of LiteLLM or Bifrost was read for this comparison. Their figures come from the hands-on review and from these public pages: [LiteLLM pricing](https://www.litellm.ai/pricing), [LiteLLM audit logs](https://docs.litellm.ai/docs/proxy/audit_logs), [LiteLLM admin UI SSO](https://docs.litellm.ai/docs/proxy/admin_ui_sso), [LiteLLM clientside credentials](https://docs.litellm.ai/docs/proxy/clientside_auth), [LiteLLM production settings](https://docs.litellm.ai/docs/proxy/prod), [Bifrost audit logs](https://docs.getbifrost.ai/enterprise/audit-logs.md), [Bifrost pricing](https://www.getmaxim.ai/bifrost/pricing), [Bifrost MCP filtering](https://docs.getbifrost.ai/mcp/filtering.md).
+No source code of LiteLLM or Bifrost was read for this comparison. Their cells come from these public pages, read on 2026-11-15: [LiteLLM releases](https://github.com/BerriAI/litellm/releases), [production](https://docs.litellm.ai/docs/proxy/prod), [users and budgets](https://docs.litellm.ai/docs/proxy/users), [routing](https://docs.litellm.ai/docs/routing), [guardrails](https://docs.litellm.ai/docs/proxy/guardrails/quick_start), [enterprise](https://docs.litellm.ai/docs/enterprise), [admin UI SSO](https://docs.litellm.ai/docs/proxy/admin_ui_sso), [providers](https://docs.litellm.ai/docs/providers), [Responses API](https://docs.litellm.ai/docs/response_api), [`/v1/messages`](https://docs.litellm.ai/docs/anthropic_unified), [caching](https://docs.litellm.ai/docs/proxy/caching), [MCP](https://docs.litellm.ai/docs/mcp), [Prometheus](https://docs.litellm.ai/docs/proxy/prometheus), [tutorials](https://docs.litellm.ai/docs/tutorials), [encryption](https://docs.litellm.ai/docs/proxy/security_encryption_faq), [`drop_params`](https://docs.litellm.ai/docs/completion/drop_params); [Bifrost releases](https://github.com/maximhq/bifrost/releases), [README](https://github.com/maximhq/bifrost), [overview](https://docs.getbifrost.ai/overview), [storage](https://docs.getbifrost.ai/deployment-guides/config-json/storage), [virtual keys](https://docs.getbifrost.ai/features/governance/virtual-keys), [fallbacks](https://docs.getbifrost.ai/features/fallbacks), [guardrails](https://docs.getbifrost.ai/enterprise/guardrails), [audit logs](https://docs.getbifrost.ai/enterprise/audit-logs), [RBAC](https://docs.getbifrost.ai/enterprise/rbac), [providers](https://docs.getbifrost.ai/providers/supported-providers/overview), [Anthropic SDK](https://docs.getbifrost.ai/integrations/anthropic-sdk), [semantic caching](https://docs.getbifrost.ai/features/semantic-caching), [MCP](https://docs.getbifrost.ai/mcp/overview), [clustering](https://docs.getbifrost.ai/enterprise/clustering), [CLI agents](https://docs.getbifrost.ai/cli-agents/overview), [schema reference](https://docs.getbifrost.ai/deployment-guides/config-json/schema-reference), [request options](https://docs.getbifrost.ai/providers/request-options), [compat plugin](https://docs.getbifrost.ai/features/compat-plugin).
 </Aside>
 
 ## Related

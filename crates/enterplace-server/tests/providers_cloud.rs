@@ -1194,7 +1194,10 @@ async fn codex_reaches_claude_through_the_responses_api() -> TestResult {
     let request = json!({"model": "claude-sonnet-5-5", "instructions": "You are Codex.", "store": false,
         "reasoning": {"effort": "low"}, "max_output_tokens": 5000,
         "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "List files"}]}],
-        "tools": [{"type": "function", "name": "shell", "parameters": {"type": "object"}}]});
+        "client_metadata": {"session_id": "s1"}, "prompt_cache_key": "s1", "include": ["reasoning.encrypted_content"],
+        "tools": [{"type": "function", "name": "shell", "parameters": {"type": "object"}},
+            {"type": "namespace", "name": "agents", "description": "Sub-agents.", "tools": [
+                {"type": "function", "name": "spawn", "strict": false, "parameters": {"type": "object"}}]}]});
     let (status, headers, text) = post(&gw, "/v1/responses", &request).await?;
     assert_eq!(status, StatusCode::OK, "{text}");
     let (target, sent, body) = anthropic.first()?;
@@ -1208,6 +1211,7 @@ async fn codex_reaches_claude_through_the_responses_api() -> TestResult {
     );
     assert_eq!(body["max_tokens"], 5000);
     assert_eq!(body["tools"][0]["name"], "shell");
+    assert_eq!(body["tools"][1]["name"], "agents__spawn");
     let response: Value = serde_json::from_str(&text)?;
     assert_eq!(response["object"], "response");
     assert_eq!(response["output"][0]["type"], "reasoning");
@@ -1216,6 +1220,15 @@ async fn codex_reaches_claude_through_the_responses_api() -> TestResult {
     assert_eq!(response["output"][2]["arguments"], r#"{"cmd":"ls"}"#);
     let (decision, usage) = records_of(&gw, &headers).await?;
     assert_eq!(decision["translated"], true);
+    assert_eq!(
+        decision["dropped_on_translation"],
+        json!([
+            "store",
+            "client_metadata",
+            "prompt_cache_key",
+            "include: reasoning.encrypted_content"
+        ])
+    );
     assert_eq!(tokens(&usage), (Some("reported"), Some(100), Some(20)));
     // State the provider does not keep is refused by name and never sent.
     let stateful =
