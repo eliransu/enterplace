@@ -1,0 +1,129 @@
+---
+title: Codex on Amazon Bedrock
+description: Run Codex CLI on models served by Amazon Bedrock through Enterplace, with a Enterplace key on the developer's machine and the AWS credentials on the gateway.
+sidebar:
+  order: 3
+---
+
+import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Codex CLI speaks OpenAI's Responses API and nothing else: `wire_api = "responses"` is the only value it takes. Enterplace gives it two ways to a model on Amazon Bedrock. Developers hold a Enterplace key; the Bedrock API key or the AWS role stays on the gateway.
+
+| Way | Models | Provider kind | What Enterplace does with the request |
+|---|---|---|---|
+| Bedrock's own Responses endpoint | The models Bedrock serves through the Responses API, such as the OpenAI models | `openai` | Checks it, records it and forwards the original bytes |
+| Converse, translated | Every family on Bedrock: Claude, Nova, Llama, Mistral and the rest | `bedrock_converse` | Translates Responses to chat completions, then to Converse |
+
+<Aside type="caution">
+The translated way is refused with Codex CLI 0.166.0. That version sends a `client_metadata` field on every request, which has no chat equivalent, so Enterplace answers `untranslatable` and names it. Use Bedrock's Responses endpoint, which forwards the body unchanged, until Enterplace's translation takes that field. `scripts/cloud_agents_check.py` reproduces the refusal.
+</Aside>
+
+## Bedrock's Responses endpoint
+
+<Steps>
+
+1. **Create an Amazon Bedrock API key** in the AWS console, in the region you will call. Enterplace sends it as `Authorization: Bearer`, as AWS documents for the OpenAI SDK. Keep it in a variable on the gateway.
+
+2. **Add the endpoint as an `openai` provider.** The base URL is `https://bedrock-runtime.<region>.amazonaws.com/openai/v1`. On that endpoint AWS names OpenAI models by inference profile, such as `us.openai.gpt-5.6-sol`; list the IDs your account can call.
+
+    ```yaml title="enterplace.policy.yaml"
+    version: 1
+    providers:
+      - name: bedrock-openai
+        kind: openai
+        url: https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1
+        key_env: BEDROCK_API_KEY
+        models: [us.openai.gpt-5.6-sol]
+    rules:
+      - name: developers
+        principals: { team: developers }
+        models: [us.openai.gpt-5.6-sol]
+    ```
+
+    For a model only the `bedrock-mantle` endpoint serves, use `https://bedrock-mantle.<region>.api.aws/v1` and the model ID AWS lists for it. The model's card in the Bedrock documentation says which endpoint and path prefix it takes.
+
+3. **Point Codex at Enterplace.** Edit `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`):
+
+    ```toml title="~/.codex/config.toml"
+    model = "us.openai.gpt-5.6-sol"
+    model_provider = "enterplace"
+    web_search = "disabled"                 # bedrock-runtime runs no server-side tools
+
+    [model_providers.enterplace]
+    name = "Enterplace"
+    base_url = "https://enterplace.example.com/v1"
+    env_key = "ENTERPLACE_KEY"
+    wire_api = "responses"
+    stream_max_retries = 0
+    ```
+
+    Do not use Codex's built-in `amazon-bedrock` or `amazon-bedrock-runtime` providers: they call AWS directly with the developer's own AWS credentials, past the gateway.
+
+4. **Set the key and run Codex.**
+
+    ```bash
+    export ENTERPLACE_KEY=enterplace_...
+    codex
+    ```
+
+</Steps>
+
+Why `stream_max_retries = 0`, and what Codex prints for a refusal, are on the [Codex](/integrations/codex/) page.
+
+### Prices and budgets
+
+Enterplace prices a request by the model name. A Bedrock inference profile ID the price table does not hold has no price: its cost is recorded as unknown, and `enterplace check` refuses a rule with a budget that allows it. Set one under `prices:` in the policy. Check with `enterplace prices us.openai.gpt-5.6-sol --policy enterplace.policy.yaml`. See [Pricing](/routing/pricing/).
+
+## Converse, translated
+
+A `bedrock_converse` provider serves every Bedrock family, signed with the AWS credentials Enterplace finds (its role, or keys in its environment). A Responses request for one of its models is translated without any opt-in.
+
+```yaml title="enterplace.policy.yaml"
+version: 1
+providers:
+  - name: bedrock
+    kind: bedrock_converse
+    region: us-east-1
+    models: [nova-pro, claude-sonnet-4-5]
+    model_ids:
+      nova-pro: amazon.nova-pro-v1:0
+      claude-sonnet-4-5: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+rules:
+  - name: developers
+    principals: { team: developers }
+    models: [nova-pro, claude-sonnet-4-5]
+```
+
+Codex's side is the same `config.toml` with `model = "nova-pro"`, plus one more setting:
+
+```toml title="~/.codex/config.toml"
+[features]
+multi_agent = false
+```
+
+With `multi_agent` on, its default, Codex declares its agent tools as a tool of type `namespace`. Only function tools translate, so Enterplace refuses the request with `untranslatable` and names the type. Web search must be off for the same reason.
+
+What is carried over, refused and dropped is listed under [Responses to chat](/routing/translation/#responses-to-chat-codex-on-any-provider) and [Bedrock Converse](/providers/bedrock/#bedrock-converse). Codex prints `Model metadata for "nova-pro" not found` and assumes a context window for a model it has no description of.
+
+## What was run
+
+`scripts/cloud_agents_check.py` runs the installed `codex exec` against a local Enterplace whose providers point at a mock of the Bedrock endpoints. No AWS account is involved, so it shows what Enterplace does with Codex's real requests, not what Bedrock answers.
+
+```bash
+cargo build -p enterplace-cli
+python3 scripts/cloud_agents_check.py target/debug/enterplace codex-responses codex-converse
+```
+
+| Run | Result on 2026-11-15, Codex CLI 0.166.0 |
+|---|---|
+| `codex-responses`: an `openai` provider at `/openai/v1` | Passed. The mock received `POST /openai/v1/responses` and Codex printed its answer |
+| `codex-converse`: a `bedrock_converse` provider, `multi_agent = false` | Refused with `untranslatable`, naming `client_metadata` |
+| Either way against Amazon Bedrock itself | Not run |
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Codex" href="/integrations/codex/" description="Setup, retries and refusals for Codex on any provider." />
+	<LinkCard title="Amazon Bedrock" href="/providers/bedrock/" description="AWS credentials, Converse and the fields of both Bedrock kinds." />
+	<LinkCard title="Translation" href="/routing/translation/" description="What a Responses request keeps on a provider that speaks another API." />
+</CardGrid>

@@ -74,6 +74,13 @@ one repository. How a release is made: RELEASING.md.
 - `tls: { cert_file, key_file }` in the policy stands in for `--tls-cert` and `--tls-key`.
 - The enterprise binary's `serve` takes every flag of the open source one. It ignored `--tls-cert` and `--tls-key`
   before and served plain HTTP; it now serves HTTPS with them, and refuses a flag it does not know.
+### Docs: runbooks and guides
+
+- Runbooks: Codex on Amazon Bedrock (integrations/codex-on-bedrock) and Claude Code on Bedrock and Vertex AI
+  (integrations/claude-code-on-bedrock-and-vertex), each in Anthropic or OpenAI format and in the cloud's own.
+  `scripts/cloud_agents_check.py` runs the installed `codex` and `claude` against a local Enterplace and a mock of the
+  cloud endpoints. Known gap it shows: Codex CLI 0.166.0 sends `client_metadata`, which the Responses to chat
+  translation refuses with `untranslatable`, so Codex reaches Bedrock only through Bedrock's own Responses endpoint.
 
 ### License
 

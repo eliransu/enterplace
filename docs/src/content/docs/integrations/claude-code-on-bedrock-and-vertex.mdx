@@ -1,0 +1,185 @@
+---
+title: Claude Code on Bedrock and Vertex AI
+description: Run Claude Code on Claude models served by Amazon Bedrock or Google Cloud Vertex AI through Enterplace, with cloud credentials on the gateway and a Enterplace key on each machine.
+sidebar:
+  order: 2
+---
+
+import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Claude Code can reach Claude on Amazon Bedrock or Vertex AI through Enterplace in two ways. In both, the AWS role or the Google service account belongs to the gateway, and a developer's machine holds only a Enterplace key.
+
+| Way | Claude Code is set up with | Enterplace |
+|---|---|---|
+| Anthropic format (use this one) | `ANTHROPIC_BASE_URL` | Takes `POST /v1/messages`, rewrites it for InvokeModel or rawPredict, and answers in Anthropic's format. Guardrails, tool permissions, budgets and the model picker work as on Anthropic's own API |
+| The cloud's own format | `CLAUDE_CODE_USE_BEDROCK` or `CLAUDE_CODE_USE_VERTEX` with a gateway base URL | Passes the cloud's own request through on a path the rule lists under `passthrough:` |
+
+## Anthropic format
+
+<Steps>
+
+1. **Add the cloud provider and allow both of Claude Code's models.** Claude Code uses a main model and a smaller one for background work.
+
+    <Tabs syncKey="cloud">
+    <TabItem label="Amazon Bedrock">
+
+    ```yaml title="enterplace.policy.yaml"
+    version: 1
+    providers:
+      - name: bedrock
+        kind: bedrock
+        region: us-east-1
+        models: [claude-sonnet-4-5, claude-haiku-4-5]
+        model_ids:
+          claude-sonnet-4-5: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+          claude-haiku-4-5: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    rules:
+      - name: developers
+        principals: { team: developers }
+        models: [claude-sonnet-4-5, claude-haiku-4-5]
+    ```
+
+    `model_ids` maps the name developers send to a Bedrock model ID, inference profile ID or ARN your account can call. Enterplace signs with the AWS credentials it finds: the role of its pod, task or instance, or `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in its environment. The role needs `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` and `bedrock:CountTokens`. See [Amazon Bedrock](/providers/bedrock/#credentials).
+
+    </TabItem>
+    <TabItem label="Vertex AI">
+
+    ```yaml title="enterplace.policy.yaml"
+    version: 1
+    providers:
+      - name: claude-vertex
+        kind: vertex_anthropic
+        url: https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic
+        models: ["claude-sonnet-4-5@20250929", "claude-haiku-4-5@20251001"]
+    aliases:
+      - name: claude-sonnet-4-5
+        deployments:
+          - { provider: claude-vertex, model: "claude-sonnet-4-5@20250929" }
+      - name: claude-haiku-4-5
+        deployments:
+          - { provider: claude-vertex, model: "claude-haiku-4-5@20251001" }
+    rules:
+      - name: developers
+        principals: { team: developers }
+        models: [claude-sonnet-4-5, claude-haiku-4-5]
+    ```
+
+    The provider lists the model IDs Vertex AI knows, and the aliases give developers names without the `@` version. Enterplace signs in to Google Cloud as the service account it runs as, which needs the Vertex AI User role (`roles/aiplatform.user`) in the project of the `url`. See [Vertex AI](/providers/vertex/#credentials).
+
+    </TabItem>
+    </Tabs>
+
+2. **Get a Enterplace key**, with `enterplace login https://enterplace.example.com` or from an admin with `enterplace key new`.
+
+3. **Point Claude Code at Enterplace.** Leave `CLAUDE_CODE_USE_BEDROCK` and `CLAUDE_CODE_USE_VERTEX` unset, and no AWS or Google credentials are needed on the machine.
+
+    ```bash
+    export ANTHROPIC_BASE_URL=https://enterplace.example.com
+    export ANTHROPIC_API_KEY=enterplace_...
+    export ANTHROPIC_MODEL=claude-sonnet-4-5
+    export ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
+    claude
+    ```
+
+    `ANTHROPIC_DEFAULT_HAIKU_MODEL` names the model for background work. Claude Code's documentation marks the older `ANTHROPIC_SMALL_FAST_MODEL` as deprecated.
+
+</Steps>
+
+### What the cloud receives
+
+| Claude Code sends Enterplace | Bedrock receives | Vertex AI receives |
+|---|---|---|
+| `POST /v1/messages` | `/model/<id>/invoke` | `<url>/models/<model>:rawPredict` |
+| `POST /v1/messages` with `"stream": true` | `/model/<id>/invoke-with-response-stream` | `<url>/models/<model>:streamRawPredict` |
+| `POST /v1/messages/count_tokens` | `/model/<id>/count-tokens` | `<url>/models/count-tokens:rawPredict` |
+
+Enterplace moves `model` and `stream` into the path, adds the cloud's `anthropic_version`, and on Bedrock moves the `anthropic-beta` header into the body. Bedrock's event stream comes back as Anthropic's server-sent events.
+
+<Aside type="note">
+Claude Code sends the betas and fields it would send Anthropic, and Enterplace passes them on. One the cloud does not offer comes back as that cloud's 400. Setting `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` makes Claude Code leave its pre-release betas out.
+</Aside>
+
+## The cloud's own format
+
+Claude Code can also send Bedrock's or Vertex AI's own requests to a gateway. Enterplace takes them on its passthrough routes, `/bedrock/<path>` and `/vertex/<path>`, for a rule that lists the provider and the path. The model in the path is decided by the rule, and the call is recorded and metered.
+
+Add the paths to the rule:
+
+{/* not checked: an excerpt, the providers above are left out */}
+```yaml title="enterplace.policy.yaml"
+rules:
+  - name: developers
+    principals: { team: developers }
+    models: [claude-sonnet-4-5, claude-haiku-4-5]
+    passthrough:
+      - { provider: bedrock, paths: [/model] }
+```
+
+For Vertex AI the entry is `{ provider: claude-vertex, paths: [/v1/projects] }`, and the rule lists the provider's own model names (`claude-sonnet-4-5@20250929`).
+
+<Tabs syncKey="cloud">
+<TabItem label="Amazon Bedrock">
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=1
+export ANTHROPIC_BEDROCK_BASE_URL=https://enterplace.example.com/bedrock
+export CLAUDE_CODE_SKIP_BEDROCK_AUTH=1
+export ANTHROPIC_AUTH_TOKEN=enterplace_...
+export AWS_REGION=us-east-1
+export ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-5-20250929-v1:0
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
+claude
+```
+
+Here the model is the Bedrock ID, which Enterplace matches to the name `model_ids` gives it. Leave `AWS_BEARER_TOKEN_BEDROCK` unset: Claude Code would send it in place of the Enterplace key.
+
+</TabItem>
+<TabItem label="Vertex AI">
+
+```bash
+export CLAUDE_CODE_USE_VERTEX=1
+export ANTHROPIC_VERTEX_BASE_URL=https://enterplace.example.com/vertex/v1
+export ANTHROPIC_VERTEX_PROJECT_ID=my-project
+export CLOUD_ML_REGION=us-east5
+export CLAUDE_CODE_SKIP_VERTEX_AUTH=1
+export ANTHROPIC_AUTH_TOKEN=enterplace_...
+export ANTHROPIC_MODEL=claude-sonnet-4-5@20250929
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5@20251001
+claude
+```
+
+The project and region must be the ones in the provider's `url`.
+
+</TabItem>
+</Tabs>
+
+- `CLAUDE_CODE_SKIP_BEDROCK_AUTH` and `CLAUDE_CODE_SKIP_VERTEX_AUTH` stop Claude Code signing the request itself, and `ANTHROPIC_AUTH_TOKEN` sends the Enterplace key as `Authorization: Bearer`.
+- With more than one Bedrock provider in the policy (a `bedrock` and a `bedrock_converse`, say), Enterplace refuses with `provider_needed`. Name one: `export ANTHROPIC_CUSTOM_HEADERS="x-enterplace-provider: bedrock"`.
+- Request guardrails read every string in the body. A streamed Bedrock answer goes back as Bedrock's event stream, unread.
+- The `/model` picker, tool permissions and answer guardrails are documented for the messages route. Use the Anthropic format when a rule depends on them.
+
+## What was run
+
+`scripts/cloud_agents_check.py` runs the installed `claude -p` against a local Enterplace whose providers point at a mock of InvokeModel and rawPredict. No cloud account is involved, so it shows what Enterplace does with Claude Code's real requests, not what Bedrock or Vertex AI answer.
+
+```bash
+cargo build -p enterplace-cli
+python3 scripts/cloud_agents_check.py target/debug/enterplace claude-bedrock claude-vertex claude-bedrock-native claude-vertex-native
+```
+
+| Run | Result on 2026-11-15, Claude Code 2.1.325 |
+|---|---|
+| `claude-bedrock`: Anthropic format, `kind: bedrock` | Passed. The mock received `/model/<id>/invoke-with-response-stream` |
+| `claude-vertex`: Anthropic format, `kind: vertex_anthropic` | Passed. The mock received `...:streamRawPredict` |
+| `claude-bedrock-native`: `CLAUDE_CODE_USE_BEDROCK` through `/bedrock` | Passed |
+| `claude-vertex-native`: `CLAUDE_CODE_USE_VERTEX` through `/vertex/v1` | Passed |
+| Any of them against Amazon Bedrock or Vertex AI itself | Not run |
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Keys, the model picker, refusals and budgets." />
+	<LinkCard title="Amazon Bedrock" href="/providers/bedrock/" description="The AWS credential chain and what Enterplace sends." />
+	<LinkCard title="Vertex AI" href="/providers/vertex/" description="Google Cloud sign-in and Claude's model names." />
+	<LinkCard title="Passthrough" href="/governance/policy/#passthrough" description="How a rule opens a provider's own paths." />
+</CardGrid>
