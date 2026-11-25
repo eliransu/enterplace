@@ -5,6 +5,7 @@
 //! How a feature registers is written up in docs/porting.md.
 
 mod alerts;
+mod auth_proxy;
 mod capture;
 pub(crate) mod devices;
 mod members;
@@ -169,6 +170,11 @@ pub fn extend_with(
     let devices_on = status.unlocked(devices::FEATURE);
     if !devices_on {
         devices::locked(&mut extension, status);
+    }
+    // Needs no store: who a trusted proxy says the caller is, from the policy alone.
+    // Without it the headers are not read, and the gateway says so at start when the policy sets them.
+    if status.unlocked(auth_proxy::FEATURE) {
+        auth_proxy::register(&mut extension, host.policy_now.clone());
     }
     // Retired on disk only through what the audit export has read, when it runs (for export or for alerting, which
     // reads the same table); through anything otherwise. With a store the request index must have copied it too.

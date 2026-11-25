@@ -27,6 +27,11 @@ one repository. How a release is made: RELEASING.md.
   address (and, for password sign-in, the account) for 30 minutes: `429`, `Retry-After`, code `sign_in_locked`.
   With a store the count is shared by every replica (new table `enterplace_sign_in_failures`, core migration 8). The
   failure that locks is recorded as `console_sign_in_locked`.
+- Identity from an authenticating proxy (enterprise, license feature `auth_proxy`): `identity_headers: { user,
+  groups, team }` names the headers in which a proxy listed in `trusted_proxies` says who the caller is. A keyless
+  request on the model routes is then that person's, and the console signs them in with the role their groups give
+  through `sso_values`. Headers from any other address are ignored; a header sent twice is refused with
+  `identity_invalid`. Records carry `auth: identity_headers`.
 - `tls: { cert_file, key_file }` in the policy stands in for `--tls-cert` and `--tls-key`.
 - The enterprise binary's `serve` takes every flag of the open source one. It ignored `--tls-cert` and `--tls-key`
   before and served plain HTTP; it now serves HTTPS with them, and refuses a flag it does not know.

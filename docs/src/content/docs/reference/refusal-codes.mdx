@@ -53,6 +53,7 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 | [`ip_not_allowed`](#ip_not_allowed) | 403 | `permission_error` |
 | [`route_not_allowed`](#route_not_allowed) | 403 | `permission_error` |
 | [`cert_required`](#cert_required) | 403 | `permission_error` |
+| [`identity_invalid`](#identity_invalid) | 401 | `authentication_error` |
 | [`jwt_untrusted`](#jwt_untrusted) | 401 | `authentication_error` |
 | [`jwt_invalid`](#jwt_invalid) | 401 | `authentication_error` |
 | [`jwt_expired`](#jwt_expired) | 401 | `authentication_error` |
@@ -201,6 +202,10 @@ The key's `routes` do not include this path. Ask an admin to change the key's ro
 ### cert_required
 
 The key is bound to a client certificate (`cert:` on the key), and this connection did not present a certificate with that name that Enterplace verified. Connect with the certificate, or ask an admin to change the key's `cert`. See [Mutual TLS](/governance/mutual-tls/).
+
+### identity_invalid
+
+Enterplace Enterprise: the request came through a trusted proxy with `identity_headers` set, and what the headers say cannot be taken: a header arrived twice, the user header holds no valid name, or the person is in no team. The message says which. Fix the proxy's header settings, or ask an admin to add the person's group to a team. See [Identity from an authenticating proxy](/governance/auth-proxy/).
 
 ### jwt_untrusted
 

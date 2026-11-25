@@ -1,0 +1,47 @@
+---
+title: Identity from an authenticating proxy
+description: Behind oauth2-proxy, an ingress with OIDC, Cloudflare Access or an AWS ALB, take the person a trusted proxy names in a header, and map their groups to roles and teams as single sign-on does. An enterprise feature, license feature auth_proxy.
+sidebar:
+  order: 10
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+When an authenticating proxy already signs people in (oauth2-proxy, an ingress with OIDC, Cloudflare Access behind a tunnel, an AWS Application Load Balancer), it can pass who the person is to Enterplace in request headers. Enterplace then needs no key of its own from them: on the model routes the request is that person's, and in the console they are signed in with the role their groups give them.
+
+This is an enterprise feature, unlocked by the license feature `auth_proxy`.
+
+## Set it up
+
+```yaml title="enterplace.policy.yaml (excerpt)"
+trusted_proxies: [10.0.0.0/8]
+identity_headers:
+  user: X-Forwarded-User        # the person's email or user name
+  groups: X-Forwarded-Groups    # optional: their groups, separated by commas
+  team: everyone                # optional: the team of someone whose groups put them in none
+teams:
+  - name: engineering
+    sso_values: [eng]
+roles:
+  - name: auditors
+    permissions: [see_keys, see_records]
+    sso_values: [enterplace-auditors]
+```
+
+- `trusted_proxies` must list the proxy's addresses. `enterplace check` refuses `identity_headers` without it.
+- Groups map to teams and roles through `sso_values`, exactly as for [single sign-on](/governance/single-sign-on/). A person whose groups match no role does not get into the console. A person in no team (and no `team:` fallback) is refused on the model routes with `identity_invalid`, by name.
+- A request that also carries a Enterplace key is the key's: the key decides.
+
+## What is trusted, and what is not
+
+<Aside type="caution">
+Anyone can write a header. Enterplace reads the identity headers only on a connection whose peer address is in `trusted_proxies`. From anywhere else they are ignored, and a forged `X-Forwarded-For` does not make a stranger a proxy. Make sure callers cannot reach Enterplace around the proxy, for example with a NetworkPolicy.
+</Aside>
+
+- A header that arrives twice is refused (`identity_invalid`): a proxy that appended its value to the caller's, instead of replacing it, must not let the caller's through. Configure the proxy to overwrite these headers.
+- The headers are removed before the request goes on: guardrails, traces and the provider never see them.
+- Records name the person in `person`, their team in `team`, and carry `auth: identity_headers`. Budgets and limits count them by person as they do a key holder.
+
+## Without the license
+
+The open source edition, and an enterprise binary whose license lacks `auth_proxy`, do not read the headers. A request with no key is refused with `no_key` as before, and the gateway warns at start that the policy sets `identity_headers` it does not read.

@@ -104,6 +104,7 @@ fn setup(name: &str) -> Result<Setup, Box<dyn std::error::Error>> {
             Box::pin(async move { ok.then(ada) })
         })),
         watch: None,
+        proxy_admin: None,
     };
     let config = ConsoleConfig {
         policy: dir.join("enterplace.policy.yaml"),

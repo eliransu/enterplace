@@ -936,6 +936,11 @@ pub fn governed_with(
         policy_now: policy_now.clone(),
         org_chains,
     })?;
+    if loaded.policy.identity_headers().is_some() && extension.identity.is_none() {
+        eprintln!(
+            "warning: the policy sets identity_headers, and this gateway does not read them (Enterplace Enterprise does, with the license feature auth_proxy), so a request without a key is refused as before. Remove identity_headers, or run the licensed binary."
+        );
+    }
     new_org.tell = extension.on_org.clone();
     let config = Config {
         providers,

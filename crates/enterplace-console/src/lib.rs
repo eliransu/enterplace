@@ -125,6 +125,11 @@ enum Who {
 pub type Accounts =
     Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Option<Admin>> + Send>> + Send + Sync>;
 
+/// Says who a console request with no session is from its headers and the address the connection came from (the
+/// proxy's), or `None` for no one. The extension must answer only for an address it trusts: anyone can write a
+/// header. Asked on every such request, so a change at the proxy or in the policy applies at once.
+pub type ProxyAdmin = Arc<dyn Fn(&HeaderMap, Option<IpAddr>) -> Option<Admin> + Send + Sync>;
+
 /// What a binary that embeds the console adds to it: pages beside the built-in ones with their nav entries, another
 /// way to sign in, and the accounts that way signs in. Its handlers take `State<Console>` and use
 /// [`Console::signed_in`], [`Console::page`] and [`Console::audit`], so they share the console's sessions, look and
@@ -139,6 +144,8 @@ pub struct Extension {
     pub sign_in: Option<(String, String)>,
     /// Answers for sessions opened with [`Console::sign_in_account`].
     pub accounts: Option<Accounts>,
+    /// Names who a request with no session is, from what an authenticating proxy put on it.
+    pub proxy_admin: Option<ProxyAdmin>,
     /// Watch mode, when the binary has it licensed and its store answers: Start here makes watch tokens with it.
     pub watch: Option<Watch>,
 }
@@ -211,6 +218,9 @@ fn who_of(text: &str) -> Option<Who> {
 /// The outcome of the last "Verify chain now", and when it ran.
 type Verified = (Instant, Result<(u64, String), String>);
 
+/// One scope's failed sign-ins: how many, since when, and until when it is locked out.
+type Failures = (u32, Instant, Option<Instant>);
+
 struct Inner {
     config: ConsoleConfig,
     /// Sessions without a store. With one (`store:` in the policy), sessions are rows in it, so a sign-in is good on
@@ -243,9 +253,10 @@ struct Inner {
     mine: Mutex<HashMap<String, String>>,
     accounts: Option<Accounts>,
     watch: Option<Watch>,
+    proxy_admin: Option<ProxyAdmin>,
     /// Failed sign-ins per scope without a store: how many, since when, and until when the scope is locked out.
     /// With a store they are rows in it, so every gateway counts and refuses together.
-    failures: Mutex<HashMap<String, (u32, Instant, Option<Instant>)>>,
+    failures: Mutex<HashMap<String, Failures>>,
     /// Nav entries and the sign-in link an extension added, set on every request for the pages to draw.
     extra: Arc<html::Extra>,
 }
@@ -387,6 +398,12 @@ pub enum Via {
 }
 
 impl Admin {
+    /// Someone with a role of the policy (or a built-in one), as single sign-on signs them in: for an extension
+    /// that maps people to roles itself.
+    pub fn with_role(name: &str, team: &str, role: &Role, via: Via) -> Admin {
+        admin_of(name.to_string(), team.to_string(), role, via)
+    }
+
     /// An admin of everything, or a read-only viewer of everything, as before roles: for extensions and tests.
     pub fn of_role(name: &str, team: &str, read_only: bool, via: Via) -> Admin {
         let role = builtin_role(if read_only { "read_only" } else { "admin" });
@@ -580,6 +597,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         mine: Mutex::default(),
         accounts: extension.accounts,
         watch: extension.watch,
+        proxy_admin: extension.proxy_admin,
         failures: Mutex::default(),
         extra: Arc::new(html::Extra {
             nav: extension.nav,
@@ -929,9 +947,20 @@ impl Console {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// The admin of a request: the one its session is for, else the one an authenticating proxy names.
+    async fn admin(&self, headers: &HeaderMap) -> Option<Admin> {
+        if let Some(admin) = self.session_admin(headers).await {
+            return Some(admin);
+        }
+        self.0
+            .proxy_admin
+            .as_ref()
+            .and_then(|named| named(headers, client()))
+    }
+
     /// The admin of a signed-in request. The keys file is read every time, so a key revoked or no longer
     /// marked admin ends its sessions at once.
-    async fn admin(&self, headers: &HeaderMap) -> Option<Admin> {
+    async fn session_admin(&self, headers: &HeaderMap) -> Option<Admin> {
         let id = cookie_value(headers, COOKIE)?;
         let who = match self.store() {
             // A store that cannot be reached signs no one in: the session may have ended on another gateway.
@@ -1182,7 +1211,7 @@ impl Console {
             .failures
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let stale = |(_, since, locked): &(u32, Instant, Option<Instant>)| {
+        let stale = |(_, since, locked): &Failures| {
             now.duration_since(*since) > SIGN_IN_LIMIT.window
                 && locked.is_none_or(|until| until <= now)
         };
