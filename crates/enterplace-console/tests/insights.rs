@@ -461,6 +461,155 @@ async fn a_kept_body_is_shown_only_to_its_viewers_and_every_view_is_recorded() -
     Ok(())
 }
 
+/// Who is close to a limit covers every budget the policy sets: rules, a key's own budget from the keys file, and
+/// each scope of the `limits:` list, a `*` entry by whoever is heading out first.
+#[tokio::test]
+async fn every_budget_scope_is_forecast_rules_keys_and_the_limits_list() -> TestResult {
+    let s = setup("every-scope")?;
+    let dir = s.audit.with_file_name("");
+    std::fs::write(
+        dir.join("enterplace.policy.yaml"),
+        format!(
+            "{POLICY}limits:\n  - {{ team: search, budget: {{ usd: 5, per: month }} }}\n  - {{ person: \"*\", budget: {{ usd: 2, per: month }} }}\n  - {{ global: true, budget: {{ usd: 100, per: month }} }}\n  - {{ model: gpt-4o-mini, budget: {{ usd: 50, per: month }} }}\n  - {{ customer: acme, budget: {{ usd: 1, per: month }} }}\n"
+        ),
+    )?;
+    std::fs::write(
+        dir.join("enterplace.keys.yaml"),
+        format!(
+            "keys:\n  - name: noa.bar\n    team: platform\n    sha256: {}\n    admin: true\n  - name: lee.k\n    team: platform\n    sha256: {}\n    admin: true\n    budget: {{ usd: 3, per: month }}\n",
+            sha256_hex(NOA.as_bytes()),
+            sha256_hex(LEE.as_bytes())
+        ),
+    )?;
+    let lee_key = &sha256_hex(LEE.as_bytes())[..8];
+    s.log
+        .append_record(&enterplace_core::audit::record(&Entry {
+            id: "01LEE0000000000000000000007",
+            person: Some("lee.k"),
+            team: Some("platform"),
+            key: Some(lee_key),
+            method: "POST",
+            path: "/v1/chat/completions",
+            model: Some("gpt-4o-mini"),
+            allowed: true,
+            rule: Some("everyone-else"),
+            provider: "openai",
+            ..Entry::default()
+        }))?;
+    s.log.append_record(&object(json!({"event": "usage", "id": "01LEE0000000000000000000007", "provider": "openai", "model": "gpt-4o-mini", "status": 200, "input_tokens": 10, "output_tokens": 5, "cost_usd": 0.5, "charged_usd": 0.5, "latency_ms": 300})))?;
+    s.log.flush();
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (status, page) = analytics(&s.app, "", &cookie).await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let forecasts = page["forecasts"].as_array().ok_or("no forecasts")?;
+    let text = |label: &str| {
+        forecasts
+            .iter()
+            .find(|f| f["label"] == label)
+            .map(|f| f["text"].as_str().unwrap_or_default().to_string())
+    };
+    for (label, expected) in [
+        ("team payments", "$4.00 of $10.00 per month"),
+        ("lee.k's key", "$0.50 of $3.00 per month"),
+        ("team search", "$0.01 of $5.00 per month"),
+        ("maya.cohen (each person)", "$4.00 of $2.00 per month"),
+        ("everything", "$4.51 of $100.00 per month"),
+        ("model gpt-4o-mini", "$4.51 of $50.00 per month"),
+        ("customer acme", "$0.00 of $1.00 per month"),
+    ] {
+        assert_eq!(text(label).as_deref(), Some(expected), "{label}: {page}");
+    }
+    assert_eq!(forecasts.len(), 7, "{page}");
+    // The one already past its limit leads: that is who to look at.
+    assert_eq!(forecasts[0]["label"], "maya.cohen (each person)", "{page}");
+    assert!(
+        forecasts[0]["note"]
+            .as_str()
+            .is_some_and(|n| n.starts_with("Set by limits { person: * }")),
+        "{page}"
+    );
+    Ok(())
+}
+
+/// A budget that lasts at its pace can still refuse: a request reserves what its most output tokens could cost
+/// before it is sent. The forecast says how many it refused this period and the fix, as the Spend page does.
+#[tokio::test]
+async fn a_forecast_that_lasts_says_what_it_refused_and_the_fix() -> TestResult {
+    let s = setup("forecast-refused")?;
+    std::fs::write(
+        s.audit.with_file_name("enterplace.policy.yaml"),
+        format!("{POLICY}limits:\n  - {{ team: search, budget: {{ usd: 5, per: month }} }}\n"),
+    )?;
+    let refusal = |id: &'static str, team: &'static str, code: &'static str, applied: Value| {
+        let mut r = enterplace_core::audit::record(&Entry {
+            id,
+            person: Some("dana.levi"),
+            team: Some(team),
+            method: "POST",
+            path: "/v1/chat/completions",
+            model: Some("gpt-4o-mini"),
+            allowed: false,
+            code: Some(code),
+            rule: Some(if team == "payments" {
+                "payments-team"
+            } else {
+                "everyone-else"
+            }),
+            ..Entry::default()
+        });
+        r.insert("applied".into(), applied);
+        r
+    };
+    for id in ["01BUD0000000000000000000010", "01BUD0000000000000000000011"] {
+        s.log.append_record(&refusal(
+            id,
+            "payments",
+            "budget_exceeded",
+            json!({ "of": "rule", "scope": "team:payments", "limit": "budget", "source": "rule \"payments-team\" (line 12)", "usd": 10.0, "per": "month" }),
+        ))?;
+    }
+    s.log.append_record(&refusal(
+        "01BUD0000000000000000000012",
+        "search",
+        "budget_exceeded",
+        json!({ "of": "team", "scope": "team:search", "limit": "budget", "source": "limits { team: search } (line 21)", "usd": 5.0, "per": "month" }),
+    ))?;
+    s.log.flush();
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (_, page) = analytics(&s.app, "", &cookie).await?;
+    let forecast = |label: &str| {
+        page["forecasts"]
+            .as_array()
+            .and_then(|f| f.iter().find(|f| f["label"] == label))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    let payments = forecast("team payments");
+    let note = payments["note"].as_str().unwrap_or_default();
+    assert!(
+        note.contains("At this pace it lasts the period."),
+        "{payments}"
+    );
+    assert!(
+        note.contains(
+            "Refused 2 requests this period: each request reserves what its most output tokens could cost before it is sent. Lower max output tokens (max_tokens) on the callers, or raise the budget."
+        ),
+        "{payments}"
+    );
+    assert_eq!(
+        payments["over"], true,
+        "a budget that refuses is shown as spent"
+    );
+    let search = forecast("team search");
+    assert!(
+        search["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("Refused 1 request this period")),
+        "{search}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_budget_is_forecast_over_its_own_period_and_time_zone() -> TestResult {
     let s = setup("forecast-window")?;
@@ -479,6 +628,51 @@ async fn a_budget_is_forecast_over_its_own_period_and_time_zone() -> TestResult 
     assert_eq!(
         page["forecasts"][0]["text"],
         "$4.00 of $10.00 per week (America/New_York)"
+    );
+    Ok(())
+}
+
+/// A Claude Code subscription login under a rule without `budget_basis: api_equivalent`: the gateway counts none of
+/// it against the team's budget (`"budget": "not_counted"`), so neither meter does; the estimate is said beside them.
+#[tokio::test]
+async fn subscription_traffic_is_beside_the_budget_meter_never_in_it() -> TestResult {
+    let s = setup("uncounted")?;
+    let mut sub = enterplace_core::audit::record(&Entry {
+        id: "01SUB0000000000000000000009",
+        person: Some("maya.cohen"),
+        team: Some("payments"),
+        method: "POST",
+        path: "/v1/messages",
+        model: Some("gpt-4o-mini"),
+        allowed: true,
+        rule: Some("payments-team"),
+        provider: "openai",
+        ..Entry::default()
+    });
+    sub.insert("user_agent".into(), "claude-cli/2.0.1".into());
+    sub.insert("auth".into(), "passthrough".into());
+    s.log.append_record(&sub)?;
+    s.log.append_record(&object(json!({"event": "usage", "id": "01SUB0000000000000000000009", "time": enterplace_core::audit::timestamp(), "person": "maya.cohen", "team": "payments", "provider": "openai", "model": "gpt-4o-mini", "status": 200, "input_tokens": 100, "output_tokens": 10, "cost_usd": 3.0, "charged_usd": 3.0, "auth": "passthrough", "cost_basis": "api_equivalent_estimate", "caller_paid": true, "budget": "not_counted", "latency_ms": 900})))?;
+    s.log.flush();
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (_, page) = analytics(&s.app, "", &cookie).await?;
+    let forecast = &page["forecasts"][0];
+    assert_eq!(forecast["text"], "$4.00 of $10.00 per month", "{forecast}");
+    assert!(
+        forecast["note"].as_str().is_some_and(|n| n.contains(
+            "~$3.00 of subscription use (an estimate at API prices) is not counted against the budget"
+        )),
+        "{forecast}"
+    );
+    let (_, spend) = api(&s.app, "/console/api/spend", &cookie).await?;
+    let meter = &spend["budgets"]["meters"][0];
+    // The Spend page reads usage records by their time: the setup's own carry none, so this is the month's only one.
+    assert_eq!(meter["text"], "$0.00 of $10.00", "{spend}");
+    assert!(
+        meter["note"].as_str().is_some_and(|n| n.contains(
+            "~$3.00 of subscription use (an estimate at API prices) is not counted against the budget"
+        )),
+        "{meter}"
     );
     Ok(())
 }
@@ -701,6 +895,52 @@ async fn analytics_draw_one_chart_with_a_metric_switch_and_four_tabs_up_front() 
     assert!(
         !more.iter().any(|l| l == "Customer" || l == "Organization"),
         "{page}"
+    );
+    Ok(())
+}
+
+/// One team's (or person's, app's, agent's, model's) trend: the day chart filtered to one value of a ranking, the
+/// ranking itself left whole, the filter named so it can be removed, and kept in the share link.
+#[tokio::test]
+async fn a_ranking_value_filters_the_chart_alone_and_stays_in_the_link() -> TestResult {
+    let s = setup("trend")?;
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (status, page) = analytics(&s.app, "?by=team&trend=team:search", &cookie).await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(
+        page["trend"],
+        json!({ "name": "team", "value": "search", "label": "Team search" })
+    );
+    assert_eq!(page["chart_title"], "Requests, per day, team search");
+    // Today's bar holds search's two requests, not all three.
+    let points = page["chart"]["points"].as_array().ok_or("no chart")?;
+    assert_eq!(
+        points.last().map(|p| &p["shown"]),
+        Some(&json!("2")),
+        "{page}"
+    );
+    // The ranking and the figures stay the whole window's.
+    assert_eq!(page["stats"][0]["figure"], "3");
+    assert_eq!(page["ranking"].as_array().map(Vec::len), Some(2), "{page}");
+    assert!(
+        page["link"]
+            .as_str()
+            .is_some_and(|l| l.contains("trend=team%3Asearch")),
+        "{page}"
+    );
+    // Without it, the chart is everything again.
+    let (_, all) = analytics(&s.app, "?by=team", &cookie).await?;
+    assert_eq!(all["trend"], Value::Null);
+    let points = all["chart"]["points"].as_array().ok_or("no chart")?;
+    assert_eq!(points.last().map(|p| &p["shown"]), Some(&json!("3")));
+    // A trend that does not parse says how to write it.
+    let (status, bad) = analytics(&s.app, "?trend=colour:blue", &cookie).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        bad["error"].as_str().is_some_and(
+            |e| e.contains("Write it as a dimension and a value, such as trend=team:payments")
+        ),
+        "{bad}"
     );
     Ok(())
 }

@@ -808,7 +808,7 @@ impl Index for PgIndex {
         })
     }
 
-    fn spent(&self, query: &Query, dimension: &str) -> Pending<Vec<(String, f64)>> {
+    fn spent(&self, query: &Query, dimension: &str) -> Pending<Vec<(String, f64, f64)>> {
         let pg = self.pg.clone();
         let query = query.clone();
         let dimension = dimension.to_string();
@@ -820,14 +820,14 @@ impl Index for PgIndex {
             let n = params.len();
             let sql = Sql::both(
                 format!(
-                    "SELECT v.k, COALESCE(sum(charged_usd), 0) FROM enterplace_requests CROSS JOIN LATERAL jsonb_array_elements_text( \
+                    "SELECT v.k, COALESCE(sum(charged_usd), 0), {UNCOUNTED} FROM enterplace_requests CROSS JOIN LATERAL jsonb_array_elements_text( \
                        CASE WHEN jsonb_typeof(labels -> ${n}) = 'array' THEN labels -> ${n} ELSE '[]'::jsonb END) AS v(k) \
                        {} GROUP BY 1",
                     clause.pg
                 ),
                 // Filtered first, as in `analytics`.
                 sql::lite(&format!(
-                    "SELECT v.value, COALESCE(sum(charged_usd), 0) * 1.0 FROM (SELECT * FROM enterplace_requests {}) r CROSS JOIN json_each( \
+                    "SELECT v.value, COALESCE(sum(charged_usd), 0) * 1.0, {UNCOUNTED} FROM (SELECT * FROM enterplace_requests {}) r CROSS JOIN json_each( \
                        CASE WHEN json_type(r.labels -> ${n}) = 'array' THEN r.labels -> ${n} ELSE '[]' END) AS v GROUP BY 1",
                     clause.lite
                 )),
@@ -837,7 +837,13 @@ impl Index for PgIndex {
                 .await
                 .map_err(db)?
                 .iter()
-                .map(|r| Ok((r.try_get(0).map_err(db)?, r.try_get(1).map_err(db)?)))
+                .map(|r| {
+                    Ok((
+                        r.try_get(0).map_err(db)?,
+                        r.try_get(1).map_err(db)?,
+                        r.try_get(2).map_err(db)?,
+                    ))
+                })
                 .collect()
         })
     }
@@ -916,6 +922,9 @@ impl Index for PgIndex {
         })
     }
 }
+
+/// [`insights::Row::uncounted_usd`] summed: the subscription estimate no budget counted.
+const UNCOUNTED: &str = "COALESCE(sum(cost_usd) FILTER (WHERE charged_usd = 0 AND line LIKE '%\"auth\":\"passthrough\"%'), 0) * 1.0";
 
 /// The sums, nearest-rank latency percentiles (`percentile_disc`, as [`insights::Stats::percentile`] takes
 /// them) of each group, as `(key, stats)`.

@@ -15,6 +15,11 @@ cargo run -p enterplace-cli -- start
 That builds the `enterplace` binary and starts a gateway in the current folder with a demo model, so you can send a
 request without any provider key. The console opens at the link it prints.
 
+To look at the console's multi-day charts without weeks of traffic, `enterplace demo-seed <new folder> --fake-records`
+writes five weeks of made-up usage records (teams, people, coding agents, apps, models, refusals, unnamed and
+subscription requests) with a policy and an admin key into a new or empty folder; it refuses any other folder. Serve
+that folder to take screenshots or run browser checks. Never point it at a real install.
+
 Before you open a pull request, run the checks CI runs:
 
 ```sh

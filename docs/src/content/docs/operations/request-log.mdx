@@ -28,7 +28,7 @@ Open `/console/requests`. Filter by any of these. Every filter narrows the list,
 |---|---|---|
 | Person, team, key, model, provider | `person`, `team`, `key`, `model`, `provider` | The value exactly. Provider and model are the ones that answered, after a fallback |
 | Tag | `tag` | One of the strings in the request record's `tags` field |
-| Coding agent | `agent` | The tool the record's `user_agent` names, as [coverage](/governance/coverage/) counts it, such as `claude-code` or `codex`; otherwise the product part, such as `OpenAI/JS` |
+| Coding agent | `agent` | The tool the record's `user_agent` names, as [coverage](/governance/coverage/) counts it, such as `claude-code` or `codex`; an SDK or plain HTTP client (OpenAI and Anthropic SDKs, `python-requests`, `node-fetch`, `curl` and the like) as an app, such as `App (OpenAI/Python)`, so it is never counted as a coding agent; otherwise the product part, such as `aider` |
 | Outcome | `outcome` | `allowed`, `refused` (by the policy or a guardrail) or `error` (a provider error status, or no answer at all) |
 | Refusal code | `code` | A [refusal code](/reference/refusal-codes/), such as `budget_exceeded` or `upstream_timeout` |
 | Guardrail finding | `finding` | A kind a guardrail found on the request or the answer, such as `email_address` |
@@ -47,7 +47,9 @@ Open `/console/analytics`. Pick a window (24 hours by the hour, 7 or 30 days by 
 
 The page shows totals (requests, refusals, errors, tokens, cost, and latency at p50, p95 and p99 by nearest rank), charts of each over time, and a ranking by the chosen dimension, most costly first. Each ranked value links to its requests.
 
-**Budget forecasts** take each budget in the policy and what it has been charged since its own period started, in its own time zone: a `per: week, tz: America/New_York` budget is measured from Monday 00:00 in New York, a `per: 6h` one from the last 00:00, 06:00, 12:00 or 18:00. With a store the sums are computed by Postgres over every request of the period; without one, from the local audit log. At that pace, each says whether it lasts the period or the date and time it runs out. A budget for each person shows the person heading out first.
+**Trend** on a ranked value (a team, person, app, coding agent or model) filters the chart alone to it, so one team's days read next to the whole ranking: `?trend=team:payments`. The chart names the filter, its button removes it, and Copy link keeps it.
+
+**Budget forecasts** take every budget in the policy (each rule's, each key's own from the keys file, and each entry of the `limits:` list: global, organization, team, person, key, customer, tag, model and model group), closest to its limit first, and what it has been charged since its own period started, in its own time zone: a `per: week, tz: America/New_York` budget is measured from Monday 00:00 in New York, a `per: 6h` one from the last 00:00, 06:00, 12:00 or 18:00. With a store the sums are computed by Postgres over every request of the period; without one, from the local audit log. At that pace, each says whether it lasts the period or the date and time it runs out. A budget for each person (or each team, key or customer, a `"*"` entry) shows the one heading out first. A budget that refused requests this period says how many, even when it lasts at its pace: each request reserves what its most output tokens could cost before it is sent, so the fix is a lower `max_tokens` on the callers or a higher budget.
 
 ## Bodies
 

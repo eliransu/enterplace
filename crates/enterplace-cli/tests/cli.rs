@@ -3137,3 +3137,78 @@ fn key_import_checks_the_whole_list_then_writes_each_key_once() -> TestResult {
     assert_eq!(out.status.code(), Some(2));
     Ok(())
 }
+
+#[test]
+fn demo_seed_fills_only_a_new_folder_with_weeks_of_fake_records_in_a_real_chain() -> TestResult {
+    // Never without the flag that says the records are fake, and never into a folder that holds anything.
+    let dir = workdir("demo-seed")?;
+    let out = enterplace(&["demo-seed", &path(&dir, "fresh")], &[])?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr)?.contains("--fake-records"));
+    assert!(!dir.join("fresh").exists());
+    let out = enterplace(
+        &["demo-seed", &dir.display().to_string(), "--fake-records"],
+        &[],
+    )?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr)?.contains("is not empty"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("enterplace.policy.yaml"))?,
+        POLICY,
+        "nothing next to an install is touched"
+    );
+
+    let fresh = dir.join("fresh");
+    let out = enterplace(
+        &["demo-seed", &fresh.display().to_string(), "--fake-records"],
+        &[],
+    )?;
+    let stdout = String::from_utf8(out.stdout)?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    assert_eq!(printed_keys(&stdout).len(), 1, "the admin key: {stdout}");
+    let (policy, keys) = (
+        path(&fresh, "enterplace.policy.yaml"),
+        path(&fresh, "enterplace.keys.yaml"),
+    );
+    let out = enterplace(&["check", &policy, "--keys", &keys], &[])?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+    let audit = fresh.join("enterplace-audit.jsonl");
+    let out = enterplace(&["audit", "verify", &audit.display().to_string()], &[])?;
+    assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
+
+    // What the insights read: five weeks of days, several teams, people, coding agents, apps and models, refusals,
+    // unnamed requests and subscription estimates.
+    let rows = enterplace_core::insights::fold_chain(&audit)?;
+    let distinct = |of: &dyn Fn(&enterplace_core::insights::Row) -> String| {
+        rows.iter()
+            .map(of)
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let days = distinct(&|r| r.time.get(..10).unwrap_or_default().to_string());
+    assert!(days.len() >= 34, "{days:?}");
+    assert!(distinct(&|r| r.label("team").to_string()).len() >= 3);
+    let agents = distinct(&|r| r.label("agent").to_string());
+    for agent in [
+        "claude-code",
+        "codex",
+        "cursor",
+        "gemini-cli",
+        "cline",
+        "App (OpenAI/Python)",
+    ] {
+        assert!(agents.contains(agent), "{agent}: {agents:?}");
+    }
+    assert!(distinct(&|r| r.label("model").to_string()).len() >= 4);
+    let refused = rows.iter().filter(|r| r.verdict == "refused").count();
+    assert!(
+        refused > 10 && refused < rows.len() / 10,
+        "{refused} of {}",
+        rows.len()
+    );
+    assert!(rows.iter().any(|r| r.label("person") == "unknown"));
+    assert!(rows.iter().any(|r| r.estimate && r.uncounted_usd() > 0.0));
+    // Nothing after now: no bar for tomorrow.
+    let now = enterplace_core::audit::timestamp();
+    assert!(rows.iter().all(|r| r.time <= now));
+    Ok(())
+}

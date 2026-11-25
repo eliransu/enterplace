@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Head, Loading, Panel, Problem } from "@/components/page";
@@ -47,6 +48,7 @@ type Data = {
   link: string;
   agent: string;
   forecasts: Forecast[] | null;
+  trend: { name: string; value: string; label: string } | null;
 };
 
 const WINDOWS: Tab[] = [
@@ -67,19 +69,21 @@ const LEAD = "Requests, cost and refusals over time, by team, person, model or p
 const UP_FRONT = ["team", "person", "model", "provider"];
 
 /// Picks a window, metric or breakdown and keeps every filter, as the old page's tab links did. `from` goes: a window
-/// is picked by its length, and a start date from a link would pin it.
+/// is picked by its length, and a start date from a link would pin it. An empty value removes the parameter.
 function pick(query: URLSearchParams, name: string, value: string) {
   const next = new URLSearchParams(query);
   next.delete("from");
-  next.set(name, value);
+  if (value) next.set(name, value);
+  else next.delete(name);
   window.location.hash = `#/usage?${next}`;
 }
 
-function Tabs({ label, tabs, current, onPick }: { label: string; tabs: Tab[]; current: string; onPick: (name: string) => void }) {
+/// `edged`: on the page's own background, where the accent fill alone does not show which one is picked.
+function Tabs({ label, tabs, current, onPick, edged }: { label: string; tabs: Tab[]; current: string; onPick: (name: string) => void; edged?: boolean }) {
   return (
     <div role="group" aria-label={label} className="flex flex-wrap gap-1">
       {tabs.map((t) => (
-        <Button key={t.name} variant="ghost" size="sm" aria-pressed={t.name === current} className={cn(t.name === current && "bg-accent")} onClick={() => onPick(t.name)}>
+        <Button key={t.name} variant="ghost" size="sm" aria-pressed={t.name === current} className={cn(t.name === current && "bg-accent", t.name === current && edged && "border border-input")} onClick={() => onPick(t.name)}>
           {t.label}
         </Button>
       ))}
@@ -160,7 +164,7 @@ export function Analytics({ query }: PageProps) {
           </>
         }
       />
-      <Tabs label="Window" tabs={WINDOWS} current={data.window} onPick={(v) => pick(query, "window", v)} />
+      <Tabs label="Window" tabs={WINDOWS} current={data.window} onPick={(v) => pick(query, "window", v)} edged />
       <section className="grid gap-4 rounded-panel bg-card p-6 sm:grid-cols-3">
         {data.stats.map((s) => (
           <div key={s.label} className="grid gap-1">
@@ -170,7 +174,18 @@ export function Analytics({ query }: PageProps) {
         ))}
       </section>
       <Panel title={data.chart_title}>
-        <Tabs label="Metric" tabs={data.metrics} current={data.metric} onPick={(v) => pick(query, "metric", v)} />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Tabs label="Metric" tabs={data.metrics} current={data.metric} onPick={(v) => pick(query, "metric", v)} />
+          {data.trend ? (
+            <div className="flex items-center gap-2">
+              <span className="t-small text-muted-foreground">Chart shows</span>
+              <Button variant="outline" size="sm" aria-label={`Remove the chart filter ${data.trend.label}`} onClick={() => pick(query, "trend", "")}>
+                {data.trend.label}
+                <X aria-hidden />
+              </Button>
+            </div>
+          ) : null}
+        </div>
         {data.chart ? <Chart chart={data.chart} /> : <p className="t-small m-0 text-muted-foreground">No requests in this window.</p>}
       </Panel>
       <Panel title={data.ranking_title}>
@@ -198,6 +213,9 @@ export function Analytics({ query }: PageProps) {
               <TableHead className="text-right">USD</TableHead>
               <TableHead className="text-right">p50</TableHead>
               <TableHead className="text-right">p95</TableHead>
+              <TableHead>
+                <span className="sr-only">Trend</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -224,27 +242,33 @@ export function Analytics({ query }: PageProps) {
                     )}
                   </TableCell>
                   {[r.requests, r.refused, r.errors, r.tokens].map((v, j) => (
-                    <TableCell key={j} className="t-mono-sm text-right tabular-nums">
+                    <TableCell key={j} className="t-mono-sm whitespace-nowrap text-right tabular-nums">
                       {v}
                     </TableCell>
                   ))}
                   <Usd usd={r.usd} estimated={r.estimated} tip={data.est_tip} />
                   {[r.p50, r.p95].map((v, j) => (
-                    <TableCell key={j} className="t-mono-sm text-right tabular-nums">
+                    <TableCell key={j} className="t-mono-sm whitespace-nowrap text-right tabular-nums">
                       {v}
                     </TableCell>
                   ))}
+                  <TableCell className="text-right">
+                    {r.value === "(none)" ? null : (
+                      <TrendButton query={query} by={data.by} value={r.value} trend={data.trend} />
+                    )}
+                  </TableCell>
                 </TableRow>
                 {r.parts.map((p) => (
                   <TableRow key={p.values.join("/")} className="text-muted-foreground">
                     <TableCell className="pl-8">
                       <span className="t-small">{p.values.map((v) => (v === "" ? "(none)" : v)).join(", ")}</span>
                     </TableCell>
-                    <TableCell className="t-mono-sm text-right tabular-nums">{p.requests}</TableCell>
+                    <TableCell className="t-mono-sm whitespace-nowrap text-right tabular-nums">{p.requests}</TableCell>
                     <TableCell />
                     <TableCell />
-                    <TableCell className="t-mono-sm text-right tabular-nums">{p.tokens}</TableCell>
+                    <TableCell className="t-mono-sm whitespace-nowrap text-right tabular-nums">{p.tokens}</TableCell>
                     <Usd usd={p.usd} estimated={p.estimated} tip={data.est_tip} />
+                    <TableCell />
                     <TableCell />
                     <TableCell />
                   </TableRow>
@@ -259,11 +283,29 @@ export function Analytics({ query }: PageProps) {
   );
 }
 
+/// Filters the day chart to one value of the ranking, or back to everything when it already is: one team's,
+/// person's, app's, coding agent's or model's trend, kept in the link.
+function TrendButton({ query, by, value, trend }: { query: URLSearchParams; by: string; value: string; trend: Data["trend"] }) {
+  const on = trend?.name === by && trend.value === value;
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      aria-pressed={on}
+      aria-label={on ? `Show everything in the chart again` : `Show ${value} alone in the chart`}
+      className={cn(on && "bg-accent")}
+      onClick={() => pick(query, "trend", on ? "" : `${by}:${value}`)}
+    >
+      Trend
+    </Button>
+  );
+}
+
 /// A cost, and under it the part of it that is an estimate (sent with a subscription login), so billed and estimated
 /// spend are never read as one.
 function Usd({ usd, estimated, tip }: { usd: string; estimated: string | null; tip: string }) {
   return (
-    <TableCell className="t-mono-sm text-right tabular-nums">
+    <TableCell className="t-mono-sm whitespace-nowrap text-right tabular-nums">
       {usd}
       {estimated ? (
         <span className="t-small block text-muted-foreground" title={tip}>

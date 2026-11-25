@@ -1290,6 +1290,44 @@ pub fn tool_of(user_agent: Option<&str>) -> String {
     }
 }
 
+/// What the Coding agent breakdown shows for a `user-agent`: a coding tool by [`tool_of`], and an SDK or plain HTTP
+/// client as `App (OpenAI/Python)`, so an app's requests are never read as a coding agent's.
+/// ponytail: prefix list of the common SDKs and HTTP clients; one missing here shows as its product, as before.
+pub fn agent_of(user_agent: Option<&str>) -> String {
+    const APPS: &[&str] = &[
+        "openai/",
+        "asyncopenai/",
+        "apache-httpclient",
+        "anthropic/",
+        "asyncanthropic/",
+        "python",
+        "node",
+        "undici",
+        "axios",
+        "curl",
+        "wget",
+        "go-http-client",
+        "okhttp",
+        "java",
+        "bun",
+        "deno",
+        "postmanruntime",
+        "google-genai",
+        "litellm",
+        "langchain",
+        "faraday",
+        "dart",
+        "ruby",
+    ];
+    let tool = tool_of(user_agent);
+    let lower = tool.to_ascii_lowercase();
+    if APPS.iter().any(|app| lower.starts_with(app)) {
+        format!("App ({tool})")
+    } else {
+        tool
+    }
+}
+
 impl AuditLog {
     /// Hands any record to the writer, for records that are not requests: configuration changes and admin calls.
     /// Their fields are written as given, after the record number.
@@ -2199,6 +2237,64 @@ mod tests {
     use super::*;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn an_sdk_or_http_client_is_an_app_and_a_coding_tool_keeps_its_name() {
+        // User agents as each client sends them by default.
+        for (agent, label) in [
+            ("OpenAI/Python 1.54.3", "App (OpenAI/Python)"),
+            ("OpenAI/JS 4.73.0", "App (OpenAI/JS)"),
+            ("AsyncOpenAI/Python 1.54.3", "App (AsyncOpenAI/Python)"),
+            ("Anthropic/Python 0.40.0", "App (Anthropic/Python)"),
+            ("Anthropic/JS 0.32.1", "App (Anthropic/JS)"),
+            ("python-requests/2.32.3", "App (python-requests)"),
+            ("python-httpx/0.27.2", "App (python-httpx)"),
+            ("Python-urllib/3.12", "App (Python-urllib)"),
+            ("Python/3.11 aiohttp/3.9.5", "App (Python)"),
+            (
+                "node-fetch/1.0 (+https://github.com/bitinn/node-fetch)",
+                "App (node-fetch)",
+            ),
+            ("node", "App (node)"),
+            ("undici", "App (undici)"),
+            ("axios/1.7.7", "App (axios)"),
+            ("curl/8.7.1", "App (curl)"),
+            ("Wget/1.21.4", "App (Wget)"),
+            ("Go-http-client/2.0", "App (Go-http-client)"),
+            ("okhttp/4.12.0", "App (okhttp)"),
+            ("Java-http-client/21.0.1", "App (Java-http-client)"),
+            (
+                "Apache-HttpClient/4.5.14 (Java/17.0.9)",
+                "App (Apache-HttpClient)",
+            ),
+            ("Bun/1.1.30", "App (Bun)"),
+            ("Deno/1.45.0", "App (Deno)"),
+            ("PostmanRuntime/7.42.0", "App (PostmanRuntime)"),
+            (
+                "google-genai-sdk/0.3.0 gl-python/3.11.9",
+                "App (google-genai-sdk)",
+            ),
+            ("litellm/1.52.0", "App (litellm)"),
+            ("langchain-openai/0.2.9", "App (langchain-openai)"),
+            ("Faraday v2.12.0", "App (Faraday)"),
+            ("Dart/3.5 (dart:io)", "App (Dart)"),
+            // Coding tools are told apart as before, an SDK in their user agent or not.
+            ("claude-cli/2.0.14 (external, cli)", "claude-code"),
+            ("codex_cli_rs/0.46.0 (Mac OS 26.0; arm64)", "codex"),
+            ("GeminiCLI/0.9.0 (darwin; arm64)", "gemini-cli"),
+            ("GitHubCopilotChat/0.22.4", "github-copilot"),
+            ("Cline/3.35.0 OpenAI/JS 4.73.0", "cline"),
+            ("opencode/0.15.2 ai-sdk/provider-utils", "opencode"),
+            // Neither: shown by its product, as before.
+            ("aider/0.86.1", "aider"),
+            ("", "unknown"),
+        ] {
+            assert_eq!(agent_of(Some(agent)), label, "{agent}");
+        }
+        assert_eq!(agent_of(None), "unknown");
+        // The coverage report keeps the product name.
+        assert_eq!(tool_of(Some("OpenAI/JS 4.73.0")), "OpenAI/JS");
+    }
 
     fn temp(name: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
