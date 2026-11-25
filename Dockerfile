@@ -41,6 +41,8 @@ RUN cargo auditable build --release --locked -p enterplace-enterprise \
  && cp target/release/enterplace-enterprise /out/enterplace
 
 FROM scratch
+# The MCP Registry checks this label to confirm the image belongs to the server.json entry of that name.
+LABEL io.modelcontextprotocol.server.name="io.github.eliransu/enterplace"
 COPY --from=build /out/enterplace /enterplace
 # The audit log's folder belongs to the user Enterplace runs as. Everything else is read-only to it.
 COPY --from=build --chown=65532:65532 /out/var/lib/enterplace /var/lib/enterplace
