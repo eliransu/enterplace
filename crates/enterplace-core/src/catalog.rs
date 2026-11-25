@@ -900,6 +900,553 @@ pub const START_PROVIDERS: &[(&str, &[&str])] = &[
     ("gemini", &["gemini-2.5-pro", "gemini-2.5-flash"]),
 ];
 
+/// Models the console fills in when a provider is picked from the catalog, for the providers outside
+/// [`START_PROVIDERS`]: each one's flagship and a cheaper model, read from its own model list or docs (November
+/// 2026). A suggestion the admin edits before saving; a provider not listed here starts with an empty list.
+pub const DEFAULT_MODELS: &[(&str, &[&str])] = &[
+    (
+        "302ai",
+        &[
+            "gpt-6.2-sol",
+            "claude-fable-5-2",
+            "claude-haiku-5-5",
+            "kimi-k3.1-pro",
+        ],
+    ),
+    (
+        "abacus",
+        &[
+            "route-llm",
+            "claude-sonnet-5-5",
+            "gpt-6.2-sol",
+            "gemini-3.8-flash",
+        ],
+    ),
+    ("ai21", &["jamba-large", "jamba-mini"]),
+    (
+        "aihubmix",
+        &["gpt-6.2-sol", "qwen4-max", "kimi-k3.1-pro", "qwen3.8-27b"],
+    ),
+    (
+        "aimlapi",
+        &[
+            "openai/gpt-6.2-sol",
+            "anthropic/claude-sonnet-5-5",
+            "deepseek/deepseek-v4-pro",
+            "openai/gpt-5.4-nano",
+        ],
+    ),
+    (
+        "akashml",
+        &[
+            "zai-org/GLM-5.3",
+            "moonshotai/Kimi-K3.1-Pro",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+        ],
+    ),
+    (
+        "atlascloud",
+        &[
+            "qwen/qwen3.6-plus",
+            "deepseek-ai/deepseek-v3.2",
+            "qwen/qwen3.6-35b-a3b",
+        ],
+    ),
+    (
+        "avian",
+        &[
+            "deepseek/deepseek-v4-pro-0813",
+            "z-ai/glm-5.3",
+            "moonshotai/kimi-k3",
+            "deepseek/deepseek-v4.1-flash",
+        ],
+    ),
+    (
+        "baseten",
+        &[
+            "deepseek-ai/DeepSeek-V4-Pro-0813",
+            "zai-org/GLM-5.3",
+            "moonshotai/Kimi-K3",
+            "deepseek-ai/DeepSeek-V4.1-Flash",
+        ],
+    ),
+    (
+        "berget",
+        &[
+            "moonshotai/Kimi-K3.1-Pro",
+            "zai-org/GLM-5.3-Flash",
+            "google/gemma-4-31B-it",
+            "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+        ],
+    ),
+    ("cerebras", &["gpt-oss-120b", "qwen-3.8-27b"]),
+    (
+        "chutes",
+        &[
+            "deepseek-ai/DeepSeek-V4-Pro-0813",
+            "zai-org/GLM-5.3",
+            "moonshotai/Kimi-K3-TEE",
+            "Qwen/Qwen3.8-27B-TEE",
+        ],
+    ),
+    (
+        "cohere",
+        &[
+            "command-a-plus-05-2026",
+            "command-a-03-2025",
+            "command-r7b-12-2024",
+        ],
+    ),
+    (
+        "cohere-native",
+        &[
+            "command-a-plus-05-2026",
+            "command-a-03-2025",
+            "command-r7b-12-2024",
+        ],
+    ),
+    (
+        "cometapi",
+        &[
+            "gpt-6.2-astra",
+            "claude-fable-5-2",
+            "gemini-4-neon",
+            "deepseek-v4.1-flash",
+        ],
+    ),
+    (
+        "cortecs",
+        &[
+            "claude-opus-5.5",
+            "gpt-6.2-sol",
+            "gemini-4-neon",
+            "deepseek-v4.1-flash",
+        ],
+    ),
+    (
+        "deepinfra",
+        &[
+            "deepseek-ai/DeepSeek-V4.1-Flash",
+            "zai-org/GLM-5.3",
+            "moonshotai/Kimi-K3.1-Pro",
+            "google/gemma-4-31B-it",
+        ],
+    ),
+    ("deepseek", &["deepseek-v4-pro", "deepseek-flash"]),
+    (
+        "digitalocean",
+        &[
+            "anthropic-claude-opus-5.5",
+            "openai-gpt-6.2-sol",
+            "deepseek-v4.1-flash",
+            "glm-5.3",
+        ],
+    ),
+    (
+        "fastrouter",
+        &[
+            "anthropic/claude-opus-5.5",
+            "openai/gpt-6.2-astra",
+            "google/gemini-4-neon",
+            "deepseek/deepseek-v4.1-flash",
+        ],
+    ),
+    (
+        "featherless",
+        &[
+            "deepseek-ai/DeepSeek-V4-Pro",
+            "moonshotai/Kimi-K3.1-Pro",
+            "zai-org/GLM-5.3",
+            "deepseek-ai/DeepSeek-V4.1-Flash",
+        ],
+    ),
+    (
+        "fireworks",
+        &[
+            "accounts/fireworks/models/kimi-k3p1-pro",
+            "accounts/fireworks/models/glm-5p3",
+        ],
+    ),
+    (
+        "friendli",
+        &[
+            "zai-org/GLM-5.3",
+            "zai-org/GLM-5.3-Flash",
+            "google/gemma-4-31B-it",
+        ],
+    ),
+    (
+        "gemini-openai",
+        &["gemini-4-neon", "gemini-3.8-flash", "gemini-3.5-flash-lite"],
+    ),
+    (
+        "gitee-ai",
+        &[
+            "kimi-k3.1-pro",
+            "GLM-5.3",
+            "deepseek-v4.1-flash",
+            "qwen3.8-max",
+        ],
+    ),
+    (
+        "gmi",
+        &[
+            "deepseek-ai/DeepSeek-V4-Pro",
+            "openai/gpt-5.5",
+            "anthropic/claude-sonnet-4.6",
+            "deepseek-ai/DeepSeek-V4-Flash",
+        ],
+    ),
+    (
+        "groq",
+        &[
+            "openai/gpt-oss-120b",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "openai/gpt-oss-20b",
+        ],
+    ),
+    (
+        "heroku",
+        &[
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+            "gpt-oss-120b",
+        ],
+    ),
+    (
+        "huggingface",
+        &["deepseek-ai/DeepSeek-V4.1-Flash", "deepseek-ai/DeepSeek-R1"],
+    ),
+    ("hunyuan", &["hunyuan-turbos-latest", "hunyuan-lite"]),
+    (
+        "hyperbolic",
+        &["glm-5.3", "glm-5.3-flash", "deepseek-v4.1-flash", "kimi-k3"],
+    ),
+    (
+        "inference-net",
+        &["glm-5.2", "gpt-5-mini", "claude-haiku-4-5"],
+    ),
+    (
+        "infini-ai",
+        &["deepseek-v4-pro", "deepseek-v4-flash", "kimi-k2.6"],
+    ),
+    (
+        "ionos",
+        &[
+            "openai/gpt-oss-120b",
+            "meta-llama/Llama-3.3-70B-Instruct",
+            "Qwen/Qwen3.5-9B",
+        ],
+    ),
+    ("jina-deepsearch", &["jina-deepsearch-v1"]),
+    (
+        "kilo",
+        &[
+            "anthropic/claude-sonnet-4.6",
+            "openai/gpt-5.4-mini",
+            "kilo-auto/frontier",
+        ],
+    ),
+    ("longcat", &["LongCat-2.5"]),
+    ("meta", &["muse-spark-1.3", "muse-ember-1.0"]),
+    ("minimax", &["MiniMax-M3", "MiniMax-M3.1-Flash"]),
+    ("minimax-cn", &["MiniMax-M3", "MiniMax-M3.1-Flash"]),
+    (
+        "mistral",
+        &[
+            "mistral-large-4-0",
+            "mistral-small-latest",
+            "ministral-8b-latest",
+        ],
+    ),
+    (
+        "modelscope",
+        &[
+            "deepseek-ai/DeepSeek-V4-Pro",
+            "Qwen/Qwen3.8-27B",
+            "deepseek-ai/DeepSeek-V4.1-Flash",
+        ],
+    ),
+    (
+        "moonshot",
+        &["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3"],
+    ),
+    (
+        "moonshot-cn",
+        &["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3"],
+    ),
+    ("morph", &["morph-v3-large", "morph-v3-fast", "auto"]),
+    (
+        "nebius",
+        &[
+            "moonshotai/Kimi-K3.1-Pro",
+            "zai-org/GLM-5.3",
+            "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+            "Qwen/Qwen3.8-27B",
+        ],
+    ),
+    (
+        "nous",
+        &[
+            "anthropic/claude-sonnet-5.5",
+            "openai/gpt-6.2-sol",
+            "google/gemini-3.8-flash",
+        ],
+    ),
+    (
+        "novita",
+        &[
+            "moonshotai/kimi-k3.1-pro",
+            "zai-org/glm-5.3",
+            "deepseek/deepseek-v4.1-flash",
+            "qwen/qwen3.8-flash",
+        ],
+    ),
+    (
+        "nvidia",
+        &[
+            "moonshotai/kimi-k3.1-pro",
+            "mistralai/mistral-large-4-1t-a52b",
+            "z-ai/glm-5.3-flash",
+            "nvidia/nemotron-3.5-lightning-30b-a3b",
+        ],
+    ),
+    (
+        "ollama-cloud",
+        &[
+            "kimi-k3.1-pro",
+            "glm-5.3",
+            "deepseek-v4.1-flash",
+            "gpt-oss:20b",
+        ],
+    ),
+    (
+        "opencode-zen",
+        &[
+            "claude-sonnet-5-5",
+            "gpt-6.2-sol",
+            "claude-haiku-5-5",
+            "gemini-3.8-flash",
+        ],
+    ),
+    (
+        "openrouter",
+        &[
+            "anthropic/claude-sonnet-5.5",
+            "openai/gpt-6.2-sol",
+            "anthropic/claude-haiku-5.5",
+            "google/gemini-3.8-flash",
+        ],
+    ),
+    (
+        "ovhcloud",
+        &[
+            "Qwen3.5-397B-A17B",
+            "Meta-Llama-3_3-70B-Instruct",
+            "gpt-oss-120b",
+            "Mistral-Small-3.2-24B-Instruct-2506",
+        ],
+    ),
+    (
+        "parasail",
+        &[
+            "parasail-kimi-k3",
+            "parasail-glm-53",
+            "parasail-deepseek-v4-flash",
+            "parasail-qwen38-27b",
+        ],
+    ),
+    (
+        "perplexity",
+        &[
+            "perplexity/glm-5.3",
+            "perplexity/glm-5.3-flash",
+            "xai/grok-4.7",
+            "openai/gpt-6-luna",
+        ],
+    ),
+    (
+        "poe",
+        &[
+            "Claude-Opus-4.7",
+            "Claude-Sonnet-4.6",
+            "GPT-5.4",
+            "Gemini-3.1-Pro",
+        ],
+    ),
+    (
+        "ppio",
+        &[
+            "deepseek/deepseek-v4-pro",
+            "deepseek/deepseek-v4.1-flash",
+            "zai-org/glm-5.3",
+            "qwen/qwen3.8-max",
+        ],
+    ),
+    (
+        "qianfan",
+        &["ernie-5.1", "ernie-light-dt-1.0", "deepseek-v4-flash"],
+    ),
+    ("regolo", &["Llama-3.3-70B-Instruct", "gpt-oss-120b"]),
+    ("reka", &["reka-flash-3", "reka-edge-2603"]),
+    (
+        "replicate",
+        &[
+            "openai/gpt-5.2",
+            "anthropic/claude-opus-5.5",
+            "google/gemini-3.1-pro",
+            "openai/gpt-5-mini",
+        ],
+    ),
+    (
+        "requesty",
+        &["openai/gpt-6-luna", "deepseek/deepseek-v4.1-flash"],
+    ),
+    ("sarvam", &["sarvam-105b", "sarvam-105b-conversations"]),
+    (
+        "siliconflow",
+        &[
+            "deepseek-ai/DeepSeek-V4-Pro",
+            "deepseek-ai/DeepSeek-V4-Flash",
+            "zai-org/GLM-5.1",
+            "Qwen/Qwen3.6-35B-A3B",
+        ],
+    ),
+    (
+        "siliconflow-cn",
+        &[
+            "deepseek-ai/DeepSeek-V4-Flash",
+            "deepseek-ai/DeepSeek-V3.2",
+            "Pro/zai-org/GLM-5.1",
+            "Qwen/Qwen3.6-27B",
+        ],
+    ),
+    (
+        "snowflake",
+        &[
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
+            "openai-gpt-5.2",
+            "openai-gpt-5-mini",
+        ],
+    ),
+    ("spark", &["4.0Ultra", "pro-128k", "lite"]),
+    ("stepfun", &["step-3.7-flash", "step-3.5-flash"]),
+    (
+        "synthetic",
+        &[
+            "hf:zai-org/GLM-5.3-Flash",
+            "hf:moonshotai/Kimi-K3.1-Pro",
+            "hf:deepseek-ai/DeepSeek-V4.1-Flash-1017",
+            "hf:openai/gpt-oss-120b",
+        ],
+    ),
+    (
+        "telnyx",
+        &[
+            "zai-org/GLM-5.3",
+            "zai-org/GLM-5.3-Flash",
+            "moonshotai/Kimi-K3",
+            "Qwen/Qwen3.8-27B",
+        ],
+    ),
+    (
+        "together",
+        &[
+            "moonshotai/Kimi-K3",
+            "deepseek-ai/DeepSeek-V4-Pro-0813",
+            "zai-org/GLM-5.3-Flash",
+            "openai/gpt-oss-120b",
+        ],
+    ),
+    ("upstage", &["solar-pro-4", "solar-mini-4"]),
+    (
+        "venice",
+        &[
+            "claude-opus-5-5",
+            "openai-gpt-6-sol",
+            "deepseek-v4-1-flash",
+            "z-ai-glm-5-3-flash",
+        ],
+    ),
+    (
+        "vercel",
+        &[
+            "anthropic/claude-opus-5",
+            "openai/gpt-6-astra",
+            "google/gemini-3.5-flash-lite",
+            "openai/gpt-5-nano",
+        ],
+    ),
+    (
+        "volcengine",
+        &[
+            "doubao-seed-2-1-pro-260915",
+            "doubao-seed-2-1-lite-260915",
+            "deepseek-v4-pro-ga-260813",
+            "deepseek-v4-1-flash-261017",
+        ],
+    ),
+    (
+        "vultr",
+        &[
+            "glm-5.3",
+            "deepseek-v4.1-flash-1017",
+            "glm-5.3-flash",
+            "qwen3.8-27b",
+        ],
+    ),
+    (
+        "wandb",
+        &[
+            "deepseek-ai/DeepSeek-V4-Pro-0813",
+            "zai-org/GLM-5.3",
+            "zai-org/GLM-5.3-Flash",
+            "openai/gpt-oss-20b",
+        ],
+    ),
+    (
+        "watsonx",
+        &[
+            "openai/gpt-oss-120b",
+            "meta-llama/llama-3-3-70b-instruct",
+            "ibm/granite-4-h-small",
+            "mistralai/mistral-small-3-1-24b-instruct-2503",
+        ],
+    ),
+    (
+        "xai",
+        &["grok-4.7", "grok-4.3", "grok-4.20-0309-non-reasoning"],
+    ),
+    ("zai", &["glm-5.3", "glm-5.2", "glm-5.3-flash"]),
+    ("zai-coding", &["glm-5.4", "glm-5.3"]),
+    (
+        "zenmux",
+        &[
+            "anthropic/claude-opus-5",
+            "openai/gpt-5.4-mini",
+            "deepseek/deepseek-v4-pro",
+            "z-ai/glm-5.3-flash",
+        ],
+    ),
+    (
+        "zhipu",
+        &["glm-5.3", "glm-5.1", "glm-4.7-flash", "glm-4.5-air"],
+    ),
+];
+
+/// The models a catalog provider starts with: the starter set, else [`DEFAULT_MODELS`], else none.
+pub fn default_models(id: &str) -> &'static [&'static str] {
+    START_PROVIDERS
+        .iter()
+        .chain(DEFAULT_MODELS)
+        .find(|(known, _)| *known == id)
+        .map_or(&[], |(_, models)| models)
+}
+
 /// The policy lines of provider `id` (one of [`START_PROVIDERS`]) as `enterplace start` and Connect a model write it,
 /// with its key given by `key_line` (`key_env: OPENAI_PROVIDER_KEY` or `credential: openai`). Its URL comes from
 /// `ENTERPLACE_<ID>_BASE_URL` when `env` has it: a proxy in front of the provider, or a mock in a test.
@@ -1029,6 +1576,39 @@ mod tests {
     use std::path::Path;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn hosted_providers_start_with_models_a_policy_accepts() -> TestResult {
+        assert!(default_models("groq").contains(&"llama-3.3-70b-versatile"));
+        assert_eq!(default_models("openai"), START_PROVIDERS[0].1);
+        assert!(default_models("ollama").is_empty());
+        let mut seen = std::collections::HashSet::new();
+        for (id, models) in DEFAULT_MODELS {
+            let preset = find(id).ok_or(format!("{id} is not in the catalog"))?;
+            assert!(
+                !preset.local,
+                "{id} runs locally: its models are whatever it loaded"
+            );
+            assert!(seen.insert(*id), "{id} is listed twice");
+            assert!(!models.is_empty(), "{id}");
+            // Each list is written into a provider's models, so the check must take it.
+            let url = match (preset.needs_url(), *id) {
+                (true, _) => "    url: https://x.example.com\n",
+                (_, "watsonx") => "    project_id: 0f6c1c3e-5d6a-4b4e-9b1e-2a7d1c9f0a11\n",
+                _ => "",
+            };
+            let provider = format!(
+                "  - name: p\n    preset: {id}\n    key_env: K\n{url}    models: [{}]\n",
+                models
+                    .iter()
+                    .map(|m| format!("\"{m}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            check(&provider).map_err(|e| format!("{id}: {}", e.join(" ")))?;
+        }
+        Ok(())
+    }
 
     fn check(provider: &str) -> Result<Loaded, Vec<String>> {
         let policy = format!(

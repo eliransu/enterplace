@@ -3088,7 +3088,7 @@ fn a_service_key_is_marked_as_one_and_takes_no_admin_or_identity_only() -> TestR
 }
 #[test]
 fn key_import_checks_the_whole_list_then_writes_each_key_once() -> TestResult {
-    let dir = workdir("import")?;
+    let dir = workdir("key-import")?;
     let keys = path(&dir, "enterplace.keys.yaml");
     let list = path(&dir, "people.csv");
     let out_file = path(&dir, "people-keys.csv");

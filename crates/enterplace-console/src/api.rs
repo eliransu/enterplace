@@ -531,11 +531,7 @@ async fn providers(State(console): State<Console>, headers: HeaderMap) -> Respon
         let presets: Vec<Value> = catalog::PRESETS
             .iter()
             .map(|p| {
-                let models = catalog::START_PROVIDERS
-                    .iter()
-                    .find(|(id, _)| *id == p.id)
-                    .map(|(_, m)| m.to_vec())
-                    .unwrap_or_default();
+                let models = catalog::default_models(p.id);
                 json!({ "id": p.id, "name": p.name, "local": p.local, "needs_url": p.needs_url(), "models": models })
             })
             .collect();
