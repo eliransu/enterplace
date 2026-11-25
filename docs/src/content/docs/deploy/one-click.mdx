@@ -1,6 +1,6 @@
 ---
 title: One-click deploys
-description: Deploy Enterplace with Postgres to Render, Fly.io, DigitalOcean, Google Cloud Run, AWS, Azure or one machine with Docker Compose, in a few clicks or one command, then sign in to the console with the admin key from the logs.
+description: Deploy Enterplace with Postgres to Render, Fly.io, DigitalOcean, Railway, Google Cloud Run, AWS, Azure or one machine with Docker Compose, in a few clicks or one command, then sign in to the console with the admin key from the logs.
 sidebar:
   label: One-click deploys
   order: 2
@@ -80,6 +80,28 @@ App Platform has no volumes, so this is the Postgres-only mode described above: 
 
 **Admin key:** the app's Runtime Logs. **Console:** `https://<app URL>/console`.
 **Cost:** $5 a month for the container and $7 a month for the dev database; a managed PostgreSQL cluster starts at $15.15 a month ([App Platform pricing](https://www.digitalocean.com/pricing/app-platform), [Managed Databases pricing](https://www.digitalocean.com/pricing/managed-databases)).
+
+## Railway
+
+Railway has no button for Enterplace yet: its templates are made in the Railway dashboard, not from a file in the repository. A few steps in a new project, or with the [`railway` CLI](https://docs.railway.com/guides/cli):
+
+```bash
+railway init
+railway add --database postgres
+railway add --image ghcr.io/eliransu/enterplace:latest
+railway variable set 'DATABASE_URL=${{Postgres.DATABASE_URL}}' PGSSLMODE=require OPENAI_API_KEY=sk-...
+railway domain
+```
+
+| Creates | Notes |
+|---|---|
+| Service from the image, listening on port 8080 | Give it a domain on port 8080 and the health check path `/healthz` in its settings |
+| Railway Postgres, service name `Postgres` | `DATABASE_URL` is a reference to it; `PGSSLMODE=require`, because its certificate is self-signed. If the logs say the server offers no TLS, use `disable`: the private network is encrypted by Railway |
+
+No volume: Railway volumes belong to root and the image runs as an unprivileged user, so the audit log is the Postgres-only mode described above. How to make the template once and publish it is in [`deploy/railway/README.md`](https://github.com/eliransu/enterplace/blob/main/deploy/railway/README.md).
+
+**Admin key:** the service's Deploy Logs. **Console:** `https://<the generated domain>/console`.
+**Cost:** usage-based on Railway's plans ([railway.com/pricing](https://railway.com/pricing)). These steps follow Railway's public documentation and were not run.
 
 ## Google Cloud Run
 

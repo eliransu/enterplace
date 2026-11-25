@@ -90,6 +90,8 @@ one repository. How a release is made: RELEASING.md.
   and Dify are marked not run. `scripts/langchain_check.py` is importable, so the new check shares its mock and gateway.
 - OWASP mappings (governance/owasp): the Top 10 for LLM Applications 2025, the Top 10 for Agentic Applications 2026
   and the agentic threats T1 to T17, each item marked addressed, partly or not covered, with the limit stated.
+- One-click deploys gain a Railway section: the image and Railway Postgres from the CLI or dashboard, with no button
+  until the template is published (deploy/railway/README.md). Marked not run.
 
 ### License
 
