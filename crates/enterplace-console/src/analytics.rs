@@ -394,6 +394,18 @@ async fn analytics(State(console): State<Console>, headers: HeaderMap, uri: Uri)
     )
 }
 
+/// Subscription use a budget did not count, said beside it: what the gateway enforces is what the meter shows.
+pub(crate) fn uncounted_note(uncounted: f64) -> String {
+    if uncounted > 0.0 {
+        format!(
+            " Beside it, {} of subscription use (an estimate at API prices) is not counted against the budget: its rule does not set budget_basis: api_equivalent.",
+            money_est(uncounted)
+        )
+    } else {
+        String::new()
+    }
+}
+
 /// Each budget in the policy, what it spent this period, and when it runs out at the pace it has spent at. An empty
 /// list means the policy sets no budget; no policy that loads gives no forecasts at all.
 async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
@@ -444,18 +456,17 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
             Who::Team(_) => "team",
             Who::Name(_) | Who::Any | Who::Tag(_) => "person",
         };
-        let by: BTreeMap<String, f64> = match &index {
+        let by: BTreeMap<String, (f64, f64)> = match &index {
             Some(index) => index
                 .spent(&since(start), dimension)
                 .await
-                .unwrap_or_default()
-                .into_iter()
-                .collect(),
-            None => insights::spent(&local, dimension, start)
-                .into_iter()
-                .collect(),
-        };
-        let (label, spent) = match &rule.who {
+                .unwrap_or_default(),
+            None => insights::spent(&local, dimension, start),
+        }
+        .into_iter()
+        .map(|(k, counted, uncounted)| (k, (counted, uncounted)))
+        .collect();
+        let (label, (spent, uncounted)) = match &rule.who {
             Who::Team(team) => (
                 format!("team {team}"),
                 by.get(team.as_str()).copied().unwrap_or_default(),
@@ -467,8 +478,8 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
             // A budget for each person (of every key, or of the keys with a tag): the one heading out first.
             Who::Any | Who::Tag(_) => by
                 .into_iter()
-                .max_by(|a, b| a.1.total_cmp(&b.1))
-                .map_or(("each person".into(), 0.0), |(p, s)| {
+                .max_by(|a, b| a.1.0.total_cmp(&b.1.0))
+                .map_or(("each person".into(), (0.0, 0.0)), |(p, s)| {
                     (format!("{p} (each person)"), s)
                 }),
         };
@@ -492,7 +503,7 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
             "text": format!("{} of {} per {}", money(spent), money(budget.usd), budget.per.describe()),
             "percent": percent,
             "over": matches!(pace, Pace::Spent | Pace::RunsOut(_)),
-            "note": format!("Rule {}. {note}", rule.name),
+            "note": format!("Rule {}. {note}{}", rule.name, uncounted_note(uncounted)),
         }));
     }
     Value::Array(out)

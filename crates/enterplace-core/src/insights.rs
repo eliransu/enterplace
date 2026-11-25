@@ -137,6 +137,8 @@ pub struct Row {
     /// The cost is an estimate at API prices: the request went with the caller's own subscription login, which is
     /// paid for by the seat.
     pub estimate: bool,
+    /// What it counted against budgets, as the gateway counted it: nothing for traffic a rule keeps out of its budgets
+    /// (a subscription login or the caller's own provider key, `"budget": "not_counted"` on its usage record).
     pub charged_usd: f64,
     pub latency_ms: Option<u64>,
     /// A redacted body was kept for it.
@@ -171,6 +173,15 @@ impl Row {
             Outcome::Error
         } else {
             Outcome::Allowed
+        }
+    }
+
+    /// The estimate of a subscription request that counted against no budget: shown beside a budget, never in it.
+    pub fn uncounted_usd(&self) -> f64 {
+        if self.estimate && self.charged_usd == 0.0 {
+            self.cost_usd.unwrap_or_default()
+        } else {
+            0.0
         }
     }
 
@@ -356,10 +367,15 @@ pub fn fact(line: &str, replica: &str, prev: Option<&str>) -> Option<Fact> {
             input_tokens: number("input_tokens"),
             output_tokens: number("output_tokens"),
             cost_usd: record.get("cost_usd").and_then(Value::as_f64),
-            charged_usd: record
-                .get("charged_usd")
-                .and_then(Value::as_f64)
-                .unwrap_or_default(),
+            // The gateway's budgets skip a record it kept out of them (spend.rs `replay`), so the row does too.
+            charged_usd: if record.get("budget").and_then(Value::as_str) == Some("not_counted") {
+                0.0
+            } else {
+                record
+                    .get("charged_usd")
+                    .and_then(Value::as_f64)
+                    .unwrap_or_default()
+            },
             latency_ms: number("latency_ms"),
             body: record.get("body").and_then(Value::as_str) == Some("captured"),
             stages: stages_of(&record),
@@ -1088,9 +1104,10 @@ pub trait Index: Send + Sync + std::fmt::Debug {
     /// at [`MAX_ROWS`]. `dimension` is one of [`DIMENSIONS`].
     fn analytics(&self, query: &Query, hourly: bool, dimension: &str) -> Pending<Analytics>;
     /// What the requests the query matches were charged against budgets (`charged_usd`), by each value of
-    /// `dimension` (a request counts under each value it has), summed where the rows are kept. What a budget
-    /// forecast reads for its own window.
-    fn spent(&self, query: &Query, dimension: &str) -> Pending<Vec<(String, f64)>>;
+    /// `dimension` (a request counts under each value it has), summed where the rows are kept, and beside it the
+    /// subscription estimate no budget counted ([`Row::uncounted_usd`]). What a budget forecast reads for its own
+    /// window.
+    fn spent(&self, query: &Query, dimension: &str) -> Pending<Vec<(String, f64, f64)>>;
     /// The decision records of every gateway since `since` (RFC 3339), as written, oldest first: the newest `max`
     /// of them when there are more. What a policy dry run replays.
     fn lines(&self, since: &str, max: usize) -> Pending<Vec<String>>;
@@ -1146,16 +1163,18 @@ pub fn cost_lines(rows: &[Row]) -> Vec<CostLine> {
 }
 
 /// [`Index::spent`] over rows folded here, from the local chain.
-pub fn spent(rows: &[Row], dimension: &str, from_secs: u64) -> Vec<(String, f64)> {
-    let mut by: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+pub fn spent(rows: &[Row], dimension: &str, from_secs: u64) -> Vec<(String, f64, f64)> {
+    let mut by: BTreeMap<String, (f64, f64)> = BTreeMap::new();
     for row in rows {
         if unix_secs(&row.time).is_some_and(|t| t >= from_secs) {
             for value in row.labels.get(dimension).into_iter().flatten() {
-                *by.entry(value.clone()).or_default() += row.charged_usd;
+                let sums = by.entry(value.clone()).or_default();
+                sums.0 += row.charged_usd;
+                sums.1 += row.uncounted_usd();
             }
         }
     }
-    by.into_iter().collect()
+    by.into_iter().map(|(k, (c, u))| (k, c, u)).collect()
 }
 
 /// What the gateway serves for an audit log: the index of every gateway on its store, when it has one, and where
@@ -1421,6 +1440,47 @@ mod tests {
             "cost_usd": cost, "charged_usd": cost, "latency_ms": ms, "body": "captured"
         });
         value.as_object().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn subscription_traffic_a_budget_does_not_count_is_spent_nothing_and_shown_apart() -> TestResult
+    {
+        let (path, log) = chain()?;
+        // A Claude Code subscription login under a rule without budget_basis: the gateway writes the estimate as
+        // charged_usd and "budget": "not_counted", and its budgets count nothing (spend.rs replay skips it).
+        for (id, budget) in [("S1", "not_counted"), ("S2", "counted")] {
+            let mut decision = request(id, "payments", true, None);
+            decision.insert("auth".into(), "passthrough".into());
+            log.append_record(&decision)?;
+            let mut used = usage(id, 200, 2.0, 100);
+            used.insert("auth".into(), "passthrough".into());
+            used.insert("caller_paid".into(), true.into());
+            used.insert("budget".into(), budget.into());
+            log.append_record(&used)?;
+        }
+        log.append_record(&request("B1", "payments", true, None))?;
+        log.append_record(&usage("B1", 200, 0.5, 100))?;
+        log.flush();
+        let rows = fold_chain(&path)?;
+        let row = |id: &str| rows.iter().find(|r| r.id == id).ok_or("no row");
+        let s1 = row("S1")?;
+        assert_eq!(
+            (s1.cost_usd, s1.charged_usd, s1.estimate),
+            (Some(2.0), 0.0, true)
+        );
+        assert_eq!(s1.uncounted_usd(), 2.0);
+        // budget_basis: api_equivalent: the estimate counts, as the gateway counted it.
+        assert_eq!(
+            (row("S2")?.charged_usd, row("S2")?.uncounted_usd()),
+            (2.0, 0.0)
+        );
+        assert_eq!(row("B1")?.uncounted_usd(), 0.0);
+        assert_eq!(
+            spent(&rows, "team", 0),
+            vec![("payments".to_string(), 2.5, 2.0)],
+            "counted: the billed request and the opted-in estimate; beside it, the estimate not counted"
+        );
+        Ok(())
     }
 
     #[test]

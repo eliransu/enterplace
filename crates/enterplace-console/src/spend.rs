@@ -97,6 +97,8 @@ struct Meter {
     key: Option<String>,
     /// Requests it refused in its current period.
     refused: usize,
+    /// Subscription use it did not count, as the gateway did not (`"budget": "not_counted"`): shown beside it.
+    uncounted: f64,
 }
 
 fn s<'a>(record: &'a Value, key: &str) -> &'a str {
@@ -156,6 +158,7 @@ fn view(log: &Result<Option<String>, String>, loaded: &Result<Loaded, Vec<String
                     rule: rule.name.clone(),
                     key: None,
                     refused: 0,
+                    uncounted: 0.0,
                 },
                 rule.who.clone(),
             ))
@@ -181,6 +184,7 @@ fn view(log: &Result<Option<String>, String>, loaded: &Result<Loaded, Vec<String
                             rule: String::new(),
                             key: Some(p.key.clone()),
                             refused: 0,
+                            uncounted: 0.0,
                         },
                         Who::Any,
                     ))
@@ -191,7 +195,7 @@ fn view(log: &Result<Option<String>, String>, loaded: &Result<Loaded, Vec<String
     keyed.sort_by(|a, b| a.0.label.cmp(&b.0.label));
     meters.extend(keyed);
     // A budget for everyone is per person: the meter follows whoever has spent most against it.
-    let mut each: HashMap<(usize, String), f64> = HashMap::new();
+    let mut each: HashMap<(usize, String), (f64, f64)> = HashMap::new();
 
     let (mut total, mut unknown, mut stopped) = (0.0, 0usize, 0usize);
     let mut daily = vec![0.0; days];
@@ -260,33 +264,43 @@ fn view(log: &Result<Option<String>, String>, loaded: &Result<Loaded, Vec<String
         who.0.usd += usd;
         who.0.requests += 1;
         *who.1.entry(model.to_string()).or_default() += usd;
+        // What the gateway's budgets count of it (the server's spend replay skips the rest), and the subscription
+        // estimate they leave out.
+        let (counted, uncounted) = if record["budget"] == "not_counted" {
+            let estimate = if s(&record, "auth") == "passthrough" {
+                record["cost_usd"].as_f64().unwrap_or(usd)
+            } else {
+                0.0
+            };
+            (0.0, estimate)
+        } else {
+            (usd, 0.0)
+        };
+        let add = |meter: &mut Meter| {
+            meter.spent += counted;
+            meter.uncounted += uncounted;
+            meter.spent
+        };
         for (i, (meter, rule_who)) in meters.iter_mut().enumerate() {
             if meter.per_day && !today_only {
                 continue;
             }
             let spent = match (&meter.key, rule_who) {
-                (Some(key), _) if s(&record, "key") == key => {
-                    meter.spent += usd;
-                    meter.spent
-                }
+                (Some(key), _) if s(&record, "key") == key => add(meter),
                 (Some(_), _) => continue,
                 (None, rule_who) => match rule_who {
-                    Who::Team(t) if t == team => {
-                        meter.spent += usd;
-                        meter.spent
-                    }
-                    Who::Name(n) if n == person => {
-                        meter.spent += usd;
-                        meter.spent
-                    }
+                    Who::Team(t) if t == team => add(meter),
+                    Who::Name(n) if n == person => add(meter),
                     Who::Any => {
-                        let spent = each.entry((i, person.to_string())).or_default();
-                        *spent += usd;
-                        if *spent > meter.spent || meter.label.is_empty() {
-                            meter.spent = *spent;
+                        let sums = each.entry((i, person.to_string())).or_default();
+                        sums.0 += counted;
+                        sums.1 += uncounted;
+                        if sums.0 > meter.spent || meter.label.is_empty() {
+                            meter.spent = sums.0;
+                            meter.uncounted = sums.1;
                             meter.label = person.to_string();
                         }
-                        *spent
+                        sums.0
                     }
                     _ => continue,
                 },
@@ -670,6 +684,10 @@ fn meter_json(
             if meter.per_day { "today" } else { "this month" }
         ),
     };
+    let note = format!(
+        "{note}{}",
+        crate::analytics::uncounted_note(meter.uncounted)
+    );
     let label = if meter.label.is_empty() {
         "each person"
     } else {

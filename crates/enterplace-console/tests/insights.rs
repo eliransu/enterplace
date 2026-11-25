@@ -483,6 +483,51 @@ async fn a_budget_is_forecast_over_its_own_period_and_time_zone() -> TestResult 
     Ok(())
 }
 
+/// A Claude Code subscription login under a rule without `budget_basis: api_equivalent`: the gateway counts none of
+/// it against the team's budget (`"budget": "not_counted"`), so neither meter does; the estimate is said beside them.
+#[tokio::test]
+async fn subscription_traffic_is_beside_the_budget_meter_never_in_it() -> TestResult {
+    let s = setup("uncounted")?;
+    let mut sub = enterplace_core::audit::record(&Entry {
+        id: "01SUB0000000000000000000009",
+        person: Some("maya.cohen"),
+        team: Some("payments"),
+        method: "POST",
+        path: "/v1/messages",
+        model: Some("gpt-4o-mini"),
+        allowed: true,
+        rule: Some("payments-team"),
+        provider: "openai",
+        ..Entry::default()
+    });
+    sub.insert("user_agent".into(), "claude-cli/2.0.1".into());
+    sub.insert("auth".into(), "passthrough".into());
+    s.log.append_record(&sub)?;
+    s.log.append_record(&object(json!({"event": "usage", "id": "01SUB0000000000000000000009", "time": enterplace_core::audit::timestamp(), "person": "maya.cohen", "team": "payments", "provider": "openai", "model": "gpt-4o-mini", "status": 200, "input_tokens": 100, "output_tokens": 10, "cost_usd": 3.0, "charged_usd": 3.0, "auth": "passthrough", "cost_basis": "api_equivalent_estimate", "caller_paid": true, "budget": "not_counted", "latency_ms": 900})))?;
+    s.log.flush();
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (_, page) = analytics(&s.app, "", &cookie).await?;
+    let forecast = &page["forecasts"][0];
+    assert_eq!(forecast["text"], "$4.00 of $10.00 per month", "{forecast}");
+    assert!(
+        forecast["note"].as_str().is_some_and(|n| n.contains(
+            "~$3.00 of subscription use (an estimate at API prices) is not counted against the budget"
+        )),
+        "{forecast}"
+    );
+    let (_, spend) = api(&s.app, "/console/api/spend", &cookie).await?;
+    let meter = &spend["budgets"]["meters"][0];
+    // The Spend page reads usage records by their time: the setup's own carry none, so this is the month's only one.
+    assert_eq!(meter["text"], "$0.00 of $10.00", "{spend}");
+    assert!(
+        meter["note"].as_str().is_some_and(|n| n.contains(
+            "~$3.00 of subscription use (an estimate at API prices) is not counted against the budget"
+        )),
+        "{meter}"
+    );
+    Ok(())
+}
+
 /// The console app's Analytics answer for a query, as JSON.
 async fn analytics(app: &Router, query: &str, cookie: &str) -> Result<(StatusCode, Value), Error> {
     let (status, _, body) =

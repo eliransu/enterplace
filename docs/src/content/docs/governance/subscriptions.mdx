@@ -70,6 +70,8 @@ rules:
     budget_basis: api_equivalent
 ```
 
+The console's budget meters (Spend) and budget forecasts (Usage) count exactly what the gateway counts. Subscription traffic a budget leaves out is never in its meter: the meter's note says how much of it there was, as an estimate not counted against the budget.
+
 ## Limit tokens and requests
 
 Tokens are what a subscription is metered in, so limit them directly:

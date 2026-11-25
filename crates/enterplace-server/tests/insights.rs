@@ -266,6 +266,47 @@ async fn capture_needs_the_master_key_and_keeps_bodies_redacted_and_sealed() -> 
     Ok(())
 }
 
+#[tokio::test]
+async fn the_index_keeps_subscription_traffic_out_of_budgets_as_the_gateway_does() -> TestResult {
+    let Some(url) = database("insights_uncounted").await? else {
+        return Ok(());
+    };
+    use enterplace_core::insights::Index;
+    let dir = dir("index-uncounted")?;
+    let path = dir.join("enterplace-audit.jsonl");
+    let log = enterplace_core::audit::AuditLog::open(&path)?;
+    // A subscription login the rule keeps out of its budgets, one it counts (budget_basis: api_equivalent), and a
+    // billed request.
+    for (id, budget) in [
+        ("01S1", Some("not_counted")),
+        ("01S2", Some("counted")),
+        ("01B1", None),
+    ] {
+        let mut d = decision(id, "payments", true);
+        let mut used = object(
+            serde_json::json!({"event": "usage", "id": id, "provider": "anthropic", "model": "claude-sonnet-5-5", "status": 200, "cost_usd": 2.0, "charged_usd": 2.0}),
+        );
+        if let Some(budget) = budget {
+            d.insert("auth".into(), "passthrough".into());
+            used.insert("auth".into(), "passthrough".into());
+            used.insert("budget".into(), budget.into());
+        }
+        log.append_record(&d)?;
+        log.append_record(&used)?;
+    }
+    log.flush();
+    let index =
+        enterplace_server::insights::PgIndex::open(TestStore::db(&url)?, &path, None, false)?;
+    assert_eq!(index.copy().await?, 6);
+    let spent = index
+        .spent(&enterplace_core::insights::Query::default(), "team")
+        .await?;
+    assert_eq!(spent, vec![("payments".to_string(), 4.0, 2.0)]);
+    let local = enterplace_core::insights::fold(enterplace_core::audit::chain_reader(&path)?, "");
+    assert_eq!(enterplace_core::insights::spent(&local, "team", 0), spent);
+    Ok(())
+}
+
 /// A fresh store of the backend this run tests (a Postgres database on the server ENTERPLACE_TEST_DATABASE_URL names,
 /// or with ENTERPLACE_TEST_STORE=cloudflare the Cloudflare store). `None` when there is nothing to run on.
 async fn database(test: &str) -> Result<Option<TestStore>, Error> {
@@ -353,7 +394,10 @@ async fn the_index_holds_every_replica_and_answers_as_the_local_chain_does() -> 
     spent.sort_by(|a, b| a.0.cmp(&b.0));
     assert_eq!(
         spent,
-        vec![("payments".to_string(), 0.5), ("search".to_string(), 0.5)]
+        vec![
+            ("payments".to_string(), 0.5, 0.0),
+            ("search".to_string(), 0.5, 0.0)
+        ]
     );
     assert!(
         replicas[0]
