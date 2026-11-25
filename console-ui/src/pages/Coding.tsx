@@ -20,6 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Empty, Head, Loading, Panel, Problem } from "@/components/page";
+import { Person } from "@/components/person";
 import { api, type Me } from "@/lib/api";
 import { count, goTo, useData } from "@/lib/use";
 import { Setup } from "./Setup";
@@ -178,16 +179,34 @@ function Names() {
   );
 }
 
-/// Which coding agents sent requests in the last 7 days, read from the user agent each request came with.
+// A ranking split by person: who used each tool, and how much of its cost is an estimate.
+type Split = {
+  ranking?: (NonNullable<Ranking["ranking"]>[number] & {
+    estimated: string | null;
+    parts: { values: string[]; usd: string; estimated: string | null }[];
+  })[];
+  est_tip?: string;
+};
+
+/// Which coding agents sent requests in the last 7 days, read from the user agent each request came with, and who
+/// sent them.
 function Tools() {
-  const { data, error, reload } = useData<Ranking>(
-    "analytics?by=agent&window=7d",
+  const { data, error, reload } = useData<Split>(
+    "analytics?by=agent&window=7d&then=person",
   );
   if (error) return <Problem text={error} retry={reload} />;
   if (!data) return <Loading rows={2} />;
   const rows = (data.ranking ?? []).filter((r) => CODING_TOOLS.includes(r.value));
   return (
-    <Panel title="Tools in use, last 7 days">
+    <Panel
+      title="Tools in use, last 7 days"
+      note="Cost of requests sent with a person's own subscription login is an estimate at API prices (est.): the seat is paid for, not the request."
+      actions={
+        <Button variant="outline" size="sm" asChild>
+          <a href="#/usage?by=person&then=agent%2Cmodel&window=7d">Each person by tool and model</a>
+        </Button>
+      }
+    >
       {rows.length === 0 ? (
         <Empty
           title="No coding agent seen yet"
@@ -197,7 +216,8 @@ function Tools() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-1/3">Tool</TableHead>
+              <TableHead className="w-1/4">Tool</TableHead>
+              <TableHead>Used by</TableHead>
               <TableHead className="text-right">Requests</TableHead>
               <TableHead className="text-right">Refused</TableHead>
               <TableHead className="text-right">Cost, USD</TableHead>
@@ -214,6 +234,9 @@ function Tools() {
                     {r.value}
                   </span>
                 </TableCell>
+                <TableCell>
+                  <People parts={r.parts} />
+                </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {r.requests}
                 </TableCell>
@@ -222,6 +245,11 @@ function Tools() {
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {r.usd}
+                  {r.estimated ? (
+                    <span className="t-small block text-muted-foreground" title={data.est_tip}>
+                      {r.estimated} est.
+                    </span>
+                  ) : null}
                 </TableCell>
                 <TableCell className="text-right">
                   <Button variant="ghost" size="sm" asChild>
@@ -236,5 +264,23 @@ function Tools() {
         </Table>
       )}
     </Panel>
+  );
+}
+
+/// The people who used a tool, costliest first: three by name, then how many more. Unnamed requests show as the
+/// problem they are.
+function People({ parts }: { parts: { values: string[] }[] }) {
+  const names = parts.map((p) => p.values[0] ?? "");
+  const shown = names.slice(0, 3);
+  return (
+    <span className="t-small inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+      {shown.map((n, i) => (
+        <span key={n}>
+          <Person name={n} />
+          {i < shown.length - 1 ? "," : ""}
+        </span>
+      ))}
+      {names.length > 3 ? <span className="text-muted-foreground">and {names.length - 3} more</span> : null}
+    </span>
   );
 }

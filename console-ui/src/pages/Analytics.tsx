@@ -1,6 +1,8 @@
+import { Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Head, Loading, Panel, Problem } from "@/components/page";
+import { Copy } from "@/components/copy";
 import { Person } from "@/components/person";
 import { useData } from "@/lib/use";
 import { cn } from "@/lib/utils";
@@ -8,7 +10,21 @@ import type { PageProps } from "@/pages";
 
 type Tab = { name: string; label: string };
 type Point = { at: string; shown: string; percent: number; mark: string | null; now: boolean };
-type Row = { value: string; href: string; requests: string; refused: string; errors: string; tokens: string; usd: string; p50: string; p95: string };
+type Part = { values: string[]; requests: string; tokens: string; usd: string; estimated: string | null };
+type Row = {
+  value: string;
+  unnamed: boolean;
+  href: string;
+  requests: string;
+  refused: string;
+  errors: string;
+  tokens: string;
+  usd: string;
+  estimated: string | null;
+  p50: string;
+  p95: string;
+  parts: Part[];
+};
 type Forecast = { label: string; text: string; percent: number; over: boolean; note: string };
 type Data = {
   empty?: { title: string; body: string; action: { label: string; href: string } | null; docs: string } | null;
@@ -25,13 +41,27 @@ type Data = {
   bys: Tab[];
   more: Tab[];
   ranking: Row[];
+  then: string;
+  then_label: string;
+  est_tip: string;
+  link: string;
+  agent: string;
   forecasts: Forecast[] | null;
 };
 
 const WINDOWS: Tab[] = [
   { name: "24h", label: "24 hours" },
   { name: "7d", label: "7 days" },
+  { name: "month", label: "This month" },
   { name: "30d", label: "30 days" },
+];
+// What a ranking can be split by: a person's spend by the tools and models it went to, a tool's by its people.
+const SPLITS: Tab[] = [
+  { name: "", label: "No split" },
+  { name: "agent", label: "Coding agent" },
+  { name: "model", label: "Model" },
+  { name: "agent,model", label: "Coding agent and model" },
+  { name: "person", label: "Person" },
 ];
 const LEAD = "Requests, cost and refusals over time, by team, person, model or provider.";
 const UP_FRONT = ["team", "person", "model", "provider"];
@@ -110,9 +140,26 @@ export function Analytics({ query }: PageProps) {
 
   // More stays open while one of its own breakdowns is picked, as the old page's details did.
   const moreOpen = !UP_FRONT.includes(data.by);
+  const splits = SPLITS.filter((t) => !t.name.split(",").includes(data.by));
+  const csv = new URLSearchParams(query);
+  csv.set("format", "csv");
   return (
     <>
-      <Head title="Analytics" lead={data.lead} />
+      <Head
+        title="Analytics"
+        lead={data.lead}
+        actions={
+          <>
+            <Copy text={`${location.origin}/console/app/${data.link}`} label="Copy link" />
+            <Button variant="outline" size="sm" asChild>
+              <a href={`/console/api/analytics?${csv}`} download>
+                Download CSV
+              </a>
+            </Button>
+            <Copy text={data.agent} label="Copy for your agent" />
+          </>
+        }
+      />
       <Tabs label="Window" tabs={WINDOWS} current={data.window} onPick={(v) => pick(query, "window", v)} />
       <section className="grid gap-4 rounded-panel bg-card p-6 sm:grid-cols-3">
         {data.stats.map((s) => (
@@ -136,6 +183,10 @@ export function Analytics({ query }: PageProps) {
             </details>
           ) : null}
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="t-small text-muted-foreground">Split by</span>
+          <Tabs label="Split by" tabs={splits} current={data.then} onPick={(v) => pick(query, "then", v)} />
+        </div>
         <Table>
           <TableHeader>
             <TableRow>
@@ -151,22 +202,75 @@ export function Analytics({ query }: PageProps) {
           </TableHeader>
           <TableBody>
             {data.ranking.map((r, i) => (
-              <TableRow key={r.value}>
-                <TableCell>
-                  <span className="text-muted-foreground tabular-nums">{i + 1}.</span> {data.by === "person" ? <Person name={r.value} href={r.href} /> : <a href={r.href}>{r.value}</a>}
-                </TableCell>
-                {[r.requests, r.refused, r.errors, r.tokens, r.usd, r.p50, r.p95].map((v, j) => (
-                  <TableCell key={j} className="t-mono-sm text-right tabular-nums">
-                    {v}
+              <Fragment key={r.value}>
+                <TableRow>
+                  <TableCell>
+                    <span className="text-muted-foreground tabular-nums">{i + 1}.</span>{" "}
+                    {r.unnamed ? (
+                      <>
+                        <Person name="" />{" "}
+                        <a href={r.href} className="t-small">
+                          See them
+                        </a>
+                        {" or "}
+                        <a href="#/coding?issue=1&token=1" className="t-small">
+                          hand out person tokens
+                        </a>
+                      </>
+                    ) : data.by === "person" ? (
+                      <Person name={r.value} href={r.href} />
+                    ) : (
+                      <a href={r.href}>{r.value}</a>
+                    )}
                   </TableCell>
+                  {[r.requests, r.refused, r.errors, r.tokens].map((v, j) => (
+                    <TableCell key={j} className="t-mono-sm text-right tabular-nums">
+                      {v}
+                    </TableCell>
+                  ))}
+                  <Usd usd={r.usd} estimated={r.estimated} tip={data.est_tip} />
+                  {[r.p50, r.p95].map((v, j) => (
+                    <TableCell key={j} className="t-mono-sm text-right tabular-nums">
+                      {v}
+                    </TableCell>
+                  ))}
+                </TableRow>
+                {r.parts.map((p) => (
+                  <TableRow key={p.values.join("/")} className="text-muted-foreground">
+                    <TableCell className="pl-8">
+                      <span className="t-small">{p.values.map((v) => (v === "" ? "(none)" : v)).join(", ")}</span>
+                    </TableCell>
+                    <TableCell className="t-mono-sm text-right tabular-nums">{p.requests}</TableCell>
+                    <TableCell />
+                    <TableCell />
+                    <TableCell className="t-mono-sm text-right tabular-nums">{p.tokens}</TableCell>
+                    <Usd usd={p.usd} estimated={p.estimated} tip={data.est_tip} />
+                    <TableCell />
+                    <TableCell />
+                  </TableRow>
                 ))}
-              </TableRow>
+              </Fragment>
             ))}
           </TableBody>
         </Table>
       </Panel>
       {data.forecasts ? <Forecasts forecasts={data.forecasts} /> : null}
     </>
+  );
+}
+
+/// A cost, and under it the part of it that is an estimate (sent with a subscription login), so billed and estimated
+/// spend are never read as one.
+function Usd({ usd, estimated, tip }: { usd: string; estimated: string | null; tip: string }) {
+  return (
+    <TableCell className="t-mono-sm text-right tabular-nums">
+      {usd}
+      {estimated ? (
+        <span className="t-small block text-muted-foreground" title={tip}>
+          {estimated} est.
+        </span>
+      ) : null}
+    </TableCell>
   );
 }
 

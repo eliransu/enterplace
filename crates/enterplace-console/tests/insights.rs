@@ -868,3 +868,148 @@ async fn a_request_refused_by_a_limit_names_the_limit() -> TestResult {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_person_splits_by_coding_agent_and_model_with_estimates_marked_shared_and_exported()
+-> TestResult {
+    let s = setup("split")?;
+    // dana.levi on Codex with her own subscription login: its cost is an estimate, not a bill.
+    let mut sub = enterplace_core::audit::record(&Entry {
+        id: "01SUB0000000000000000000004",
+        person: Some("dana.levi"),
+        team: Some("search"),
+        method: "POST",
+        path: "/v1/messages",
+        model: Some("claude-sonnet-4-5"),
+        allowed: true,
+        rule: Some("everyone-else"),
+        provider: "anthropic",
+        ..Entry::default()
+    });
+    sub.insert("user_agent".into(), "codex_cli_rs/0.46.0".into());
+    sub.insert("auth".into(), "passthrough".into());
+    s.log.append_record(&sub)?;
+    s.log.append_record(&object(json!({"event": "usage", "id": "01SUB0000000000000000000004", "provider": "anthropic", "model": "claude-sonnet-4-5", "status": 200, "input_tokens": 100, "output_tokens": 10, "cost_usd": 0.5, "charged_usd": 0.0, "latency_ms": 900})))?;
+    // A coding agent with no person token: unnamed, shown as a problem with its fix.
+    let mut nobody = enterplace_core::audit::record(&Entry {
+        id: "01UNK0000000000000000000005",
+        person: Some("unknown"),
+        team: Some("unknown"),
+        method: "POST",
+        path: "/v1/messages",
+        model: Some("claude-sonnet-4-5"),
+        allowed: true,
+        rule: Some("everyone-else"),
+        provider: "anthropic",
+        ..Entry::default()
+    });
+    nobody.insert("user_agent".into(), "claude-cli/2.0.1".into());
+    s.log.append_record(&nobody)?;
+    s.log.flush();
+    let cookie = sign_in(&s.app, NOA).await?;
+
+    let (status, page) = analytics(&s.app, "?by=person&then=agent,model", &cookie).await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["then"], "agent,model");
+    assert_eq!(page["then_label"], "Coding agent and model", "{page}");
+    let ranking = page["ranking"].as_array().ok_or("no ranking")?;
+    let dana = ranking
+        .iter()
+        .find(|r| r["value"] == "dana.levi")
+        .ok_or("no dana.levi")?;
+    assert_eq!(dana["usd"], "$0.51", "{dana}");
+    assert_eq!(dana["estimated"], "~$0.50", "{dana}");
+    let parts = dana["parts"].as_array().ok_or("no parts")?;
+    assert_eq!(
+        parts[0]["values"],
+        json!(["codex", "claude-sonnet-4-5"]),
+        "{dana}"
+    );
+    assert_eq!(parts[0]["estimated"], "~$0.50");
+    assert_eq!(parts[1]["values"], json!(["claude-code", "gpt-4o-mini"]));
+    assert_eq!(
+        parts[1]["requests"], "2",
+        "the allowed and the refused request"
+    );
+    assert_eq!(parts[1]["estimated"], Value::Null, "billed at API prices");
+    let unnamed = ranking
+        .iter()
+        .find(|r| r["value"] == "unknown")
+        .ok_or("no unnamed row")?;
+    assert_eq!(unnamed["unnamed"], true, "{unnamed}");
+    assert_eq!(dana["unnamed"], false);
+    // The cost figure says how much of it is an estimate.
+    assert_eq!(
+        page["stats"][1]["label"], "cost, ~$0.50 of it estimated",
+        "{page}"
+    );
+
+    // The same view as a link, and as a prompt that lets an agent read it from the admin API with a key the human
+    // sets.
+    assert_eq!(
+        page["link"], "#/usage?by=person&then=agent%2Cmodel&window=7d",
+        "{page}"
+    );
+    let agent = page["agent"].as_str().ok_or("no agent prompt")?;
+    assert!(
+        agent.contains("/admin/usage?group_by=person&then=agent,model&from="),
+        "{agent}"
+    );
+    assert!(
+        agent.contains("$ENTERPLACE_KEY") && !agent.contains(NOA),
+        "{agent}"
+    );
+
+    // The breakdown in view as CSV, plain numbers, one line per part, in the columns of /admin/usage.
+    let (status, _, csv) = send(
+        &s.app,
+        get(
+            "/console/api/analytics?by=person&then=agent,model&format=csv",
+            &cookie,
+        )?,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        csv.lines().next(),
+        Some(
+            "person,agent,model,requests,refused,errors,input_tokens,output_tokens,total_tokens,spend_usd,latency_p50_ms,latency_p95_ms,estimated_usd"
+        ),
+        "{csv}"
+    );
+    assert!(
+        csv.lines().any(|l| l
+            == "\"dana.levi\",\"codex\",\"claude-sonnet-4-5\",1,0,0,100,10,110,0.5,900,900,0.5"),
+        "{csv}"
+    );
+
+    // This month so far, as a window of its own, so a team's month reads next to its budget.
+    let (_, month) = analytics(&s.app, "?by=team&window=month", &cookie).await?;
+    assert_eq!(month["window"], "month", "{month}");
+    assert!(
+        month["lead"]
+            .as_str()
+            .is_some_and(|l| l.starts_with("This month so far, from the 1st (UTC).")),
+        "{month}"
+    );
+    // One bar a day from the 1st to today, and none for tomorrow.
+    let today = &enterplace_core::audit::timestamp()[..10];
+    let points = month["chart"]["points"].as_array().ok_or("no chart")?;
+    assert_eq!(
+        points
+            .first()
+            .and_then(|p| p["at"].as_str())
+            .and_then(|a| a.get(8..10)),
+        Some("01"),
+        "{month}"
+    );
+    assert_eq!(
+        points.last().and_then(|p| p["at"].as_str()),
+        Some(today),
+        "{month}"
+    );
+    // A split by the dimension already ranked is not a split.
+    let (status, page) = analytics(&s.app, "?by=person&then=person", &cookie).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{page}");
+    Ok(())
+}

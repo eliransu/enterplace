@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, Head, Loading, Panel, Problem } from "@/components/page";
-import { goTo } from "@/lib/use";
+import { goTo, useData } from "@/lib/use";
 import { Setup } from "./Setup";
 import { isService, KeyDialogs, KeyTable, ReadOnly, useKeys } from "./People";
 import type { PageProps } from "@/pages";
@@ -50,11 +51,74 @@ export function Apps({ query }: PageProps) {
           )}
         </Panel>
       ) : null}
+      {services.length ? <Spend names={services.map((s) => s.name)} /> : null}
       <section aria-label="Connect" className="grid gap-4">
         <h2 className="t-sm m-0">Connect an app or an agent</h2>
         <Setup query={query} base={ROUTE} track="apps" />
       </section>
       <KeyDialogs route={ROUTE} query={query} keys={keys} service />
     </>
+  );
+}
+
+type Ranked = {
+  ranking?: {
+    value: string;
+    requests: string;
+    refused: string;
+    usd: string;
+    href: string;
+    parts: { values: string[]; usd: string; requests: string }[];
+  }[];
+};
+
+/// What each app spent this month and on which models: a service key's requests are recorded under its name.
+function Spend({ names }: { names: string[] }) {
+  const view = "by=person&then=model&window=month";
+  const { data, error, reload } = useData<Ranked>(`analytics?${view}`);
+  if (error) return <Problem text={error} retry={reload} />;
+  if (!data) return <Loading rows={2} />;
+  const rows = (data.ranking ?? []).filter((r) => names.includes(r.value));
+  return (
+    <Panel
+      title="Spend this month"
+      note="From the 1st, UTC. Billed at API prices: a service key never uses a subscription login."
+      actions={
+        <Button variant="outline" size="sm" asChild>
+          <a href={`#/usage?${view}`}>Open in Usage</a>
+        </Button>
+      }
+    >
+      {rows.length === 0 ? (
+        <Empty title="Nothing spent this month" body="Once an app sends a request with its service key, its spend and models show here." />
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>App or agent</TableHead>
+              <TableHead>Models</TableHead>
+              <TableHead className="text-right">Requests</TableHead>
+              <TableHead className="text-right">Refused</TableHead>
+              <TableHead className="text-right">Cost, USD</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => (
+              <TableRow key={r.value}>
+                <TableCell>
+                  <a href={r.href}>{r.value}</a>
+                </TableCell>
+                <TableCell className="t-small">
+                  {r.parts.map((p) => `${p.values[0] || "(none)"} ${p.usd}`).join(", ")}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">{r.requests}</TableCell>
+                <TableCell className="text-right tabular-nums">{r.refused}</TableCell>
+                <TableCell className="text-right tabular-nums">{r.usd}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </Panel>
   );
 }

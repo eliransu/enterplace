@@ -411,13 +411,60 @@ async fn usage_sums_spend_tokens_and_requests_by_any_dimension_as_json_and_csv()
     assert_eq!(
         lines.next(),
         Some(
-            "model,requests,refused,errors,input_tokens,output_tokens,total_tokens,spend_usd,latency_p50_ms,latency_p95_ms"
+            "model,requests,refused,errors,input_tokens,output_tokens,total_tokens,spend_usd,latency_p50_ms,latency_p95_ms,estimated_usd"
         )
     );
     assert!(
         lines.any(|l| l.starts_with("\"m\",2,0,0,20,10,30,")),
         "{csv}"
     );
+
+    // Two dimensions: each person's requests split by model, as JSON and as CSV with one line per part.
+    let (status, _, _, body) = call(
+        &gw.router,
+        "GET",
+        "/admin/usage?group_by=person&then=model",
+        Some(ROOT),
+        "",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let usage = json(&body);
+    assert_eq!(usage["then"], json!(["model"]), "{usage}");
+    let maya = usage["groups"]
+        .as_array()
+        .and_then(|g| g.iter().find(|r| r["person"] != "dana.levi").cloned())
+        .ok_or("no second person")?;
+    let split = maya["split"].as_array().ok_or("no split")?;
+    assert_eq!(split.len(), 2, "{maya}");
+    assert!(
+        split
+            .iter()
+            .all(|p| p["requests"] == 1 && p["model"].is_string())
+    );
+    let (_, _, _, csv) = call(
+        &gw.router,
+        "GET",
+        "/admin/usage?group_by=person&then=model&format=csv",
+        Some(ROOT),
+        "",
+    )
+    .await?;
+    assert!(
+        csv.starts_with("person,model,requests,refused,errors,"),
+        "{csv}"
+    );
+    assert!(csv.contains("\"dana.levi\",\"m\",1,0,0,"), "{csv}");
+    let (status, _, _, body) = call(
+        &gw.router,
+        "GET",
+        "/admin/usage?group_by=day&then=model",
+        Some(ROOT),
+        "",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("then"), "{body}");
 
     // A wrong group is refused with what to send.
     let (status, _, _, body) = call(

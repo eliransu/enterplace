@@ -333,6 +333,7 @@ Spend, tokens and requests of the requests that match, summed by one dimension, 
 | Parameter | Description |
 |---|---|
 | `group_by` | `day` (default), `hour`, or a dimension: `org`, `team`, `person`, `key`, `customer`, `tag`, `model`, `provider`, `agent`. A request with several tags counts under each |
+| `then` | One or two more dimensions, comma separated (`then=agent,model`): each group gets a `split` list, its requests by those dimensions together, most costly first. With `group_by` a dimension only. Summed from the request rows (at most 200,000 with a store) |
 | `from`, `to` | A date (`2026-11-01`, `to` takes the whole day) or a time (`2026-11-14T09:30:00Z`), UTC |
 | `team`, `model`, ... | Any dimension as a filter, as the request log takes it, and `outcome`, `code`, `min_cost`, `max_cost`, `min_ms`, `max_ms` |
 | `format` | `csv` for CSV; or send `Accept: text/csv`. `focus` for a [FOCUS cost file](/operations/cost-export/), where `group_by` does not apply. JSON otherwise |
@@ -347,7 +348,19 @@ curl "http://127.0.0.1:8080/admin/usage?group_by=team&from=2026-11-01&to=2026-11
  "groups":[{"team":"payments","requests":1203,"refused":4,"errors":1,"input_tokens":3900100,"output_tokens":610300,"total_tokens":4510400,"spend_usd":30.11,"latency_p50_ms":790,"latency_p95_ms":3900}]}
 ```
 
-`spend_usd` is what the provider's answers cost at the policy's prices. Groups are ordered by spend, then requests; `day` and `hour` groups oldest first. The CSV has a header row, `<group>,requests,refused,errors,input_tokens,output_tokens,total_tokens,spend_usd,latency_p50_ms,latency_p95_ms`, and every group value quoted. A role kept to an organization, teams or customers sees usage within them only (within each, when it is kept to more than one kind): `org=`, `team=` or `customer=` outside them is 403 `not_permitted`, never an empty answer.
+`spend_usd` is what the provider's answers cost at the policy's prices. `estimated_usd` is the part of it sent with a person's own subscription login (a Claude Code subscription through `auth: passthrough`): an estimate at API prices, since the seat is paid for, not the request. Groups are ordered by spend, then requests; `day` and `hour` groups oldest first. The CSV has a header row, `<group>,requests,refused,errors,input_tokens,output_tokens,total_tokens,spend_usd,latency_p50_ms,latency_p95_ms,estimated_usd`, and every group value quoted. With `then`, the CSV has a column for each of its dimensions after the group's, and one line per part.
+
+```bash
+curl "http://127.0.0.1:8080/admin/usage?group_by=person&then=agent,model&from=2026-11-18" -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY"
+```
+
+```json title="200, one group"
+{"person":"avi.cohen","requests":10,"spend_usd":0.65,"estimated_usd":0.38,
+ "split":[{"agent":"claude-code","model":"claude-sonnet-4-5","requests":6,"spend_usd":0.38,"estimated_usd":0.38},
+          {"agent":"cursor","model":"gpt-4.1","requests":4,"spend_usd":0.27,"estimated_usd":0.0}]}
+```
+
+The console's Usage page writes the same CSV (Download CSV) for the breakdown in view, and its Copy for your agent button gives a coding agent this call for the view, with the admin key left for you to set. A role kept to an organization, teams or customers sees usage within them only (within each, when it is kept to more than one kind): `org=`, `team=` or `customer=` outside them is 403 `not_permitted`, never an empty answer.
 
 ## The policy by part
 

@@ -20,7 +20,7 @@ use axum::{
 };
 use enterplace_core::{
     config, id,
-    insights::{self, Query, Stats},
+    insights::{self, Query},
     policy::{Permission, Role},
     store::Pending,
     versions,
@@ -1294,46 +1294,8 @@ fn if_match(headers: &HeaderMap) -> Option<Option<i64>> {
     )
 }
 
-/// A group's numbers as the usage API answers them.
-fn stats_json(stats: &Stats) -> Map<String, Value> {
-    let mut out = Map::new();
-    out.insert("requests".into(), stats.requests.into());
-    out.insert("refused".into(), stats.refused.into());
-    out.insert("errors".into(), stats.errors.into());
-    out.insert("input_tokens".into(), stats.input_tokens.into());
-    out.insert("output_tokens".into(), stats.output_tokens.into());
-    out.insert(
-        "total_tokens".into(),
-        (stats.input_tokens + stats.output_tokens).into(),
-    );
-    out.insert("spend_usd".into(), stats.cost_usd.into());
-    out.insert("latency_p50_ms".into(), stats.percentile(50.0).into());
-    out.insert("latency_p95_ms".into(), stats.percentile(95.0).into());
-    out
-}
-
-/// What the usage columns are, in CSV order after the group.
-const USAGE_COLUMNS: [&str; 9] = [
-    "requests",
-    "refused",
-    "errors",
-    "input_tokens",
-    "output_tokens",
-    "total_tokens",
-    "spend_usd",
-    "latency_p50_ms",
-    "latency_p95_ms",
-];
-
 /// A CSV field, quoted, and kept from reading as a formula in a spreadsheet.
-pub(crate) fn csv_field(text: &str) -> String {
-    let text = if text.starts_with(['=', '+', '-', '@']) {
-        format!("'{text}")
-    } else {
-        text.to_string()
-    };
-    format!("\"{}\"", text.replace('"', "\"\""))
-}
+pub(crate) use insights::csv_field;
 
 /// Keeps a query within what a confined role reaches: its organization, teams and customers. A filter outside them is
 /// refused, not quietly dropped, so a caller never mistakes an empty answer for no usage.
@@ -1389,6 +1351,13 @@ async fn usage(
             names.join(", ")
         )));
     }
+    let then = insights::then_of(form.get("then"), group)
+        .map_err(|problem| bad(format!("then is \"{}\". {problem}", form.get("then"))))?;
+    if time && !then.is_empty() {
+        return Err(bad(format!(
+            "then splits a group by more dimensions; group_by is {group}. Group by a dimension, such as person, to split it by then."
+        )));
+    }
     query.limit = insights::MAX_ROWS;
     let hourly = group == "hour";
     let dimension = if time { "team" } else { group }.to_string();
@@ -1417,40 +1386,90 @@ async fn usage(
             format!("Refused: {err}"),
         )
     })?;
-    let groups = if time { summed.series } else { summed.ranking };
+    let groups: Vec<insights::Split> = if time {
+        summed
+            .series
+            .into_iter()
+            .map(|(k, s)| (k, s, Vec::new()))
+            .collect()
+    } else if then.is_empty() {
+        summed
+            .ranking
+            .into_iter()
+            .map(|(k, s)| (k, s, Vec::new()))
+            .collect()
+    } else {
+        split_rows(audit, &query, &dimension, &then).await?
+    };
     if csv {
-        let mut out = format!("{group},{}\n", USAGE_COLUMNS.join(","));
-        for (value, stats) in &groups {
-            let row = stats_json(stats);
-            let cells: Vec<String> = USAGE_COLUMNS
-                .iter()
-                .map(|c| match &row[*c] {
-                    Value::Null => String::new(),
-                    v => v.to_string(),
-                })
-                .collect();
-            out.push_str(&format!("{},{}\n", csv_field(value), cells.join(",")));
-        }
-        return Ok(Plan::Csv(out, "enterplace-usage.csv"));
+        return Ok(Plan::Csv(
+            insights::usage_csv(group, &then, &groups),
+            "enterplace-usage.csv",
+        ));
     }
     let rows: Vec<Value> = groups
         .iter()
-        .map(|(value, stats)| {
+        .map(|(value, stats, parts)| {
             let mut row = Map::new();
             row.insert(group.to_string(), value.clone().into());
-            row.extend(stats_json(stats));
+            row.extend(insights::usage_json(stats));
+            if !then.is_empty() {
+                let split: Vec<Value> = parts
+                    .iter()
+                    .map(|(names, stats)| {
+                        let mut part: Map<String, Value> = then
+                            .iter()
+                            .zip(names)
+                            .map(|(d, v)| (d.to_string(), v.clone().into()))
+                            .collect();
+                        part.extend(insights::usage_json(stats));
+                        Value::Object(part)
+                    })
+                    .collect();
+                row.insert("split".into(), split.into());
+            }
             Value::Object(row)
         })
         .collect();
     Ok(Plan::Read(json!({
         "group_by": group,
+        "then": then,
         "from": query.from,
         "to": query.to,
         "filters": query.pairs().into_iter().filter(|(k, _)| k != "from" && k != "to").map(|(k, v)| (k, Value::from(v))).collect::<Map<String, Value>>(),
         "counted_by": counted_by,
-        "totals": stats_json(&summed.totals),
+        "totals": insights::usage_json(&summed.totals),
         "groups": rows,
     })))
+}
+
+/// A ranking split by more dimensions, folded from the request rows: the store's index sums one dimension at a time.
+/// ponytail: folds at most MAX_ROWS rows of the store; a SQL GROUP BY of several labels if a window ever holds more.
+async fn split_rows(
+    audit: &std::path::Path,
+    query: &Query,
+    dimension: &str,
+    then: &[&'static str],
+) -> Result<Vec<insights::Split>, Refusal> {
+    let rows = match insights::attached(audit).index {
+        Some(index) => index.rows(query).await,
+        None => {
+            let (path, q) = (audit.to_path_buf(), query.clone());
+            blocking(move || {
+                insights::fold_chain(&path)
+                    .map(|rows| rows.into_iter().filter(|r| q.matches(r)).collect())
+            })
+            .await?
+        }
+    }
+    .map_err(|err| {
+        refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_unavailable",
+            format!("Refused: {err}"),
+        )
+    })?;
+    Ok(insights::split(&rows, dimension, then))
 }
 
 /// `GET /admin/usage?format=focus`: the requests the query matches as a FOCUS 1.2 cost and usage file, one line per

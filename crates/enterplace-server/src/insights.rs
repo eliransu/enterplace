@@ -890,20 +890,22 @@ impl Index for PgIndex {
     }
 }
 
-/// The sums and nearest-rank latency percentiles (`percentile_disc`, as [`insights::Stats::percentile`] takes
+/// The sums, nearest-rank latency percentiles (`percentile_disc`, as [`insights::Stats::percentile`] takes
 /// them) of each group, as `(key, stats)`.
 const GROUP_STATS: &str = "count(*), count(*) FILTER (WHERE verdict = 'refused' OR code = 'guardrail_blocked'), \
     count(*) FILTER (WHERE verdict <> 'refused' AND code <> 'guardrail_blocked' AND status >= 400), \
     coalesce(sum(input_tokens), 0)::bigint, coalesce(sum(output_tokens), 0)::bigint, coalesce(sum(cost_usd), 0)::float8, \
     percentile_disc(0.5) WITHIN GROUP (ORDER BY latency_ms), percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms), \
-    percentile_disc(0.99) WITHIN GROUP (ORDER BY latency_ms)";
+    percentile_disc(0.99) WITHIN GROUP (ORDER BY latency_ms), \
+    coalesce(sum(cost_usd) FILTER (WHERE line LIKE '%\"auth\":\"passthrough\"%'), 0)::float8";
 
 /// [`GROUP_STATS`] on SQLite, which has no `percentile_disc`: the group's latencies instead, for
 /// [`insights::Stats::percentile`] to rank. Written in Postgres for [`sql::lite`].
 const GROUP_STATS_LITE: &str = "count(*), count(*) FILTER (WHERE verdict = 'refused' OR code = 'guardrail_blocked'), \
     count(*) FILTER (WHERE verdict <> 'refused' AND code <> 'guardrail_blocked' AND status >= 400), \
     coalesce(sum(input_tokens), 0)::bigint, coalesce(sum(output_tokens), 0)::bigint, coalesce(sum(cost_usd), 0)::float8, \
-    json_group_array(latency_ms) FILTER (WHERE latency_ms IS NOT NULL)";
+    json_group_array(latency_ms) FILTER (WHERE latency_ms IS NOT NULL), \
+    coalesce(sum(cost_usd) FILTER (WHERE line LIKE '%\"auth\":\"passthrough\"%'), 0)::float8";
 
 fn stats_of(r: &sql::Row, lite: bool) -> Result<(String, insights::Stats), String> {
     let n = |i: usize| -> Result<u64, String> {
@@ -914,6 +916,8 @@ fn stats_of(r: &sql::Row, lite: bool) -> Result<(String, insights::Stats), Strin
             .map_err(db)?
             .and_then(|v| u64::try_from(v).ok()))
     };
+    // Last of the columns: after the three percentiles, or after the one list of latencies on SQLite.
+    let estimated_usd: f64 = r.try_get(if lite { 8 } else { 10 }).map_err(db)?;
     let (latencies, quantiles) = if lite {
         let text: String = r.try_get(7).map_err(db)?;
         let mut all: Vec<u64> = serde_json::from_str(&text).map_err(|err| {
@@ -935,6 +939,7 @@ fn stats_of(r: &sql::Row, lite: bool) -> Result<(String, insights::Stats), Strin
             input_tokens: n(4)?,
             output_tokens: n(5)?,
             cost_usd: r.try_get(6).map_err(db)?,
+            estimated_usd,
             latencies,
             quantiles,
         },

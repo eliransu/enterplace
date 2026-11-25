@@ -556,7 +556,12 @@ async fn analytics_summed_in_the_store_match_the_local_fold() -> TestResult {
     for n in 1..=9u32 {
         let id = format!("01A{n:024}");
         let team = if n % 3 == 0 { "search" } else { "payments" };
-        log.append_record(&decision(&id, team, n != 5))?;
+        let mut record = decision(&id, team, n != 5);
+        // Some went with the caller's own subscription login: their cost is summed apart, as an estimate.
+        if n % 4 == 0 {
+            record.insert("auth".into(), "passthrough".into());
+        }
+        log.append_record(&record)?;
         if n != 5 {
             log.append_record(&object(serde_json::json!({"event": "usage", "id": id, "provider": "openai", "model": "gpt-4o-mini", "status": if n == 7 { 500 } else { 200 }, "input_tokens": n, "output_tokens": 2, "cost_usd": f64::from(n) / 10.0, "charged_usd": 0.1, "latency_ms": n * 100})))?;
         }
@@ -586,6 +591,7 @@ async fn analytics_summed_in_the_store_match_the_local_fold() -> TestResult {
                 b.input_tokens,
                 b.output_tokens,
             ) && (a.cost_usd - b.cost_usd).abs() < 1e-9
+                && (a.estimated_usd - b.estimated_usd).abs() < 1e-9
                 && [50.0, 95.0, 99.0]
                     .iter()
                     .all(|p| a.percentile(*p) == b.percentile(*p))

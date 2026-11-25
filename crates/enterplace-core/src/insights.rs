@@ -670,6 +670,8 @@ pub struct Stats {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cost_usd: f64,
+    /// The part of `cost_usd` that is an estimate: requests sent with the caller's own subscription login.
+    pub estimated_usd: f64,
     /// Sorted, once the group is complete.
     pub latencies: Vec<u64>,
     /// The p50, p95 and p99 latencies when the store computed them, in place of `latencies`.
@@ -687,6 +689,9 @@ impl Stats {
         self.input_tokens += row.input_tokens.unwrap_or_default();
         self.output_tokens += row.output_tokens.unwrap_or_default();
         self.cost_usd += row.cost_usd.unwrap_or_default();
+        if row.estimate {
+            self.estimated_usd += row.cost_usd.unwrap_or_default();
+        }
         if let Some(ms) = row.latency_ms {
             self.latencies.push(ms);
         }
@@ -737,30 +742,181 @@ pub fn series(rows: &[Row], hourly: bool) -> Vec<(String, Stats)> {
 /// Stats per value of a dimension, most costly first, then most requests. A request with no value is counted
 /// under "".
 pub fn ranking(rows: &[Row], dimension: &str) -> Vec<(String, Stats)> {
-    let mut groups: HashMap<String, Stats> = HashMap::new();
+    split(rows, dimension, &[])
+        .into_iter()
+        .map(|(value, stats, _)| (value, stats))
+        .collect()
+}
+
+/// The values of a dimension a request counts under: each one it has, or "" when it has none.
+fn values_of<'a>(row: &'a Row, dimension: &str) -> Vec<&'a str> {
+    match row.labels.get(dimension) {
+        Some(values) if !values.is_empty() => values.iter().map(String::as_str).collect(),
+        _ => vec![""],
+    }
+}
+
+/// One value of a ranking, its stats, and its requests split by more dimensions: each part names one value of each.
+pub type Split = (String, Stats, Vec<(Vec<String>, Stats)>);
+
+/// [`ranking`] by `dimension`, each value's requests split again by the dimensions of `then` together (a person by
+/// coding agent and model), most costly part first. With `then` empty there are no parts.
+pub fn split(rows: &[Row], dimension: &str, then: &[&str]) -> Vec<Split> {
+    type Parts = HashMap<Vec<String>, Stats>;
+    let mut groups: HashMap<String, (Stats, Parts)> = HashMap::new();
     for row in rows {
-        match row.labels.get(dimension) {
-            Some(values) if !values.is_empty() => {
-                for value in values {
-                    groups.entry(value.clone()).or_default().add(row);
+        // Every combination of the `then` values, as a request with two tags counts under both.
+        let mut keys: Vec<Vec<String>> = vec![Vec::new()];
+        for d in then {
+            keys = keys
+                .into_iter()
+                .flat_map(|k| {
+                    values_of(row, d).into_iter().map(move |v| {
+                        let mut k = k.clone();
+                        k.push(v.to_string());
+                        k
+                    })
+                })
+                .collect();
+        }
+        for value in values_of(row, dimension) {
+            let group = groups.entry(value.to_string()).or_default();
+            group.0.add(row);
+            if !then.is_empty() {
+                for key in &keys {
+                    group.1.entry(key.clone()).or_default().add(row);
                 }
             }
-            _ => groups.entry(String::new()).or_default().add(row),
         }
     }
-    let mut ranked: Vec<(String, Stats)> = groups.into_iter().map(|(k, s)| (k, s.done())).collect();
-    rank(&mut ranked);
+    let mut ranked: Vec<Split> = groups
+        .into_iter()
+        .map(|(value, (stats, parts))| {
+            let mut parts: Vec<(Vec<String>, Stats)> =
+                parts.into_iter().map(|(k, s)| (k, s.done())).collect();
+            parts.sort_by(|a, b| costlier((&a.0, &a.1), (&b.0, &b.1)));
+            (value, stats.done(), parts)
+        })
+        .collect();
+    ranked.sort_by(|a, b| costlier((&a.0, &a.1), (&b.0, &b.1)));
     ranked
+}
+
+/// The dimensions a ranking by `group` is split by, from `then=agent,model`: at most two, each a dimension other than
+/// `group`. `Err` says what to send instead.
+pub fn then_of(text: &str, group: &str) -> Result<Vec<&'static str>, String> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for name in text.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        let Some(d) = dimensions().find(|d| d.name == name) else {
+            return Err(format!(
+                "{name} is not a dimension. Split by one or two of {}.",
+                dimensions().map(|d| d.name).collect::<Vec<_>>().join(", ")
+            ));
+        };
+        if d.name == group || out.contains(&d.name) {
+            return Err(format!(
+                "{name} is named twice. Split by dimensions other than the one ranked."
+            ));
+        }
+        out.push(d.name);
+    }
+    if out.len() > 2 {
+        return Err("Split by at most two dimensions, for example agent,model.".into());
+    }
+    Ok(out)
+}
+
+/// The columns of a usage export, in order after the group's own: what `/admin/usage` and the console's CSV write.
+pub const USAGE_COLUMNS: [&str; 10] = [
+    "requests",
+    "refused",
+    "errors",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "spend_usd",
+    "latency_p50_ms",
+    "latency_p95_ms",
+    "estimated_usd",
+];
+
+/// A group's stats as the usage API writes them, plain numbers.
+pub fn usage_json(stats: &Stats) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    out.insert("requests".into(), stats.requests.into());
+    out.insert("refused".into(), stats.refused.into());
+    out.insert("errors".into(), stats.errors.into());
+    out.insert("input_tokens".into(), stats.input_tokens.into());
+    out.insert("output_tokens".into(), stats.output_tokens.into());
+    out.insert(
+        "total_tokens".into(),
+        (stats.input_tokens + stats.output_tokens).into(),
+    );
+    out.insert("spend_usd".into(), stats.cost_usd.into());
+    out.insert("latency_p50_ms".into(), stats.percentile(50.0).into());
+    out.insert("latency_p95_ms".into(), stats.percentile(95.0).into());
+    out.insert("estimated_usd".into(), stats.estimated_usd.into());
+    out
+}
+
+/// A text cell of a CSV export, quoted, and never read as a formula by a spreadsheet.
+pub fn csv_field(text: &str) -> String {
+    let text = if text.starts_with(['=', '+', '-', '@']) {
+        format!("'{text}")
+    } else {
+        text.to_string()
+    };
+    format!("\"{}\"", text.replace('"', "\"\""))
+}
+
+/// A ranking as CSV: a column for the group and each `then` dimension, then [`USAGE_COLUMNS`]. With `then` set,
+/// one line per part, so a spreadsheet can pivot it either way.
+pub fn usage_csv(group: &str, then: &[&str], ranked: &[Split]) -> String {
+    let mut out = std::iter::once(group)
+        .chain(then.iter().copied())
+        .chain(USAGE_COLUMNS)
+        .collect::<Vec<_>>()
+        .join(",");
+    out.push('\n');
+    let mut line = |names: Vec<&str>, stats: &Stats| {
+        let row = usage_json(stats);
+        let cells = names
+            .into_iter()
+            .map(csv_field)
+            .chain(USAGE_COLUMNS.iter().map(|c| match &row[*c] {
+                Value::Null => String::new(),
+                v => v.to_string(),
+            }))
+            .collect::<Vec<_>>();
+        out.push_str(&cells.join(","));
+        out.push('\n');
+    };
+    for (value, stats, parts) in ranked {
+        if then.is_empty() {
+            line(vec![value], stats);
+        }
+        for (names, stats) in parts {
+            line(
+                std::iter::once(value.as_str())
+                    .chain(names.iter().map(String::as_str))
+                    .collect(),
+                stats,
+            );
+        }
+    }
+    out
 }
 
 /// Most costly first, then most requests, then by name.
 pub fn rank(ranked: &mut [(String, Stats)]) {
-    ranked.sort_by(|a, b| {
-        b.1.cost_usd
-            .total_cmp(&a.1.cost_usd)
-            .then(b.1.requests.cmp(&a.1.requests))
-            .then(a.0.cmp(&b.0))
-    });
+    ranked.sort_by(|a, b| costlier((&a.0, &a.1), (&b.0, &b.1)));
+}
+
+fn costlier<K: Ord>(a: (&K, &Stats), b: (&K, &Stats)) -> std::cmp::Ordering {
+    b.1.cost_usd
+        .total_cmp(&a.1.cost_usd)
+        .then(b.1.requests.cmp(&a.1.requests))
+        .then(a.0.cmp(b.0))
 }
 
 /// What the analytics page shows for a window: its totals, per hour or day, and per value of one dimension.
