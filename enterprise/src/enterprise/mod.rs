@@ -43,6 +43,7 @@ const DEVICES: &[&str] = &[
     devices::MIGRATION_4,
     devices::MIGRATION_5,
     devices::MIGRATION_6,
+    devices::MIGRATION_7,
 ];
 /// Watch tokens, what tells a repeated export apart, and the daily sums of what Claude Code reported.
 const WATCH: &[&str] = &[watch::MIGRATION, watch::MIGRATION_2, watch::MIGRATION_3];
@@ -88,6 +89,8 @@ WHERE namespace = 'enterprise' AND version >= entry
 ON CONFLICT (namespace) DO NOTHING;
 "],
         "enterprise.siem" => &[siem::LITE_MIGRATION, capture::LITE_MIGRATION],
+        // Entries 1 to 6 translate; entry 7 changes a primary key, which SQLite does by making the table again.
+        "enterprise.devices" => &["", "", "", "", "", "", devices::LITE_MIGRATION_7],
         _ => &[],
     }
 }

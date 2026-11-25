@@ -164,6 +164,55 @@ pub const MIGRATION_6: &str = "
 ALTER TABLE enterprise_device_profiles ADD COLUMN mcp_enforcement text NOT NULL DEFAULT 'report';
 ";
 
+/// MCP decisions per organization: an admin whose role is kept to one organization decides for its devices alone
+/// (`org` names it); an admin of the whole install decides for every device (`org` empty). A device follows its own
+/// organization's decision on a server, else the install's. Decisions made before are the install's, as they were.
+pub const MIGRATION_7: &str = "
+ALTER TABLE enterprise_mcp_decisions ADD COLUMN org text NOT NULL DEFAULT '';
+ALTER TABLE enterprise_mcp_decisions DROP CONSTRAINT enterprise_mcp_decisions_pkey;
+ALTER TABLE enterprise_mcp_decisions ADD PRIMARY KEY (org, transport, target);
+";
+
+/// `MIGRATION_7` on the Cloudflare store: SQLite cannot change a table's primary key, so the table is made again
+/// with the new key and the decisions are copied over as the install's.
+pub const LITE_MIGRATION_7: &str = "
+CREATE TABLE enterprise_mcp_decisions_by_org (
+    org TEXT NOT NULL DEFAULT '',
+    transport TEXT NOT NULL,
+    target TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    decided_by TEXT NOT NULL,
+    decided_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (org, transport, target)
+);
+INSERT INTO enterprise_mcp_decisions_by_org (org, transport, target, decision, decided_by, decided_at)
+SELECT '', transport, target, decision, decided_by, decided_at FROM enterprise_mcp_decisions;
+DROP TABLE enterprise_mcp_decisions;
+ALTER TABLE enterprise_mcp_decisions_by_org RENAME TO enterprise_mcp_decisions;
+";
+
+/// The decision on each server that holds for devices of the organization in parameter `n` (empty for the
+/// install's own): its own organization's where it made one, else the install's. Columns: transport, target,
+/// decision, decided_by, decided_at, org. `p` is the parameter sign: `$` for Postgres, `?` for SQLite.
+fn decisions_for(p: char, n: u8) -> String {
+    format!(
+        "SELECT transport, target, decision, decided_by, decided_at, org FROM enterprise_mcp_decisions d \
+         WHERE d.org = {p}{n} OR (d.org = '' AND NOT EXISTS (SELECT 1 FROM enterprise_mcp_decisions o \
+         WHERE o.org = {p}{n} AND o.transport = d.transport AND o.target = d.target))"
+    )
+}
+
+/// The organization an admin's MCP decisions hold for: theirs when their role keeps them to one, the whole install
+/// (empty) when it keeps them to nothing. `None`: a role kept to teams or customers alone, whose decision would
+/// reach devices outside it.
+fn decision_scope(admin: &Admin) -> Option<String> {
+    match &admin.org {
+        Some(org) => Some(org.clone()),
+        None if !admin.confined() => Some(String::new()),
+        None => None,
+    }
+}
+
 /// The header the agent sends the person's Enterplace key in (the one `enterplace login` saved), beside the enrolment token.
 pub const PERSON_HEADER: &str = "x-enterplace-key";
 
@@ -285,6 +334,7 @@ fn valid_gateway(url: &str) -> bool {
 struct Token {
     id: String,
     team: String,
+    org: String,
 }
 
 /// The key holder whose key this is, if the key is in the keys file (or the store) and not expired.
@@ -352,7 +402,7 @@ impl Devices {
         let client = self.db.client().await.map_err(unavailable)?;
         let row = client
             .query_opt(
-                &format!("SELECT id, team, expires_at < now(), to_char(expires_at AT TIME ZONE 'UTC', {TIME}) FROM enterprise_device_tokens WHERE token_sha256 = $1 AND revoked_at IS NULL"),
+                &format!("SELECT id, team, expires_at < now(), to_char(expires_at AT TIME ZONE 'UTC', {TIME}), org FROM enterprise_device_tokens WHERE token_sha256 = $1 AND revoked_at IS NULL"),
                 &[&sha256_hex(token.as_bytes())],
             )
             .await
@@ -372,6 +422,7 @@ impl Devices {
         Ok(Token {
             id: get(0),
             team: get(1),
+            org: get(4),
         })
     }
 
@@ -464,8 +515,11 @@ impl Devices {
         }
         let servers = client
             .query(
-                "SELECT m.device_id, m.tool, m.server, m.transport, m.target, m.via_enterplace, coalesce(x.decision, 'pending') \
-                 FROM enterprise_device_mcp m LEFT JOIN enterprise_mcp_decisions x ON x.transport = m.transport AND x.target = m.target \
+                "SELECT m.device_id, m.tool, m.server, m.transport, m.target, m.via_enterplace, coalesce(( \
+                 SELECT x.decision FROM enterprise_mcp_decisions x WHERE x.transport = m.transport AND x.target = m.target \
+                 AND (x.org = '' OR x.org = coalesce(k.org, '')) ORDER BY x.org DESC LIMIT 1), 'pending') \
+                 FROM enterprise_device_mcp m JOIN enterprise_devices d ON d.device_id = m.device_id \
+                 LEFT JOIN enterprise_device_tokens k ON k.id = d.token_id \
                  ORDER BY m.device_id, m.tool, m.server",
                 &[],
             )
@@ -504,45 +558,73 @@ impl Devices {
         } else {
             None
         };
+        // The decision shown is the one that holds where the admin decides: their organization's, else the install's.
+        let scope = admin.org.clone().unwrap_or_default();
         let client = self.db.client().await?;
         let rows = client
             .query(
                 Sql::both(
-                    format!("SELECT k.transport, k.target, coalesce(string_agg(DISTINCT m.server, ', '), ''), coalesce(string_agg(DISTINCT m.tool, ', '), ''), \
+                    format!("WITH x AS ({}) \
+                     SELECT k.transport, k.target, coalesce(string_agg(DISTINCT m.server, ', '), ''), coalesce(string_agg(DISTINCT m.tool, ', '), ''), \
                      count(DISTINCT m.device_id), coalesce(bool_and(m.via_enterplace), false), coalesce(x.decision, 'pending'), coalesce(x.decided_by, ''), \
-                     coalesce(to_char(x.decided_at AT TIME ZONE 'UTC', {TIME}), '') \
+                     coalesce(to_char(x.decided_at AT TIME ZONE 'UTC', {TIME}), ''), coalesce(x.org, '') \
                      FROM (SELECT transport, target FROM enterprise_device_mcp WHERE $1::text[] IS NULL OR device_id = ANY($1) \
-                     UNION SELECT transport, target FROM enterprise_mcp_decisions WHERE $1::text[] IS NULL) k \
+                     UNION SELECT transport, target FROM enterprise_mcp_decisions WHERE $1::text[] IS NULL OR ($2 <> '' AND org = $2)) k \
                      LEFT JOIN enterprise_device_mcp m ON m.transport = k.transport AND m.target = k.target AND ($1::text[] IS NULL OR m.device_id = ANY($1)) \
-                     LEFT JOIN enterprise_mcp_decisions x ON x.transport = k.transport AND x.target = k.target \
-                     GROUP BY k.transport, k.target, x.decision, x.decided_by, x.decided_at ORDER BY k.target, k.transport"),
+                     LEFT JOIN x ON x.transport = k.transport AND x.target = k.target \
+                     GROUP BY k.transport, k.target, x.decision, x.decided_by, x.decided_at, x.org ORDER BY k.target, k.transport", decisions_for('$', 2)),
                     // SQLite: the device list is JSON text, and a DISTINCT group_concat takes no separator, so the
                     // names are joined in subqueries, sorted as Postgres sorts them for DISTINCT.
-                    "SELECT k.transport, k.target, \
+                    format!("WITH x AS ({}) \
+                     SELECT k.transport, k.target, \
                      coalesce((SELECT group_concat(server, ', ') FROM (SELECT DISTINCT n.server FROM enterprise_device_mcp n WHERE n.transport = k.transport AND n.target = k.target \
                        AND (?1 IS NULL OR n.device_id IN (SELECT value FROM json_each(?1))) ORDER BY n.server)), ''), \
                      coalesce((SELECT group_concat(tool, ', ') FROM (SELECT DISTINCT n.tool FROM enterprise_device_mcp n WHERE n.transport = k.transport AND n.target = k.target \
                        AND (?1 IS NULL OR n.device_id IN (SELECT value FROM json_each(?1))) ORDER BY n.tool)), ''), \
                      count(DISTINCT m.device_id), coalesce(min(m.via_enterplace), 0), coalesce(x.decision, 'pending'), coalesce(x.decided_by, ''), \
-                     coalesce(strftime('%Y-%m-%dT%H:%M:%SZ', x.decided_at), '') \
+                     coalesce(strftime('%Y-%m-%dT%H:%M:%SZ', x.decided_at), ''), coalesce(x.org, '') \
                      FROM (SELECT transport, target FROM enterprise_device_mcp WHERE ?1 IS NULL OR device_id IN (SELECT value FROM json_each(?1)) \
-                     UNION SELECT transport, target FROM enterprise_mcp_decisions WHERE ?1 IS NULL) k \
+                     UNION SELECT transport, target FROM enterprise_mcp_decisions WHERE ?1 IS NULL OR (?2 <> '' AND org = ?2)) k \
                      LEFT JOIN enterprise_device_mcp m ON m.transport = k.transport AND m.target = k.target AND (?1 IS NULL OR m.device_id IN (SELECT value FROM json_each(?1))) \
-                     LEFT JOIN enterprise_mcp_decisions x ON x.transport = k.transport AND x.target = k.target \
-                     GROUP BY k.transport, k.target, x.decision, x.decided_by, x.decided_at ORDER BY k.target, k.transport",
+                     LEFT JOIN x ON x.transport = k.transport AND x.target = k.target \
+                     GROUP BY k.transport, k.target, x.decision, x.decided_by, x.decided_at, x.org ORDER BY k.target, k.transport", decisions_for('?', 2)),
                 ),
-                &[&within],
+                &[&within, &scope],
             )
             .await
             .map_err(db_error)?;
+        // An admin of the whole install also sees what each organization decided for itself.
+        let orgs = if admin.confined() {
+            Vec::new()
+        } else {
+            client
+                .query(
+                    "SELECT transport, target, org, decision FROM enterprise_mcp_decisions WHERE org <> '' ORDER BY org",
+                    &[],
+                )
+                .await
+                .map_err(db_error)?
+        };
         Ok(rows
             .iter()
             .map(|r| {
                 let get = |i| r.try_get::<_, String>(i).unwrap_or_default();
+                let (transport, target) = (get(0), get(1));
+                let by_org: Vec<Value> = orgs
+                    .iter()
+                    .filter(|o| {
+                        o.try_get::<_, String>(0).is_ok_and(|t| t == transport)
+                            && o.try_get::<_, String>(1).is_ok_and(|t| t == target)
+                    })
+                    .map(|o| {
+                        let get = |i| o.try_get::<_, String>(i).unwrap_or_default();
+                        json!({ "org": get(2), "decision": get(3) })
+                    })
+                    .collect();
                 json!({
-                    "transport": get(0), "target": get(1), "servers": get(2), "tools": get(3),
+                    "transport": transport, "target": target, "servers": get(2), "tools": get(3),
                     "devices": r.try_get::<_, i64>(4).unwrap_or(0), "via_enterplace": r.try_get::<_, bool>(5).unwrap_or(false),
-                    "decision": get(6), "decided_by": get(7), "decided_at": get(8),
+                    "decision": get(6), "decided_by": get(7), "decided_at": get(8), "scope": get(9), "orgs": by_org,
                 })
             })
             .collect())
@@ -591,8 +673,20 @@ impl Devices {
             return Err((status, code, message));
         }
         let unavailable = |e: String| (StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", e);
-        // A decision holds for every device with the server, so a role kept to part of the install decides only on
-        // a server one of its own devices has.
+        let Some(scope) = decision_scope(admin) else {
+            let _ = console
+                .audit(Some(admin), action, details, Some("outside_role"))
+                .await;
+            return Err((
+                StatusCode::FORBIDDEN,
+                "outside_role",
+                "Your role keeps you to teams or customers, and an MCP decision holds for a whole organization or the whole install, so it would reach devices outside your role. Ask an admin of your organization or of the whole install.".into(),
+            ));
+        };
+        let details =
+            json!({ "transport": transport, "target": target, "decision": decision, "org": scope });
+        // A role kept to an organization decides for that organization's devices, and only on a server one of its
+        // own devices has.
         if admin.confined()
             && !self
                 .mcp_servers(admin)
@@ -618,29 +712,33 @@ impl Devices {
         let done = if decision == "pending" {
             client
                 .execute(
-                    "DELETE FROM enterprise_mcp_decisions WHERE transport = $1 AND target = $2",
-                    &[&transport, &target],
+                    "DELETE FROM enterprise_mcp_decisions WHERE org = $1 AND transport = $2 AND target = $3",
+                    &[&scope, &transport, &target],
                 )
                 .await
         } else {
             client
                 .execute(
-                    "INSERT INTO enterprise_mcp_decisions (transport, target, decision, decided_by) VALUES ($1, $2, $3, $4) \
-                     ON CONFLICT (transport, target) DO UPDATE SET decision = excluded.decision, decided_by = excluded.decided_by, decided_at = now()",
-                    &[&transport, &target, &decision, &admin.name],
+                    "INSERT INTO enterprise_mcp_decisions (org, transport, target, decision, decided_by) VALUES ($1, $2, $3, $4, $5) \
+                     ON CONFLICT (org, transport, target) DO UPDATE SET decision = excluded.decision, decided_by = excluded.decided_by, decided_at = now()",
+                    &[&scope, &transport, &target, &decision, &admin.name],
                 )
                 .await
         };
         done.map(|_| ()).map_err(|e| unavailable(db_error(e)))
     }
 
-    /// The decided servers, for the device profile: approved and blocked, each as {transport, target}.
-    async fn mcp_decisions(&self) -> Result<Value, String> {
+    /// The decided servers for a device of organization `org` (empty for none), for its profile: approved and
+    /// blocked, each as {transport, target}.
+    async fn mcp_decisions(&self, org: &str) -> Result<Value, String> {
         let client = self.db.client().await?;
         let rows = client
             .query(
-                "SELECT transport, target, decision FROM enterprise_mcp_decisions ORDER BY target, transport",
-                &[],
+                format!(
+                    "SELECT transport, target, decision FROM ({}) x ORDER BY target, transport",
+                    decisions_for('$', 1)
+                ),
+                &[&org],
             )
             .await
             .map_err(db_error)?;
@@ -821,7 +919,7 @@ async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls) -> Response
     let team = if token.team.is_empty() {
         holder.map(|h| h.team).unwrap_or_default()
     } else {
-        token.team
+        token.team.clone()
     };
     let row = match d.db.client().await {
         Ok(client) => client
@@ -860,7 +958,7 @@ async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls) -> Response
         ),
         Err(e) => return fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     };
-    let mut mcp = match d.mcp_decisions().await {
+    let mut mcp = match d.mcp_decisions(&token.org).await {
         Ok(mcp) => mcp,
         Err(e) => return fail(StatusCode::SERVICE_UNAVAILABLE, "store_unavailable", &e),
     };
@@ -1610,6 +1708,24 @@ fn mcp_list(servers: &[Value], can_edit: bool) -> String {
                 s("decided_by"),
                 s("decided_at")
             );
+        }
+        if !s("scope").is_empty() {
+            meta += &format!(" · for {} alone", s("scope"));
+        }
+        let by_org: Vec<String> = m["orgs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|o| {
+                format!(
+                    "{} {}",
+                    o["org"].as_str().unwrap_or(""),
+                    o["decision"].as_str().unwrap_or("")
+                )
+            })
+            .collect();
+        if !by_org.is_empty() {
+            meta += &format!(" · own decisions: {}", by_org.join(", "));
         }
         let mut end = html::tag("", &esc(&s("decision")), "");
         if can_edit {

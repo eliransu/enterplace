@@ -32,6 +32,11 @@ one repository. How a release is made: RELEASING.md.
   request on the model routes is then that person's, and the console signs them in with the role their groups give
   through `sso_values`. Headers from any other address are ignored; a header sent twice is refused with
   `identity_invalid`. Records carry `auth: identity_headers`.
+- Device MCP decisions per organization (enterprise, `devices`): an admin kept to one organization approves or
+  blocks an MCP server for that organization's devices alone, and its decision wins over the install's there. Only
+  an admin of the whole install decides for every device; a role kept to teams alone gets `403 outside_role`.
+  `GET /console/devices/mcp` adds `scope` and, for an admin of the whole install, `orgs`. Decisions made before
+  stay the install's. Enterprise migration `devices` 7.
 - `tls: { cert_file, key_file }` in the policy stands in for `--tls-cert` and `--tls-key`.
 - The enterprise binary's `serve` takes every flag of the open source one. It ignored `--tls-cert` and `--tls-key`
   before and served plain HTTP; it now serves HTTPS with them, and refuses a flag it does not know.

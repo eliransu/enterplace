@@ -1354,7 +1354,8 @@ async fn an_admin_kept_to_an_organization_or_to_teams_reaches_only_its_own_devic
         .collect();
     assert_eq!(
         decisions,
-        ["blocked", "pending", "pending"],
+        // Acme's block holds in acme alone: the install's own decision on its server is still pending.
+        ["pending", "pending", "pending"],
         "{}",
         listed.text
     );
@@ -1363,5 +1364,110 @@ async fn an_admin_kept_to_an_organization_or_to_teams_reaches_only_its_own_devic
             .iter()
             .any(|r| r["action"] == "device_mcp_decided" && r["code"] == "outside_role")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_mcp_decision_of_an_admin_kept_to_an_organization_holds_for_that_organization_alone()
+-> Result<(), Error> {
+    let Some(url) = database("devices_mcp_org").await? else {
+        return Ok(());
+    };
+    let policy = format!("{POLICY}{CONFINED}");
+    let gw = gateway_policy(
+        "devices_mcp_org",
+        &url,
+        &licensed(&["devices"]),
+        &[],
+        &policy,
+    )?;
+    confined_admins(&gw)?;
+    let app = &gw.app;
+    const SHARED: &str = "https://shared.example.com/mcp";
+    // Two devices with the same server: one enrolled by acme's admin, one by the install's.
+    let mut tokens = Vec::new();
+    for (maker, person_key, host) in [
+        (ACME_KEY, ACME_KEY, "acme-pay"),
+        (ADMIN_KEY, ADMIN_KEY, "plain-web"),
+    ] {
+        let body = json!({ "label": host, "team": "" });
+        let made = call(app, "POST", "/console/devices/tokens", maker, Some(body)).await?;
+        assert_eq!(made.status, StatusCode::CREATED, "{}", made.text);
+        let token = made.body["token"].as_str().ok_or("no token")?.to_string();
+        let mut sent = report("x", host, json!([]));
+        sent["mcp"] = json!([{"tool": "cursor", "file": "/mcp.json", "server": "shared", "transport": "http",
+            "target": SHARED, "via_enterplace": false}]);
+        let stored = agent(
+            app,
+            "POST",
+            "/device/report",
+            &token,
+            person_key,
+            Some(sent),
+        )
+        .await?;
+        assert_eq!(stored.status, StatusCode::OK, "{}", stored.text);
+        tokens.push((token, person_key));
+    }
+    let decide = async |key: &str, decision: &str| -> Result<Reply, Error> {
+        let body = json!({"transport": "http", "target": SHARED, "decision": decision});
+        call(app, "POST", "/console/devices/mcp", key, Some(body)).await
+    };
+    let profile = async |n: usize| -> Result<Value, Error> {
+        let (token, key) = &tokens[n];
+        let got = agent(app, "GET", "/device/profile", token, key, None).await?;
+        assert_eq!(got.status, StatusCode::OK, "{}", got.text);
+        Ok(got.body["mcp"].clone())
+    };
+    let listed = async |key: &str| -> Result<Value, Error> {
+        let got = call(app, "GET", "/console/devices/mcp", key, None).await?;
+        assert_eq!(got.status, StatusCode::OK, "{}", got.text);
+        Ok(got.body["servers"][0].clone())
+    };
+    let server = json!([{"transport": "http", "target": SHARED}]);
+
+    // Acme's admin blocks it: acme's device is told, the install's other device is not.
+    assert_eq!(decide(ACME_KEY, "blocked").await?.status, StatusCode::OK);
+    assert_eq!(profile(0).await?["blocked"], server);
+    assert_eq!(profile(1).await?["blocked"], json!([]));
+    assert_eq!(profile(1).await?["approved"], json!([]));
+    let acme = listed(ACME_KEY).await?;
+    assert_eq!(acme["decision"], "blocked", "{acme}");
+    assert_eq!(acme["scope"], "acme", "{acme}");
+    let whole = listed(ADMIN_KEY).await?;
+    assert_eq!(whole["decision"], "pending", "{whole}");
+    assert_eq!(
+        whole["orgs"],
+        json!([{"org": "acme", "decision": "blocked"}]),
+        "{whole}"
+    );
+
+    // The install's admin approves it for everyone: acme's own decision still holds in acme.
+    assert_eq!(decide(ADMIN_KEY, "approved").await?.status, StatusCode::OK);
+    assert_eq!(profile(1).await?["approved"], server);
+    assert_eq!(profile(0).await?["blocked"], server);
+    // Acme puts it back to pending: the install's decision applies there again.
+    assert_eq!(decide(ACME_KEY, "pending").await?.status, StatusCode::OK);
+    assert_eq!(profile(0).await?["approved"], server);
+    let acme = listed(ACME_KEY).await?;
+    assert_eq!(
+        (&acme["decision"], &acme["scope"]),
+        (&json!("approved"), &json!("")),
+        "{acme}"
+    );
+
+    // A role kept to teams but no organization decides for neither: the decision would reach other teams.
+    let refused = decide(PAYMENTS_KEY, "blocked").await?;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text);
+    assert_eq!(refused.body["error"]["code"], "outside_role");
+    let devices = call(app, "GET", "/console/devices/devices.json", ADMIN_KEY, None).await?;
+    let decisions: Vec<&Value> = devices
+        .body
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|d| &d["mcp"][0]["decision"])
+        .collect();
+    assert_eq!(decisions, [&json!("approved"), &json!("approved")]);
     Ok(())
 }
