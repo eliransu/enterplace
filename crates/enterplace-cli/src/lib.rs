@@ -10,6 +10,7 @@ use std::{
 mod diagnose;
 /// How `enterplace diagnose` is called, here and in the enterprise binary.
 pub const DIAGNOSE_USAGE: &str = "enterplace diagnose [--policy <file>] [--keys <file>] [--out <bundle.tar.gz>] [--metrics <host:port>]";
+mod demo;
 mod start;
 pub use diagnose::diagnose;
 
@@ -578,6 +579,18 @@ pub async fn run(args: &[String]) -> ExitCode {
             ),
             _ => None,
         },
+        // Not in the help: fake records for screenshots and browser checks, only into a new or empty folder.
+        ["demo-seed", folder, "--fake-records"] | ["demo-seed", "--fake-records", folder] => {
+            Some(demo::seed(Path::new(folder)).map_or_else(fail, |admin| {
+                println!(
+                    "Wrote five weeks of fake usage records, a policy and a keys file to {folder}.\nServe it: cd {folder} && enterplace serve enterplace.policy.yaml --listen 127.0.0.1:<port>\nSign in to the console with this admin key: {admin}"
+                );
+                ExitCode::SUCCESS
+            }))
+        }
+        ["demo-seed", ..] => Some(fail(
+            "demo-seed writes fake usage records. Run it as `enterplace demo-seed <new or empty folder> --fake-records`; it never writes into an install.",
+        )),
         ["audit", "repair", rest @ ..]
             if rest.iter().filter(|a| **a != "--yes").count() <= 1
                 && rest

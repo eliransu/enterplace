@@ -67,6 +67,20 @@ fn agent_prompt(base: &str, api: &str, by: &str, then: &str) -> String {
     )
 }
 
+/// The top of the chart's scale: the highest bar rounded up to a figure whose half reads cleanly too (150 and 75,
+/// $0.80 and $0.40), not 124 and 62.
+fn nice_top(x: f64) -> f64 {
+    if x <= 0.0 || !x.is_finite() {
+        return 1.0;
+    }
+    let power = 10f64.powf(x.log10().floor());
+    [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
+        .into_iter()
+        .map(|m| m * power)
+        .find(|top| *top >= x * 0.999_999)
+        .unwrap_or(10.0 * power)
+}
+
 fn at(secs: u64) -> String {
     enterplace_core::audit::rfc3339(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
 }
@@ -284,7 +298,7 @@ async fn analytics(State(console): State<Console>, headers: HeaderMap, uri: Uri)
             let chart = (all.requests > 0).then(|| {
                 let values: Vec<f64> = series.iter().map(|(_, s)| (metric.2)(s)).collect();
                 let top = values.iter().copied().fold(0.0, f64::max);
-                let top = if top > 0.0 { top } else { 1.0 };
+                let top = if top > 0.0 { nice_top(top) } else { 1.0 };
                 // About six marks under the bars, so the labels never run into each other.
                 let every = series.len().div_ceil(6).max(1);
                 let last = series.len().saturating_sub(1);
@@ -769,4 +783,20 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
     // Who is close to a limit comes first: spent or running out, then the most used.
     out.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
     Value::Array(out.into_iter().map(|(_, _, v)| v).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_scale_tops_out_at_a_round_figure() {
+        for (x, top) in [
+            (124.0, 150.0),
+            (0.63, 0.8),
+            (3.0, 3.0),
+            (8951.0, 10_000.0),
+            (1.0, 1.0),
+        ] {
+            assert!((super::nice_top(x) - top).abs() < 1e-9, "{x}");
+        }
+    }
 }

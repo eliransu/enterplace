@@ -78,11 +78,12 @@ function pick(query: URLSearchParams, name: string, value: string) {
   window.location.hash = `#/usage?${next}`;
 }
 
-function Tabs({ label, tabs, current, onPick }: { label: string; tabs: Tab[]; current: string; onPick: (name: string) => void }) {
+/// `edged`: on the page's own background, where the accent fill alone does not show which one is picked.
+function Tabs({ label, tabs, current, onPick, edged }: { label: string; tabs: Tab[]; current: string; onPick: (name: string) => void; edged?: boolean }) {
   return (
     <div role="group" aria-label={label} className="flex flex-wrap gap-1">
       {tabs.map((t) => (
-        <Button key={t.name} variant="ghost" size="sm" aria-pressed={t.name === current} className={cn(t.name === current && "bg-accent")} onClick={() => onPick(t.name)}>
+        <Button key={t.name} variant="ghost" size="sm" aria-pressed={t.name === current} className={cn(t.name === current && "bg-accent", t.name === current && edged && "border border-input")} onClick={() => onPick(t.name)}>
           {t.label}
         </Button>
       ))}
@@ -163,7 +164,7 @@ export function Analytics({ query }: PageProps) {
           </>
         }
       />
-      <Tabs label="Window" tabs={WINDOWS} current={data.window} onPick={(v) => pick(query, "window", v)} />
+      <Tabs label="Window" tabs={WINDOWS} current={data.window} onPick={(v) => pick(query, "window", v)} edged />
       <section className="grid gap-4 rounded-panel bg-card p-6 sm:grid-cols-3">
         {data.stats.map((s) => (
           <div key={s.label} className="grid gap-1">
@@ -241,13 +242,13 @@ export function Analytics({ query }: PageProps) {
                     )}
                   </TableCell>
                   {[r.requests, r.refused, r.errors, r.tokens].map((v, j) => (
-                    <TableCell key={j} className="t-mono-sm text-right tabular-nums">
+                    <TableCell key={j} className="t-mono-sm whitespace-nowrap text-right tabular-nums">
                       {v}
                     </TableCell>
                   ))}
                   <Usd usd={r.usd} estimated={r.estimated} tip={data.est_tip} />
                   {[r.p50, r.p95].map((v, j) => (
-                    <TableCell key={j} className="t-mono-sm text-right tabular-nums">
+                    <TableCell key={j} className="t-mono-sm whitespace-nowrap text-right tabular-nums">
                       {v}
                     </TableCell>
                   ))}
@@ -262,10 +263,10 @@ export function Analytics({ query }: PageProps) {
                     <TableCell className="pl-8">
                       <span className="t-small">{p.values.map((v) => (v === "" ? "(none)" : v)).join(", ")}</span>
                     </TableCell>
-                    <TableCell className="t-mono-sm text-right tabular-nums">{p.requests}</TableCell>
+                    <TableCell className="t-mono-sm whitespace-nowrap text-right tabular-nums">{p.requests}</TableCell>
                     <TableCell />
                     <TableCell />
-                    <TableCell className="t-mono-sm text-right tabular-nums">{p.tokens}</TableCell>
+                    <TableCell className="t-mono-sm whitespace-nowrap text-right tabular-nums">{p.tokens}</TableCell>
                     <Usd usd={p.usd} estimated={p.estimated} tip={data.est_tip} />
                     <TableCell />
                     <TableCell />
@@ -304,7 +305,7 @@ function TrendButton({ query, by, value, trend }: { query: URLSearchParams; by: 
 /// spend are never read as one.
 function Usd({ usd, estimated, tip }: { usd: string; estimated: string | null; tip: string }) {
   return (
-    <TableCell className="t-mono-sm text-right tabular-nums">
+    <TableCell className="t-mono-sm whitespace-nowrap text-right tabular-nums">
       {usd}
       {estimated ? (
         <span className="t-small block text-muted-foreground" title={tip}>
