@@ -28,7 +28,7 @@ Open `/console/requests`. Filter by any of these. Every filter narrows the list,
 |---|---|---|
 | Person, team, key, model, provider | `person`, `team`, `key`, `model`, `provider` | The value exactly. Provider and model are the ones that answered, after a fallback |
 | Tag | `tag` | One of the strings in the request record's `tags` field |
-| Coding agent | `agent` | The tool the record's `user_agent` names, as [coverage](/governance/coverage/) counts it, such as `claude-code` or `codex`; otherwise the product part, such as `OpenAI/JS` |
+| Coding agent | `agent` | The tool the record's `user_agent` names, as [coverage](/governance/coverage/) counts it, such as `claude-code` or `codex`; an SDK or plain HTTP client (OpenAI and Anthropic SDKs, `python-requests`, `node-fetch`, `curl` and the like) as an app, such as `App (OpenAI/Python)`, so it is never counted as a coding agent; otherwise the product part, such as `aider` |
 | Outcome | `outcome` | `allowed`, `refused` (by the policy or a guardrail) or `error` (a provider error status, or no answer at all) |
 | Refusal code | `code` | A [refusal code](/reference/refusal-codes/), such as `budget_exceeded` or `upstream_timeout` |
 | Guardrail finding | `finding` | A kind a guardrail found on the request or the answer, such as `email_address` |

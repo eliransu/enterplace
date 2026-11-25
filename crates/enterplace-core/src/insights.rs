@@ -275,7 +275,7 @@ fn labels_of(record: &Value) -> BTreeMap<String, Vec<String>> {
         let values: Vec<String> = if dimension.name == "agent" {
             values
                 .iter()
-                .map(|a| crate::audit::tool_of(Some(a)))
+                .map(|a| crate::audit::agent_of(Some(a)))
                 .collect()
         } else {
             values

@@ -1015,8 +1015,8 @@ impl Ctx<'_> {
 }
 
 fn agent(r: &Row) -> String {
-    let ua = r.label("agent");
-    let name = ua.split('/').next().unwrap_or("");
+    // Already the tool's name (`insights` reads it with `agent_of`): an app's `App (OpenAI/Python)` stays whole.
+    let name = r.label("agent");
     if name.is_empty() {
         String::new()
     } else {
@@ -2259,8 +2259,9 @@ fn live_strip(f: &Facts) -> Value {
         }
         seen
     };
-    let tools = distinct(&|r: &Row| {
-        enterplace_core::audit::tool_of(Some(r.label("agent")).filter(|a| !a.is_empty()))
+    let tools = distinct(&|r: &Row| match r.label("agent") {
+        "" => "unknown".to_string(),
+        tool => tool.to_string(),
     });
     let providers = distinct(&|r: &Row| r.label("provider").to_string());
     let rows: Vec<Value> = f
