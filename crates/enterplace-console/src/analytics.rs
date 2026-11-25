@@ -419,6 +419,43 @@ struct Gauge {
     org: Option<String>,
     /// Where it is set, the first words of its note.
     source: String,
+    /// How a request it refused is told apart.
+    refuses: Refuses,
+}
+
+/// What a budget's refusal record says of it: its code, and the `applied` limit the gateway wrote on it.
+enum Refuses {
+    /// A rule's budget, by the rule's name.
+    Rule(String),
+    /// A key's own budget, by the key's hash prefix.
+    Key(String),
+    /// A `limits:` entry, by its label (`limits { team: search } (line 21)`).
+    Entry(String),
+}
+
+impl Refuses {
+    fn refused(&self, row: &insights::Row) -> bool {
+        let applied =
+            serde_json::from_str::<Value>(&row.line).unwrap_or_default()["applied"].take();
+        let (of, source) = (applied["of"].as_str(), applied["source"].as_str());
+        match self {
+            // Records from before `applied` was written name the rule alone.
+            Refuses::Rule(name) => {
+                row.code == "budget_exceeded"
+                    && row.rule == *name
+                    && of.is_none_or(|of| of == "rule")
+            }
+            Refuses::Key(key) => {
+                row.code == "key_budget_exceeded"
+                    && row.label("key") == key
+                    && source.is_none_or(|s| s.ends_with("(keys file)"))
+            }
+            Refuses::Entry(label) => {
+                ["budget_exceeded", "key_budget_exceeded"].contains(&row.code.as_str())
+                    && source == Some(label.as_str())
+            }
+        }
+    }
 }
 
 /// Every budget of the policy, as the gateway counts them (`Policy::applied`): each rule's budget, each key's own
@@ -444,6 +481,7 @@ fn gauges(policy: &Policy) -> Vec<Gauge> {
             values: vec![value],
             org: None,
             source: format!("Rule {}.", rule.name),
+            refuses: Refuses::Rule(rule.name.clone()),
         });
     }
     let mut keyed: Vec<Gauge> = policy
@@ -456,6 +494,7 @@ fn gauges(policy: &Policy) -> Vec<Gauge> {
                 values: vec![p.key.clone()],
                 org: None,
                 source: "The key's own budget, from the keys file.".into(),
+                refuses: Refuses::Key(p.key.clone()),
             })
         })
         .collect();
@@ -495,6 +534,7 @@ fn gauges(policy: &Policy) -> Vec<Gauge> {
                 values: values.clone(),
                 org: org.clone(),
                 source: format!("Set by {}.", entry.label()),
+                refuses: Refuses::Entry(entry.label()),
             });
         }
     }
@@ -543,6 +583,22 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
             query.limit = insights::MAX_ROWS;
             rows(console, &query).await.unwrap_or_default()
         }
+    };
+    // The budget refusals of the longest window, told apart per budget below.
+    let refusals: Vec<insights::Row> = {
+        let earliest = windows.iter().map(|w| w.0).min().unwrap_or(now);
+        let mut query = since(earliest, &None);
+        query.outcome = "refused".into();
+        query.limit = insights::MAX_ROWS;
+        let found = match &index {
+            Some(index) if !gauges.is_empty() => index.rows(&query).await.unwrap_or_default(),
+            Some(_) => Vec::new(),
+            None => local.iter().filter(|r| query.matches(r)).cloned().collect(),
+        };
+        found
+            .into_iter()
+            .filter(|r| r.code.ends_with("budget_exceeded"))
+            .collect()
     };
     // Budgets of the same window, dimension and organization read the same sums: counted and not counted, by value.
     type Sums = BTreeMap<String, (f64, f64)>;
@@ -625,7 +681,21 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
         } else {
             0
         };
-        let over = matches!(pace, Pace::Spent | Pace::RunsOut(_));
+        let from = at(start);
+        let refused = refusals
+            .iter()
+            .filter(|r| r.time >= from && gauge.refuses.refused(r))
+            .count();
+        // A budget that lasts can still refuse: a request reserves its most output tokens' cost before it is sent,
+        // and is refused when that would pass what is left. That is a budget spent for its callers.
+        let refused_note = match refused {
+            0 => String::new(),
+            n => format!(
+                " Refused {} this period: each request reserves what its most output tokens could cost before it is sent. Lower max output tokens (max_tokens) on the callers, or raise the budget.",
+                enterplace_core::count(n, "request")
+            ),
+        };
+        let over = matches!(pace, Pace::Spent | Pace::RunsOut(_)) || refused > 0;
         out.push((
             over,
             percent,
@@ -634,7 +704,7 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
                 "text": format!("{} of {} per {}", money(spent), money(budget.usd), budget.per.describe()),
                 "percent": percent,
                 "over": over,
-                "note": format!("{} {note}{}", gauge.source, uncounted_note(uncounted)),
+                "note": format!("{} {note}{refused_note}{}", gauge.source, uncounted_note(uncounted)),
             }),
         ));
     }

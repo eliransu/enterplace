@@ -531,6 +531,85 @@ async fn every_budget_scope_is_forecast_rules_keys_and_the_limits_list() -> Test
     Ok(())
 }
 
+/// A budget that lasts at its pace can still refuse: a request reserves what its most output tokens could cost
+/// before it is sent. The forecast says how many it refused this period and the fix, as the Spend page does.
+#[tokio::test]
+async fn a_forecast_that_lasts_says_what_it_refused_and_the_fix() -> TestResult {
+    let s = setup("forecast-refused")?;
+    std::fs::write(
+        s.audit.with_file_name("enterplace.policy.yaml"),
+        format!("{POLICY}limits:\n  - {{ team: search, budget: {{ usd: 5, per: month }} }}\n"),
+    )?;
+    let refusal = |id: &'static str, team: &'static str, code: &'static str, applied: Value| {
+        let mut r = enterplace_core::audit::record(&Entry {
+            id,
+            person: Some("dana.levi"),
+            team: Some(team),
+            method: "POST",
+            path: "/v1/chat/completions",
+            model: Some("gpt-4o-mini"),
+            allowed: false,
+            code: Some(code),
+            rule: Some(if team == "payments" {
+                "payments-team"
+            } else {
+                "everyone-else"
+            }),
+            ..Entry::default()
+        });
+        r.insert("applied".into(), applied);
+        r
+    };
+    for id in ["01BUD0000000000000000000010", "01BUD0000000000000000000011"] {
+        s.log.append_record(&refusal(
+            id,
+            "payments",
+            "budget_exceeded",
+            json!({ "of": "rule", "scope": "team:payments", "limit": "budget", "source": "rule \"payments-team\" (line 12)", "usd": 10.0, "per": "month" }),
+        ))?;
+    }
+    s.log.append_record(&refusal(
+        "01BUD0000000000000000000012",
+        "search",
+        "budget_exceeded",
+        json!({ "of": "team", "scope": "team:search", "limit": "budget", "source": "limits { team: search } (line 21)", "usd": 5.0, "per": "month" }),
+    ))?;
+    s.log.flush();
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (_, page) = analytics(&s.app, "", &cookie).await?;
+    let forecast = |label: &str| {
+        page["forecasts"]
+            .as_array()
+            .and_then(|f| f.iter().find(|f| f["label"] == label))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    let payments = forecast("team payments");
+    let note = payments["note"].as_str().unwrap_or_default();
+    assert!(
+        note.contains("At this pace it lasts the period."),
+        "{payments}"
+    );
+    assert!(
+        note.contains(
+            "Refused 2 requests this period: each request reserves what its most output tokens could cost before it is sent. Lower max output tokens (max_tokens) on the callers, or raise the budget."
+        ),
+        "{payments}"
+    );
+    assert_eq!(
+        payments["over"], true,
+        "a budget that refuses is shown as spent"
+    );
+    let search = forecast("team search");
+    assert!(
+        search["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("Refused 1 request this period")),
+        "{search}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_budget_is_forecast_over_its_own_period_and_time_zone() -> TestResult {
     let s = setup("forecast-window")?;
