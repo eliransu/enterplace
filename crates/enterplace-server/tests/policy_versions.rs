@@ -627,7 +627,7 @@ async fn the_console_adds_a_model_edits_a_key_and_shows_teams_and_versions() -> 
     )?)
     .await?;
     assert_eq!(status, StatusCode::OK, "{page}");
-    assert!(page.contains("is live"), "{page}");
+    assert!(page.contains("in force on 1 of 1 gateways"), "{page}");
     let live = enterplace_core::config::policy_text(&gw_dir.join("enterplace.policy.yaml"))?;
     assert_eq!(live, policy(port, "store"));
     let (_, headers, export) = send(form("GET", "/console/policy/export", &cookie, "")?).await?;
@@ -839,5 +839,165 @@ async fn a_dry_run_replays_the_requests_of_every_gateway_on_the_store() -> TestR
             .contains("does not name"),
         "{body}"
     );
+    Ok(())
+}
+
+/// Signs in to the console with `key`: the session cookie.
+async fn console_cookie(app: &Router, key: &str) -> Result<String, Error> {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/console/sign-in")
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("http://{HOST}"))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(format!("key={key}")))?;
+    let response = app.clone().oneshot(request).await?;
+    Ok(response
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| c.split(';').next())
+        .ok_or("no cookie")?
+        .to_string())
+}
+
+/// A console API call with the session cookie: status and JSON body.
+async fn console_api(
+    app: &Router,
+    cookie: &str,
+    method: &str,
+    path: &str,
+    body: Value,
+) -> Result<(StatusCode, Value), Error> {
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, format!("http://{HOST}"))
+        .header(header::COOKIE, cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))?;
+    let response = app.clone().oneshot(request).await?;
+    let status = response.status();
+    let bytes = response.into_body().collect().await?.to_bytes();
+    Ok((
+        status,
+        serde_json::from_slice(&bytes)
+            .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).into_owned())),
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_version_every_gateway_refuses_never_reads_as_in_force() -> TestResult {
+    let Some(url) = database("policy_in_force").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let (one_dir, two_dir) = (dir("force-one")?, dir("force-two")?);
+    let first = policy(port, "store");
+    let one = gateway(&one_dir, &url, &first)?;
+    enterplace_core::keyfile::add_entry("admin", "ops", ADMIN, true, &one.loaded.keys_path)?;
+    enterplace_core::keyfile::add_entry("maya.cohen", "ops", MAYA, false, &one.loaded.keys_path)?;
+    one.reloader.check(enterplace_server::Trigger::FileChange);
+    let two = gateway(&two_dir, &url, &first)?;
+    let cookie = console_cookie(&one.router, ADMIN).await?;
+    let store = enterplace_core::store::policy_store(&one_dir.join("enterplace.policy.yaml"))
+        .ok_or("no store")?;
+    let start = Instant::now();
+    while store.replicas().await?.iter().filter(|r| r.healthy).count() < 2 {
+        if start.elapsed() > Duration::from_secs(6) {
+            return Err("both gateways did not write a heartbeat in 6 seconds".into());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // A version both gateways run: the toast and Versions say it is in force on 2 of 2.
+    let wider = first.replace("    models: [m]\n", "    models: [m, m2]\n");
+    let (status, body) = console_api(
+        &one.router,
+        &cookie,
+        "POST",
+        "/console/api/policy/save",
+        json!({ "text": wider, "base": 1, "note": "add m2" }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["message"], "Saved; in force on 2 of 2 gateways.",
+        "{body}"
+    );
+
+    // A provider whose key variable no gateway has: saved, and refused by both, by name and with the reason.
+    let unset = "ENTERPLACE_TEST_KEY_NOBODY_SET";
+    let refused = wider.replace(
+        "rules:",
+        &format!(
+            "  - name: keyed\n    kind: openai\n    url: http://127.0.0.1:{port}\n    allow_private: true\n    key_env: {unset}\n    models: [k]\nrules:"
+        ),
+    );
+    let (status, body) = console_api(
+        &one.router,
+        &cookie,
+        "POST",
+        "/console/api/policy/save",
+        json!({ "text": refused, "base": 2, "note": "add keyed" }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let message = body["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("refused it")
+            && message.contains(unset)
+            && message.contains("In force on 0 of 2 gateways"),
+        "{body}"
+    );
+    assert!(!message.contains("Every gateway uses it"), "{body}");
+    // Both keep serving version 2.
+    assert_eq!(chat(&two.router, "m2").await?, StatusCode::OK);
+
+    let (status, body) = console_api(
+        &one.router,
+        &cookie,
+        "GET",
+        "/console/api/policy/versions?version=3",
+        Value::Null,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let row = |id: i64| {
+        body["versions"]
+            .as_array()
+            .and_then(|l| l.iter().find(|v| v["id"] == id))
+            .cloned()
+            .unwrap_or_default()
+    };
+    assert_eq!(row(3)["tag"]["word"], "Saved, in force nowhere", "{body}");
+    assert_eq!(row(3)["force"], "In force on 0 of 2 gateways", "{body}");
+    let refusals = row(3)["refusals"].as_array().cloned().unwrap_or_default();
+    assert_eq!(refusals.len(), 2, "{body}");
+    assert!(
+        refusals.iter().all(|r| r
+            .as_str()
+            .is_some_and(|r| r.starts_with("Refused by ") && r.contains(unset))),
+        "{body}"
+    );
+    assert_eq!(row(2)["force"], "In force on 2 of 2 gateways", "{body}");
+    assert_eq!(
+        body["detail"]["force"], "In force on 0 of 2 gateways",
+        "{body}"
+    );
+
+    // The store lists what each gateway runs and refused.
+    let replicas = enterplace_core::store::policy_store(&one_dir.join("enterplace.policy.yaml"))
+        .ok_or("no store")?
+        .replicas()
+        .await?;
+    assert!(
+        replicas
+            .iter()
+            .all(|r| r.policy_version == Some(2) && r.refused_version == Some(3)),
+        "{replicas:?}"
+    );
+    drop(two);
     Ok(())
 }

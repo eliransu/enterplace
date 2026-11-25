@@ -146,7 +146,7 @@ Hourly, daily and session request counts (`rph`, `rpd`, `session_requests`) are 
 
 ### Replicas
 
-Each replica writes a heartbeat to `enterplace_replicas` every 2 seconds. `GET /admin/replicas` (needs `see_records`) and the Gateways panel on the console's Policy page list every replica that wrote one in the last day, with its host, version, store schema, start time and last heartbeat. A replica is healthy while its last heartbeat is under 10 seconds old; one that stopped stays listed as silent until it has been gone for a day.
+Each replica writes a heartbeat to `enterplace_replicas` every 2 seconds. `GET /admin/replicas` (needs `see_records`) and the Gateways panel on the console's Policy page list every replica that wrote one in the last day, with its host, version, store schema, start time and last heartbeat. A replica is healthy while its last heartbeat is under 10 seconds old; one that stopped stays listed as silent until it has been gone for a day. With the policy kept in the store, each heartbeat also names the policy version the replica runs and a newer version it refused, with the reason; the console's Versions page counts them.
 
 ```bash
 curl -s http://127.0.0.1:8080/admin/replicas -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY"
@@ -158,7 +158,7 @@ A [budget raise](/governance/budgets-and-rate-limits/#budget-raises) asked for o
 
 ### Heartbeats
 
-Each replica writes a row to `enterplace_replicas` every 2 seconds: a name that is new at each start, its host name (`HOSTNAME`), its Enterplace version, the store schema it knows by namespace, when it started and when it last wrote. A replica counts as healthy for 10 seconds after its last write, and its row is deleted a day after it. An embedding binary reads the list through the store interface (`Store::replicas`).
+Each replica writes a row to `enterplace_replicas` every 2 seconds: a name that is new at each start, its host name (`HOSTNAME`), its Enterplace version, the store schema it knows by namespace, when it started and when it last wrote, the policy version it runs (`policy_version`) and a newer one it refused (`refused_version`, `refused`). A replica counts as healthy for 10 seconds after its last write, and its row is deleted a day after it. An embedding binary reads the list through the store interface (`Store::replicas`).
 
 ### Rate limits
 

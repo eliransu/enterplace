@@ -196,6 +196,60 @@ pub struct Replica {
     pub healthy: bool,
     /// The store schema it knows: each namespace and how many migrations of it.
     pub schema: String,
+    /// The policy version it runs, when the policy is kept in the store.
+    pub policy_version: Option<i64>,
+    /// A newer version it refused to run, and why.
+    pub refused_version: Option<i64>,
+    pub refused: Option<String>,
+}
+
+impl Replica {
+    /// The policy it runs and what it refused, as a sentence to put after its other facts. Empty when the
+    /// policy is not kept in the store.
+    pub fn policy_note(&self) -> String {
+        let mut note = String::new();
+        if let Some(v) = self.policy_version {
+            note.push_str(&format!(" Runs policy version {v}."));
+        }
+        if let (Some(v), Some(why)) = (self.refused_version, &self.refused) {
+            note.push_str(&format!(" Refused policy version {v}: {why}"));
+        }
+        note
+    }
+}
+
+/// What a gateway runs of its policy, as its last reload found: written to its heartbeat, and read by the console
+/// after a save, so a version no gateway runs never reads as in force.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InForce {
+    /// SHA-256 of the policy text in force.
+    pub sha256: String,
+    /// Its version, when the policy is kept in the store.
+    pub version: Option<i64>,
+    /// A newer policy the gateway refused: its SHA-256, its version when kept in the store, and why.
+    pub refused: Option<(String, Option<i64>, String)>,
+}
+
+// What the reloader of each policy file in this process last found.
+static IN_FORCE: Mutex<Vec<(PathBuf, InForce)>> = Mutex::new(Vec::new());
+
+/// Notes what the gateway serving `policy` runs now.
+pub fn report_in_force(policy: &Path, state: InForce) {
+    let mut all = IN_FORCE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    all.retain(|(path, _)| path != policy);
+    all.push((policy.to_path_buf(), state));
+}
+
+/// What the gateway serving `policy` in this process runs, if one does.
+pub fn in_force(policy: &Path) -> Option<InForce> {
+    IN_FORCE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(path, _)| path == policy)
+        .map(|(_, state)| state.clone())
 }
 
 /// A cached answer as the store keeps it for every gateway.
@@ -272,6 +326,8 @@ pub trait Store: Credentials + Send + Sync + std::fmt::Debug {
     fn replicas(&self) -> Pending<Vec<Replica>> {
         Box::pin(async { Ok(Vec::new()) })
     }
+    /// What this gateway runs of the policy, written with its next heartbeat.
+    fn report_policy(&self, _state: &InForce) {}
     /// Whether cached answers are kept in this store (`store.answer_cache: true`), so every gateway serves them.
     fn shares_cache(&self) -> bool {
         false

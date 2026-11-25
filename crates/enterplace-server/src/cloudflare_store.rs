@@ -109,6 +109,8 @@ struct Inner {
     load: RwLock<Arc<HashMap<String, DeploymentLoad>>>,
     health_out: Mutex<Option<String>>,
     health: RwLock<Arc<Vec<String>>>,
+    /// What this gateway runs of the policy, for its heartbeat.
+    in_force: Mutex<enterplace_core::store::InForce>,
     polls: AtomicU64,
     shares_cache: AtomicBool,
 }
@@ -155,6 +157,7 @@ pub fn open(url: &str) -> Result<Arc<CfStore>, String> {
         load: RwLock::default(),
         health_out: Mutex::default(),
         health: RwLock::default(),
+        in_force: Mutex::default(),
         polls: AtomicU64::new(0),
         shares_cache: AtomicBool::new(false),
     });
@@ -240,10 +243,18 @@ impl Inner {
             .map(|(d, l)| json!([d, l.in_flight, l.minute, l.requests, l.tokens]))
             .collect();
         let heartbeat = (polls % HEARTBEAT_EVERY == 0).then(|| {
+            let state = lock(&self.in_force).clone();
+            let (refused_version, refused) = match state.refused {
+                Some((_, version, why)) => (version, Some(why)),
+                None => (None, None),
+            };
             json!({
                 "host": std::env::var("HOSTNAME").unwrap_or_default(),
                 "version": enterplace_core::VERSION,
                 "schema": "cloudflare",
+                "policy_version": state.version,
+                "refused_version": refused_version,
+                "refused": refused,
             })
         });
         let body = json!({
@@ -938,9 +949,16 @@ impl Store for CfStore {
                     seen: text(&r["seen"]).to_string(),
                     healthy: r["healthy"].as_bool().unwrap_or(false),
                     schema: text(&r["schema"]).to_string(),
+                    policy_version: r["policy_version"].as_i64(),
+                    refused_version: r["refused_version"].as_i64(),
+                    refused: r["refused"].as_str().map(str::to_string),
                 })
                 .collect())
         })
+    }
+
+    fn report_policy(&self, state: &enterplace_core::store::InForce) {
+        *lock(&self.inner.in_force) = state.clone();
     }
 
     fn shares_cache(&self) -> bool {

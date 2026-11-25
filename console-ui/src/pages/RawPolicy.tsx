@@ -33,8 +33,9 @@ type Raw = {
   next?: { title: string; body: string; action: { label: string; href: string }; docs: string; act: boolean } | null;
 };
 type Line = { n: number; text: string; kind: string };
-type Version = { id: number; tag: Tag; by: string; at: string; note: string; decided: string };
-type Detail = { id: number; tag: Tag; facts: [string, string][]; from: string; diff: Line[]; own: string | null; actions: string[]; text: string };
+type Force = { force?: string | null; refusals?: string[] };
+type Version = Force & { id: number; tag: Tag; by: string; at: string; note: string; decided: string };
+type Detail = Force & { id: number; tag: Tag; facts: [string, string][]; from: string; diff: Line[]; own: string | null; actions: string[]; text: string };
 type Versions = { lead: string; file?: { title: string; body: string }; edit?: boolean; versions?: Version[]; detail?: Detail | null };
 type Draft = { lead: string; text: string; note: string; base: number; hours: number; save: string };
 type Run = { tag: Tag; summary: string; note: string; tables: { title: string; count: number; rows: Record<string, string>[] }[] };
@@ -188,6 +189,21 @@ export function RawPolicy({ query }: PageProps) {
 
 // ---------------------------------------------------------------- versions
 
+// Where a version is in force, from each gateway's heartbeat, and each gateway that refused it with why.
+function InForce({ v }: { v: Force }) {
+  if (!v.force && !v.refusals?.length) return null;
+  return (
+    <span className="t-small grid gap-1 text-muted-foreground">
+      {v.force ? <span>{v.force}</span> : null}
+      {(v.refusals ?? []).map((r) => (
+        <span key={r} className="text-foreground">
+          {r}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function Report({ run }: { run: Run }) {
   return (
     <Panel title="Dry run" actions={<VerdictTag tag={run.tag} />} note={run.note}>
@@ -325,6 +341,7 @@ export function PolicyVersions({ query }: PageProps) {
               </div>
             ))}
           </dl>
+          <InForce v={detail} />
           <h3 className="t-tag m-0 uppercase">Changes from {detail.from}</h3>
           {detail.diff.length ? <Code lines={detail.diff} /> : <p className="t-small m-0 text-muted-foreground">The same text as the version it was drafted on.</p>}
           {detail.own ? <p className="t-small m-0 text-muted-foreground">{detail.own}</p> : null}
@@ -376,8 +393,11 @@ export function PolicyVersions({ query }: PageProps) {
                   <TableCell className="whitespace-nowrap">
                     <a href={`#/policy/versions?version=${v.id}`}>Version {v.id}</a>
                   </TableCell>
-                  <TableCell>
-                    <VerdictTag tag={v.tag} />
+                  <TableCell className="whitespace-normal">
+                    <span className="grid gap-1">
+                      <VerdictTag tag={v.tag} />
+                      <InForce v={v} />
+                    </span>
                   </TableCell>
                   <TableCell>
                     {v.by}

@@ -5,7 +5,8 @@
 //! Every change goes through [`commit`]: the role must hold `edit_policy`, the change is recorded in the audit chain
 //! with who made it before it is made, the new text is checked as `enterplace check` checks a file, and it is then
 //! saved as a new version (policy kept in the store) or written over the file in one rename (policy kept in the
-//! file). Either way every gateway uses it within 2 seconds. A form edit writes the policy without its comments.
+//! file). The answer says on how many gateways it is in force, or which refused it and why. A form edit writes the
+//! policy without its comments.
 
 use axum::{
     Router,
@@ -327,6 +328,24 @@ async fn commit(
             json!({ "message": "Nothing changed: the policy already says this." }),
         ));
     }
+    save_text(console, admin, action, note, target, before, after, base).await
+}
+
+/// Saves `after` (drafted on `before`, the store's version `base` when the policy is kept there) as the policy:
+/// a new version in the store, or the file rewritten in one rename. Recorded first, with the whole text; checked
+/// as `enterplace check` checks a file. The answer waits a few seconds for the gateways to report on it, so it
+/// says where it is in force, or which gateway refused it and why.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn save_text(
+    console: &Console,
+    admin: &Admin,
+    action: &'static str,
+    note: String,
+    target: Value,
+    before: String,
+    after: String,
+    base: Option<i64>,
+) -> Answer {
     if base.is_some() {
         return match edit::save_version(console, admin, action, after, base, note).await {
             Ok(v) if v.state == store::PENDING => Ok(ok(json!({
@@ -334,22 +353,29 @@ async fn commit(
                 "version": v.id,
             }))),
             Ok(v) => Ok(ok(json!({
-                "message": format!("Saved as version {}. Every gateway uses it within 2 seconds.", v.id),
+                "message": edit::in_force(console, Some(v.id), &v.sha256).await,
                 "version": v.id,
             }))),
             Err(err) => Err(refused(&err)),
         };
     }
+    let sha256 = enterplace_core::id::sha256_hex(after.as_bytes());
     let mut target = target;
     if let Value::Object(t) = &mut target {
-        t.insert(
-            "sha256".into(),
-            enterplace_core::id::sha256_hex(after.as_bytes()).into(),
-        );
-        // The policy holds no secrets: the chain keeps the whole text, as a saved version would.
+        t.insert("sha256".into(), sha256.clone().into());
+        if !note.is_empty() {
+            t.insert("note".into(), note.into());
+        }
+        // The policy holds no secrets: the chain keeps the whole text, as a saved version would. The file's
+        // versions are read back from these records.
         t.insert("policy".into(), after.clone().into());
     }
-    let act = act(target);
+    let act = Act {
+        action,
+        by: Some((&admin.name, &admin.team)),
+        key: None,
+        target,
+    };
     if record(console, &act, None, None).await.is_err() {
         return Err(Fail(StatusCode::SERVICE_UNAVAILABLE, NOT_RECORDED.into()));
     }
@@ -364,7 +390,7 @@ async fn commit(
         });
     match written {
         Ok(()) => Ok(ok(json!({
-            "message": "Saved. Every gateway uses it within 2 seconds.",
+            "message": edit::in_force(console, None, &sha256).await,
         }))),
         Err(err) => {
             let _ = record(console, &act, Some("invalid_policy"), Some(&err.message())).await;

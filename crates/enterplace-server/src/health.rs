@@ -507,7 +507,7 @@ async fn view(
                                 "host": if r.host.is_empty() { r.gateway.clone() } else { r.host.clone() },
                                 "version": r.version,
                                 "healthy": r.healthy,
-                                "meta": format!("Started {}, last heartbeat {}.", r.started, r.seen),
+                                "meta": format!("Started {}, last heartbeat {}.{}", r.started, r.seen, r.policy_note()),
                             })
                         })
                         .collect::<Vec<Value>>(),

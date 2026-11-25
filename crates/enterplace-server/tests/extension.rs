@@ -183,7 +183,7 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
             ("batches".to_string(), 2),
             ("demo".to_string(), 1),
             ("enterplace_events".to_string(), 1),
-            ("enterplace_ha".to_string(), 1),
+            ("enterplace_ha".to_string(), 2),
             ("enterplace_policy".to_string(), 1),
             ("enterplace_routing".to_string(), 4),
             ("insights".to_string(), 2),

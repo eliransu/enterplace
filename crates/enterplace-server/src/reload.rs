@@ -73,6 +73,8 @@ struct Current {
     credential_prints: Vec<i64>,
     /// How many times secrets read from secret managers had changed when the keys were last taken.
     secrets: u64,
+    /// The store's version in use, when the policy is kept there.
+    version: Option<i64>,
 }
 
 /// Watches the files and swaps the version in use. One per served policy file.
@@ -991,6 +993,7 @@ pub fn governed_with(
                 loaded: loaded.clone(),
                 prints,
                 rejected: HashMap::new(),
+                version: live_version(policy_path, &loaded.policy_text),
             }),
             shown: Mutex::new(None),
             wake: Mutex::new(None),
@@ -1003,6 +1006,13 @@ pub fn governed_with(
     })
     .map_err(|err| err.to_string())?;
     let reloader = reloader.ok_or("the reloader was not built")?;
+    {
+        let current = match reloader.current.lock() {
+            Ok(current) => current,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        reloader.report(&current, None);
+    }
     Ok(Governed {
         router,
         reloader,
@@ -1079,12 +1089,53 @@ impl Reloader {
         }
     }
 
-    /// Looks at both files and, if either changed, checks them and uses them or records why not.
+    /// Looks at both files and, if either changed, checks them and uses them or records why not. What it runs
+    /// after, and what it refused, is reported for the heartbeat and the console.
     pub fn check(&self, trigger: Trigger) -> Reload {
         let mut current = match self.current.lock() {
             Ok(current) => current,
             Err(poisoned) => poisoned.into_inner(),
         };
+        let live = store::policy_store(&self.policy_path).and_then(|s| s.live_policy());
+        let live_id = live.as_ref().map(|v| v.id);
+        let outcome = self.look(&mut current, trigger, live);
+        let refused = match &outcome {
+            Reload::Loaded => {
+                current.version = live_id;
+                None
+            }
+            Reload::Unchanged => None,
+            Reload::Rejected(problems) => Some((
+                self.rejected()
+                    .and_then(|(policy, _)| policy)
+                    .unwrap_or_default(),
+                live_id,
+                problems.join(" "),
+            )),
+        };
+        self.report(&current, refused);
+        outcome
+    }
+
+    /// Tells the store's heartbeat and the console what this gateway runs, and what newer policy it refused.
+    fn report(&self, current: &Current, refused: Option<(String, Option<i64>, String)>) {
+        let state = store::InForce {
+            sha256: current.loaded.policy_sha256.clone(),
+            version: current.version,
+            refused,
+        };
+        if let Some(store) = &self.store {
+            store.report_policy(&state);
+        }
+        store::report_in_force(&self.policy_path, state);
+    }
+
+    fn look(
+        &self,
+        current: &mut Current,
+        trigger: Trigger,
+        live: Option<enterplace_core::store::PolicyVersion>,
+    ) -> Reload {
         // A reload asked for (SIGHUP, the admin API) reads the secret managers again too.
         if trigger == Trigger::Signal {
             for problem in enterplace_core::secrets::refresh() {
@@ -1114,7 +1165,7 @@ impl Reloader {
         let kept = store::policy_store(&self.policy_path);
         let policy = match &kept {
             // From memory, as the keys are: a version saved on any gateway shows here within the store's poll.
-            Some(store) => Ok(store.live_policy().map(|v| v.text.into_bytes())),
+            Some(_) => Ok(live.map(|v| v.text.into_bytes())),
             None => read(&self.policy_path),
         };
         let trigger = match (&kept, trigger) {
@@ -1143,8 +1194,8 @@ impl Reloader {
             keys => keys,
         };
         match self.evaluate(&current.loaded, policy, keys) {
-            Ok(new) => self.use_version(&mut current, trigger, prints, new),
-            Err(problems) => self.reject(&mut current, trigger, prints, problems),
+            Ok(new) => self.use_version(current, trigger, prints, new),
+            Err(problems) => self.reject(current, trigger, prints, problems),
         }
     }
 

@@ -7,6 +7,17 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Saved is not in force
+
+- Each gateway's heartbeat names the policy version it runs and a newer one it refused, with the reason
+  (`enterplace_replicas.policy_version`, `refused_version`, `refused`; a new `enterplace_ha` migration, and the same
+  columns on the Cloudflare store). The console's Versions page shows "In force on N of M gateways" under each version
+  and "Refused by" each gateway with its reason; a live version no gateway runs is tagged "Saved, in force nowhere".
+- A console save waits up to 5 seconds for the heartbeats and says "Saved; in force on N of M gateways", or names
+  the gateway that refused it and why. It no longer says "Every gateway uses it" for a version no gateway runs.
+- With the policy in its file, a console save waits for the gateway to reload the file and says whether it runs it,
+  or that it refused it, with the reason.
+
 ### Every request is named by default
 
 - `enterplace start` writes the `claude-subscriptions` provider with `identity: required` (it wrote `optional`), so a

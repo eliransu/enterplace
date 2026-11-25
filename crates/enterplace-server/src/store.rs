@@ -32,8 +32,9 @@ use enterplace_core::{
     kill::Kill,
     policy::{Budget, Period},
     store::{
-        self as core_store, Bucket, CachedAnswer, Change, Credential, DeploymentLoad, LEASE, Lease,
-        NewVersion, Pending, PolicyVersion, Raise, Replica, Reserve, Store, VersionError,
+        self as core_store, Bucket, CachedAnswer, Change, Credential, DeploymentLoad, InForce,
+        LEASE, Lease, NewVersion, Pending, PolicyVersion, Raise, Replica, Reserve, Store,
+        VersionError,
     },
 };
 
@@ -267,6 +268,8 @@ CREATE TABLE enterplace_answer_vectors (
 CREATE INDEX enterplace_answer_vectors_partition ON enterplace_answer_vectors (partition, created DESC);
 CREATE TABLE enterplace_raises (id text PRIMARY KEY, body text NOT NULL);
 INSERT INTO enterplace_versions VALUES ('raises', 0) ON CONFLICT (name) DO NOTHING;
+", "
+ALTER TABLE enterplace_replicas ADD COLUMN policy_version bigint, ADD COLUMN refused_version bigint, ADD COLUMN refused text;
 "];
 
 /// Most bytes of answers the store keeps. Past it the least recently used go first, at the next clean-up.
@@ -397,6 +400,8 @@ struct Inner {
     /// Budget raises, and the version of them last read.
     raises: RwLock<Arc<Vec<Raise>>>,
     raises_seen: Mutex<Option<i64>>,
+    /// What this gateway runs of the policy, for its heartbeat.
+    in_force: Mutex<InForce>,
     /// Set from `store.answer_cache`: cached answers are kept in the database.
     shares_cache: AtomicBool,
 }
@@ -469,6 +474,7 @@ pub fn open(env: &str, url: &str) -> Result<Arc<PgStore>, String> {
         polls: std::sync::atomic::AtomicU64::new(0),
         raises: RwLock::default(),
         raises_seen: Mutex::new(None),
+        in_force: Mutex::new(InForce::default()),
         shares_cache: AtomicBool::new(false),
     });
     let store = PgStore {
@@ -1194,12 +1200,23 @@ impl Inner {
             .map(|(namespace, list)| format!("{namespace} {}", list.len()))
             .collect::<Vec<_>>()
             .join(", ");
+        let state = self
+            .in_force
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let (refused_version, refused) = match &state.refused {
+            Some((_, version, why)) => (*version, Some(why.clone())),
+            None => (None, None),
+        };
         let _ = tokio::time::timeout(
             WAIT,
             client.execute(
-                "INSERT INTO enterplace_replicas VALUES ($1, $2, $3, $4, clock_timestamp(), clock_timestamp()) \
-                 ON CONFLICT (gateway) DO UPDATE SET seen = excluded.seen",
-                &[&self.gateway, &host, &enterplace_core::VERSION, &schema],
+                "INSERT INTO enterplace_replicas (gateway, host, version, schema, started, seen, policy_version, refused_version, refused) \
+                 VALUES ($1, $2, $3, $4, clock_timestamp(), clock_timestamp(), $5, $6, $7) \
+                 ON CONFLICT (gateway) DO UPDATE SET seen = excluded.seen, policy_version = excluded.policy_version, \
+                 refused_version = excluded.refused_version, refused = excluded.refused",
+                &[&self.gateway, &host, &enterplace_core::VERSION, &schema, &state.version, &refused_version, &refused],
             ),
         )
         .await;
@@ -2386,7 +2403,7 @@ impl Store for PgStore {
                     &format!(
                         "SELECT gateway, host, version, schema, to_char(started AT TIME ZONE 'UTC', {TIME}), \
                          to_char(seen AT TIME ZONE 'UTC', {TIME}), \
-                         seen > clock_timestamp() - $1 * interval '1 second' \
+                         seen > clock_timestamp() - $1 * interval '1 second', policy_version, refused_version, refused \
                          FROM enterplace_replicas ORDER BY started DESC, gateway"
                     ),
                     &[&HEALTHY_FOR_SECS],
@@ -2404,10 +2421,21 @@ impl Store for PgStore {
                         started: row.try_get(4).map_err(field)?,
                         seen: row.try_get(5).map_err(field)?,
                         healthy: row.try_get(6).map_err(field)?,
+                        policy_version: row.try_get(7).map_err(field)?,
+                        refused_version: row.try_get(8).map_err(field)?,
+                        refused: row.try_get(9).map_err(field)?,
                     })
                 })
                 .collect()
         })
+    }
+
+    fn report_policy(&self, state: &InForce) {
+        *self
+            .inner
+            .in_force
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = state.clone();
     }
 
     fn shares_cache(&self) -> bool {

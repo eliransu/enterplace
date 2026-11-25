@@ -58,6 +58,99 @@ pub(crate) async fn save_version(
     .await
 }
 
+/// How long a save waits for the gateways to report on what it saved: a gateway reads a new version within a
+/// second, checks for it every second and writes its heartbeat every 2.
+const REPORT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Where a saved policy is in force, said after waiting a few seconds for the gateways to report: on how many of
+/// the healthy gateways (store's `version`), or whether the gateway serving the file runs it (`sha256` of the text
+/// written), and the reason of each gateway that refused it. A save is never said to be in force where it is not.
+pub(crate) async fn in_force(console: &Console, version: Option<i64>, sha256: &str) -> String {
+    let start = std::time::Instant::now();
+    if let Some(id) = version {
+        let Some(store) = console.store() else {
+            return format!("Saved as version {id}.");
+        };
+        loop {
+            let replicas = store.replicas().await.unwrap_or_default();
+            let (n, m, refusals) = spread(&replicas, id);
+            if m == 0 {
+                // A gateway that just started writes its first heartbeat within 2 seconds.
+                if start.elapsed() >= REPORT_WAIT {
+                    return format!(
+                        "Saved as version {id}. No gateway has written a heartbeat in 10 seconds, so none is known to run it yet: Policy, Versions shows where it is in force."
+                    );
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                continue;
+            }
+            let settled = n + refusals.len() >= m;
+            if settled || start.elapsed() >= REPORT_WAIT {
+                return match refusals.first() {
+                    Some((host, why)) => format!(
+                        "Saved as version {id}, and {host} refused it: {why} In force on {n} of {m} gateways; the others keep the version they ran. Fix the cause on {host} (or save a version it can run)."
+                    ),
+                    None if settled => format!("Saved; in force on {n} of {m} gateways."),
+                    None => format!(
+                        "Saved as version {id}; in force on {n} of {m} gateways so far. The others have not reported yet: Policy, Versions shows where it is in force."
+                    ),
+                };
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
+    let path = &console.config().policy;
+    loop {
+        let Some(state) = store::in_force(path) else {
+            // No gateway serves this file in this process (the console runs on its own): nothing to wait for.
+            return "Saved. The gateway reading this file uses it within 2 seconds.".into();
+        };
+        if state.sha256 == sha256 {
+            return "Saved; in force on the gateway.".into();
+        }
+        if let Some((_, _, why)) = state.refused.as_ref().filter(|(s, _, _)| s == sha256) {
+            return format!(
+                "Saved to {}, and the gateway refused it, so it keeps the policy it had: {why} Fix the cause, or put the earlier version back under Policy, Versions.",
+                path.display()
+            );
+        }
+        if start.elapsed() >= REPORT_WAIT {
+            return format!(
+                "Saved to {}. The gateway has not loaded it yet: Policy, Versions shows whether it runs it.",
+                path.display()
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+/// How many healthy gateways run version `id`, how many are healthy, and each healthy one that refused it.
+pub(crate) fn spread(
+    replicas: &[store::Replica],
+    id: i64,
+) -> (usize, usize, Vec<(String, String)>) {
+    let healthy: Vec<&store::Replica> = replicas.iter().filter(|r| r.healthy).collect();
+    let n = healthy
+        .iter()
+        .filter(|r| r.policy_version == Some(id))
+        .count();
+    let refusals = healthy
+        .iter()
+        .filter(|r| r.refused_version == Some(id) && r.policy_version != Some(id))
+        .map(|r| (gateway_name(r), r.refused.clone().unwrap_or_default()))
+        .collect();
+    (n, healthy.len(), refusals)
+}
+
+/// A gateway as the console names it: its host, else its name on the store.
+pub(crate) fn gateway_name(r: &store::Replica) -> String {
+    if r.host.is_empty() {
+        r.gateway.clone()
+    } else {
+        r.host.clone()
+    }
+}
+
 /// Records `act`, runs `work` off the request threads, and records its failure if it fails.
 pub(crate) async fn run(
     console: &Console,

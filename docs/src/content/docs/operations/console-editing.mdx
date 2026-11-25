@@ -81,6 +81,8 @@ With a [store](/operations/store/), a dry run on any gateway replays the request
 
 **Raw policy**, then **Versions** (`#/policy/versions`, formerly `/console/policy/versions`), lists every version with its state (Live, Waiting for approval, Earlier, Rejected), who saved it and who approved it. Open one to see its diff from the version it was drafted on. **Roll back to this version** saves its text as a new version: the history keeps both, and with approval on it waits for a second admin like any change.
 
+Saved is not the same as in force. Each gateway reports in its heartbeat the version it runs and, when it refused a newer one, why (a provider key variable unset on that gateway, a guardrail credential missing). Versions shows under each version **In force on N of M gateways** (M counts the gateways with a heartbeat in the last 10 seconds) and, for a refused one, **Refused by** the gateway with its reason. A live version no gateway runs is tagged **Saved, in force nowhere**. After a save the console waits up to 5 seconds for the heartbeats and says `Saved; in force on N of M gateways`, or names the gateway that refused it and why.
+
 ## GitOps
 
 **Export YAML** downloads the live policy as `enterplace.policy.yaml`, from the console or `GET /admin/policy`. A team that reviews every change in git has two ways to work:

@@ -575,7 +575,7 @@ async fn every_gateway_on_the_store_is_listed_with_its_version_and_health() -> T
         assert_eq!(replica.version, enterplace_core::VERSION);
         assert!(
             TestStore::cloudflare()
-                || (replica.schema.contains("core ") && replica.schema.contains("enterplace_ha 1")),
+                || (replica.schema.contains("core ") && replica.schema.contains("enterplace_ha 2")),
             "{}",
             replica.schema
         );

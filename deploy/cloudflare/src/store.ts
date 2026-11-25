@@ -74,6 +74,12 @@ const MIGRATIONS: string[][] = [
   ],
   // Failed console sign-ins per source address and account, and until when each is locked out.
   ["CREATE TABLE sign_in_failures (scope TEXT PRIMARY KEY, failures INTEGER NOT NULL, since INTEGER NOT NULL, locked_until INTEGER)"],
+  // The policy version each gateway runs, and a newer one it refused with why.
+  [
+    "ALTER TABLE replicas ADD COLUMN policy_version INTEGER",
+    "ALTER TABLE replicas ADD COLUMN refused_version INTEGER",
+    "ALTER TABLE replicas ADD COLUMN refused TEXT",
+  ],
 ];
 
 /** The versions the poll compares, each naming what is read again when it changes. */
@@ -238,13 +244,17 @@ export class StoreCore {
     }
     if (b.heartbeat) {
       this.run(
-        "INSERT INTO replicas VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (gateway) DO UPDATE SET seen = excluded.seen",
+        "INSERT INTO replicas (gateway, host, version, schema, started, seen, policy_version, refused_version, refused) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+          "ON CONFLICT (gateway) DO UPDATE SET seen = excluded.seen, policy_version = excluded.policy_version, refused_version = excluded.refused_version, refused = excluded.refused",
         b.gateway,
         b.heartbeat.host,
         b.heartbeat.version,
         b.heartbeat.schema,
         now,
         now,
+        b.heartbeat.policy_version ?? null,
+        b.heartbeat.refused_version ?? null,
+        b.heartbeat.refused ?? null,
       );
     }
     const loadFor = b.load_for * 1000;
@@ -625,6 +635,9 @@ export class StoreCore {
         started: time(r.started),
         seen: time(r.seen),
         healthy: r.seen > now - b.healthy_for * 1000,
+        policy_version: r.policy_version ?? null,
+        refused_version: r.refused_version ?? null,
+        refused: r.refused ?? null,
       })),
     };
   }

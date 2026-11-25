@@ -202,7 +202,7 @@ async fn raw(State(console): State<Console>, headers: HeaderMap) -> Response {
                         .iter()
                         .map(|r| json!({
                             "host": r.host,
-                            "meta": format!("Version {}, schema {}. Started {}, last heartbeat {}.", r.version, r.schema, r.started, r.seen),
+                            "meta": format!("Version {}, schema {}. Started {}, last heartbeat {}.{}", r.version, r.schema, r.started, r.seen, r.policy_note()),
                             "healthy": r.healthy,
                         }))
                         .collect(),
@@ -282,12 +282,30 @@ async fn list(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> R
             let all = store.policy_versions().unwrap_or_default();
             let selected: Option<i64> = Form::of(&uri).get("version").parse().ok();
             let editable = edits_policy(&admin);
+            // What each gateway runs, from its heartbeat: a saved version no gateway runs never reads as in force.
+            let replicas = store.replicas().await.unwrap_or_default();
+            let spread = |v: &PolicyVersion| {
+                let (n, m, refusals) = edit::spread(&replicas, v.id);
+                let refusals: Vec<String> = refusals
+                    .into_iter()
+                    .map(|(host, why)| format!("Refused by {host}: {why}"))
+                    .collect();
+                let mut tag = state_tag(&v.state);
+                if v.state == store::LIVE && m > 0 && n == 0 {
+                    tag = json!({ "kind": "warn", "word": "Saved, in force nowhere", "detail": "" });
+                }
+                let shown = m > 0 && (v.state == store::LIVE || n > 0 || !refusals.is_empty());
+                (tag, shown.then(|| format!("In force on {n} of {m} gateways")), refusals)
+            };
             let rows: Vec<Value> = all
                 .iter()
                 .map(|v| {
+                    let (tag, force, refusals) = spread(v);
                     json!({
                         "id": v.id,
-                        "tag": state_tag(&v.state),
+                        "tag": tag,
+                        "force": force,
+                        "refusals": refusals,
                         "by": v.created_by,
                         "at": time_full(&v.created_at),
                         "note": v.note,
@@ -318,9 +336,12 @@ async fn list(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> R
                         }
                         actions.push("dry_run");
                     }
+                    let (tag, force, refusals) = spread(v);
                     json!({
                         "id": v.id,
-                        "tag": state_tag(&v.state),
+                        "tag": tag,
+                        "force": force,
+                        "refusals": refusals,
                         "facts": [
                             ["Saved by", v.created_by],
                             ["Saved at", time_full(&v.created_at)],
@@ -346,8 +367,8 @@ async fn list(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> R
     )
 }
 
-/// What a saved version's toast says, by its state.
-fn saved(v: &PolicyVersion) -> Response {
+/// What a saved version's toast says, by its state: a live one after the gateways reported on it.
+async fn saved(console: &Console, v: &PolicyVersion) -> Response {
     let message = match v.state.as_str() {
         store::PENDING => format!(
             "Version {} is saved and waits for a second admin to approve it.",
@@ -357,10 +378,7 @@ fn saved(v: &PolicyVersion) -> Response {
             "Version {} is rejected. The live version stays in force.",
             v.id
         ),
-        _ => format!(
-            "Version {} is live. Every gateway uses it within 2 seconds.",
-            v.id
-        ),
+        _ => edit::in_force(console, Some(v.id), &v.sha256).await,
     };
     ok(json!({ "message": message, "version": v.id, "state": v.state }))
 }
@@ -399,7 +417,7 @@ async fn decide(
                 key: None,
                 target: json!({ "version": id }),
             };
-            edit::run(
+            let v = edit::run(
                 &console,
                 &act,
                 move |policy, keys, by| match act_name {
@@ -409,8 +427,8 @@ async fn decide(
                 &admin.name,
             )
             .await
-            .map(|v| saved(&v))
-            .map_err(|err| refused(&err))
+            .map_err(|err| refused(&err))?;
+            Ok(saved(&console, &v).await)
         }
         .await,
     )
@@ -450,7 +468,7 @@ async fn editor(State(console): State<Console>, headers: HeaderMap, uri: Uri) ->
                 "lead": if approval {
                     "Edit the YAML, or load a file to import it. A save is checked as enterplace check checks a file, then waits for a second admin to approve it."
                 } else {
-                    "Edit the YAML, or load a file to import it. A save is checked as enterplace check checks a file, then every gateway uses it within 2 seconds."
+                    "Edit the YAML, or load a file to import it. A save is checked as enterplace check checks a file; each gateway loads it within 2 seconds, and the save says on how many it is in force."
                 },
                 "text": text,
                 "note": note,
@@ -501,10 +519,10 @@ async fn save_draft(console: &Console, headers: &HeaderMap, bytes: &Bytes) -> An
     // The version the editor read: a version saved since is refused rather than overwritten.
     let base = number(&body, "base");
     let note = text(&body, "note").to_string();
-    edit::save_version(console, &admin, "propose_policy", draft(&body), base, note)
+    let v = edit::save_version(console, &admin, "propose_policy", draft(&body), base, note)
         .await
-        .map(|v| saved(&v))
-        .map_err(|err| refused(&err))
+        .map_err(|err| refused(&err))?;
+    Ok(saved(console, &v).await)
 }
 
 async fn dry_run(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {

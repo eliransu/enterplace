@@ -215,7 +215,7 @@ async fn change(
             "version": v.id,
         }))),
         Ok(v) => Ok(ok(json!({
-            "message": format!("Saved as version {}. Every gateway uses it within 2 seconds.", v.id),
+            "message": edit::in_force(console, Some(v.id), &v.sha256).await,
             "version": v.id,
         }))),
         Err(err) => Err(refused(&err)),
