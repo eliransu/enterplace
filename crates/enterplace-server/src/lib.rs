@@ -1347,10 +1347,17 @@ fn build(
             cors::layer,
         ));
     let router = match console {
-        Some(console) => router.nest(
-            "/console",
-            enterplace_console::router_with(console, config.setup.clone(), console_extension),
-        ),
+        // `/console/` with a slash is what a browser or a person types; nest matches `/console` alone, so without this
+        // route it fell through to the API and answered with a no_key error in JSON.
+        Some(console) => router
+            .route(
+                "/console/",
+                get(|| async { axum::response::Redirect::permanent("/console") }),
+            )
+            .nest(
+                "/console",
+                enterplace_console::router_with(console, config.setup.clone(), console_extension),
+            ),
         None => router,
     };
     Ok((router, reloader, metrics))

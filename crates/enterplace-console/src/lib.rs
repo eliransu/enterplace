@@ -650,9 +650,9 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
                 StatusCode::NOT_FOUND,
                 pages::notice(
                     "No console page here",
-                    "This address is not a page of the console. Start here is where it starts.",
+                    "This address is not a page of the console. The overview is where it starts.",
                     HOME,
-                    "Open Start here",
+                    "Open the overview",
                 ),
             )
         })

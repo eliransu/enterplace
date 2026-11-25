@@ -104,6 +104,10 @@ async fn the_setup_link_makes_the_first_admin_once_and_that_key_makes_a_governed
         assert!(page.contains(step), "the page shows {step}");
     }
 
+    // `/console/` with a slash, as a browser or a person types it, is the console, never the API's no_key answer.
+    let (status, _) = send(&gw.router, Request::get("/console/").body(Body::empty())?).await?;
+    assert!(status.is_redirection(), "/console/ answered {status}");
+
     let (status, page) = send(&gw.router, form(&link, "name=eve&team=x")?).await?;
     assert_eq!(status, StatusCode::GONE, "the link works once: {page}");
     let (status, _) = send(&gw.router, Request::get(&link).body(Body::empty())?).await?;
