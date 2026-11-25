@@ -5,7 +5,7 @@ Every change to Enterplace that a user or operator can see, newest first. The fo
 The open source crates and the enterprise features in `enterprise/` (commercial license) share one version number and
 one repository. How a release is made: RELEASING.md.
 
-## [Unreleased]
+## [0.1.0] - 2026-11-25
 
 ### Saved is not in force
 
@@ -1187,7 +1187,7 @@ login` saved, so the gateway answers with their team's profile. Tool names now m
   without content.
 - `POST /v1/completions` (legacy text completions) for openai providers, guarded on its prompt and priced from usage.
 
-## [0.1.0] - Unreleased
+### The first tagged release
 
 The first tagged release: a governed AI gateway in one static binary. Every request carries a person's or workload's
 identity, passes a policy decision and lands in a hash-chained audit log before Enterplace forwards it with the provider key.
