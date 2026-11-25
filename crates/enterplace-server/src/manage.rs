@@ -955,7 +955,7 @@ async fn allow(
         return Err(refused(
             StatusCode::UNAUTHORIZED,
             "unknown_key",
-            "Refused: Enterplace does not know this key. It was never issued or it has been removed. Ask a Enterplace admin.",
+            "Refused: Enterplace does not know this key. It was never issued or it has been removed. Ask an Enterplace admin.",
         ));
     };
     call.person = Some(person.clone());
@@ -966,7 +966,7 @@ async fn allow(
             StatusCode::FORBIDDEN,
             "not_admin",
             format!(
-                "Refused: the admin API is for keys marked `admin: true` or given a role: in the keys file, and the key of \"{}\" is neither. Ask a Enterplace admin.",
+                "Refused: the admin API is for keys marked `admin: true` or given a role: in the keys file, and the key of \"{}\" is neither. Ask an Enterplace admin.",
                 person.name
             ),
         ));
@@ -984,7 +984,7 @@ async fn allow(
                 StatusCode::FORBIDDEN,
                 "not_permitted",
                 format!(
-                    "Refused: role \"{}\" of \"{}\" does not have the {} permission, which {} needs. Ask a Enterplace admin to add it to the role under roles: in the policy, or to give you another role.",
+                    "Refused: role \"{}\" of \"{}\" does not have the {} permission, which {} needs. Ask an Enterplace admin to add it to the role under roles: in the policy, or to give you another role.",
                     role.name,
                     person.name,
                     permission.word(),

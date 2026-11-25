@@ -30,7 +30,7 @@ roles:
 
 - `trusted_proxies` must list the proxy's addresses. `enterplace check` refuses `identity_headers` without it.
 - Groups map to teams and roles through `sso_values`, exactly as for [single sign-on](/governance/single-sign-on/). A person whose groups match no role does not get into the console. A person in no team (and no `team:` fallback) is refused on the model routes with `identity_invalid`, by name.
-- A request that also carries a Enterplace key is the key's: the key decides.
+- A request that also carries an Enterplace key is the key's: the key decides.
 
 ## What is trusted, and what is not
 

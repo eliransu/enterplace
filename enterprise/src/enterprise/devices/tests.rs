@@ -357,7 +357,7 @@ async fn a_report_is_from_the_person_of_its_key_and_a_device_stays_bound() -> Re
         }
     };
 
-    // The person comes from a Enterplace key, never from the report.
+    // The person comes from an Enterplace key, never from the report.
     let none = send(all, "").await?;
     assert_eq!(none.status, StatusCode::UNAUTHORIZED, "{}", none.text);
     assert!(none.text.contains("person_key_required"), "{}", none.text);

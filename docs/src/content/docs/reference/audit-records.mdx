@@ -38,7 +38,7 @@ Every record starts with `n` and ends with `prev` and `hash`.
 | `prev` | string | The `hash` of the record before, or 64 zeros for record 1 |
 | `hash` | string | SHA-256, in hex, of this line's text up to and including `prev` and its value, closed with `}` |
 
-`enterplace audit verify` recomputes each hash and link. Times are UTC with millisecond precision, such as `2026-11-13T00:53:10.132Z`. Strings that come from the caller are cut to 200 characters. No record holds prompt text, answer text, a Enterplace key or a provider key.
+`enterplace audit verify` recomputes each hash and link. Times are UTC with millisecond precision, such as `2026-11-13T00:53:10.132Z`. Strings that come from the caller are cut to 200 characters. No record holds prompt text, answer text, an Enterplace key or a provider key.
 
 ## Request decision
 

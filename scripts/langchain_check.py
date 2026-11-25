@@ -129,7 +129,7 @@ def js_checks(base):
 
 
 def main(checks=None, handler=None):
-    """Runs `checks(base)` against a Enterplace in front of the mock; scripts/sdk_check.py passes its own."""
+    """Runs `checks(base)` against an Enterplace in front of the mock; scripts/sdk_check.py passes its own."""
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     enterplace = str(pathlib.Path(args[0] if args else "target/release/enterplace").resolve())
     provider = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler or Provider)

@@ -39,7 +39,7 @@ pub struct Principal {
     pub role: Option<String>,
     /// The rest of the key's settings: rpm, metadata, routes, source addresses, rotation.
     pub options: KeyOptions,
-    /// Set when the caller signed in with a JWT from a trusted issuer instead of a Enterplace key.
+    /// Set when the caller signed in with a JWT from a trusted issuer instead of an Enterplace key.
     pub jwt: Option<JwtIdentity>,
 }
 
@@ -159,7 +159,7 @@ impl std::fmt::Display for Cidr {
     }
 }
 
-/// An identity provider whose JWTs Enterplace accepts in place of a Enterplace key on the model routes.
+/// An identity provider whose JWTs Enterplace accepts in place of an Enterplace key on the model routes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JwtTrust {
     /// `iss` must equal this.
@@ -1298,7 +1298,7 @@ pub struct Policy {
     orgs: Vec<String>,
     /// The `teams:` list.
     teams: Vec<Team>,
-    /// Identity providers whose JWTs stand in for a Enterplace key.
+    /// Identity providers whose JWTs stand in for an Enterplace key.
     jwt: Vec<JwtTrust>,
     /// Proxies whose `X-Forwarded-For` names the client. A request from anywhere else is taken by its own address.
     trusted_proxies: Vec<Cidr>,

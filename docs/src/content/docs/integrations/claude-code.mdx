@@ -29,7 +29,7 @@ Then run `claude`. The same two keys can go in the `env` block of `~/.claude/set
 Claude Code keeps your Claude login. Leave `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset. Send a prompt, and **Requests** in the console shows it under your name. No Enterplace yet? See the [Quickstart](/getting-started/quickstart/).
 
 <Aside type="caution" title="Not in the Claude desktop app">
-This works in Claude Code in a terminal and in the VS Code extension (`claudeCode.environmentVariables`). The Code tab of the Claude desktop app sets `ANTHROPIC_BASE_URL` to `https://api.anthropic.com` itself, over your shell profile and `settings.json`, so its sessions never reach Enterplace. Run `echo $ANTHROPIC_BASE_URL` inside a session to check. For the desktop app, use its [third-party inference setup](/integrations/claude-desktop/) with a Enterplace key.
+This works in Claude Code in a terminal and in the VS Code extension (`claudeCode.environmentVariables`). The Code tab of the Claude desktop app sets `ANTHROPIC_BASE_URL` to `https://api.anthropic.com` itself, over your shell profile and `settings.json`, so its sessions never reach Enterplace. Run `echo $ANTHROPIC_BASE_URL` inside a session to check. For the desktop app, use its [third-party inference setup](/integrations/claude-desktop/) with an Enterplace key.
 </Aside>
 
 ## Three ways
@@ -161,17 +161,17 @@ An unnamed request is recorded as the person `unknown` (team `unknown`), told ap
 | `x-enterplace-user` | Names the person and team. Removed before the request is forwarded |
 | `anthropic-beta`, `anthropic-version`, `x-app`, `X-Claude-Code-Session-Id`, user agent | Passed unchanged. The session ID groups the requests into sessions |
 
-A login is never swapped for a key of Enterplace's, and a Enterplace key never goes to a passthrough provider:
+A login is never swapped for a key of Enterplace's, and an Enterplace key never goes to a passthrough provider:
 
 | Request | Answer |
 |---|---|
 | A login for a model only a keyed provider serves | 403 `login_not_accepted` |
-| A Enterplace key (or `ANTHROPIC_API_KEY`) for a model only a passthrough provider serves | 403 `login_needed` |
+| An Enterplace key (or `ANTHROPIC_API_KEY`) for a model only a passthrough provider serves | 403 `login_needed` |
 | A person token as the only credential | 403 `person_token_only` |
 | A login and a different Enterplace key at once | 400 `ambiguous_key` |
 | No `x-enterplace-user` on a provider with `identity: required` | 403 `person_needed` |
 
-When a passthrough provider and a keyed provider list the same model, a request with a login goes to the passthrough one and a request with a Enterplace key to the keyed one.
+When a passthrough provider and a keyed provider list the same model, a request with a login goes to the passthrough one and a request with an Enterplace key to the keyed one.
 
 <Aside type="caution">
 Check that routing your plan's traffic through your own gateway fits Anthropic's terms for your plan (consumer terms for Pro and Max, your commercial agreement for Team and Enterprise). Enterplace does not change what Claude Code sends Anthropic; it reads it on the way.
@@ -183,7 +183,7 @@ To see usage without routing anything, send Claude Code's own telemetry to Enter
 
 ## Anthropic API keys
 
-When Claude Code runs on API keys, Enterplace holds the provider key and each developer gets a Enterplace key in its place.
+When Claude Code runs on API keys, Enterplace holds the provider key and each developer gets an Enterplace key in its place.
 
 <Steps>
 
@@ -205,7 +205,7 @@ When Claude Code runs on API keys, Enterplace holds the provider key and each de
 
     Keep the provider key in a variable of its own. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be the Enterplace key.
 
-2. **Get a Enterplace key**: **People and workloads**, **Issue a key** in the console (or **Start here**, **Coding agents**, **API keys, any coding agent**), `enterplace login` on a gateway without subscription passthrough, or `enterplace key new maya.cohen --team payments --url https://enterplace.example.com`. See [Keys and identity](/governance/keys/).
+2. **Get an Enterplace key**: **People and workloads**, **Issue a key** in the console (or **Start here**, **Coding agents**, **API keys, any coding agent**), `enterplace login` on a gateway without subscription passthrough, or `enterplace key new maya.cohen --team payments --url https://enterplace.example.com`. See [Keys and identity](/governance/keys/).
 
 3. **Point Claude Code at Enterplace.**
 
@@ -313,7 +313,7 @@ The full runbook for both clouds, with Claude Code's own Bedrock and Vertex AI m
 On the messages routes a refusal uses Anthropic's error shape, so Claude Code shows Enterplace's message:
 
 ```text
-API Error: 403 Refused (model_not_allowed): team "interns" may not use model "claude-sonnet-5-5" under rule "everyone-else". This rule allows no models. Ask a Enterplace admin to change the policy if you need this one. Decision 01M7969SCWCX2P3AR3KSXZJ7VS.
+API Error: 403 Refused (model_not_allowed): team "interns" may not use model "claude-sonnet-5-5" under rule "everyone-else". This rule allows no models. Ask an Enterplace admin to change the policy if you need this one. Decision 01M7969SCWCX2P3AR3KSXZJ7VS.
 ```
 
 Claude Code labels any 403 "Failed to authenticate". The message after that label is Enterplace's.

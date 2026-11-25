@@ -8,7 +8,7 @@ Two ways to watch Enterplace: Prometheus metrics for alerts and dashboards, and 
 enterplace serve enterplace.policy.yaml --metrics 127.0.0.1:9464
 ```
 
-`GET /metrics` is served on that address only, in the Prometheus text format. It is off unless `--metrics` names an address, and it takes no key: anyone who reaches it sees team, model and provider names and what each team spent. Keep it on loopback, or on a network only your scraper reaches (in a container, publish that port only to the scraper's network). The gateway's own address never serves it, so a caller with a Enterplace key cannot read it. Scrapes are not written to the audit log.
+`GET /metrics` is served on that address only, in the Prometheus text format. It is off unless `--metrics` names an address, and it takes no key: anyone who reaches it sees team, model and provider names and what each team spent. Keep it on loopback, or on a network only your scraper reaches (in a container, publish that port only to the scraper's network). The gateway's own address never serves it, so a caller with an Enterplace key cannot read it. Scrapes are not written to the audit log.
 
 | Metric | Type | Labels | What it counts |
 |---|---|---|---|

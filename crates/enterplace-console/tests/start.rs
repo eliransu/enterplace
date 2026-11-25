@@ -1016,6 +1016,10 @@ async fn the_start_link_signs_in_once_and_only_from_this_machine_and_a_pasted_ex
     assert_eq!(status, StatusCode::FORBIDDEN, "once: {page}");
     let audit = std::fs::read_to_string(s.dir.join("enterplace-audit.jsonl"))?;
     assert!(audit.contains(r#""via":"start_link""#), "{audit}");
+    // Signing in makes nothing: enterplace start printed the person's token already.
+    let keys = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
+    assert_eq!(keys.matches("- name:").count(), 2, "{keys}");
+    assert!(!audit.contains("issue_key"), "{audit}");
 
     // The whole line enterplace start prints, quotes and all, signs in too; a wrong key says so plainly.
     let line = format!("key=export%20ENTERPLACE_KEY%3D%22{ADMIN_KEY}%22%20");
@@ -1029,7 +1033,7 @@ async fn the_start_link_signs_in_once_and_only_from_this_machine_and_a_pasted_ex
         post("/console/sign-in", "", "key=sk-not-enterplace")?,
     )
     .await?;
-    assert!(page.contains("That is not a Enterplace key"), "{page}");
+    assert!(page.contains("That is not an Enterplace key"), "{page}");
     Ok(())
 }
 
@@ -1167,8 +1171,8 @@ async fn the_signed_in_person_s_own_token_is_in_the_lines_and_in_the_agent_promp
     blocks(&state, "button", &mut buttons);
     let mine = buttons
         .iter()
-        .find(|b| b["label"] == "Make my token")
-        .ok_or("no Make my token")?;
+        .find(|b| b["label"] == "Make my person token")
+        .ok_or("no Make my person token")?;
     assert_eq!(mine["action"], "key");
     assert_eq!(mine["body"]["name"], "noa.bar");
     // Named by default: the lines name the person.
@@ -1215,6 +1219,72 @@ async fn the_signed_in_person_s_own_token_is_in_the_lines_and_in_the_agent_promp
         "{state}"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_person_who_holds_a_person_token_gets_no_second_one_by_opening_the_page() -> TestResult {
+    // Review round 1: enterplace start printed a token for the admin, then the console made a second one.
+    let s = setup("held")?;
+    enterplace_core::keyfile::issue_person_token(
+        "noa.bar",
+        "platform",
+        &s.dir.join("enterplace.keys.yaml"),
+    )?;
+    let before = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
+    let cookie = sign_in(&s.app, ADMIN_KEY).await?;
+    change(&s.app, &cookie, "pick", json!({ "choice": "coding" })).await?;
+    change(&s.app, &cookie, "passthrough", json!({})).await?;
+    let state = start(&s.app, &cookie, "pay=subscriptions").await?;
+    let mut buttons = Vec::new();
+    blocks(&state, "button", &mut buttons);
+    assert!(
+        buttons.iter().all(|b| b["label"] != "Make my person token"),
+        "{state}"
+    );
+    assert!(
+        lines(&state, "lines-subscription")
+            .contains("x-enterplace-user: <the person token enterplace start printed for noa.bar>"),
+        "{state}"
+    );
+    assert_eq!(
+        step(&state, "Point Claude Code at Enterplace")["listen"],
+        "Waiting for the first request from noa.bar."
+    );
+    // On API keys a person token reaches no model, so it is not the first person's key.
+    let state = start(&s.app, &cookie, "pay=api").await?;
+    assert_ne!(
+        step(&state, "Make a key for the first person")["state"],
+        "done",
+        "{state}"
+    );
+    // The admin's test call with the admin key shares the name of their token, and is still not a coding agent's.
+    let admin_hash = sha256_hex(ADMIN_KEY.as_bytes());
+    s.log.append(&Entry {
+        id: "01ADMINCALL000000000000000",
+        person: Some("noa.bar"),
+        team: Some("platform"),
+        key: Some(&admin_hash[..8]),
+        method: "POST",
+        path: "/v1/chat/completions",
+        model: Some("gpt-4o-mini"),
+        allowed: true,
+        rule: Some("everyone"),
+        provider: "openai",
+        policy_sha256: "x",
+        ..Entry::default()
+    })?;
+    let state = start(&s.app, &cookie, "pay=api").await?;
+    assert_ne!(
+        step(
+            &state,
+            "Point your coding agent at Enterplace and send one prompt"
+        )["state"],
+        "done",
+        "{state}"
+    );
+    let after = std::fs::read_to_string(s.dir.join("enterplace.keys.yaml"))?;
+    assert_eq!(after, before);
     Ok(())
 }
 

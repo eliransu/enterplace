@@ -1,4 +1,4 @@
-//! `enterplace import litellm`: turns a LiteLLM proxy `config.yaml` into a Enterplace policy, with a report of what could
+//! `enterplace import litellm`: turns a LiteLLM proxy `config.yaml` into an Enterplace policy, with a report of what could
 //! not be carried across. Written from LiteLLM's public docs only (read 2026-11-13, routing, budgets and timeouts
 //! again 2026-11-15): https://docs.litellm.ai/docs/proxy/configs, https://docs.litellm.ai/docs/proxy/reliability,
 //! https://docs.litellm.ai/docs/proxy/config_settings, https://docs.litellm.ai/docs/proxy/virtual_keys,
@@ -271,7 +271,7 @@ fn priced(
     }
 }
 
-/// Turns a LiteLLM proxy config into a Enterplace policy. `keys` is an optional export of LiteLLM virtual keys (a JSON
+/// Turns a LiteLLM proxy config into an Enterplace policy. `keys` is an optional export of LiteLLM virtual keys (a JSON
 /// list, `{"keys": [...]}`, or CSV with a header): keys cannot move (LiteLLM keeps hashes), so they become team
 /// rules and the `enterplace key new` lines to reissue them.
 pub fn import(config: &str, keys: Option<&str>) -> Result<Imported, String> {
@@ -958,7 +958,7 @@ fn guardrail_type(litellm: &str) -> Option<&'static str> {
     })
 }
 
-/// A LiteLLM `budget_duration` (`30s`, `30m`, `24h`, `7d`, `1mo`) as a Enterplace budget period, when Enterplace can count
+/// A LiteLLM `budget_duration` (`30s`, `30m`, `24h`, `7d`, `1mo`) as an Enterplace budget period, when Enterplace can count
 /// it: whole minutes up to a year. LiteLLM resets `24h`, `7d` and `30d` on the UTC day, Monday and the 1st, which
 /// are Enterplace's calendar day, week and month.
 fn period_of(duration: Option<&str>) -> Option<String> {

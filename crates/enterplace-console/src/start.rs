@@ -225,6 +225,8 @@ pub(crate) struct Facts {
     pub policy_path: String,
     /// Keys that are not admin keys, within the person's reach, in file order.
     pub people: Vec<KeyEntry>,
+    /// The first 8 characters of each admin key's hash, as requests record their key.
+    pub admin_keys: Vec<String>,
     /// Model requests with a person, newest first.
     pub requests: Vec<Row>,
     /// MCP tool calls, newest first.
@@ -265,12 +267,16 @@ impl Facts {
         self.people.iter().map(|k| k.name.as_str()).collect()
     }
 
-    /// Requests sent with a key other than an admin's.
+    /// Requests sent with a key other than an admin's. The admin key carries its holder's name, so a test call with it
+    /// shares a name with their person token: the key, not the name, tells them apart.
     fn sent_by_people(&self) -> Vec<&Row> {
         let names = self.names();
         self.requests
             .iter()
-            .filter(|r| names.contains(&r.label("person")))
+            .filter(|r| {
+                names.contains(&r.label("person"))
+                    && !self.admin_keys.iter().any(|k| k == r.label("key"))
+            })
             .collect()
     }
 
@@ -348,7 +354,7 @@ pub(crate) async fn facts(console: &Console, admin: &Admin, base: String) -> Fac
         f.observe = loaded.policy.mode() == Mode::Observe;
         for p in &loaded.providers {
             if p.passthrough {
-                // Not a connected model: it holds no key, and a first request with a Enterplace key cannot use it.
+                // Not a connected model: it holds no key, and a first request with an Enterplace key cannot use it.
                 f.passthrough = true;
                 f.unnamed_ok |= p.identity_optional;
             } else if p.kind == config::Kind::Demo {
@@ -392,8 +398,13 @@ pub(crate) async fn facts(console: &Console, admin: &Admin, base: String) -> Fac
         .map(|s| s.keys_text())
         .or_else(|| config::read_keys(&c.keys).ok().flatten())
         .unwrap_or_default();
-    f.people = config::key_entries(&c.keys, &text)
-        .unwrap_or_default()
+    let entries = config::key_entries(&c.keys, &text).unwrap_or_default();
+    f.admin_keys = entries
+        .iter()
+        .filter(|k| k.admin)
+        .filter_map(|k| k.sha256.get(..8).map(str::to_string))
+        .collect();
+    f.people = entries
         .into_iter()
         // The key Send your first request makes is no person's or app's: it does not tick their steps.
         .filter(|k| !k.admin && admin.covers_entry(k) && !first_request_key(k))
@@ -744,6 +755,11 @@ pub(crate) struct Made {
     start: bool,
 }
 
+/// Whether `k` is a person token: it names a person on a subscription request and reaches no model on its own.
+fn is_person_token(k: &KeyEntry) -> bool {
+    k.options.metadata.get("kind").map(String::as_str) == Some(crate::PERSON_TOKEN_KIND)
+}
+
 /// Whether `k` is the key Send your first request makes.
 fn first_request_key(k: &KeyEntry) -> bool {
     k.options.metadata.get("kind").map(String::as_str) == Some(FIRST_KIND)
@@ -763,7 +779,7 @@ struct Ctx<'a> {
     pay_api: bool,
     /// How step 2 of Claude subscriptions sets Claude Code up: `shell` or `mdm`.
     setup: String,
-    /// The signed-in person's own person token, when one was made for them this run.
+    /// The signed-in person's own person token, when they pressed Make my person token this run.
     mine: Option<String>,
 }
 
@@ -795,7 +811,7 @@ impl Ctx<'_> {
         match (self.made.filter(|m| !m.start), owner) {
             (Some(m), _) => m.key.clone(),
             (None, Some(k)) => format!("<key of {}>", k.name),
-            (None, None) => "<a Enterplace key>".into(),
+            (None, None) => "<an Enterplace key>".into(),
         }
     }
 
@@ -1146,14 +1162,19 @@ fn made_text(c: &Ctx<'_>, k: Option<&KeyEntry>) -> String {
 }
 
 fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
-    let first = f.newest(false).or_else(|| f.people.last());
+    // A person token reaches no model, so on API keys it is not the first person's key: the token enterplace start
+    // prints would otherwise tick this step on day one.
+    let first = f
+        .newest(false)
+        .filter(|k| !is_person_token(k))
+        .or_else(|| f.people.iter().rev().find(|k| !is_person_token(k)));
     let who = first.map_or("your first person".to_string(), |k| k.name.clone());
     let tool = if c.tool.is_empty() { "claude" } else { &c.tool };
     let senders = f.senders();
     let second = senders.get(1).cloned();
     let s1 = Step::new(
         "Make a key for the first person",
-        !f.people.is_empty(),
+        first.is_some(),
         vec![
             p("Each person gets their own key, so every request carries a name and a team."),
             c.key_form("Name", ("sarah.miller", "platform"), false),
@@ -1222,7 +1243,7 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let base = f.base.as_str();
     let s1 = s1.agent(prompt(
         base,
-        "Make a Enterplace key for the first developer",
+        "Make an Enterplace key for the first developer",
         &[],
         &["On the machine that runs the gateway, in the folder of its policy, run: `enterplace key new <name> --team <team>`. It prints the key once; send it to the developer through the company's secret manager.".into()],
         "`enterplace key list` shows the new key.",
@@ -1241,7 +1262,7 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     ));
     let s3 = s3.agent(prompt(
         base,
-        "Make a Enterplace key for one more developer",
+        "Make an Enterplace key for one more developer",
         &[],
         &["On the gateway's machine, run `enterplace key new <name> --team <team>` and send the printed lines through the company's secret manager.".into()],
         "Their first request shows in Requests.",
@@ -1312,7 +1333,7 @@ fn subscription_prompt(base: &str, token: Option<&str>, unnamed_ok: bool) -> Str
         Some(_) => todo.push("1. Add these two lines to my shell profile (~/.zshrc or ~/.bashrc), replacing any earlier ANTHROPIC_BASE_URL or ANTHROPIC_CUSTOM_HEADERS lines:".to_string()),
         None if unnamed_ok => todo.push("1. Add this one line to my shell profile (~/.zshrc or ~/.bashrc), replacing any earlier ANTHROPIC_BASE_URL line. Do not ask me for a token and do not make one: none is needed, and my requests show as the person unknown until I add a token on the page myself.".to_string()),
         None => {
-            todo.push(format!("0. First ask me for my person token: I get it by pressing Make person token on {base}/console/start. It starts with enterplace_u_."));
+            todo.push(format!("0. First ask me for my person token. It starts with enterplace_u_: enterplace start printed it for whoever ran it, and anyone else gets one by pressing Make my person token on {base}/console/app/#/coding?pay=subscriptions."));
             todo.push("1. Add this line to my shell profile (~/.zshrc or ~/.bashrc), and a second one, export ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: \" followed by that token inside the quotes:".to_string());
         }
     }
@@ -1401,30 +1422,48 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     // A token made on this page, whole. Else a placeholder naming whose token goes there, but only where a name is
     // needed or people already hold tokens: a first run shows one line.
     let made = c.made.filter(|m| !m.start).map(|m| m.key.clone());
-    // The signed-in person's own token: made with the console's first admin, or by the button below. It goes in
-    // the lines and in what Copy for your agent copies, so their requests carry their name from the first one.
+    // The signed-in person's own token, made by the button below. It goes in the lines and in what Copy for your
+    // agent copies, so their requests carry their name from the first one.
     let own = made
         .clone()
         .filter(|_| c.made.is_some_and(|m| m.name == c.admin.name))
         .or_else(|| c.mine.clone());
     let made = made.or_else(|| own.clone());
     let mdm = c.setup == "mdm";
+    // A person token the signed-in person already holds (the one enterplace start printed for whoever ran it): never
+    // a second one, the lines name the one to paste. Only the token is shown once, so it cannot be filled in here.
+    let held = own.is_none()
+        && f.people
+            .iter()
+            .any(|k| k.name == c.admin.name && is_person_token(k));
     // Managed settings are a rollout, one token per person: they keep the header line, with the place to put it.
-    let token = made
-        .clone()
-        .or_else(|| (!f.unnamed_ok || mdm).then(|| person_token(c, first)));
+    let token = made.clone().or_else(|| {
+        if held {
+            Some(format!(
+                "<the person token enterplace start printed for {}>",
+                c.admin.name
+            ))
+        } else {
+            (!f.unnamed_ok || mdm).then(|| person_token(c, first))
+        }
+    });
     let seen = f.subscribed();
     let first_seen = seen.last();
-    let who = if own.is_some() {
+    let who = if own.is_some() || held {
         c.admin.name.clone()
     } else {
         who
     };
     // The lines carry the signed-in person's token. Without one yet (a restart forgets it, single sign-on never made
-    // one), one button makes it in their own name.
+    // one), one button makes it in their own name: nothing is made until it is pressed.
     let name_on_requests = if own.is_some() {
         vec![note(format!(
             "The lines carry your person token, so your requests show as {}. It reaches no model on its own.",
+            mono(&c.admin.name)
+        ))]
+    } else if held {
+        vec![note(format!(
+            "You hold a person token already: put it where the lines say, and your requests show as {}. It starts with enterplace_u_. Lost it? Make a new one on People.",
             mono(&c.admin.name)
         ))]
     } else if c.may_keys() {
@@ -1435,14 +1474,16 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         };
         vec![
             actions(vec![button(
-                "Make my token",
+                "Make my person token",
                 "key",
                 json!({ "kind": "person_token", "name": c.admin.name, "team": team }),
                 false,
             )]),
-            note(
-                "Puts your name on your requests: the lines above get your token. Until then they show as the person unknown.",
-            ),
+            note(if f.unnamed_ok {
+                "Puts your name on your requests: the lines above get your token. Until then they show as the person unknown."
+            } else {
+                "Puts your name on your requests: the lines above get your token. Until then they are refused, because every request needs a name."
+            }),
         ]
     } else {
         vec![note(
@@ -1504,7 +1545,7 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     ))
     .agent(prompt(
         base,
-        "Make a Enterplace person token for one more developer",
+        "Make an Enterplace person token for one more developer",
         &[],
         &[
             "1. On the machine that runs the gateway, in the folder of its policy, run: `enterplace key new <name> --team <team> --identity-only`.".into(),
@@ -1637,7 +1678,7 @@ fn apps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let budget = plain(c, &format!("budget-team:{team}"));
     let s1 = s1.agent(prompt(
         base,
-        "Make a Enterplace workload key for the app",
+        "Make an Enterplace workload key for the app",
         &[],
         &["On the gateway's machine, run `enterplace key new <app name> --team <owning team>`. Keep the printed key in the app's secret store, never in code.".into()],
         "`enterplace key list` shows the key.",
@@ -1825,7 +1866,7 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     let base = f.base.as_str();
     let s1 = s1.agent(prompt(
         base,
-        "Make a Enterplace key",
+        "Make an Enterplace key",
         &[],
         &["On the gateway's machine, run `enterplace key new <name> --team <team>`.".into()],
         "`enterplace key list` shows the key.",
@@ -2349,8 +2390,8 @@ fn page_state(console: &Console, admin: &Admin, f: &Facts, v: &View<'_>) -> Valu
         "query": query_of(v),
     });
     let Some(track) = v.track else {
-        // An empty install with nothing chosen and nothing skipped opens on the welcome. The person token the
-        // start link makes for the signed-in person does not make it any less empty.
+        // An empty install with nothing chosen and nothing skipped opens on the welcome. The person token enterplace
+        // start makes for the signed-in person does not make it any less empty.
         let welcome = !v.kept.skipped
             && !v.picking
             && f.requests.is_empty()
@@ -3226,7 +3267,7 @@ mod tests {
         // A provider that needs a name, and no token yet: the one thing to get from me is said first.
         let ask = subscription_prompt(base, None, false);
         assert!(
-            ask.contains("Make person token") && !ask.contains("<person token"),
+            ask.contains("Make my person token") && !ask.contains("<person token"),
             "{ask}"
         );
         // The lines on the page: one line until a token exists.

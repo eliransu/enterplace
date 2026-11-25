@@ -256,7 +256,7 @@ While Enterplace has the log open it keeps `enterplace-audit.jsonl.lock` beside 
 - `audit repair --yes` refuses while the lock file exists.
 - A second `enterplace serve` on the same machine refuses to start while the process the lock names is running.
 - A holder in another container or on another machine counts as running while its lock keeps changing. A new `enterplace serve` waits up to 40 seconds for it to stop, then refuses and names it. It takes the lock over once the lock has not changed for 30 seconds.
-- A Enterplace that cannot rewrite its lock for 15 seconds refuses every request until it is started again, so two writers never share one chain.
+- An Enterplace that cannot rewrite its lock for 15 seconds refuses every request until it is started again, so two writers never share one chain.
 - After `kill -9` or a crash the lock file stays. The next `enterplace serve` takes it over once that process is gone (at once on the same machine, after 30 seconds from another). For a repair, delete it once Enterplace is surely stopped.
 
 ## Stop all traffic

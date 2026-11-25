@@ -112,7 +112,7 @@ Commands:
         Copy the keys of a keys file, and the kill switches beside it, into the store the policy's store:
         names (default enterplace.policy.yaml). Keys already there are left as they are. The file is not changed.
   import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>]
-        Write a Enterplace policy (default enterplace.policy.yaml, never over an existing file) from a LiteLLM proxy
+        Write an Enterplace policy (default enterplace.policy.yaml, never over an existing file) from a LiteLLM proxy
         config, check it, and list what could not be mapped. --keys-from reads an export of LiteLLM virtual
         keys: they become team rules and the `enterplace key new` lines to reissue them (keys cannot move).
   import litellm --url <proxy> --master-key-env <VAR> [<config.yaml>] [--out <policy file>] [--keys-out <keys file>]

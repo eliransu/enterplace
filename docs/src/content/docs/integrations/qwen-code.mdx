@@ -1,16 +1,16 @@
 ---
 title: Qwen Code
-description: Send Qwen Code's requests through Enterplace with its OpenAI-compatible provider and a Enterplace key.
+description: Send Qwen Code's requests through Enterplace with its OpenAI-compatible provider and an Enterplace key.
 sidebar:
   order: 12
 ---
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Qwen Code reaches Enterplace through its `openai` auth type. Its requests go to `POST /v1/chat/completions` on Enterplace, or to `POST /v1/responses` with `wireApi: responses`, identified by a Enterplace key.
+Qwen Code reaches Enterplace through its `openai` auth type. Its requests go to `POST /v1/chat/completions` on Enterplace, or to `POST /v1/responses` with `wireApi: responses`, identified by an Enterplace key.
 
 <Aside type="tip" title="Before you start">
-You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and an Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -61,7 +61,7 @@ With `OPENAI_API_KEY` set, Qwen Code picks its OpenAI-compatible auth from the e
 
 - Usage statistics, sent to Qwen Code's own collection endpoint unless `QWEN_USAGE_STATISTICS_ENABLED=false` or `privacy.usageStatisticsEnabled: false`.
 - The model catalog download from `models.dev`. `QWEN_CODE_MODELS_DEV=off` stops it.
-- The built-in `web_search` tool on Qwen's own plans. With a Enterplace key it is not set up.
+- The built-in `web_search` tool on Qwen's own plans. With an Enterplace key it is not set up.
 
 <Aside type="note">
 This setup follows Qwen Code's configuration, auth and model providers documentation. It was run headless (`qwen -p`) against a local Enterplace and a mock provider: each turn was one allowed request on `/v1/chat/completions`.

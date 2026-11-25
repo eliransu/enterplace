@@ -139,7 +139,7 @@ fn load(
 fn verify(token: &str, public_key: &[u8], source: &str) -> Result<License, String> {
     let malformed = |why: &str| {
         format!(
-            "{source} is not a Enterplace license: {why}. Paste the whole token from your license, on one line, or unset ENTERPLACE_LICENSE and ENTERPLACE_LICENSE_FILE to run the open source features only."
+            "{source} is not an Enterplace license: {why}. Paste the whole token from your license, on one line, or unset ENTERPLACE_LICENSE and ENTERPLACE_LICENSE_FILE to run the open source features only."
         )
     };
     let (payload, signature) = token

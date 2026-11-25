@@ -613,7 +613,7 @@ fn application(
             StatusCode::FORBIDDEN,
             "application_not_allowed",
             format!(
-                "Refused: rule \"{}\" does not let a caller run as application \"{name}\" in x-enterplace-application. Leave the header out, or ask a Enterplace admin to add it (or \"*\") to the rule's applications.",
+                "Refused: rule \"{}\" does not let a caller run as application \"{name}\" in x-enterplace-application. Leave the header out, or ask an Enterplace admin to add it (or \"*\") to the rule's applications.",
                 sender.rule.name
             ),
         )),
@@ -1597,15 +1597,15 @@ fn streamed(state: &AppState, carry: Carry, response: Response) -> Response {
             };
             let message = if blocked.guardrail.is_empty() {
                 format!(
-                    "Refused: {name} would rewrite a part of the model's answer that was already sent, and what was sent cannot be rewritten, so the answer ends here. Ask in another way, or ask a Enterplace admin about the guardrail: with stream.hold it masks each window before it is sent."
+                    "Refused: {name} would rewrite a part of the model's answer that was already sent, and what was sent cannot be rewritten, so the answer ends here. Ask in another way, or ask an Enterplace admin about the guardrail: with stream.hold it masks each window before it is sent."
                 )
             } else if hold {
                 format!(
-                    "Refused: {name} stopped the model's answer partway. What came before was checked and sent; the rest was withheld. Ask in another way, or ask a Enterplace admin about the guardrail."
+                    "Refused: {name} stopped the model's answer partway. What came before was checked and sent; the rest was withheld. Ask in another way, or ask an Enterplace admin about the guardrail."
                 )
             } else {
                 format!(
-                    "Refused: {name} stopped the model's answer. What came before it was already sent. Ask in another way, or ask a Enterplace admin about the guardrail."
+                    "Refused: {name} stopped the model's answer. What came before it was already sent. Ask in another way, or ask an Enterplace admin about the guardrail."
                 )
             };
             let _ = tx
@@ -1812,7 +1812,7 @@ fn session_ended(by: &str) -> Refusal {
         StatusCode::FORBIDDEN,
         core::SESSION_ENDED,
         format!(
-            "Refused: guardrail \"{by}\" ended this session, so its requests are refused for a while. Start a new conversation, or ask a Enterplace admin about the guardrail."
+            "Refused: guardrail \"{by}\" ended this session, so its requests are refused for a while. Start a new conversation, or ask an Enterplace admin about the guardrail."
         ),
     )
 }

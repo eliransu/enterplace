@@ -2,7 +2,7 @@
 
 Enterplace is an AI gateway where governance comes first. It sits between the tools your people and workloads use (Claude Code, OpenAI-compatible clients, your own agents) and the model providers. Every request that reaches it gets three things before it leaves:
 
-1. **A person.** The caller sends a Enterplace key, not a provider key. The key names a person or a workload and their team.
+1. **A person.** The caller sends an Enterplace key, not a provider key. The key names a person or a workload and their team.
 2. **A policy decision.** A policy file says which team or person may use which model. Enterplace decides by the first rule that names the caller.
 3. **An audit record.** One line in a hash-chained log, written before anything is forwarded. A request that cannot be recorded is refused.
 

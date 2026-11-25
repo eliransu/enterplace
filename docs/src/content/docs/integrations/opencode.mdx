@@ -10,7 +10,7 @@ import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components'
 OpenCode takes a provider of its own in its configuration file. Add one that points at Enterplace, and its requests go to `POST /v1/chat/completions` with the Enterplace key as `Authorization: Bearer`.
 
 <Aside type="tip" title="Before you start">
-You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and an Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -63,11 +63,11 @@ OpenCode shows Enterplace's message:
 
 ```text
 > build · gpt-4o
-Error: Refused (model_not_allowed): team "payments" may not use model "gpt-4o" under rule "payments-team". Allowed: gpt-4o-mini. Ask a Enterplace admin to change the policy if you need this one. Decision 01M79QS3FKFHJAQSYW8BMX3E5F.
+Error: Refused (model_not_allowed): team "payments" may not use model "gpt-4o" under rule "payments-team". Allowed: gpt-4o-mini. Ask an Enterplace admin to change the policy if you need this one. Decision 01M79QS3FKFHJAQSYW8BMX3E5F.
 ```
 
 ```text
-Error: Refused (unknown_key): Enterplace does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask a Enterplace admin. Decision 01M79QS9S2XNB6ZDE3MT1TTN59.
+Error: Refused (unknown_key): Enterplace does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask an Enterplace admin. Decision 01M79QS9S2XNB6ZDE3MT1TTN59.
 ```
 
 OpenCode does not resend a request refused with 403 and marks the error not retryable.

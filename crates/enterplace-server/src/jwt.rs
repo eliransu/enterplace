@@ -1,4 +1,4 @@
-//! JWTs from a customer's identity provider, accepted on the model routes in place of a Enterplace key. The policy's
+//! JWTs from a customer's identity provider, accepted on the model routes in place of an Enterplace key. The policy's
 //! `jwt:` list names each trusted issuer, the audience its tokens must carry, where its signing keys are, and which
 //! claims name the person and the team. A verified token is decided and recorded as that person.
 //!
@@ -104,7 +104,7 @@ pub(crate) async fn verify_admin(
         return Err(refused(
             "not_admin",
             format!(
-                "Refused: tokens from \"{}\" are not accepted on the admin API, because its jwt: entry in the policy has no role_claim. Ask a Enterplace admin to set role_claim (for example groups) and list your group under a role's sso_values, or use an admin key.",
+                "Refused: tokens from \"{}\" are not accepted on the admin API, because its jwt: entry in the policy has no role_claim. Ask an Enterplace admin to set role_claim (for example groups) and list your group under a role's sso_values, or use an admin key.",
                 trust.issuer
             ),
         ));
@@ -121,7 +121,7 @@ pub(crate) async fn verify_admin(
             refused(
                 "not_admin",
                 format!(
-                    "Refused: the token's \"{claim}\" claim holds none of the values in a role's sso_values, so \"{}\" has no admin role. Ask a Enterplace admin to add your group to a role under roles: in the policy.",
+                    "Refused: the token's \"{claim}\" claim holds none of the values in a role's sso_values, so \"{}\" has no admin role. Ask an Enterplace admin to add your group to a role under roles: in the policy.",
                     person.name
                 ),
             )
@@ -161,7 +161,7 @@ async fn verified<'t>(
         return Err(refused(
             "jwt_untrusted",
             format!(
-                "Refused: the token was issued by \"{issuer}\", which this gateway's policy does not trust. Ask a Enterplace admin to add it under jwt:, or send your Enterplace key."
+                "Refused: the token was issued by \"{issuer}\", which this gateway's policy does not trust. Ask an Enterplace admin to add it under jwt:, or send your Enterplace key."
             ),
         ));
     };
@@ -255,7 +255,7 @@ async fn verified<'t>(
             refused(
                 "jwt_claims",
                 format!(
-                    "Refused: the token's \"{claim}\" claim is missing, holds more than one value, or is not a name (letters, digits, dots, dashes, underscores and @, at most 100 characters). Ask a Enterplace admin to check jwt: in the policy against your identity provider's tokens."
+                    "Refused: the token's \"{claim}\" claim is missing, holds more than one value, or is not a name (letters, digits, dots, dashes, underscores and @, at most 100 characters). Ask an Enterplace admin to check jwt: in the policy against your identity provider's tokens."
                 ),
             )
         })

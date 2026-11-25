@@ -52,7 +52,7 @@ limits:
     <h2 id="try">Try it before it blocks anyone</h2>
     <p>A limit you guessed will be wrong for someone. Two ways to see what a number would do first:</p>
     <ul class="ticks">
-      <li><strong>Observe mode.</strong> With <code>mode: observe</code> at the top of the policy, nothing is refused. A request over a limit is forwarded and recorded as <code>would_refuse</code>.</li>
+      <li><strong>Observe mode.</strong> With <code>mode: observe</code> at the top of the policy, limits, rules and guardrails only record what they would refuse (a request without a valid key or person token, an unknown model and a kill switch are still refused). A request over a limit is forwarded and recorded as <code>would_refuse</code>.</li>
       <li><strong>A trial date on one limit.</strong> <code>shadow_until: 2026-12-15</code> on a budget or a <code>limits:</code> entry does the same for that limit alone, and it starts enforcing on the date.</li>
     </ul>
     <p>After a week, the records show who would have been stopped and how often. Raise the number for the people whose work needs it, then enforce.</p>

@@ -1816,7 +1816,7 @@ pub fn settle(
             out.blocked = Some(Blocked {
                 guardrail: name.to_string(),
                 message: format!(
-                    "Guardrail \"{name}\" refused {what}: the plugin found {}. Ask in another way, or ask a Enterplace admin about the guardrail.",
+                    "Guardrail \"{name}\" refused {what}: the plugin found {}. Ask in another way, or ask an Enterplace admin about the guardrail.",
                     found.join(", ")
                 ),
             });

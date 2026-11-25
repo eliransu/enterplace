@@ -9,7 +9,7 @@ caller ──> identify ──> policy ──> guardrails ──> route ──> 
               └────────────┴────────────┴─── audit record ──────┘
 ```
 
-1. **Identify**: which person or workload is asking: a Enterplace key, a person token, a JWT, or a passed-through
+1. **Identify**: which person or workload is asking: an Enterplace key, a person token, a JWT, or a passed-through
    subscription login.
 2. **Policy**: may they use this model, within which budget and rate limit (`enterplace.policy.yaml`).
 3. **Guardrails**: secrets and personal data in the prompt are found and blocked, masked or recorded.

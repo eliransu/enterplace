@@ -1,6 +1,6 @@
 //! Cursor's requests as its public docs describe them, through Enterplace: the key as an OpenAI API key (a bearer token),
 //! the base URL with /v1, the model list it checks the key with, and streamed chat completions for an exact model
-//! name. Not a run of Cursor itself: Cursor's servers send these requests, so a Enterplace they can reach is needed
+//! name. Not a run of Cursor itself: Cursor's servers send these requests, so an Enterplace they can reach is needed
 //! (docs/src/content/docs/integrations/cursor.mdx).
 
 use axum::{

@@ -82,7 +82,7 @@ async fn analytics(State(console): State<Console>, headers: HeaderMap, uri: Uri)
                 return Err(Fail(
                     StatusCode::FORBIDDEN,
                     format!(
-                        "Your role, {}, does not have the {} permission this page needs. Ask a Enterplace admin to add it to the role under roles: in the policy.",
+                        "Your role, {}, does not have the {} permission this page needs. Ask an Enterplace admin to add it to the role under roles: in the policy.",
                         admin.role,
                         Permission::SeeSpend.word()
                     ),

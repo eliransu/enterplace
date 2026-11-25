@@ -213,7 +213,7 @@ pub(crate) fn requested(
             StatusCode::TOO_MANY_REQUESTS,
             "too_many_raises",
             format!(
-                "Refused: \"{}\" has {pending} budget raises waiting for a decision, the most one person may have. Ask a Enterplace admin to decide them.",
+                "Refused: \"{}\" has {pending} budget raises waiting for a decision, the most one person may have. Ask an Enterplace admin to decide them.",
                 person.name
             ),
         ));

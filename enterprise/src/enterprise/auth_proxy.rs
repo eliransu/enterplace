@@ -1,6 +1,6 @@
 //! Identity from an authenticating proxy (oauth2-proxy, an ingress with OIDC, Cloudflare Access behind a tunnel,
 //! an AWS ALB): behind a proxy the policy lists in `trusted_proxies`, the headers `identity_headers:` names say who
-//! the caller is. On the model routes a request without a Enterplace key is then that person's; in the console they are
+//! the caller is. On the model routes a request without an Enterplace key is then that person's; in the console they are
 //! signed in with the role their groups give them. Groups map to roles and teams through `sso_values`, as single
 //! sign-on's do.
 //!
@@ -83,7 +83,7 @@ impl Identify for ModelRoutes {
             .or_else(|| setting.team.clone());
         let Some(team) = team else {
             return Some(Err(refused(format!(
-                "{} is in no team: the policy's teams list neither the name nor any of its groups under members or sso_values, and identity_headers sets no team. Ask a Enterplace admin to add one.",
+                "{} is in no team: the policy's teams list neither the name nor any of its groups under members or sso_values, and identity_headers sets no team. Ask an Enterplace admin to add one.",
                 named.user
             ))));
         };

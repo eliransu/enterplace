@@ -167,7 +167,7 @@ async fn allow(state: &AppState, request: Request, call: &mut Call) -> Result<Pl
                 StatusCode::FORBIDDEN,
                 "not_permitted",
                 format!(
-                    "Refused: the policy API needs the edit_policy permission in a role that is not kept to an organization, teams or customers, and role \"{}\" of \"{}\" is not such a role. Ask a Enterplace admin.",
+                    "Refused: the policy API needs the edit_policy permission in a role that is not kept to an organization, teams or customers, and role \"{}\" of \"{}\" is not such a role. Ask an Enterplace admin.",
                     role.name, person.name
                 ),
             ));
@@ -177,7 +177,7 @@ async fn allow(state: &AppState, request: Request, call: &mut Call) -> Result<Pl
                 StatusCode::FORBIDDEN,
                 "not_admin",
                 format!(
-                    "Refused: the admin API is for keys marked `admin: true` or given a role: in the keys file, and the key of \"{}\" is neither. Ask a Enterplace admin.",
+                    "Refused: the admin API is for keys marked `admin: true` or given a role: in the keys file, and the key of \"{}\" is neither. Ask an Enterplace admin.",
                     person.name
                 ),
             ));

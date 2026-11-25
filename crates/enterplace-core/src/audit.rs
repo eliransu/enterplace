@@ -217,7 +217,7 @@ fn locked_paths() -> std::sync::MutexGuard<'static, std::collections::HashSet<Pa
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// How often a holder rewrites its lock. A lock that has not changed for six beats belongs to a Enterplace that is gone;
+/// How often a holder rewrites its lock. A lock that has not changed for six beats belongs to an Enterplace that is gone;
 /// one that cannot rewrite its own for three beats stops writing records first, so the two never overlap.
 const BEAT: Duration = Duration::from_secs(5);
 
@@ -448,7 +448,7 @@ fn is_mine(lock: &Path, instance: &str) -> bool {
         .is_ok_and(|text| text.starts_with(&format!("holder {instance}\n")))
 }
 
-/// The lock's text written whole beside it, for a rename or link into place: a Enterplace elsewhere reading the lock
+/// The lock's text written whole beside it, for a rename or link into place: an Enterplace elsewhere reading the lock
 /// while it is written in place can read it cut short, and then names a wrong holder.
 fn staged(lock: &Path, text: &str) -> io::Result<PathBuf> {
     let mut name = lock.as_os_str().to_owned();
@@ -506,7 +506,7 @@ enum Verdict {
 }
 
 fn judge(holder: &Holder, me: &Me, held_here: bool) -> Verdict {
-    // A bare process ID comes from a Enterplace that could only see its own machine, as this check did.
+    // A bare process ID comes from an Enterplace that could only see its own machine, as this check did.
     let near = holder.bare || (holder.space.is_some() && holder.space == me.space);
     match holder.pid {
         Some(pid) if near && pid != me.pid => {
@@ -595,7 +595,7 @@ fn take_lock(
                         true
                     } else if now >= deadline {
                         return Err(format!(
-                            "another Enterplace ({}) holds the audit log at {}: its lock {} last changed {} seconds ago, and Enterplace waited {} seconds for it to stop. Two writers would break the chain. Stop the other one or give this one its own `audit: {{ path: ... }}`. A Enterplace that is gone is taken over once its lock has not changed for {} seconds; if no Enterplace is running anywhere, delete {} and start again.",
+                            "another Enterplace ({}) holds the audit log at {}: its lock {} last changed {} seconds ago, and Enterplace waited {} seconds for it to stop. Two writers would break the chain. Stop the other one or give this one its own `audit: {{ path: ... }}`. An Enterplace that is gone is taken over once its lock has not changed for {} seconds; if no Enterplace is running anywhere, delete {} and start again.",
                             holder.describe(),
                             path.display(),
                             lock.display(),
@@ -721,9 +721,9 @@ fn process_alive(pid: u32) -> bool {
         })
 }
 
-/// The file beside an audit log that says a Enterplace process holds it: `enterplace audit repair` refuses while it exists.
+/// The file beside an audit log that says an Enterplace process holds it: `enterplace audit repair` refuses while it exists.
 // ponytail: a lock file, not an OS lock (File::lock needs Rust 1.89, and NFS and SMB locks do not outlive a client
-// that is gone). A Enterplace killed without closing its log leaves it behind: the next `serve` takes it over once the
+// that is gone). An Enterplace killed without closing its log leaves it behind: the next `serve` takes it over once the
 // process it names is gone or its lock stops changing (see `take_lock`), and repair says to delete it.
 pub fn lock_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
@@ -1024,7 +1024,7 @@ impl AuditLog {
         me: &Me,
         clock: &Arc<dyn Clock>,
     ) -> Result<Self, String> {
-        // Taken before the chain is read: a Enterplace waited for may still be adding records until it stops.
+        // Taken before the chain is read: an Enterplace waited for may still be adding records until it stops.
         let lock = take_lock(path, beat, me, clock)?;
         let mut file = log_options()
             .open(path)
@@ -2000,7 +2000,7 @@ pub fn repair(path: &Path, cut: &Cut) -> Result<u64, String> {
     if lock.exists() {
         let holder = Holder::parse(&std::fs::read_to_string(&lock).unwrap_or_default());
         return Err(format!(
-            "a Enterplace process ({}) holds the audit log at {}: it wrote {}. Stop it and run the repair again; a repair while it writes would break the chain. If no Enterplace is running (it was killed), delete {} and run the repair again.",
+            "an Enterplace process ({}) holds the audit log at {}: it wrote {}. Stop it and run the repair again; a repair while it writes would break the chain. If no Enterplace is running (it was killed), delete {} and run the repair again.",
             holder.describe(),
             path.display(),
             lock.display(),
@@ -2352,7 +2352,7 @@ mod tests {
             .ok_or("repaired a changing file")?;
         assert!(err.contains("changed while"), "{err}");
         assert_eq!(std::fs::read(&path)?, before);
-        // (d) While a Enterplace holds the log, repair is refused; once it is gone, it goes ahead.
+        // (d) While an Enterplace holds the log, repair is refused; once it is gone, it goes ahead.
         with(b"{\"n\":3,\"id\":\"C")?;
         let cut = find_cut(&path)?.ok_or("no cut found")?;
         std::fs::write(lock_path(&path), "4242\n")?;
@@ -2383,7 +2383,7 @@ mod tests {
         );
         drop(first);
         assert!(!lock_path(&path).exists());
-        // A live process that is not a Enterplace of this process: refused, the file named.
+        // A live process that is not an Enterplace of this process: refused, the file named.
         let other = std::process::Command::new("sleep").arg("30").spawn()?;
         std::fs::write(lock_path(&path), format!("{}\n", other.id()))?;
         let err = AuditLog::open(&path)
@@ -2513,7 +2513,7 @@ mod tests {
         (clock, shared)
     }
 
-    /// A Enterplace in another container or on another machine: a process space this one cannot see into.
+    /// An Enterplace in another container or on another machine: a process space this one cannot see into.
     fn elsewhere(space: &str) -> Me {
         Me {
             pid: 1,

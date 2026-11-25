@@ -32,11 +32,11 @@ rules:
 | `auth` | `key`, `passthrough` | `key` | `passthrough`: the caller's own `Authorization` (or `x-api-key`) goes to the provider unchanged. The provider takes no `key_env`, `key_file`, `credential` or `keys`. Kind `anthropic` (Claude) or `openai` (ChatGPT) only |
 | `identity` | `required`, `optional` | `required` | `required`: a request without `x-enterplace-user` is refused with `person_needed`. `optional`: it is recorded as the person `unknown`, by session. Only with `auth: passthrough` |
 
-A passthrough provider and a keyed provider may list the same model. A request that carries a login goes to the passthrough one; a request with a Enterplace key goes to the keyed one. Neither ever falls back to the other.
+A passthrough provider and a keyed provider may list the same model. A request that carries a login goes to the passthrough one; a request with an Enterplace key goes to the keyed one. Neither ever falls back to the other.
 
 ## Who sent it
 
-The person comes from `x-enterplace-user`, which Claude Code sends from `ANTHROPIC_CUSTOM_HEADERS` and Codex from its model provider's `http_headers`. Its value is a Enterplace person token (`enterplace_u_...`, from the console, `enterplace key new --identity-only`, or the device agent) or any Enterplace key of the person (from `enterplace login`). The token names the person and team for rules, records, guardrails, kill switches and limits. On its own it reaches no model: sent as the only credential it is refused with `person_token_only`.
+The person comes from `x-enterplace-user`, which Claude Code sends from `ANTHROPIC_CUSTOM_HEADERS` and Codex from its model provider's `http_headers`. Its value is an Enterplace person token (`enterplace_u_...`, from the console, `enterplace key new --identity-only`, or the device agent) or any Enterplace key of the person (from `enterplace login`). The token names the person and team for rules, records, guardrails, kill switches and limits. On its own it reaches no model: sent as the only credential it is refused with `person_token_only`.
 
 Every request is named by default. `enterplace start` writes `identity: required` and makes a person token for whoever runs it, printed once with the Claude Code lines, so the first request already carries a name.
 

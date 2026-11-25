@@ -259,7 +259,7 @@ def describe(status, headers, data, what):
 
 # ---------------------------------------------------------------------------------------------------------------
 # A mock of each provider API, for --mock. It answers in the provider's own shape and refuses any request that does
-# not carry the provider key, or that carries anything that looks like a Enterplace key.
+# not carry the provider key, or that carries anything that looks like an Enterplace key.
 
 def sse(events):
     return "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
@@ -309,13 +309,13 @@ class Mock(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         if not self.authorized():
-            return self.reply({"error": {"message": "mock: no provider key, or a Enterplace key reached the provider"}}, status=401)
+            return self.reply({"error": {"message": "mock: no provider key, or an Enterplace key reached the provider"}}, status=401)
         self.reply({"object": "list", "data": [{"id": "mock-model", "object": "model"}]})
 
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("content-length", "0")))
         if not self.authorized():
-            return self.reply({"error": {"message": "mock: no provider key, or a Enterplace key reached the provider"}}, status=401)
+            return self.reply({"error": {"message": "mock: no provider key, or an Enterplace key reached the provider"}}, status=401)
         body = parse(raw) if self.headers.get("content-type", "").startswith("application/json") else {}
         body = body if isinstance(body, dict) else {}
         path = urllib.parse.urlsplit(self.path).path

@@ -1,6 +1,6 @@
 # Moving from LiteLLM
 
-`enterplace import litellm` reads a LiteLLM proxy `config.yaml` and writes a Enterplace policy that passes `enterplace check`, with a list of everything it could not carry across. Keys cannot move: LiteLLM keeps only their hashes, as Enterplace does. An export of LiteLLM's virtual keys becomes team rules and the commands to reissue each key.
+`enterplace import litellm` reads a LiteLLM proxy `config.yaml` and writes an Enterplace policy that passes `enterplace check`, with a list of everything it could not carry across. Keys cannot move: LiteLLM keeps only their hashes, as Enterplace does. An export of LiteLLM's virtual keys becomes team rules and the commands to reissue each key.
 
 ```bash
 enterplace import litellm config.yaml --out enterplace.policy.yaml

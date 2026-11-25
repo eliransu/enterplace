@@ -10,7 +10,7 @@ import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 Aider reaches an OpenAI-compatible server through two environment variables. Point them at Enterplace and its requests go to `POST /v1/chat/completions`.
 
 <Aside type="tip" title="Before you start">
-You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and an Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -34,7 +34,7 @@ The `openai/` prefix tells Aider which API to use. Enterplace receives the name 
 - Aider documents only `ANTHROPIC_API_KEY` for Anthropic, with no base URL, so use the OpenAI route. For Claude models, set `accept_chat: true` on the Enterplace provider. See [Translation](/routing/translation/).
 
 <Aside type="note">
-This setup follows Aider's documentation. How Aider displays a Enterplace refusal is not documented.
+This setup follows Aider's documentation. How Aider displays an Enterplace refusal is not documented.
 </Aside>
 
 ## Related

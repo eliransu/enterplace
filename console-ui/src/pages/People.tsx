@@ -330,7 +330,8 @@ export function KeyTable({
                 {e.name}
               </span>
               <span className="block text-muted-foreground">
-                {e.team}, {kindOf(e)}
+                {kindOf(e)}
+                {e.team ? `, team ${e.team}` : ""}
               </span>
             </TableCell>
             <TableCell className="whitespace-normal">
@@ -444,7 +445,9 @@ function StatusCell({ status }: { status: Status }) {
       {status.meter ? (
         <div className="grid min-w-48 gap-1">
           <div className="flex justify-between gap-4">
-            <span className="t-small whitespace-nowrap text-muted-foreground">Key budget</span>
+            <span className="t-small whitespace-nowrap text-muted-foreground">
+              Key budget
+            </span>
             <span className="t-mono-sm">{status.meter.text}</span>
           </div>
           <div
@@ -971,7 +974,11 @@ function MadeDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogTitle>
-          {made.key.startsWith("enterplace_") ? "The new key" : "The new token"}
+          {made.key.startsWith("enterplace_u_")
+            ? "The new person token"
+            : made.key.startsWith("enterplace_")
+              ? "The new key"
+              : "The new token"}
         </DialogTitle>
         <DialogDescription>
           {made.until

@@ -1,13 +1,13 @@
 ---
 title: AutoGen
-description: Point AutoGen's OpenAIChatCompletionClient at Enterplace with base_url and a Enterplace key.
+description: Point AutoGen's OpenAIChatCompletionClient at Enterplace with base_url and an Enterplace key.
 sidebar:
   order: 28
 ---
 
 import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-AutoGen agents take a model client. `OpenAIChatCompletionClient` with Enterplace's address and a Enterplace key sends each of an agent's model calls through the gateway.
+AutoGen agents take a model client. `OpenAIChatCompletionClient` with Enterplace's address and an Enterplace key sends each of an agent's model calls through the gateway.
 
 ## Send a request
 
@@ -42,7 +42,7 @@ A Claude model reached this way needs `accept_chat: true` on its provider. See [
 
 ## Tools and refusals
 
-Tools given to an agent are declared as function tools, so a rule's [tool permissions](/governance/tool-permissions/) apply by name. A refusal is raised as the OpenAI SDK's error (`openai.PermissionDeniedError` for a 403), with `e.code` holding Enterplace's code. In a team of agents, give each agent's client a Enterplace key of its own to tell their requests apart in the audit log.
+Tools given to an agent are declared as function tools, so a rule's [tool permissions](/governance/tool-permissions/) apply by name. A refusal is raised as the OpenAI SDK's error (`openai.PermissionDeniedError` for a 403), with `e.code` holding Enterplace's code. In a team of agents, give each agent's client an Enterplace key of its own to tell their requests apart in the audit log.
 
 ## Tested
 
@@ -62,5 +62,5 @@ Last run on 2026-11-15 with autogen-agentchat 0.7.5 and autogen-ext 0.7.5 on Pyt
 <CardGrid>
 	<LinkCard title="OpenAI and Anthropic SDKs" href="/integrations/sdks/" description="Base URLs, keys and error fields." />
 	<LinkCard title="Tool permissions" href="/governance/tool-permissions/" description="Allow or deny the tools an agent declares." />
-	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue a Enterplace key for an app or a person." />
+	<LinkCard title="Keys and identity" href="/governance/keys/" description="Issue an Enterplace key for an app or a person." />
 </CardGrid>

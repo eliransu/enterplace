@@ -1,5 +1,5 @@
 //! Subscription passthrough: a provider with `auth: passthrough` sends each caller's own Claude login (Claude Code's
-//! subscription OAuth token) to Anthropic unchanged, and Enterplace holds no key. The person is named by a Enterplace person
+//! subscription OAuth token) to Anthropic unchanged, and Enterplace holds no key. The person is named by an Enterplace person
 //! token in x-enterplace-user, or recorded as unknown on `identity: optional`. The login is never stored, logged or
 //! recorded, never swapped for a key of Enterplace's, and every rule, guardrail, kill switch and limit still applies.
 
@@ -418,7 +418,7 @@ async fn without_a_person_an_optional_identity_records_an_unknown_person_by_sess
     );
     assert!(!everything_written(&s.dir).contains("sk-ant-oat01"));
 
-    // A Enterplace key is still read as one, and goes to the keyed provider with Enterplace's key.
+    // An Enterplace key is still read as one, and goes to the keyed provider with Enterplace's key.
     let (status, body) = send(
         &s.gw,
         messages(
@@ -478,7 +478,7 @@ async fn a_login_and_a_key_never_stand_in_for_each_other() -> TestResult {
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(code(&body), "login_not_accepted", "{body}");
 
-    // A login beside a Enterplace key is ambiguous.
+    // A login beside an Enterplace key is ambiguous.
     let mut both = claude_code(Some(MAYA));
     both.retain(|(n, _)| *n != "authorization");
     let bearer = format!("Bearer {OMER_KEY}");

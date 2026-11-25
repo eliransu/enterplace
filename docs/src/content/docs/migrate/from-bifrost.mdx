@@ -1,6 +1,6 @@
 ---
 title: Coming from Bifrost
-description: Map Bifrost concepts and config.json to a Enterplace policy and keys, translate a config by hand, move clients over step by step, and see what differs.
+description: Map Bifrost concepts and config.json to an Enterplace policy and keys, translate a config by hand, move clients over step by step, and see what differs.
 sidebar:
   order: 2
 ---
@@ -36,7 +36,7 @@ Enterplace has no importer for Bifrost. You write the policy by hand from your `
 
 | Bifrost | Enterplace |
 |---|---|
-| Virtual key (`sk-bf-*`), sent as `x-bf-vk` or `Authorization: Bearer` | A Enterplace key, sent as `Authorization: Bearer` or `x-api-key` |
+| Virtual key (`sk-bf-*`), sent as `x-bf-vk` or `Authorization: Bearer` | An Enterplace key, sent as `Authorization: Bearer` or `x-api-key` |
 | `client.enforce_auth_on_inference` | Always on. A request without a known Enterplace key is refused before its body is read |
 | Virtual key `is_active: false` | Revoke the key in the console, with the [admin API](/reference/admin-api/), or by removing its line from `enterplace.keys.yaml` |
 | Virtual key `expires_at` | `enterplace key new --expires <date>` |
@@ -147,7 +147,7 @@ enterplace key new engineering --team eng --budget 100/month
 The rule's `rate` counts each person, so with one key per person it limits each key as Bifrost's virtual key limit did.
 
 <Aside type="tip">
-Give provider keys variable names of their own, such as `ANTHROPIC_PROVIDER_KEY`. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which through Enterplace is a Enterplace key.
+Give provider keys variable names of their own, such as `ANTHROPIC_PROVIDER_KEY`. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which through Enterplace is an Enterplace key.
 </Aside>
 
 ## Migrate step by step
@@ -189,7 +189,7 @@ Give provider keys variable names of their own, such as `ANTHROPIC_PROVIDER_KEY`
 ## What differs
 
 - **No importer.** `enterplace import` reads LiteLLM configs only. A Bifrost `config.json` is translated by hand, as above.
-- **Rules, not keys, hold the policy.** A Bifrost virtual key carries its providers, models, budget and limits. A Enterplace key carries a name and a team, the first matching rule decides, and a key can only narrow its rule.
+- **Rules, not keys, hold the policy.** A Bifrost virtual key carries its providers, models, budget and limits. An Enterplace key carries a name and a team, the first matching rule decides, and a key can only narrow its rule.
 - **A record before every request.** Each request, allowed or refused, gets a hash-chained [audit record](/governance/audit-log/) before it is forwarded, and a request that cannot be recorded is refused.
 - **No prompt text by default.** The audit log and the request log hold no prompt or answer text. A rule can [capture bodies](/operations/request-log/#bodies), redacted, for named viewers and a set number of days.
 - **Budgets reserve.** A request under a budget reserves the most it could cost before it is sent and gives the rest back when the answer ends. See [how a budget is counted](/governance/budgets-and-rate-limits/#how-a-budget-is-counted).

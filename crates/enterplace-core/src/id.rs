@@ -39,7 +39,7 @@ pub fn new_key() -> Result<String, String> {
     Ok(format!("{KEY_PREFIX}{}", hex(&random)))
 }
 
-/// What a Enterplace person token starts with. It names a person for subscription passthrough (`x-enterplace-user`) and
+/// What an Enterplace person token starts with. It names a person for subscription passthrough (`x-enterplace-user`) and
 /// grants no provider access on its own: a request that sends it as its only credential is refused.
 pub const PERSON_PREFIX: &str = "enterplace_u_";
 

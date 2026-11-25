@@ -145,7 +145,7 @@ A subscription request is never answered 401: Claude Code reads a 401 as its own
 
 ### person_needed
 
-**403.** A request carries a login that is not a Enterplace key (a Claude subscription's), names no person in `x-enterplace-user`, and the [passthrough provider](/governance/subscriptions/) has `identity: required`.
+**403.** A request carries a login that is not an Enterplace key (a Claude subscription's), names no person in `x-enterplace-user`, and the [passthrough provider](/governance/subscriptions/) has `identity: required`.
 
 **Fix:** set `ANTHROPIC_CUSTOM_HEADERS="x-enterplace-user: <person token>"` in Claude Code. Get a token from the console, `enterplace login` or `enterplace key new --identity-only`.
 
@@ -153,11 +153,11 @@ A subscription request is never answered 401: Claude Code reads a 401 as its own
 
 **403.** A person token (`enterplace_u_...`) was sent as the request's only credential. It names a person and reaches no model on its own.
 
-**Fix:** send it in `x-enterplace-user` beside your own Claude login, or use a Enterplace key.
+**Fix:** send it in `x-enterplace-user` beside your own Claude login, or use an Enterplace key.
 
 ### login_needed
 
-**403.** The model is served only by a provider with `auth: passthrough`, which holds no key, and the request carries a Enterplace key in place of a login.
+**403.** The model is served only by a provider with `auth: passthrough`, which holds no key, and the request carries an Enterplace key in place of a login.
 
 **Fix:** in Claude Code, unset `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, keep your Claude login and send your person token in `x-enterplace-user`.
 
@@ -165,7 +165,7 @@ A subscription request is never answered 401: Claude Code reads a 401 as its own
 
 **403.** The request carries your own Claude login, and the model is served by a provider that uses Enterplace's key, or the route is `/passthrough`. A login is never swapped for Enterplace's key.
 
-**Fix:** ask an admin to serve the model from a provider with `auth: passthrough`, or send a Enterplace key instead.
+**Fix:** ask an admin to serve the model from a provider with `auth: passthrough`, or send an Enterplace key instead.
 
 ### no_login
 
@@ -209,7 +209,7 @@ Enterplace Enterprise: the request came through a trusted proxy with `identity_h
 
 ### jwt_untrusted
 
-The bearer token is a JWT from an issuer the policy's `jwt:` does not list. Use a token from a trusted issuer, or a Enterplace key.
+The bearer token is a JWT from an issuer the policy's `jwt:` does not list. Use a token from a trusted issuer, or an Enterplace key.
 
 ### jwt_invalid
 
@@ -231,7 +231,7 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 
 ### unknown_route
 
-**404.** The method and path are not one Enterplace serves. See [HTTP routes](/reference/http-routes/). On the admin API, also a method and path it does not serve, or a Enterplace that serves no keys file.
+**404.** The method and path are not one Enterplace serves. See [HTTP routes](/reference/http-routes/). On the admin API, also a method and path it does not serve, or an Enterplace that serves no keys file.
 
 **Fix:** check the method and the path.
 

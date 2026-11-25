@@ -632,14 +632,14 @@ guardrails:
 
 ### LLM as a judge
 
-`type: judge` asks a model whether the conversation breaks a rubric you write. The model is called through Enterplace's own `POST /v1/chat/completions`, with a Enterplace key of the judge's own, so each judge call is a governed request: decided by that key's rule, recorded, priced and charged to that key's person and team. Mint the key for a scope such as a `guardrails` team and give it a budget to cap what judging costs.
+`type: judge` asks a model whether the conversation breaks a rubric you write. The model is called through Enterplace's own `POST /v1/chat/completions`, with an Enterplace key of the judge's own, so each judge call is a governed request: decided by that key's rule, recorded, priced and charged to that key's person and team. Mint the key for a scope such as a `guardrails` team and give it a budget to cap what judging costs.
 
 ```yaml
 guardrails:
   - name: no-legal-advice
     type: judge
     url: http://127.0.0.1:8080/v1      # this Enterplace
-    key_env: ENTERPLACE_JUDGE_KEY          # a Enterplace key, team guardrails
+    key_env: ENTERPLACE_JUDGE_KEY          # an Enterplace key, team guardrails
     model: gpt-5-mini
     rubric: The assistant must not give legal advice or interpret contracts.
     cache_seconds: 300
@@ -657,7 +657,7 @@ guardrails:
 
 The judge is told to answer `PASS` or `FAIL`. `FAIL` blocks with the finding `rubric`; the record never holds the model's words, which may quote the conversation. Any other answer counts as a service failure and follows `on_failure`. A judge does not run on requests made with its own key, so its calls are never judged again, even when the judge's key falls under the same rule. Cached verdicts are kept per process.
 
-Not built in: Prompt Security, Pillar Security, Noma, Qualifire and Zscaler AI Guard publish no API reference with the request and answer fields without an account, so connect them with a [webhook](/governance/guardrail-webhooks/) that calls their API. Anthropic documents no hosted moderation endpoint: its guide classifies with Claude itself, which you can do with a `llama_guard` guardrail whose `url` is a Enterplace and whose `prompt` asks for `safe` or `unsafe`.
+Not built in: Prompt Security, Pillar Security, Noma, Qualifire and Zscaler AI Guard publish no API reference with the request and answer fields without an account, so connect them with a [webhook](/governance/guardrail-webhooks/) that calls their API. Anthropic documents no hosted moderation endpoint: its guide classifies with Claude itself, which you can do with a `llama_guard` guardrail whose `url` is an Enterplace and whose `prompt` asks for `safe` or `unsafe`.
 
 ## Requests and answers
 

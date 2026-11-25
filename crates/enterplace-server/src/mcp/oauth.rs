@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 use super::{Asked, Conn, Mcp, Shared, Upstream, event, keep::now};
 use crate::Refusal;
 
-/// The start of every access token Enterplace issues to MCP clients, so it is told from a Enterplace key at a glance.
+/// The start of every access token Enterplace issues to MCP clients, so it is told from an Enterplace key at a glance.
 const ACCESS_PREFIX: &str = "enterplace_mcp_";
 const REFRESH_PREFIX: &str = "enterplace_mcpr_";
 const ACCESS_FOR: u64 = 60 * 60;
@@ -521,7 +521,7 @@ impl Mcp {
         ))
     }
 
-    /// Who a credential belongs to: a Enterplace key, or an access token Enterplace issued. Returns the person, the hash a
+    /// Who a credential belongs to: an Enterplace key, or an access token Enterplace issued. Returns the person, the hash a
     /// key kill switch is matched with, and `oauth` for a token.
     pub(super) async fn authenticate(
         &self,
@@ -536,7 +536,7 @@ impl Mcp {
                 StatusCode::UNAUTHORIZED,
                 "key_expired",
                 format!(
-                    "Refused: the key {} of \"{}\" expired at {} (UTC). Ask a Enterplace admin for a new key, or run enterplace login again, and connect the MCP client again.",
+                    "Refused: the key {} of \"{}\" expired at {} (UTC). Ask an Enterplace admin for a new key, or run enterplace login again, and connect the MCP client again.",
                     person.key,
                     person.name,
                     person.expires.as_deref().unwrap_or_default()
@@ -711,13 +711,13 @@ impl Mcp {
                 }
                 let answer = self.post_form(token_url, &pairs).await.map_err(|err| {
                     Some(format!(
-                        "MCP server \"{}\" is reached with a token traded for yours, and the identity provider did not trade it: {err}. Sign in again for a fresh token; if it keeps failing, a Enterplace admin checks the server's token_url, oauth_client_id and audience.",
+                        "MCP server \"{}\" is reached with a token traded for yours, and the identity provider did not trade it: {err}. Sign in again for a fresh token; if it keeps failing, an Enterplace admin checks the server's token_url, oauth_client_id and audience.",
                         server.name
                     ))
                 })?;
                 let Some(token) = answer["access_token"].as_str() else {
                     return Err(Some(format!(
-                        "MCP server \"{}\": the identity provider's answer to the token exchange holds no access_token. A Enterplace admin checks the server's token_url.",
+                        "MCP server \"{}\": the identity provider's answer to the token exchange holds no access_token. An Enterplace admin checks the server's token_url.",
                         server.name
                     )));
                 };

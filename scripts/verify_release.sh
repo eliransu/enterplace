@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks a Enterplace release before you run it: the image and the Helm chart were signed by this repository's release
+# Checks an Enterplace release before you run it: the image and the Helm chart were signed by this repository's release
 # workflows (keyless, through GitHub's OIDC identity and Sigstore), and the image carries a signed SBOM and signed SLSA
 # provenance.
 #

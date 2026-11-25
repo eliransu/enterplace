@@ -1,6 +1,6 @@
 ---
 title: Continue
-description: Configure a Continue model that sends chat, edit and apply requests through Enterplace with a Enterplace key.
+description: Configure a Continue model that sends chat, edit and apply requests through Enterplace with an Enterplace key.
 sidebar:
   order: 4
 ---
@@ -10,7 +10,7 @@ import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components'
 Continue reads its models from `config.yaml` in `~/.continue`. Use the `openai` provider with `apiBase` set to Enterplace, and its requests go to `POST /v1/chat/completions` on Enterplace.
 
 <Aside type="tip" title="Before you start">
-You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and an Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -57,7 +57,7 @@ You need a running Enterplace and a Enterplace key. `enterplace start` gives bot
 - The example leaves out the `autocomplete` role. Enterplace serves chat completions; autocomplete through Enterplace is untried.
 
 <Aside type="note">
-This setup follows Continue's documentation. How Continue displays a Enterplace refusal is not documented.
+This setup follows Continue's documentation. How Continue displays an Enterplace refusal is not documented.
 </Aside>
 
 ## Related

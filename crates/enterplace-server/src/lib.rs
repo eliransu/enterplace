@@ -335,7 +335,7 @@ fn allowed_query(path: &str) -> &'static [Param] {
 const DECISION: HeaderName = HeaderName::from_static("x-enterplace-decision");
 /// Where a caller sends their own provider key, on a rule with `caller_provider_key: allowed`.
 const CALLER_PROVIDER_KEY: &str = "x-enterplace-provider-key";
-/// Where Claude Code (through ANTHROPIC_CUSTOM_HEADERS) names its person on a subscription passthrough request: a
+/// Where Claude Code (through ANTHROPIC_CUSTOM_HEADERS) names its person on a subscription passthrough request: an
 /// Enterplace person token or key, while Authorization carries the person's own Claude login.
 const PERSON_HEADER: &str = "x-enterplace-user";
 /// The name a passthrough request without x-enterplace-user is recorded under, on a provider with `identity: optional`.
@@ -1380,7 +1380,7 @@ fn checked_upstream(raw: &str) -> Result<String, ConfigError> {
     }
 }
 
-/// Healthy means able to do the job. A Enterplace that can no longer write its audit log refuses every
+/// Healthy means able to do the job. An Enterplace that can no longer write its audit log refuses every
 /// request, so it says so here and a load balancer stops sending it traffic.
 /// The body names the version in use, and a version on disk that was rejected, so an admin can see both at once.
 async fn root(state: State<AppState>, request: Request) -> Response {
@@ -1845,7 +1845,7 @@ fn gemini_key(parts: &mut Parts) -> Result<(), Refusal> {
         Refusal::new(
             StatusCode::UNAUTHORIZED,
             "no_key",
-            "Refused: the Gemini API key holds characters a Enterplace key never has. Set GEMINI_API_KEY to your Enterplace key alone.",
+            "Refused: the Gemini API key holds characters an Enterplace key never has. Set GEMINI_API_KEY to your Enterplace key alone.",
         )
     })?;
     value.set_sensitive(true);
@@ -2134,7 +2134,7 @@ pub(crate) fn customer_and_tags(
                             StatusCode::FORBIDDEN,
                             "customer_not_allowed",
                             format!(
-                                "Refused: rule \"{}\" does not let a caller name customer \"{customer}\" in x-enterplace-customer. Leave the header out, or ask a Enterplace admin to add it (or \"*\") to the rule's customers.",
+                                "Refused: rule \"{}\" does not let a caller name customer \"{customer}\" in x-enterplace-customer. Leave the header out, or ask an Enterplace admin to add it (or \"*\") to the rule's customers.",
                                 rule.name
                             ),
                         ),
@@ -2169,7 +2169,7 @@ pub(crate) fn customer_and_tags(
                     StatusCode::FORBIDDEN,
                     "tag_not_allowed",
                     format!(
-                        "Refused: rule \"{}\" does not let a caller send tag \"{tag}\" in x-enterplace-tags. Remove it, or ask a Enterplace admin to add it to the rule's tags.",
+                        "Refused: rule \"{}\" does not let a caller send tag \"{tag}\" in x-enterplace-tags. Remove it, or ask an Enterplace admin to add it to the rule's tags.",
                         rule.name
                     ),
                 ),
@@ -2264,7 +2264,7 @@ fn caller_paid(rule: Option<&Rule>, kind: Option<Kind>, key: Option<&str>) -> Re
             StatusCode::FORBIDDEN,
             "caller_provider_key_not_allowed",
             format!(
-                "Refused: {} does not take a caller's own provider key, and this request carries one in x-enterplace-provider-key. Send it without that header to use Enterplace's key, or ask a Enterplace admin to set `caller_provider_key: allowed` on the rule.",
+                "Refused: {} does not take a caller's own provider key, and this request carries one in x-enterplace-provider-key. Send it without that header to use Enterplace's key, or ask an Enterplace admin to set `caller_provider_key: allowed` on the rule.",
                 rule.map_or_else(|| "no rule".to_string(), |r| format!("rule \"{}\"", r.name))
             ),
         ));
@@ -2317,10 +2317,10 @@ fn subscription_login(
             Refusal::new(
                 StatusCode::BAD_REQUEST,
                 "unknown_key",
-                "Refused: x-enterplace-user holds characters a Enterplace person token never has. Send the token alone, as ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <token>\".",
+                "Refused: x-enterplace-user holds characters an Enterplace person token never has. Send the token alone, as ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <token>\".",
             )
         })?;
-    // A request whose credential is a Enterplace key is a key request, as always. A device agent may also have named the
+    // A request whose credential is an Enterplace key is a key request, as always. A device agent may also have named the
     // same person in x-enterplace-user: that is dropped; a different one is refused.
     if let Ok(credential) = caller_key(headers)
         && (credential.starts_with(id::KEY_PREFIX) || policy.identify(credential).is_some())
@@ -2329,7 +2329,7 @@ fn subscription_login(
             return Err(Refusal::new(
                 StatusCode::BAD_REQUEST,
                 "ambiguous_key",
-                "Refused: this request carries a Enterplace key as its login and another person token in x-enterplace-user. With a Claude subscription, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN and keep x-enterplace-user; with a Enterplace key, remove x-enterplace-user.",
+                "Refused: this request carries an Enterplace key as its login and another person token in x-enterplace-user. With a Claude subscription, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN and keep x-enterplace-user; with an Enterplace key, remove x-enterplace-user.",
             ));
         }
         headers.remove(PERSON_HEADER);
@@ -2340,7 +2340,7 @@ fn subscription_login(
             Some(_) => Err(Refusal::new(
                 StatusCode::BAD_REQUEST,
                 "passthrough_off",
-                "Refused: x-enterplace-user names a person for subscription passthrough, and no provider of this Enterplace has auth: passthrough. Ask a Enterplace admin to turn on Claude subscriptions (console, Start here, Coding agents), or send your Enterplace key as your only credential.",
+                "Refused: x-enterplace-user names a person for subscription passthrough, and no provider of this Enterplace has auth: passthrough. Ask an Enterplace admin to turn on Claude subscriptions (console, Coding agents), or send your Enterplace key as your only credential.",
             )),
             None => Ok((None, None)),
         };
@@ -2376,7 +2376,7 @@ fn subscription_login(
                 return Err(Refusal::new(
                     StatusCode::UNAUTHORIZED,
                     "no_key",
-                    "Refused: x-enterplace-user is empty. Send your Enterplace person token in it: ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <token>\". Get one from the console (Start here, Coding agents) or with enterplace login.",
+                    "Refused: x-enterplace-user is empty. Send your Enterplace person token in it: ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <token>\". Get one from the console (Coding agents) or with enterplace login.",
                 ));
             }
             let Some((name, value)) = login(headers)? else {
@@ -2391,7 +2391,7 @@ fn subscription_login(
                     return Err(Refusal::new(
                         StatusCode::BAD_REQUEST,
                         "ambiguous_key",
-                        "Refused: this request carries a Enterplace key as its login and a person token in x-enterplace-user. With a Claude subscription, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN and keep x-enterplace-user; with a Enterplace key, remove x-enterplace-user.",
+                        "Refused: this request carries an Enterplace key as its login and a person token in x-enterplace-user. With a Claude subscription, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN and keep x-enterplace-user; with an Enterplace key, remove x-enterplace-user.",
                     ));
                 }
                 (false, true) => {
@@ -2410,7 +2410,7 @@ fn subscription_login(
                 return Ok((None, None));
             };
             let text = value.to_str().unwrap_or_default();
-            // A Enterplace key or a JWT the policy trusts is read as always.
+            // An Enterplace key or a JWT the policy trusts is read as always.
             let jwt =
                 !policy.jwt().is_empty() && jwt::looks_like(text.trim_start_matches("Bearer "));
             if enterplaces(&value) != (false, false) || jwt {
@@ -2425,7 +2425,7 @@ fn subscription_login(
                 return Err(Refusal::new(
                     StatusCode::FORBIDDEN,
                     "person_needed",
-                    "Refused: this request carries a login that is not a Enterplace key and does not name its person. With a Claude subscription, set ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <your person token>\"; with Codex on ChatGPT, add http_headers = { \"x-enterplace-user\" = \"<your person token>\" } to the Enterplace model provider. Get the token from the console (Start here, Coding agents) or enterplace login. Otherwise send your Enterplace key.",
+                    "Refused: this request carries a login that is not an Enterplace key and does not name its person. With a Claude subscription, set ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <your person token>\"; with Codex on ChatGPT, add http_headers = { \"x-enterplace-user\" = \"<your person token>\" } to the Enterplace model provider. Get the token from the console (Coding agents), from what enterplace start printed, or with enterplace login. Otherwise send your Enterplace key.",
                 ));
             }
             (name, value, false)
@@ -2478,7 +2478,7 @@ fn login_fits(provider: &Upstream, login: Option<&Login>, model: &str) -> Result
             StatusCode::FORBIDDEN,
             "login_needed",
             format!(
-                "Refused: model \"{model}\" is served by provider \"{}\", which sends each caller's own Claude or ChatGPT login and holds no key of Enterplace's, and this request carries only a Enterplace key. In Claude Code, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN, keep your normal Claude login, and send your person token with ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <token>\". In Codex, sign in with ChatGPT and set requires_openai_auth = true and http_headers = {{ \"x-enterplace-user\" = \"<token>\" }} on the Enterplace model provider.",
+                "Refused: model \"{model}\" is served by provider \"{}\", which sends each caller's own Claude or ChatGPT login and holds no key of Enterplace's, and this request carries only an Enterplace key. In Claude Code, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN, keep your normal Claude login, and send your person token with ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <token>\". In Codex, sign in with ChatGPT and set requires_openai_auth = true and http_headers = {{ \"x-enterplace-user\" = \"<token>\" }} on the Enterplace model provider.",
                 provider.name
             ),
         )),
@@ -2486,7 +2486,7 @@ fn login_fits(provider: &Upstream, login: Option<&Login>, model: &str) -> Result
             StatusCode::FORBIDDEN,
             "login_not_accepted",
             format!(
-                "Refused: this request carries your own Claude or ChatGPT login, and model \"{model}\" is served by provider \"{}\", which uses Enterplace's provider key. A login is never swapped for Enterplace's key. Ask a Enterplace admin to serve it from a provider with auth: passthrough, or send your Enterplace key in place of the login.",
+                "Refused: this request carries your own Claude or ChatGPT login, and model \"{model}\" is served by provider \"{}\", which uses Enterplace's provider key. A login is never swapped for Enterplace's key. Ask an Enterplace admin to serve it from a provider with auth: passthrough, or send your Enterplace key in place of the login.",
                 provider.name
             ),
         )),
@@ -2495,7 +2495,7 @@ fn login_fits(provider: &Upstream, login: Option<&Login>, model: &str) -> Result
                 StatusCode::FORBIDDEN,
                 "person_needed",
                 format!(
-                    "Refused: provider \"{}\" needs each request to name its person, and this one carries no x-enterplace-user. In Claude Code, set ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <your person token>\"; in Codex, add http_headers = {{ \"x-enterplace-user\" = \"<your person token>\" }} to the Enterplace model provider. Get the token from the console (Start here, Coding agents) or enterplace login.",
+                    "Refused: provider \"{}\" needs each request to name its person, and this one carries no x-enterplace-user. In Claude Code, set ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <your person token>\"; in Codex, add http_headers = {{ \"x-enterplace-user\" = \"<your person token>\" }} to the Enterplace model provider. Get the token from the console (Coding agents), from what enterplace start printed, or with enterplace login.",
                     provider.name
                 ),
             ))
@@ -2588,7 +2588,7 @@ async fn check<'a>(
         return Err(Refusal::new(
             StatusCode::FORBIDDEN,
             "person_token_only",
-            "Refused: this is a Enterplace person token, which names a person for Claude subscription passthrough and reaches no model on its own. Send it in x-enterplace-user (ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <token>\") beside your own Claude login, or ask a Enterplace admin for a Enterplace key.",
+            "Refused: this is an Enterplace person token, which names a person for Claude subscription passthrough and reaches no model on its own. Send it in x-enterplace-user (ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <token>\") beside your own Claude login, or ask an Enterplace admin for an Enterplace key.",
         ));
     }
     // The key must not travel on in any other header either, under whatever name the caller chose for it.
@@ -2954,7 +2954,7 @@ async fn check<'a>(
                         StatusCode::FORBIDDEN,
                         "model_not_allowed",
                         format!(
-                            "Refused: the request's fallbacks name model \"{target}\", which your rule does not allow. Remove it from fallbacks, or ask a Enterplace admin to allow it."
+                            "Refused: the request's fallbacks name model \"{target}\", which your rule does not allow. Remove it from fallbacks, or ask an Enterplace admin to allow it."
                         ),
                     ));
                 }
@@ -3112,7 +3112,7 @@ fn rule_refusal(decision: Decision<'_>, person: &Principal, model: &str, path: &
                 StatusCode::FORBIDDEN,
                 "model_not_allowed",
                 format!(
-                    "Refused: the key {} of \"{}\" may not use model \"{model}\". Its own list allows: {}. {hint}Ask a Enterplace admin to change the key's models if you need this one.",
+                    "Refused: the key {} of \"{}\" may not use model \"{model}\". Its own list allows: {}. {hint}Ask an Enterplace admin to change the key's models if you need this one.",
                     person.key,
                     person.name,
                     person.models.as_deref().unwrap_or_default().join(", ")
@@ -3130,7 +3130,7 @@ fn rule_refusal(decision: Decision<'_>, person: &Principal, model: &str, path: &
                 StatusCode::FORBIDDEN,
                 "model_not_allowed",
                 format!(
-                    "Refused: team \"{}\" may not use model \"{model}\" under rule \"{}\". {} {hint}Ask a Enterplace admin to change the policy if you need this one.",
+                    "Refused: team \"{}\" may not use model \"{model}\" under rule \"{}\". {} {hint}Ask an Enterplace admin to change the policy if you need this one.",
                     person.team,
                     rule.name,
                     allowed_models(rule)
@@ -3290,7 +3290,7 @@ pub(crate) fn no_rule(person: &Principal) -> Refusal {
         StatusCode::FORBIDDEN,
         "no_rule",
         format!(
-            "Refused: no rule in the policy names \"{}\" or team \"{}\", so nothing is allowed. Ask a Enterplace admin to add a rule.",
+            "Refused: no rule in the policy names \"{}\" or team \"{}\", so nothing is allowed. Ask an Enterplace admin to add a rule.",
             person.name, person.team
         ),
     )
@@ -3316,7 +3316,7 @@ pub(crate) fn mark_would_refuse(
 /// A stranger is refused before their body is read. Returns the person and the SHA-256 of the key.
 /// Who sends a request, by their Enterplace key or a JWT from an issuer the policy trusts, refused when unknown,
 /// expired, stopped by a kill switch, from an address range their key or rule does not allow, or for a route their
-/// key may not call. Every route that takes a Enterplace key comes here: the model routes, files, batches,
+/// key may not call. Every route that takes an Enterplace key comes here: the model routes, files, batches,
 /// fine-tuning and realtime. Returns the person and the SHA-256 kill switches know the caller by.
 pub(crate) async fn identify<'a>(
     state: &AppState,
@@ -3367,7 +3367,7 @@ pub(crate) async fn identify<'a>(
             StatusCode::UNAUTHORIZED,
             "unknown_key",
             format!(
-                "Refused: Enterplace does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. A key from enterplace login is replaced by the next login and removed by enterplace logout: run enterplace login again. Otherwise ask a Enterplace admin.{hint}"
+                "Refused: Enterplace does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. A key from enterplace login is replaced by the next login and removed by enterplace logout: run enterplace login again. Otherwise ask an Enterplace admin.{hint}"
             ),
         ));
     };
@@ -3379,7 +3379,7 @@ pub(crate) async fn identify<'a>(
             StatusCode::UNAUTHORIZED,
             "key_expired",
             format!(
-                "Refused: the key {} of \"{}\" expired at {} (UTC). Ask a Enterplace admin for a new key, or, if it came from enterplace login, run enterplace login <enterplace url> again.",
+                "Refused: the key {} of \"{}\" expired at {} (UTC). Ask an Enterplace admin for a new key, or, if it came from enterplace login, run enterplace login <enterplace url> again.",
                 person.key,
                 person.name,
                 person.expires.as_deref().unwrap_or_default()
@@ -3406,7 +3406,7 @@ pub(crate) async fn identify<'a>(
             StatusCode::FORBIDDEN,
             "ip_not_allowed",
             format!(
-                "Refused: the key {} of \"{}\" may be used only from its listed address ranges, and this request came from {where_from}. Send it from an allowed network, or ask a Enterplace admin to change the key's from list.",
+                "Refused: the key {} of \"{}\" may be used only from its listed address ranges, and this request came from {where_from}. Send it from an allowed network, or ask an Enterplace admin to change the key's from list.",
                 person.key, person.name
             ),
         );
@@ -3421,7 +3421,7 @@ pub(crate) async fn identify<'a>(
             StatusCode::FORBIDDEN,
             "ip_not_allowed",
             format!(
-                "Refused: rule \"{}\" allows requests only from its listed address ranges, and this request came from {where_from}. Send it from an allowed network, or ask a Enterplace admin to change the rule's from list.",
+                "Refused: rule \"{}\" allows requests only from its listed address ranges, and this request came from {where_from}. Send it from an allowed network, or ask an Enterplace admin to change the rule's from list.",
                 rule.name
             ),
         );
@@ -3437,7 +3437,7 @@ pub(crate) async fn identify<'a>(
             StatusCode::FORBIDDEN,
             "route_not_allowed",
             format!(
-                "Refused: the key {} of \"{}\" may call only {}, and this request is for {}. Ask a Enterplace admin to change the key's routes if it needs this one.",
+                "Refused: the key {} of \"{}\" may call only {}, and this request is for {}. Ask an Enterplace admin to change the key's routes if it needs this one.",
                 person.key,
                 person.name,
                 person.options.routes.join(", "),
@@ -3464,7 +3464,7 @@ pub(crate) fn cert_bound(person: &Principal, cert: Option<&ClientCert>) -> Resul
         StatusCode::FORBIDDEN,
         "cert_required",
         format!(
-            "Refused: the key {} of \"{}\" is bound to the client certificate named \"{bound}\", and this connection {}. Connect with that certificate (its subject common name or a subject alternative name must be \"{bound}\"), or ask a Enterplace admin to change the key's cert.",
+            "Refused: the key {} of \"{}\" is bound to the client certificate named \"{bound}\", and this connection {}. Connect with that certificate (its subject common name or a subject alternative name must be \"{bound}\"), or ask an Enterplace admin to change the key's cert.",
             person.key,
             person.name,
             match cert {
@@ -3576,7 +3576,7 @@ async fn passthrough<'a>(
                         StatusCode::NOT_FOUND,
                         "unknown_provider",
                         format!(
-                            "Refused: this Enterplace has no {cloud} provider{} to pass through to. Ask a Enterplace admin to add one, or check the {PROVIDER_HEADER} header.",
+                            "Refused: this Enterplace has no {cloud} provider{} to pass through to. Ask an Enterplace admin to add one, or check the {PROVIDER_HEADER} header.",
                             named.map(|n| format!(" named \"{n}\"")).unwrap_or_default()
                         ),
                     ));
@@ -3644,7 +3644,7 @@ async fn passthrough<'a>(
             StatusCode::FORBIDDEN,
             "passthrough_not_allowed",
             format!(
-                "Refused: rule \"{}\" does not let you reach {native} at provider \"{name}\" as sent. Ask a Enterplace admin to add the path under the rule's passthrough:.",
+                "Refused: rule \"{}\" does not let you reach {native} at provider \"{name}\" as sent. Ask an Enterplace admin to add the path under the rule's passthrough:.",
                 rule.name
             ),
         );
@@ -3704,7 +3704,7 @@ async fn passthrough<'a>(
                     StatusCode::FORBIDDEN,
                     "model_not_allowed",
                     format!(
-                        "Refused: rule \"{}\" does not allow model \"{model}\" for \"{}\". {} Ask a Enterplace admin if you need it.",
+                        "Refused: rule \"{}\" does not allow model \"{model}\" for \"{}\". {} Ask an Enterplace admin if you need it.",
                         rule.name,
                         person.name,
                         allowed_models(rule)
@@ -3888,7 +3888,7 @@ fn targets(
                 StatusCode::FORBIDDEN,
                 "region_not_allowed",
                 format!(
-                    "Refused: your rule keeps requests in {}, and model \"{model}\" is not an alias whose deployments are labelled with a region, so where it runs cannot be shown. Use an alias with a deployment in one of those regions, or ask a Enterplace admin to add region: to its deployments.",
+                    "Refused: your rule keeps requests in {}, and model \"{model}\" is not an alias whose deployments are labelled with a region, so where it runs cannot be shown. Use an alias with a deployment in one of those regions, or ask an Enterplace admin to add region: to its deployments.",
                     regions.join(", ")
                 ),
             ));
@@ -3928,7 +3928,7 @@ fn targets(
             Refusal::new(
                 StatusCode::FORBIDDEN,
                 "unknown_model",
-                format!("Refused: alias \"{model}\" has no deployment Enterplace can reach. Ask a Enterplace admin to check its providers."),
+                format!("Refused: alias \"{model}\" has no deployment Enterplace can reach. Ask an Enterplace admin to check its providers."),
             )
         }));
     }
@@ -3946,7 +3946,7 @@ fn targets(
                 StatusCode::FORBIDDEN,
                 "region_not_allowed",
                 format!(
-                    "Refused: your rule keeps requests in {}, and alias \"{model}\" has no deployment labelled with one of those regions, so the request was not sent anywhere. Ask a Enterplace admin to add a deployment in one of them.",
+                    "Refused: your rule keeps requests in {}, and alias \"{model}\" has no deployment labelled with one of those regions, so the request was not sent anywhere. Ask an Enterplace admin to add a deployment in one of them.",
                     regions.join(", ")
                 ),
             ));
@@ -3995,7 +3995,7 @@ fn targets(
                 StatusCode::FORBIDDEN,
                 "no_deployment",
                 format!(
-                    "Refused: every deployment of alias \"{model}\" that is allowed here is kept for another team or tag. Send a tag the alias keeps a deployment for, or ask a Enterplace admin to add a deployment for everyone."
+                    "Refused: every deployment of alias \"{model}\" that is allowed here is kept for another team or tag. Send a tag the alias keeps a deployment for, or ask an Enterplace admin to add a deployment for everyone."
                 ),
             ));
         }
@@ -4021,7 +4021,7 @@ fn targets(
             StatusCode::TOO_MANY_REQUESTS,
             "deployment_limit",
             format!(
-                "Refused: every deployment of alias \"{model}\" is at its max_parallel, rpm or tpm. Try again in a moment, or ask a Enterplace admin to raise the limits or add a deployment."
+                "Refused: every deployment of alias \"{model}\" is at its max_parallel, rpm or tpm. Try again in a moment, or ask an Enterplace admin to raise the limits or add a deployment."
             ),
         ));
     }
@@ -4373,7 +4373,7 @@ fn unserved(model: &str) -> Refusal {
         StatusCode::FORBIDDEN,
         "unknown_model",
         format!(
-            "Refused: no provider of this Enterplace serves model \"{model}\". Check the model name, or ask a Enterplace admin to add it to a provider."
+            "Refused: no provider of this Enterplace serves model \"{model}\". Check the model name, or ask an Enterplace admin to add it to a provider."
         ),
     )
 }
@@ -4436,7 +4436,7 @@ fn fits(provider: &Upstream, path: &str, model: &str) -> Result<Shape, Refusal> 
             Kind::Anthropic => Ok(Shape::Sent),
             _ if provider.accept_messages => Ok(Shape::Chat),
             _ => wrong(format!(
-                "which speaks the chat completions API. Send this request to {CHAT} instead of {path}. A Enterplace admin can let messages requests (Claude Code) reach it, translated, with `accept_messages: true` on the provider."
+                "which speaks the chat completions API. Send this request to {CHAT} instead of {path}. An Enterplace admin can let messages requests (Claude Code) reach it, translated, with `accept_messages: true` on the provider."
             )),
         },
         CHAT => match kind {
@@ -4445,7 +4445,7 @@ fn fits(provider: &Upstream, path: &str, model: &str) -> Result<Shape, Refusal> 
             _ if kind.translates_chat() => Ok(Shape::Native),
             _ if provider.accept_chat => Ok(Shape::Messages),
             _ => wrong(format!(
-                "which speaks the messages API. Send this request to {MESSAGES} instead of {path}. A Enterplace admin can let chat requests reach it, translated, with `accept_chat: true` on the provider."
+                "which speaks the messages API. Send this request to {MESSAGES} instead of {path}. An Enterplace admin can let chat requests reach it, translated, with `accept_chat: true` on the provider."
             )),
         },
         RESPONSES => match kind {
@@ -6364,7 +6364,7 @@ async fn answer_guarded(
             StatusCode::FORBIDDEN,
             guard::BLOCKED_CODE,
             format!(
-                "Refused: guardrail \"{}\" withheld the model's answer, which contained {}. The answer was produced and is counted in usage. Ask in another way, or ask a Enterplace admin about the guardrail.",
+                "Refused: guardrail \"{}\" withheld the model's answer, which contained {}. The answer was produced and is counted in usage. Ask in another way, or ask an Enterplace admin about the guardrail.",
                 blocked.guardrail,
                 kinds.join(", ")
             ),
@@ -6620,7 +6620,7 @@ fn windowed(
                             audit.log.append_record_then(&record, |_| {});
                         }
                         let message = format!(
-                            "Refused: guardrail \"{name}\" stopped the model's answer partway. What came before was checked and sent; the rest was withheld. Ask in another way, or ask a Enterplace admin about the guardrail."
+                            "Refused: guardrail \"{name}\" stopped the model's answer partway. What came before was checked and sent; the rest was withheld. Ask in another way, or ask an Enterplace admin about the guardrail."
                         );
                         let _ = tx
                             .send(Bytes::from(blocked_event(&check.path, &message)))
@@ -7357,7 +7357,7 @@ async fn send(
     // The body may be translated or adjusted for the provider, so its length is set from what is sent.
     headers.remove(header::CONTENT_LENGTH);
     if version.policy.is_some() {
-        // The caller's credential is a Enterplace key. It must never reach the provider, in whichever header it came.
+        // The caller's credential is an Enterplace key. It must never reach the provider, in whichever header it came.
         // Headers that pick the provider account or project go too: the provider key is Enterplace's, and so is that choice.
         let private: Vec<HeaderName> = headers
             .keys()
@@ -8477,7 +8477,7 @@ fn outbound(
                 StatusCode::FORBIDDEN,
                 "unknown_model",
                 format!(
-                    "Refused: provider \"{}\" has no deployment or model ID for model \"{model}\". Ask a Enterplace admin to add it.",
+                    "Refused: provider \"{}\" has no deployment or model ID for model \"{model}\". Ask an Enterplace admin to add it.",
                     provider.name
                 ),
             )
@@ -10454,7 +10454,7 @@ fn start_block(
             "\nProvider keys pasted in the dashboard are sealed with the master key in {master}: keep it with the policy.\n"
         ));
     }
-    out.push_str("\nIn the dashboard, Start here connects a model (or tries the free demo model) and shows the exact settings for each coding tool and SDK.\n");
+    out.push_str("\nIn the dashboard, pick a use case on Overview: its checklist connects a model (or tries the free demo model) and shows the exact settings for each coding tool and SDK.\n");
     out.push_str(if container {
         "Restart: docker restart enterplace. Start over: docker rm -f enterplace && docker volume rm enterplace-data\n\n"
     } else {

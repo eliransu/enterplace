@@ -1,6 +1,6 @@
 # Claude Code
 
-Claude Code talks to Anthropic's messages API. Point it at Enterplace and give it a Enterplace key in place of a provider key. Each of its requests is then identified, decided and recorded.
+Claude Code talks to Anthropic's messages API. Point it at Enterplace and give it an Enterplace key in place of a provider key. Each of its requests is then identified, decided and recorded.
 
 ## Policy
 
@@ -75,7 +75,7 @@ With `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, Claude Code asks Enterplace
 On the messages routes a refusal uses Anthropic's error shape, so Claude Code shows Enterplace's message:
 
 ```text
-API Error: 403 Refused (model_not_allowed): team "interns" may not use model "claude-sonnet-5-5" under rule "everyone-else". This rule allows no models. Ask a Enterplace admin to change the policy if you need this one. Decision 01M7969SCWCX2P3AR3KSXZJ7VS.
+API Error: 403 Refused (model_not_allowed): team "interns" may not use model "claude-sonnet-5-5" under rule "everyone-else". This rule allows no models. Ask an Enterplace admin to change the policy if you need this one. Decision 01M7969SCWCX2P3AR3KSXZJ7VS.
 ```
 
 Claude Code labels any 403 "Failed to authenticate"; the message after that label is Enterplace's. A model no provider serves is refused with 403 `unknown_model`, not 404, because Claude Code replaces the text of a 404 with its own and sends a 400 again several times; a 403 is shown as it is and sent once.

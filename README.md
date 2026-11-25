@@ -89,7 +89,7 @@ Full walkthrough: [Quickstart](https://docs.enterplace.dev/getting-started/quick
 - **[Prometheus metrics](https://docs.enterplace.dev/operations/observability/)** and audit log shipping with Vector, Fluent Bit or the OpenTelemetry Collector.
 - **[Container image and Kubernetes](https://docs.enterplace.dev/deploy/overview/)**: one non-root image built `FROM scratch` (`ghcr.io/eliransu/enterplace`), a Helm chart, Terraform for AWS, Google Cloud and Azure, Docker Compose and Cloudflare.
 - **[HTTPS](https://docs.enterplace.dev/operations/deployment/)** with `--tls-cert` and `--tls-key`.
-- **[Coming from LiteLLM](https://docs.enterplace.dev/migrate/from-litellm/)**: `enterplace import litellm` turns a LiteLLM proxy config into a Enterplace policy.
+- **[Coming from LiteLLM](https://docs.enterplace.dev/migrate/from-litellm/)**: `enterplace import litellm` turns a LiteLLM proxy config into an Enterplace policy.
 
 ## Integrations
 

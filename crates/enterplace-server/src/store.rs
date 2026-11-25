@@ -155,7 +155,7 @@ CREATE TABLE enterplace_sign_in_failures (
 ",
 ];
 
-/// Whether a Enterplace of version `own` may use a database whose schema a Enterplace of version `writer` moved ahead of it.
+/// Whether an Enterplace of version `own` may use a database whose schema an Enterplace of version `writer` moved ahead of it.
 /// Every migration is additive (expand), and a change that removes or renames what an older binary reads (contract)
 /// waits two minor versions, so a binary one minor version behind the writer still finds everything it uses. A
 /// rolling upgrade therefore runs N and N+1 side by side; N beside N+2 is refused. A writer that is not strictly

@@ -126,7 +126,7 @@ A bundle serves tools only. Calling a tool outside it is refused with `not_in_bu
 
 ## Connect a client
 
-The endpoint is `<enterplace url>/mcp` (or `/mcp/<bundle>`). A client either sends a Enterplace key as `Authorization: Bearer <key>`, as on the model routes, or signs in with OAuth.
+The endpoint is `<enterplace url>/mcp` (or `/mcp/<bundle>`). A client either sends an Enterplace key as `Authorization: Bearer <key>`, as on the model routes, or signs in with OAuth.
 
 ### Sign in with OAuth
 
@@ -137,7 +137,7 @@ Clients that follow MCP's authorization specification (Claude Desktop, Claude Co
 3. The person says who they are on Enterplace's page: with their Enterplace key, or with **Sign in with single sign-on**, which goes through the console's identity provider (`console.sso`). Single sign-on is offered when `console.sso.self_issue` is set; it decides who may have personal access and which team they are in, as for `enterplace login`.
 4. The client trades the code at `/oauth/token` for an access token (one hour) and a refresh token (30 days, replaced on each use). The token is bound to the address the client asked for (`resource`), so a token for `/mcp` does not work at a bundle's address.
 
-Every call made with a token is the person's: checked against their rule and recorded under their name with `via: "oauth"`. A token from a Enterplace key stops working when that key is revoked, expires or is killed; a token from single sign-on names the person and team the identity provider gave. Tokens and clients are kept in the store (`store:`), or without one in `enterplace.mcp.json` beside the policy, as hashes only.
+Every call made with a token is the person's: checked against their rule and recorded under their name with `via: "oauth"`. A token from an Enterplace key stops working when that key is revoked, expires or is killed; a token from single sign-on names the person and team the identity provider gave. Tokens and clients are kept in the store (`store:`), or without one in `enterplace.mcp.json` beside the policy, as hashes only.
 
 <Tabs>
 <TabItem label="Claude Code">
@@ -197,7 +197,7 @@ Any client that speaks MCP's Streamable HTTP transport and can send a header wor
 A refusal is a JSON-RPC error with code `-32001`, a message that names the cause and the fix, and `data.enterplace_code` and `data.decision`:
 
 ```json
-{"jsonrpc":"2.0","id":9,"error":{"code":-32001,"message":"Refused (tool_not_allowed): rule \"payments-team\" does not allow tool \"github.delete_repo\" for \"maya.cohen\" of team \"payments\". It allows: github.create_issue, github.list_issues, docs.*. Ask a Enterplace admin to add it to the rule's tools if you need it. Decision 01J....","data":{"enterplace_code":"tool_not_allowed","decision":"01J..."}}}
+{"jsonrpc":"2.0","id":9,"error":{"code":-32001,"message":"Refused (tool_not_allowed): rule \"payments-team\" does not allow tool \"github.delete_repo\" for \"maya.cohen\" of team \"payments\". It allows: github.create_issue, github.list_issues, docs.*. Ask an Enterplace admin to add it to the rule's tools if you need it. Decision 01J....","data":{"enterplace_code":"tool_not_allowed","decision":"01J..."}}}
 ```
 
 A missing or unknown key is refused with HTTP 401 before the message is read. Every other refusal comes with HTTP 200, so the client shows its message as the answer to that call. The codes are those of the model routes (`no_key`, `unknown_key`, `key_expired`, `killed`, `no_rule`, `audit_unavailable`), plus:

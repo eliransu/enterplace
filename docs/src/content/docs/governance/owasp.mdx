@@ -13,7 +13,7 @@ Each item is marked:
 
 | Mark | Means |
 |---|---|
-| Addressed | A Enterplace control acts on the item directly |
+| Addressed | An Enterplace control acts on the item directly |
 | Partly | A control helps, with a stated limit |
 | Not covered | Outside what a gateway sees. Named so nobody assumes otherwise |
 
@@ -42,7 +42,7 @@ A mapping is not a certification. No control here removes a risk; each narrows i
 |---|---|---|---|
 | ASI01 Agent Goal Hijack | Partly | The injection detectors above, run on requests, tool results and, through the MCP gateway, on tool call arguments and results. An [events plugin](/governance/plugin-events/) is sent the conversation as typed events and can end a session | No detector of its own for a changed goal. An agent's plan is visible only as the requests it sends |
 | ASI02 Tool Misuse | Addressed | Tool allow and deny lists per rule, narrowed per key and per request. MCP approvals for named tools. Guardrails on tool call arguments and results. Every MCP call is recorded with who called which tool | Function tool arguments in a model's answer are not judged by the built-in detectors, and a streamed answer's tool calls are not checked. A locally executed tool runs out of Enterplace's sight |
-| ASI03 Identity and Privilege Abuse | Addressed | Every request carries a Enterplace key or a JWT from your identity provider, tied to a person and a team. The agent never holds a provider key. MCP servers with `user_auth` run each call with the caller's own credential, sealed under the master key. Keys expire and are revoked at once | A Enterplace key copied from one machine works from another, unless the rule or key lists [source address ranges](/governance/access-control/). Enterplace does not manage the rights an agent has on its own host |
+| ASI03 Identity and Privilege Abuse | Addressed | Every request carries an Enterplace key or a JWT from your identity provider, tied to a person and a team. The agent never holds a provider key. MCP servers with `user_auth` run each call with the caller's own credential, sealed under the master key. Keys expire and are revoked at once | An Enterplace key copied from one machine works from another, unless the rule or key lists [source address ranges](/governance/access-control/). Enterplace does not manage the rights an agent has on its own host |
 | ASI04 Agentic Supply Chain Vulnerabilities | Partly | Only MCP servers an admin lists in the policy are reachable. Tool pins record or block changed tool descriptions and schemas, and a tool has its own kill switch | Does not scan an MCP server's code, an agent framework or a plugin an agent installs itself |
 | ASI05 Unexpected Code Execution | Partly | A rule can deny the tools that run code (`!function.run_shell`, an MCP tool) or hold them for approval | Does not sandbox anything. Code an agent runs on its own machine is not seen or stopped |
 | ASI06 Memory and Context Poisoning | Partly | Guardrails read the whole conversation of each request, tool results included, so poisoned context that returns in a request passes the detectors again. Stored Responses state is refused under a budget, because the provider would add text Enterplace never saw | Does not see or clean an agent's memory store or a vector index |

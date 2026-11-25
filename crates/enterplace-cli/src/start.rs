@@ -276,15 +276,15 @@ pub async fn run(options: &Options<'_>) -> Result<(), String> {
         admin: true,
         ..Default::default()
     };
-    let issued = keyfile::issue_with("admin", "admin", &admin, &keys_path)?;
     // The subscription provider refuses a request that names no person, so whoever runs start gets a name at once:
-    // the OS user, else the admin's.
+    // the OS user, else admin. The admin key carries the same name, so People shows one person on day one.
     let person = ["USER", "USERNAME"]
         .into_iter()
         .filter_map(&env)
         .map(|v| v.trim().to_string())
         .find(|v| enterplace_core::config::valid_name(v))
         .unwrap_or_else(|| "admin".into());
+    let issued = keyfile::issue_with(&person, "admin", &admin, &keys_path)?;
     let token = keyfile::issue_person_token(&person, "admin", &keys_path)?;
     if !options.serve {
         let kept = if opened.is_some() {
@@ -425,7 +425,7 @@ pub fn stop(dir: &Path) -> Result<String, String> {
     let filter = format!("PID eq {pid}");
     let row = format!(",\"{pid}\",");
     let list = ["/FI", filter.as_str(), "/FO", "CSV", "/NH"];
-    // The lock outlives a Enterplace that was killed, and its process number may be another program's by now.
+    // The lock outlives an Enterplace that was killed, and its process number may be another program's by now.
     let command = if cfg!(windows) {
         Some(text(&run("tasklist", &list)?.stdout)).filter(|rows| rows.contains(&row))
     } else {

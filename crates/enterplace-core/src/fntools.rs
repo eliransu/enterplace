@@ -356,12 +356,12 @@ pub fn refusal(rule: &str, refused: &[String], patterns: &[String], answer: bool
     let quoted: Vec<String> = refused.iter().map(|n| format!("\"{}\"", kind(n))).collect();
     if answer {
         format!(
-            "Refused: the model's answer calls function tool {} that rule \"{rule}\" does not allow, so it was withheld. {allows} The answer was produced and is counted in usage. Declare only allowed tools, or ask a Enterplace admin to add function.<name> to the rule's tools.",
+            "Refused: the model's answer calls function tool {} that rule \"{rule}\" does not allow, so it was withheld. {allows} The answer was produced and is counted in usage. Declare only allowed tools, or ask an Enterplace admin to add function.<name> to the rule's tools.",
             quoted.join(", ")
         )
     } else {
         format!(
-            "Refused: rule \"{rule}\" does not allow function tool {}. {allows} Remove it from the request, or ask a Enterplace admin to add function.<name> to the rule's tools.",
+            "Refused: rule \"{rule}\" does not allow function tool {}. {allows} Remove it from the request, or ask an Enterplace admin to add function.<name> to the rule's tools.",
             quoted.join(", ")
         )
     }

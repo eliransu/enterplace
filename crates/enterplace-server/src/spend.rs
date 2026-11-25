@@ -2093,7 +2093,7 @@ pub(crate) async fn admit(
                     StatusCode::FORBIDDEN,
                     "no_price",
                     format!(
-                        "Refused: a budget applies to this request ({}) and {named} has no price, so its spend could not be counted. Ask a Enterplace admin to add its price under prices: in the policy.",
+                        "Refused: a budget applies to this request ({}) and {named} has no price, so its spend could not be counted. Ask an Enterplace admin to add its price under prices: in the policy.",
                         budgets
                             .iter()
                             .map(|a| a.source.as_str())
@@ -2149,7 +2149,7 @@ pub(crate) async fn admit(
                             StatusCode::BAD_REQUEST,
                             "max_tokens_needed",
                             format!(
-                                "Refused: {whose} to this request, and {named} is priced by the token with no max_output, so the most its generated output could cost is unknown. Ask a Enterplace admin to set {per_image}max_output for the model under prices: in the policy."
+                                "Refused: {whose} to this request, and {named} is priced by the token with no max_output, so the most its generated output could cost is unknown. Ask an Enterplace admin to set {per_image}max_output for the model under prices: in the policy."
                             ),
                         ),
                         &mut observed,
@@ -2171,7 +2171,7 @@ pub(crate) async fn admit(
                             StatusCode::BAD_REQUEST,
                             "max_tokens_needed",
                             format!(
-                                "Refused: {whose} to this request, and it does not say how many output tokens it may use, and {named} has no max_output in its price, so the most it could cost is unknown. Send {field} with the request, or ask a Enterplace admin to set max_output for the model under prices: in the policy."
+                                "Refused: {whose} to this request, and it does not say how many output tokens it may use, and {named} has no max_output in its price, so the most it could cost is unknown. Send {field} with the request, or ask an Enterplace admin to set max_output for the model under prices: in the policy."
                             ),
                         ),
                         &mut observed,
@@ -2186,7 +2186,7 @@ pub(crate) async fn admit(
                         StatusCode::BAD_REQUEST,
                         "stored_context",
                         format!(
-                            "Refused: a budget applies to this request and it names stored context ({fields}), which the provider adds to the prompt and Enterplace cannot see, so the most it could cost is unknown. Send the whole conversation in input instead (as Codex does, with store: false), or ask a Enterplace admin to set max_context for model \"{}\" under prices: in the policy, so such a request reserves the model's whole context.",
+                            "Refused: a budget applies to this request and it names stored context ({fields}), which the provider adds to the prompt and Enterplace cannot see, so the most it could cost is unknown. Send the whole conversation in input instead (as Codex does, with store: false), or ask an Enterplace admin to set max_context for model \"{}\" under prices: in the policy, so such a request reserves the model's whole context.",
                             ask.model
                         ),
                     ),
@@ -2247,7 +2247,7 @@ async fn count_requests(
                 StatusCode::TOO_MANY_REQUESTS,
                 "session_requests_exceeded",
                 format!(
-                    "Refused: {} has sent {most} requests, the most {} allows one session. Start a new session (a new conversation in your tool), or ask a Enterplace admin to raise session_requests.",
+                    "Refused: {} has sent {most} requests, the most {} allows one session. Start a new session (a new conversation in your tool), or ask an Enterplace admin to raise session_requests.",
                     applied.whose,
                     allows(applied, rule)
                 ),
@@ -2326,7 +2326,7 @@ async fn count_day_tokens(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
             format!(
-                "Refused: {} tokens were used today, and {whose} allows {most} per day. The count starts again at {}. Ask a Enterplace admin to raise tpd if this team needs more.",
+                "Refused: {} tokens were used today, and {whose} allows {most} per day. The count starts again at {}. Ask an Enterplace admin to raise tpd if this team needs more.",
                 over.spent.round() as u64,
                 resets(&period_of(&now, Period::Day), Period::Day)
             ),
@@ -2365,7 +2365,7 @@ fn over_session_budget(
         StatusCode::TOO_MANY_REQUESTS,
         "session_budget_exceeded",
         format!(
-            "Refused: {whose} has spent {} of the {} rule \"{}\" allows one session{}. This request could cost up to {}, which would pass it. Start a new session (a new conversation in your tool), or ask a Enterplace admin to raise the session budget.",
+            "Refused: {whose} has spent {} of the {} rule \"{}\" allows one session{}. This request could cost up to {}, which would pass it. Start a new session (a new conversation in your tool), or ask an Enterplace admin to raise the session budget.",
             dollars(over.spent),
             dollars(budget.usd),
             rule.name,
@@ -2393,7 +2393,7 @@ fn max_tokens_for_tpm(named: &str) -> Refusal {
         StatusCode::BAD_REQUEST,
         "max_tokens_needed",
         format!(
-            "Refused: a tokens-per-minute limit applies to this request, and it does not say how many output tokens it may use, and {named} has no max_output in its price, so the tokens it could use are unknown. Send max_tokens (max_output_tokens on /v1/responses) with the request, or ask a Enterplace admin to set max_output for the model under prices: in the policy."
+            "Refused: a tokens-per-minute limit applies to this request, and it does not say how many output tokens it may use, and {named} has no max_output in its price, so the tokens it could use are unknown. Send max_tokens (max_output_tokens on /v1/responses) with the request, or ask an Enterplace admin to set max_output for the model under prices: in the policy."
         ),
     )
 }
@@ -2718,7 +2718,7 @@ fn over_budget(
             StatusCode::TOO_MANY_REQUESTS,
             code,
             format!(
-                "Refused: {whose} has spent {} of its {} budget for any {length}{under}{held}. {what} could cost up to {}, which would pass it.{smaller} The budget slides: each cost stops counting {length} after it was made, so room comes back as older spend leaves. Ask a Enterplace admin to raise it if you need more before then.",
+                "Refused: {whose} has spent {} of its {} budget for any {length}{under}{held}. {what} could cost up to {}, which would pass it.{smaller} The budget slides: each cost stops counting {length} after it was made, so room comes back as older spend leaves. Ask an Enterplace admin to raise it if you need more before then.",
                 dollars(over.spent),
                 dollars(budget.usd),
                 dollars(most),
@@ -2729,7 +2729,7 @@ fn over_budget(
         StatusCode::TOO_MANY_REQUESTS,
         code,
         format!(
-            "Refused: {whose} has spent {} of its {} budget for this {}{under}{held}. {what} could cost up to {}, which would pass it.{smaller} The budget starts again at {}. Ask a Enterplace admin to raise it if you need more before then.",
+            "Refused: {whose} has spent {} of its {} budget for this {}{under}{held}. {what} could cost up to {}, which would pass it.{smaller} The budget starts again at {}. Ask an Enterplace admin to raise it if you need more before then.",
             dollars(over.spent),
             dollars(budget.usd),
             budget.per.describe(),

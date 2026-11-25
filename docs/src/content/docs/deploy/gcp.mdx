@@ -241,7 +241,7 @@ The role is granted on the module's project. For Vertex AI in another project, g
 - **A rotated secret needs a new revision.** Cloud Run reads secret versions when an instance starts, and the module makes a new revision only when its inputs change. To rotate a key, create a new secret (such as `openai-key-2`) and point `provider_key_secrets` at it.
 - **No metrics port.** Cloud Run serves one port, so `/metrics` is not exposed. Use Cloud Run's own request metrics and OpenTelemetry traces.
 - **Filestore BASIC_HDD starts at 1 TiB.** It is the smallest NFS share Filestore offers.
-- **`public = false` blocks most callers.** Coding tools and SDKs send a Enterplace key, not a Google identity token. With an organization policy that forbids `allUsers`, put an internal load balancer in front and set `ingress` to match.
+- **`public = false` blocks most callers.** Coding tools and SDKs send an Enterplace key, not a Google identity token. With an organization policy that forbids `allUsers`, put an internal load balancer in front and set `ingress` to match.
 - **Deletion is protected.** Set `deletion_protection = false` and apply before `terraform destroy`.
 
 ## Production checklist

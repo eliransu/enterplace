@@ -1,13 +1,13 @@
 ---
 title: Codex on Amazon Bedrock
-description: Run Codex CLI on models served by Amazon Bedrock through Enterplace, with a Enterplace key on the developer's machine and the AWS credentials on the gateway.
+description: Run Codex CLI on models served by Amazon Bedrock through Enterplace, with an Enterplace key on the developer's machine and the AWS credentials on the gateway.
 sidebar:
   order: 3
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Codex CLI speaks OpenAI's Responses API and nothing else: `wire_api = "responses"` is the only value it takes. Enterplace gives it two ways to a model on Amazon Bedrock. Developers hold a Enterplace key; the Bedrock API key or the AWS role stays on the gateway.
+Codex CLI speaks OpenAI's Responses API and nothing else: `wire_api = "responses"` is the only value it takes. Enterplace gives it two ways to a model on Amazon Bedrock. Developers hold an Enterplace key; the Bedrock API key or the AWS role stays on the gateway.
 
 | Way | Models | Provider kind | What Enterplace does with the request |
 |---|---|---|---|

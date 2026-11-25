@@ -49,13 +49,13 @@ export function PolicyBasics({ me }: { me: Me | null }) {
                 disabled={!may}
                 onCheckedChange={(on) => (on ? change(() => api.put("policy/mode", { mode: "enforce" })) : setObserving(true))}
               />
-              {data.mode === "enforce" ? "Enforce: what the policy does not allow is refused." : "Observe: everything goes through, and what the policy would refuse is recorded."}
+              {data.mode === "enforce" ? "Enforce: what the policy does not allow is refused." : "Observe: rules, limits and guardrails only record what they would refuse. A request without a valid key or person token, an unknown model and a kill switch are still refused."}
             </label>
             <AlertDialog open={observing} onOpenChange={setObserving}>
               <AlertDialogContent>
                 <AlertDialogTitle>Stop enforcing the policy?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  In observe mode nothing is refused: every request goes through, budgets and guardrails only record what they would stop. Every gateway follows within 2 seconds.
+                  In observe mode rules, limits and guardrails only record what they would refuse. A request without a valid key or person token, an unknown model and a kill switch are still refused. Every gateway follows within 2 seconds.
                 </AlertDialogDescription>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>

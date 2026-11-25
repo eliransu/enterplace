@@ -380,7 +380,7 @@ impl Devices {
         }
         self.holder(key).ok_or((
             "invalid_person_key",
-            "The key in x-enterplace-key is not a Enterplace key, or it expired or was revoked. Run `enterplace login` again on the machine.",
+            "The key in x-enterplace-key is not an Enterplace key, or it expired or was revoked. Run `enterplace login` again on the machine.",
         ))
     }
 

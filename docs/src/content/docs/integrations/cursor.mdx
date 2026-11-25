@@ -7,14 +7,14 @@ sidebar:
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Cursor reaches Enterplace through its "Override OpenAI Base URL" setting. Its chat and agent requests then go to `POST /v1/chat/completions` on Enterplace, identified by a Enterplace key.
+Cursor reaches Enterplace through its "Override OpenAI Base URL" setting. Its chat and agent requests then go to `POST /v1/chat/completions` on Enterplace, identified by an Enterplace key.
 
 <Aside type="caution">
-Cursor's own servers build the final prompt and send the request, also when you give it your own key and base URL. Enterplace must have a public HTTPS address, and every Enterplace key travels through Cursor's servers. A Enterplace on `127.0.0.1` or a private network cannot be reached from Cursor. See [Deployment](/operations/deployment/) for TLS.
+Cursor's own servers build the final prompt and send the request, also when you give it your own key and base URL. Enterplace must have a public HTTPS address, and every Enterplace key travels through Cursor's servers. An Enterplace on `127.0.0.1` or a private network cannot be reached from Cursor. See [Deployment](/operations/deployment/) for TLS.
 </Aside>
 
 <Aside type="tip" title="Before you start">
-You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and an Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -36,7 +36,7 @@ Model name:                gpt-4o-mini
 
 ## Try it from your laptop with a tunnel
 
-Cursor cannot reach `127.0.0.1`, so a Enterplace on your laptop needs a public address. A Cloudflare quick tunnel gives one, with no account, for as long as the command runs:
+Cursor cannot reach `127.0.0.1`, so an Enterplace on your laptop needs a public address. A Cloudflare quick tunnel gives one, with no account, for as long as the command runs:
 
 <Steps>
 
@@ -56,7 +56,7 @@ A quick tunnel is public: anyone with the address reaches your Enterplace, and o
 From Cursor's documentation: the key as the OpenAI API key, sent as a bearer token, and the base URL with `/v1`. Cursor checks the key with `GET /v1/models`, then sends chat and agent requests to `POST /v1/chat/completions`, streamed, with the model name exactly as you added it. Enterplace's test `crates/enterplace-server/tests/cursor.rs` sends those requests with `User-Agent: Cursor/1.0` and checks the answers and the record.
 
 <Aside type="note">
-Not run with Cursor itself: the CI has no public address for Cursor's servers to call, so this page follows Cursor's documentation and statements by Cursor staff. How Cursor shows a Enterplace refusal is not documented.
+Not run with Cursor itself: the CI has no public address for Cursor's servers to call, so this page follows Cursor's documentation and statements by Cursor staff. How Cursor shows an Enterplace refusal is not documented.
 </Aside>
 
 ## Behavior

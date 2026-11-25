@@ -253,7 +253,7 @@ Two Enterplace versions one minor version apart (0.2.x and 0.3.x) run on one dat
 
 - The newer version applies its migrations when it starts. The older replicas keep serving, accept keys the newer one issues, and the newer accepts theirs.
 - An older replica that restarts mid-rollout starts on the schema the newer one moved ahead.
-- A Enterplace two or more minor versions behind refuses the database at start, naming its own version and the newer one (`the store was written by a newer Enterplace (0.4.0, ...; this one is 0.2.1 ...)`). Upgrade it, or upgrade in steps of one minor version.
+- An Enterplace two or more minor versions behind refuses the database at start, naming its own version and the newer one (`the store was written by a newer Enterplace (0.4.0, ...; this one is 0.2.1 ...)`). Upgrade it, or upgrade in steps of one minor version.
 
 How it holds: every migration only adds (tables, columns, indexes). A change that removes or renames something an older version reads ships two minor versions later, when the version that read it can no longer run beside the database. The database records the newest version that started on it (`enterplace_writer`), and an older binary compares itself with that. The release workflow runs `scripts/mixed_version_check.py`: the previous version and the new one on one Postgres at once, serving traffic while the new one migrates.
 

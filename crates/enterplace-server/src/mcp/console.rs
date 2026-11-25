@@ -188,7 +188,7 @@ impl Mcp {
                 StatusCode::FORBIDDEN,
                 "tool_changed",
                 format!(
-                    "Refused: MCP server \"{}\" changed tool \"{tool}\" since it was approved, and the server is set to hold changed tools. Ask a Enterplace admin to review the change in the console (MCP tools) and approve it.",
+                    "Refused: MCP server \"{}\" changed tool \"{tool}\" since it was approved, and the server is set to hold changed tools. Ask an Enterplace admin to review the change in the console (MCP tools) and approve it.",
                     server.name
                 ),
             )),

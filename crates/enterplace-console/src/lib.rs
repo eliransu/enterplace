@@ -1,6 +1,6 @@
 //! The admin console: server-rendered pages the server mounts at `/console`.
 //!
-//! An admin signs in with a Enterplace key whose keys file entry says `admin: true`, or through the identity provider the
+//! An admin signs in with an Enterplace key whose keys file entry says `admin: true`, or through the identity provider the
 //! policy file names under `console.sso`. The browser gets a random session ID, never the key or a token. Every page
 //! reads the policy, keys and audit files when it is asked for.
 
@@ -1258,7 +1258,7 @@ impl Console {
                     StatusCode::TOO_MANY_REQUESTS,
                     "Too many failed sign-ins",
                     &format!(
-                        r#"<h1 class="t-lg" style="margin: 0">Too many failed sign-ins</h1><p class="t-lead g-muted" style="margin: 0">Sign-in from this address or to this account is locked for {} more minute{} after {} failed attempts. Wait, or ask a Enterplace admin: the lockout is in the audit log as console_sign_in_locked.</p><p class="t-small g-muted" style="margin: 0">Code: sign_in_locked</p>"#,
+                        r#"<h1 class="t-lg" style="margin: 0">Too many failed sign-ins</h1><p class="t-lead g-muted" style="margin: 0">Sign-in from this address or to this account is locked for {} more minute{} after {} failed attempts. Wait, or ask an Enterplace admin: the lockout is in the audit log as console_sign_in_locked.</p><p class="t-small g-muted" style="margin: 0">Code: sign_in_locked</p>"#,
                         seconds.div_ceil(60),
                         if seconds.div_ceil(60) == 1 { "" } else { "s" },
                         SIGN_IN_LIMIT.max
@@ -1483,9 +1483,9 @@ async fn sign_in(
         }
         // One message for an unknown key and a key that is not an admin's: the page does not tell which keys exist.
         let error = if key.is_empty() {
-            "Paste a Enterplace key. It starts with enterplace_.".to_string()
+            "Paste an Enterplace key. It starts with enterplace_.".to_string()
         } else if !key.starts_with("enterplace_") {
-            "That is not a Enterplace key: Enterplace keys start with enterplace_. Paste the admin key enterplace start printed, or open the sign-in link it printed.".to_string()
+            "That is not an Enterplace key: Enterplace keys start with enterplace_. Paste the admin key enterplace start printed, or open the sign-in link it printed.".to_string()
         } else {
             format!(
                 "This key does not sign in here: it is not an admin key in {}. Check that you pasted the whole admin key enterplace start printed, or ask an admin to add admin: true under your entry.",
@@ -1576,13 +1576,7 @@ pub fn offer_start_link(admin: &str, any_address: bool) -> Option<String> {
     Some(code)
 }
 
-/// Signs in with the one-time link `enterplace start` printed: recorded as a console sign-in, then the link is spent.
-/// Makes `name`'s own person token and keeps it for them this run, unless they have one already. Done when the first
-/// admin is made (setup link) and when `enterplace start`'s link signs them in, so the lines Start here hands them for
-/// a coding agent name them from the first request. The token reaches no model on its own; a failure here changes
-/// nothing else, and Start here offers Make my token.
-/// The keys file keeps only a hash, so a person token says what it is in its metadata: People labels it by that.
-pub(crate) const PERSON_TOKEN_KIND: &str = "person-token";
+pub(crate) use keyfile::PERSON_TOKEN_KIND;
 
 fn person_token_attributes(mut attributes: keyfile::Attributes) -> keyfile::Attributes {
     attributes
@@ -1592,10 +1586,11 @@ fn person_token_attributes(mut attributes: keyfile::Attributes) -> keyfile::Attr
     attributes
 }
 
-async fn mint_mine(console: &Console, name: &str, team: &str) {
-    if console.mine(name).is_some() {
-        return;
-    }
+/// Makes the first admin's own person token and keeps it for them this run, so the Claude Code lines on Coding agents
+/// name them from the first request. Only the setup link does this: nobody holds a token there yet. A start link
+/// signs in someone enterplace start already printed a token for, so it makes none. The token reaches no model on
+/// its own; a failure here changes nothing else, and Coding agents offers Make my person token.
+async fn first_admin_token(console: &Console, name: &str, team: &str) {
     let Ok(token) = id::new_person_token() else {
         return;
     };
@@ -1619,6 +1614,7 @@ async fn mint_mine(console: &Console, name: &str, team: &str) {
     }
 }
 
+/// Signs in with the one-time link `enterplace start` printed: recorded as a console sign-in, then the link is spent.
 async fn sign_in_link(
     State(console): State<Console>,
     Path(code): Path<String>,
@@ -1690,12 +1686,6 @@ async fn sign_in_link(
             );
         }
     };
-    let team = if entry.team.is_empty() {
-        "people"
-    } else {
-        entry.team.as_str()
-    };
-    mint_mine(&console, &entry.name, team).await;
     let mut response = redirect(HOME);
     set_cookie(
         &mut response,
@@ -2455,7 +2445,7 @@ async fn cli_token(State(console): State<Console>, body: String) -> Response {
             StatusCode::BAD_REQUEST,
             "unusable_email",
             &format!(
-                "a key is named by your email, and \"{}\" has characters a key name cannot hold (letters, digits, dots, dashes, underscores and @ only). Ask a Enterplace admin for a key with enterplace key new instead.",
+                "a key is named by your email, and \"{}\" has characters a key name cannot hold (letters, digits, dots, dashes, underscores and @ only). Ask an Enterplace admin for a key with enterplace key new instead.",
                 pending.email
             ),
         );
@@ -3254,7 +3244,7 @@ async fn setup_done(
             );
         }
     };
-    mint_mine(&console, &name, &team).await;
+    first_admin_token(&console, &name, &team).await;
     let origin = headers
         .get("host")
         .and_then(|h| h.to_str().ok())

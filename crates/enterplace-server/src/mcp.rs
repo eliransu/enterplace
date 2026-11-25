@@ -64,7 +64,7 @@ const UPSTREAM_VERSION: &str = "2025-06-18";
 /// Pages of one server's list Enterplace reads, so a server that always answers with a next cursor cannot hold a list
 /// forever.
 const MAX_PAGES: usize = 100;
-/// JSON-RPC error code of a Enterplace refusal, in the range JSON-RPC leaves to servers.
+/// JSON-RPC error code of an Enterplace refusal, in the range JSON-RPC leaves to servers.
 const REFUSED: i64 = -32001;
 /// MCP's error for "the caller must open a URL first" (URL mode elicitation): a person's credential is missing.
 const URL_REQUIRED: i64 = -32042;
@@ -707,7 +707,7 @@ async fn answer(
                 StatusCode::NOT_FOUND,
                 "unknown_bundle",
                 format!(
-                    "Refused: no MCP bundle is named \"{name}\", so /mcp/{name} serves nothing. Connect to /mcp, or ask a Enterplace admin which bundles the policy's mcp_bundles names."
+                    "Refused: no MCP bundle is named \"{name}\", so /mcp/{name} serves nothing. Connect to /mcp, or ask an Enterplace admin which bundles the policy's mcp_bundles names."
                 ),
             )
         })?),
@@ -730,7 +730,7 @@ async fn answer(
             StatusCode::FORBIDDEN,
             "bundle_not_allowed",
             format!(
-                "Refused: MCP bundle \"{}\" is for team {}, and \"{}\" is of team \"{}\". Connect to /mcp, or ask a Enterplace admin to add your team to the bundle.",
+                "Refused: MCP bundle \"{}\" is for team {}, and \"{}\" is of team \"{}\". Connect to /mcp, or ask an Enterplace admin to add your team to the bundle.",
                 bundle.name,
                 bundle.teams.join(", "),
                 person.name,
@@ -779,7 +779,7 @@ async fn answer(
         return Err(Refusal::new(
             StatusCode::NOT_FOUND,
             "session_revoked",
-            "Refused: a Enterplace admin ended this MCP session. Connect the MCP client again to open a new one.",
+            "Refused: an Enterplace admin ended this MCP session. Connect the MCP client again to open a new one.",
         ));
     }
     let item = match method {
@@ -836,7 +836,7 @@ async fn answer(
         StatusCode::FORBIDDEN,
         "no_rule",
         format!(
-            "Refused: no rule in the policy names \"{}\" or team \"{}\", so no MCP tool is allowed. Ask a Enterplace admin to add a rule with the tools you need.",
+            "Refused: no rule in the policy names \"{}\" or team \"{}\", so no MCP tool is allowed. Ask an Enterplace admin to add a rule with the tools you need.",
             person.name, person.team
         ),
     );
@@ -866,7 +866,7 @@ async fn answer(
                 StatusCode::FORBIDDEN,
                 "mcp_client_not_allowed",
                 format!(
-                    "Refused: rule \"{}\" lets only these MCP clients connect: {}. This client called itself \"{client}\". Use one of them, or ask a Enterplace admin to add this client to the rule's mcp_clients.",
+                    "Refused: rule \"{}\" lets only these MCP clients connect: {}. This client called itself \"{client}\". Use one of them, or ask an Enterplace admin to add this client to the rule's mcp_clients.",
                     rule.name,
                     rule.mcp.clients.join(", ")
                 ),
@@ -930,7 +930,7 @@ async fn answer(
                 StatusCode::FORBIDDEN,
                 "tool_not_allowed",
                 format!(
-                    "Refused: tool \"{name}\" is allowed by rule \"{}\", and left out by this key's mcp_tools or the request's {NARROW_HEADER} header, which only narrow it. Remove it from the header, or ask a Enterplace admin to change the key's mcp_tools.",
+                    "Refused: tool \"{name}\" is allowed by rule \"{}\", and left out by this key's mcp_tools or the request's {NARROW_HEADER} header, which only narrow it. Remove it from the header, or ask an Enterplace admin to change the key's mcp_tools.",
                     rule.name
                 ),
             ));
@@ -949,7 +949,7 @@ async fn answer(
             StatusCode::FORBIDDEN,
             code,
             format!(
-                "Refused: rule \"{}\" does not allow {noun} \"{name}\" for \"{}\" of team \"{}\". {allowed} Ask a Enterplace admin to add it to the rule's {field} if you need it.",
+                "Refused: rule \"{}\" does not allow {noun} \"{name}\" for \"{}\" of team \"{}\". {allowed} Ask an Enterplace admin to add it to the rule's {field} if you need it.",
                 rule.name, person.name, person.team
             ),
         );
@@ -1026,7 +1026,7 @@ async fn answer(
                 StatusCode::TOO_MANY_REQUESTS,
                 "budget_exceeded",
                 format!(
-                    "Refused: tool \"{name}\" costs ${price} a call, and a budget \"{}\" counts against (of rule \"{}\", its key or the limits: list) is spent for this period. It starts again at the next period; ask a Enterplace admin to raise it if you need more before then.",
+                    "Refused: tool \"{name}\" costs ${price} a call, and a budget \"{}\" counts against (of rule \"{}\", its key or the limits: list) is spent for this period. It starts again at the next period; ask an Enterplace admin to raise it if you need more before then.",
                     person.name, rule.name
                 ),
             );
@@ -1814,7 +1814,7 @@ impl Mcp {
             StatusCode::FORBIDDEN,
             "approval_timeout",
             format!(
-                "Refused: rule \"{}\" needs an admin's approval for tool \"{tool}\", and none approved this call within {timeout} seconds. Ask a Enterplace admin to watch the console's MCP approvals page, then try again.",
+                "Refused: rule \"{}\" needs an admin's approval for tool \"{tool}\", and none approved this call within {timeout} seconds. Ask an Enterplace admin to watch the console's MCP approvals page, then try again.",
                 rule.name
             ),
         ))

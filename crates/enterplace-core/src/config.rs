@@ -2111,7 +2111,7 @@ fn provider_auth(
             at("identity")
         )),
         (Some(other), true) => errors.push(format!(
-            "{}: identity is \"{other}\". It is required (the default: a request must name its person with a Enterplace person token in x-enterplace-user) or optional (a request without one is recorded as an unknown person, by its session).",
+            "{}: identity is \"{other}\". It is required (the default: a request must name its person with an Enterplace person token in x-enterplace-user) or optional (a request without one is recorded as an unknown person, by its session).",
             at("identity")
         )),
     }
@@ -6213,7 +6213,7 @@ pub fn warnings(policy_path: &Path, loaded: &Loaded) -> Vec<String> {
     let mut out = Vec::new();
     if loaded.policy.mode() == Mode::Observe {
         out.push(format!(
-            "warning: {}:{}: mode: observe is on, so nothing is refused but a missing, bad or revoked key, an unknown model and a kill switch. What the policy would refuse is forwarded and recorded as would_refuse. Remove the line, or write mode: enforce, to enforce the policy.",
+            "warning: {}:{}: mode: observe is on, so nothing is refused but a missing, bad or revoked key or person token, an unknown model and a kill switch. What the policy would refuse is forwarded and recorded as would_refuse. Remove the line, or write mode: enforce, to enforce the policy.",
             policy_path.display(),
             line_of_key(&loaded.policy_text, "mode", 1, usize::MAX)
         ));

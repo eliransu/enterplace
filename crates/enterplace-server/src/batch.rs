@@ -1093,7 +1093,7 @@ fn not_yours(word: &str, id: &str) -> Refusal {
         StatusCode::NOT_FOUND,
         "not_found",
         format!(
-            "Refused: Enterplace knows no {word} \"{id}\" of yours. A {word} is reachable only by the person who created it through Enterplace, and by a Enterplace admin. Check the ID, or ask its owner."
+            "Refused: Enterplace knows no {word} \"{id}\" of yours. A {word} is reachable only by the person who created it through Enterplace, and by an Enterplace admin. Check the ID, or ask its owner."
         ),
     )
 }
@@ -1134,7 +1134,7 @@ async fn owned(
                 StatusCode::CONFLICT,
                 "unknown_provider",
                 format!(
-                    "Refused: {word} \"{id}\" is held by provider \"{}\", which the policy no longer names. Ask a Enterplace admin to add the provider back, or create it again.",
+                    "Refused: {word} \"{id}\" is held by provider \"{}\", which the policy no longer names. Ask an Enterplace admin to add the provider back, or create it again.",
                     found.provider
                 ),
             )
@@ -1200,7 +1200,7 @@ fn pick(
                     StatusCode::FORBIDDEN,
                     "unknown_model",
                     format!(
-                        "Refused: no provider of kind {} serves model \"{model}\", and its batches go to such a provider. Check the model name, or ask a Enterplace admin to add it to a provider.",
+                        "Refused: no provider of kind {} serves model \"{model}\", and its batches go to such a provider. Check the model name, or ask an Enterplace admin to add it to a provider.",
                         kind.word()
                     ),
                 )
@@ -1215,7 +1215,7 @@ fn pick(
             StatusCode::NOT_FOUND,
             "unknown_provider",
             format!(
-                "Refused: this Enterplace has no provider of kind {}, which this route needs. Ask a Enterplace admin to add one.",
+                "Refused: this Enterplace has no provider of kind {}, which this route needs. Ask an Enterplace admin to add one.",
                 kind.word()
             ),
         )),
@@ -1923,7 +1923,7 @@ async fn prepare<'a>(
                             StatusCode::FORBIDDEN,
                             "unknown_model",
                             format!(
-                                "Refused: no openai or vertex provider of this Enterplace serves video model \"{model}\". Check the model name, or ask a Enterplace admin to add it to a provider."
+                                "Refused: no openai or vertex provider of this Enterplace serves video model \"{model}\". Check the model name, or ask an Enterplace admin to add it to a provider."
                             ),
                         )
                     })?,
@@ -2088,7 +2088,7 @@ async fn prepare<'a>(
                     StatusCode::FORBIDDEN,
                     "container_not_allowed",
                     format!(
-                        "Refused: rule \"{}\" does not let \"{}\" create a {memory} container. {allowed}. Ask for another memory_limit, or ask a Enterplace admin to list the size in the rule, for example containers: {{ sizes: [1g] }}.",
+                        "Refused: rule \"{}\" does not let \"{}\" create a {memory} container. {allowed}. Ask for another memory_limit, or ask an Enterplace admin to list the size in the rule, for example containers: {{ sizes: [1g] }}.",
                         rule.name, person.name
                     ),
                 );
@@ -2738,7 +2738,7 @@ pub(crate) fn decide_model(
         StatusCode::FORBIDDEN,
         "model_not_allowed",
         format!(
-            "Refused: {what} asks for model \"{model}\", which rule \"{}\" does not allow for \"{}\". {} Change the model, or ask a Enterplace admin to change the policy.",
+            "Refused: {what} asks for model \"{model}\", which rule \"{}\" does not allow for \"{}\". {} Change the model, or ask an Enterplace admin to change the policy.",
             rule.name,
             person.name,
             crate::allowed_models(rule)
@@ -2776,7 +2776,7 @@ async fn reserve(
         return crate::enforce(seen, bad(
             "no_estimate",
             format!(
-                "Refused: a budget applies to {what}, and the most its lines could cost was not known when they were checked (a model without a price, or a line without max_tokens and no max_output for its model). Ask a Enterplace admin to set the model's price with max_output under prices:, or give every line max_tokens, then upload the lines again."
+                "Refused: a budget applies to {what}, and the most its lines could cost was not known when they were checked (a model without a price, or a line without max_tokens and no max_output for its model). Ask an Enterplace admin to set the model's price with max_output under prices:, or give every line max_tokens, then upload the lines again."
             ),
         ), shadow).map(|()| Vec::new());
     };
@@ -3241,7 +3241,7 @@ async fn check_lines(
                     n,
                     bad(
                         "max_tokens_needed",
-                        format!("{why}, so the most it could cost is unknown and a budget applies. Give the line max_tokens, or ask a Enterplace admin to set max_output for model \"{model}\" under prices: in the policy."),
+                        format!("{why}, so the most it could cost is unknown and a budget applies. Give the line max_tokens, or ask an Enterplace admin to set max_output for model \"{model}\" under prices: in the policy."),
                     ),
                 )
             }),
@@ -3250,7 +3250,7 @@ async fn check_lines(
                 Refusal::new(
                     StatusCode::FORBIDDEN,
                     "no_price",
-                    format!("a budget applies, and model \"{model}\" has no price, so its spend could not be counted. Ask a Enterplace admin to add its price under prices: in the policy."),
+                    format!("a budget applies, and model \"{model}\" has no price, so its spend could not be counted. Ask an Enterplace admin to add its price under prices: in the policy."),
                 ),
             )),
         };

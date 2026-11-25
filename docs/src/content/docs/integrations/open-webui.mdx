@@ -10,7 +10,7 @@ import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/com
 Open WebUI connects to Enterplace as an OpenAI-compatible API. An admin connection is called from the Open WebUI server with one key; a direct connection is called from each person's browser with their own key.
 
 <Aside type="tip" title="Before you start">
-You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and an Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -23,7 +23,7 @@ Open **Settings**, **Admin**, **Connections**, and under **Manage OpenAI API Con
 | Field | Value |
 |---|---|
 | URL | Enterplace's address with `/v1`, for example `http://enterplace:8080/v1` |
-| API Key | A Enterplace key for Open WebUI |
+| API Key | An Enterplace key for Open WebUI |
 | Provider (Advanced) | Default |
 
 **Verify Connection** calls `GET /v1/models`. The same can be set with `OPENAI_API_BASE_URL` and `OPENAI_API_KEY` on first start; after that, the values saved in Open WebUI's database win.

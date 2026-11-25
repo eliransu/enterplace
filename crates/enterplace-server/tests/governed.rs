@@ -518,7 +518,7 @@ async fn a_enterplace_key_or_an_account_choice_reaches_the_provider_in_no_header
     let sent = format!("{headers:?}");
     assert!(
         !sent.contains(LIOR),
-        "a Enterplace key reached the provider: {sent}"
+        "an Enterplace key reached the provider: {sent}"
     );
     assert!(
         !sent.contains("callers-choice"),

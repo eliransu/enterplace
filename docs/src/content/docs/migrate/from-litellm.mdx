@@ -1,13 +1,13 @@
 ---
 title: Coming from LiteLLM
-description: Map LiteLLM proxy concepts to Enterplace, turn a config.yaml and its virtual keys into a Enterplace policy with enterplace import litellm, and see what differs.
+description: Map LiteLLM proxy concepts to Enterplace, turn a config.yaml and its virtual keys into an Enterplace policy with enterplace import litellm, and see what differs.
 sidebar:
   order: 1
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-`enterplace import litellm` reads a LiteLLM proxy `config.yaml` and writes a Enterplace policy that passes `enterplace check`. Everything it cannot carry across is listed with what to do instead. Given an export of LiteLLM virtual keys, it also writes team rules and one `enterplace key new` command per key.
+`enterplace import litellm` reads a LiteLLM proxy `config.yaml` and writes an Enterplace policy that passes `enterplace check`. Everything it cannot carry across is listed with what to do instead. Given an export of LiteLLM virtual keys, it also writes team rules and one `enterplace key new` command per key.
 
 This page is for replacing a LiteLLM proxy. To keep the LiteLLM Python SDK in your code and point it at Enterplace, see [LiteLLM SDK](/integrations/litellm-sdk/).
 
@@ -52,7 +52,7 @@ This page is for replacing a LiteLLM proxy. To keep the LiteLLM Python SDK in yo
 
 2. Read the report. Each line is an item that was not mapped, or that needs a hand, with the fix.
 
-3. Read the policy. The last rule, `everyone`, allows every imported model to anyone with a Enterplace key, as a LiteLLM proxy allows any valid key every model by default. Narrow it before you serve.
+3. Read the policy. The last rule, `everyone`, allows every imported model to anyone with an Enterplace key, as a LiteLLM proxy allows any valid key every model by default. Narrow it before you serve.
 
 4. Reissue the keys with the commands from the report, then start the gateway with `enterplace serve enterplace.policy.yaml`.
 
@@ -164,7 +164,7 @@ rules:
 `claude-sonnet` became an alias, because callers send a name that differs from the deployment's model. `gpt-4o` is listed directly under its provider.
 
 <Aside type="tip">
-The import keeps LiteLLM's variable names in `key_env`. If Claude Code will run through Enterplace, rename `ANTHROPIC_API_KEY` to a variable of its own, such as `ANTHROPIC_PROVIDER_KEY`: Claude Code reads `ANTHROPIC_API_KEY` for its own key, which is a Enterplace key.
+The import keeps LiteLLM's variable names in `key_env`. If Claude Code will run through Enterplace, rename `ANTHROPIC_API_KEY` to a variable of its own, such as `ANTHROPIC_PROVIDER_KEY`: Claude Code reads `ANTHROPIC_API_KEY` for its own key, which is an Enterplace key.
 </Aside>
 
 ## What maps

@@ -1,6 +1,6 @@
 # Codex
 
-Codex CLI talks to OpenAI's Responses API (`POST /v1/responses`). Point it at Enterplace through a model provider of its own and give it a Enterplace key in place of a provider key. Each of its requests is then identified, decided, checked by the rule's guardrails, recorded and only then forwarded.
+Codex CLI talks to OpenAI's Responses API (`POST /v1/responses`). Point it at Enterplace through a model provider of its own and give it an Enterplace key in place of a provider key. Each of its requests is then identified, decided, checked by the rule's guardrails, recorded and only then forwarded.
 
 Tested against: Codex CLI 0.166.0 (`codex exec`) through Enterplace to a mock of the Responses API on this machine, on 2026-11-13: answers, token counts, records, and the refusals shown below. Not yet run against OpenAI itself.
 
@@ -64,11 +64,11 @@ For a model Codex has no built-in description of, it prints `warning: Model meta
 On `/v1/responses` a refusal uses OpenAI's error shape, so Codex prints Enterplace's message after its own prefix:
 
 ```text
-ERROR: unexpected status 403 Forbidden: Refused (model_not_allowed): team "t" may not use model "gpt-4o" under rule "everyone". Allowed: gpt-4o-mini. Ask a Enterplace admin to change the policy if you need this one. Decision 01M79K3AKCRTY593P82PZPG1GE., url: http://127.0.0.1:20770/v1/responses
+ERROR: unexpected status 403 Forbidden: Refused (model_not_allowed): team "t" may not use model "gpt-4o" under rule "everyone". Allowed: gpt-4o-mini. Ask an Enterplace admin to change the policy if you need this one. Decision 01M79K3AKCRTY593P82PZPG1GE., url: http://127.0.0.1:20770/v1/responses
 ```
 
 ```text
-ERROR: unexpected status 401 Unauthorized: Refused (unknown_key): Enterplace does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask a Enterplace admin. Decision 01M79K3Q28V5EXP60V1YSSA595., url: http://127.0.0.1:20770/v1/responses
+ERROR: unexpected status 401 Unauthorized: Refused (unknown_key): Enterplace does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask an Enterplace admin. Decision 01M79K3Q28V5EXP60V1YSSA595., url: http://127.0.0.1:20770/v1/responses
 ```
 
 Quote the decision ID to an admin: it finds the record. Every code is in [Refusal codes](refusals.html).

@@ -1,16 +1,16 @@
 ---
 title: Codex
-description: Send Codex CLI's Responses API requests through Enterplace with a Enterplace key, or with each developer's own ChatGPT login.
+description: Send Codex CLI's Responses API requests through Enterplace with an Enterplace key, or with each developer's own ChatGPT login.
 sidebar:
   order: 2
 ---
 
 import { Aside, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Codex CLI talks to OpenAI's Responses API (`POST /v1/responses`). Give it a model provider that points at Enterplace and a Enterplace key, and each of its requests is identified, decided, checked by the rule's guardrails and recorded before it is forwarded.
+Codex CLI talks to OpenAI's Responses API (`POST /v1/responses`). Give it a model provider that points at Enterplace and an Enterplace key, and each of its requests is identified, decided, checked by the rule's guardrails and recorded before it is forwarded.
 
 <Aside type="tip" title="Before you start">
-You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and an Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -103,13 +103,13 @@ Developers signed in to Codex with ChatGPT (Plus, Pro, Business, Enterprise or E
     stream_max_retries = 0
     ```
 
-    `requires_openai_auth = true` makes Codex send its own ChatGPT login (`Authorization` and `chatgpt-account-id`) to this provider. The person token in `http_headers` comes from the console (Start here, Coding agents), `enterplace key new --identity-only`, or `enterplace login`. Leave `env_key` out.
+    `requires_openai_auth = true` makes Codex send its own ChatGPT login (`Authorization` and `chatgpt-account-id`) to this provider. The person token in `http_headers` comes from the console (Coding agents), `enterplace key new --identity-only`, or `enterplace login`. Leave `env_key` out.
 
 3. **Sign in with ChatGPT and run Codex.** `codex login` (choose ChatGPT) if you are not signed in, then `codex`. **Requests** in the console shows the person, the model and an API-equivalent cost estimate. The login itself is never written to the audit log.
 
 </Steps>
 
-A request that carries a ChatGPT login is served only by a `passthrough` provider, and a request with a Enterplace key only by a keyed one. If Codex is refused with `person_needed` or `login_needed`, the message names the setting to fix.
+A request that carries a ChatGPT login is served only by a `passthrough` provider, and a request with an Enterplace key only by a keyed one. If Codex is refused with `person_needed` or `login_needed`, the message names the setting to fix.
 
 ## Retries
 
@@ -135,11 +135,11 @@ With `stream_max_retries = 0`, a stream cut by the network is not resumed, and t
 On `/v1/responses` a refusal uses OpenAI's error shape, so Codex prints Enterplace's message after its own prefix:
 
 ```text
-ERROR: unexpected status 403 Forbidden: Refused (model_not_allowed): team "t" may not use model "gpt-4o" under rule "everyone". Allowed: gpt-4o-mini. Ask a Enterplace admin to change the policy if you need this one. Decision 01M79K3AKCRTY593P82PZPG1GE., url: http://127.0.0.1:20770/v1/responses
+ERROR: unexpected status 403 Forbidden: Refused (model_not_allowed): team "t" may not use model "gpt-4o" under rule "everyone". Allowed: gpt-4o-mini. Ask an Enterplace admin to change the policy if you need this one. Decision 01M79K3AKCRTY593P82PZPG1GE., url: http://127.0.0.1:20770/v1/responses
 ```
 
 ```text
-ERROR: unexpected status 401 Unauthorized: Refused (unknown_key): Enterplace does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask a Enterplace admin. Decision 01M79K3Q28V5EXP60V1YSSA595., url: http://127.0.0.1:20770/v1/responses
+ERROR: unexpected status 401 Unauthorized: Refused (unknown_key): Enterplace does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask an Enterplace admin. Decision 01M79K3Q28V5EXP60V1YSSA595., url: http://127.0.0.1:20770/v1/responses
 ```
 
 Quote the decision ID to an admin: it finds the record. See [Refusal codes](/reference/refusal-codes/).

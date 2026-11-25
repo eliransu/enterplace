@@ -381,7 +381,7 @@ async fn admit<'a>(
                     StatusCode::FORBIDDEN,
                     "passthrough_not_allowed",
                     format!(
-                        "Refused: rule \"{}\" does not list {path} on provider \"{name}\" under passthrough:. Ask a Enterplace admin to add it.",
+                        "Refused: rule \"{}\" does not list {path} on provider \"{name}\" under passthrough:. Ask an Enterplace admin to add it.",
                         rule.name
                     ),
                 ));
@@ -429,7 +429,7 @@ async fn admit<'a>(
                 StatusCode::TOO_MANY_REQUESTS,
                 "budget_exceeded",
                 format!(
-                    "Refused: a budget \"{}\" counts against (of rule \"{}\", its key or the limits: list) is spent for this period, and a realtime session starts only with budget left. It starts again at the next period; ask a Enterplace admin to raise it if you need more before then.",
+                    "Refused: a budget \"{}\" counts against (of rule \"{}\", its key or the limits: list) is spent for this period, and a realtime session starts only with budget left. It starts again at the next period; ask an Enterplace admin to raise it if you need more before then.",
                     person.name, rule.name
                 ),
             ),
@@ -475,7 +475,7 @@ fn serving(version: &Snapshot, kind: Kind, model: &str) -> Result<usize, Refusal
                 StatusCode::FORBIDDEN,
                 "unknown_model",
                 format!(
-                    "Refused: no provider of kind {} serves model \"{model}\", and its realtime sessions go to such a provider. Check the model name, or ask a Enterplace admin to add it to a provider.",
+                    "Refused: no provider of kind {} serves model \"{model}\", and its realtime sessions go to such a provider. Check the model name, or ask an Enterplace admin to add it to a provider.",
                     kind.word()
                 ),
             )

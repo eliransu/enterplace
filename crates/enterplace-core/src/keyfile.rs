@@ -73,11 +73,20 @@ pub fn issue_with(
     })
 }
 
+/// The keys file keeps only a hash, so a person token says what it is in its metadata (`kind`): People labels it by
+/// that.
+pub const PERSON_TOKEN_KIND: &str = "person-token";
+
 /// Makes a person token (`enterplace_u_...`) and adds its entry: it names the person for subscription passthrough and
 /// reaches no provider on its own.
 pub fn issue_person_token(name: &str, team: &str, keys: &Path) -> Result<Issued, String> {
     let key = id::new_person_token()?;
-    let rotated = add_with(name, team, &key, &Attributes::default(), keys)?;
+    let mut attributes = Attributes::default();
+    attributes
+        .options
+        .metadata
+        .insert("kind".into(), PERSON_TOKEN_KIND.into());
+    let rotated = add_with(name, team, &key, &attributes, keys)?;
     Ok(Issued {
         sha256: id::sha256_hex(key.as_bytes()),
         key,

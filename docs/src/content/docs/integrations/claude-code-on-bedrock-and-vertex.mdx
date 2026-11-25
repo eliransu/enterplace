@@ -1,13 +1,13 @@
 ---
 title: Claude Code on Bedrock and Vertex AI
-description: Run Claude Code on Claude models served by Amazon Bedrock or Google Cloud Vertex AI through Enterplace, with cloud credentials on the gateway and a Enterplace key on each machine.
+description: Run Claude Code on Claude models served by Amazon Bedrock or Google Cloud Vertex AI through Enterplace, with cloud credentials on the gateway and an Enterplace key on each machine.
 sidebar:
   order: 2
 ---
 
 import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Claude Code can reach Claude on Amazon Bedrock or Vertex AI through Enterplace in two ways. In both, the AWS role or the Google service account belongs to the gateway, and a developer's machine holds only a Enterplace key.
+Claude Code can reach Claude on Amazon Bedrock or Vertex AI through Enterplace in two ways. In both, the AWS role or the Google service account belongs to the gateway, and a developer's machine holds only an Enterplace key.
 
 | Way | Claude Code is set up with | Enterplace |
 |---|---|---|
@@ -69,7 +69,7 @@ Claude Code can reach Claude on Amazon Bedrock or Vertex AI through Enterplace i
     </TabItem>
     </Tabs>
 
-2. **Get a Enterplace key**, with `enterplace login https://enterplace.example.com` or from an admin with `enterplace key new`.
+2. **Get an Enterplace key**, with `enterplace login https://enterplace.example.com` or from an admin with `enterplace key new`.
 
 3. **Point Claude Code at Enterplace.** Leave `CLAUDE_CODE_USE_BEDROCK` and `CLAUDE_CODE_USE_VERTEX` unset, and no AWS or Google credentials are needed on the machine.
 

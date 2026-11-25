@@ -226,8 +226,9 @@ function Shell() {
             className="t-small flex flex-wrap items-center justify-between gap-2 rounded-box border border-input px-4 py-2"
           >
             <span>
-              Observe mode: nothing is refused, the policy only records what it
-              would refuse.
+              Observe mode: rules, limits and guardrails only record what they
+              would refuse. A request without a valid key or person token, an
+              unknown model and a kill switch are still refused.
             </span>
             <a href="#/policy">Turn on enforcement</a>
           </div>

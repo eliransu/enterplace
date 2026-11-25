@@ -104,7 +104,7 @@ async fn a_trusted_proxy_names_the_caller_on_the_model_routes_and_in_the_console
     let no_team = get(addr, "/v1/models", &[MAYA, ("X-Forwarded-Groups", "sales")]).await?;
     assert_eq!(no_team.status, 401);
     assert!(no_team.text.contains("is in no team"), "{}", no_team.text);
-    // A Enterplace key beside the headers is the caller: the key decides.
+    // An Enterplace key beside the headers is the caller: the key decides.
     let auth = format!("Bearer {ADMIN_KEY}");
     let keyed = get(addr, "/v1/models", &[MAYA, ("Authorization", &auth)]).await?;
     assert_eq!(keyed.status, 200, "{}", keyed.text);

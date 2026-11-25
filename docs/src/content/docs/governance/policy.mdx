@@ -120,7 +120,7 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `key_bounds` | map | none | What a key may be issued with: `max_days`, `max_budget`, `models`. See [Keys](/governance/keys/#bounds-on-issued-keys). |
 | `limits` | list | `[]` | Budgets, rates and `parallel` per scope: global, organization, team, person, key, customer, tag, model. See [Budgets and rate limits](/governance/budgets-and-rate-limits/#scopes-and-the-limits-list). |
 | `roles` | list | `[]` | [Console roles](#console-roles) beside the built-in `admin` and `read_only`. |
-| `jwt` | list | `[]` | Identity providers whose JWTs are accepted in place of a Enterplace key. See [JWT sign-in](/governance/access-control/#jwts-from-your-identity-provider). |
+| `jwt` | list | `[]` | Identity providers whose JWTs are accepted in place of an Enterplace key. See [JWT sign-in](/governance/access-control/#jwts-from-your-identity-provider). |
 | `trusted_proxies` | list | `[]` | Address ranges of load balancers whose `X-Forwarded-For` names the client. See [Behind a load balancer](/governance/access-control/#behind-a-load-balancer). |
 | `cors` | map | off | `allowed_origins`: the browser origins that may call Enterplace's routes, or `"*"`. See [Browser pages (CORS)](/governance/access-control/#browser-pages-cors). |
 | `store` | map | none | `{ postgres_url_env: DATABASE_URL, policy_from: file, approval: false }`. The shared Postgres store. `policy_from: store` keeps this policy in the store as versions edited in the console and the admin API; see [Policy versions](#policy-versions-in-the-store). See [Store](/operations/store/). |

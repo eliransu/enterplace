@@ -84,7 +84,7 @@ audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }
 
 The provider key is sent as `Authorization: Bearer <key>` to an `openai` or `vertex` provider, as `x-api-key: <key>` to an `anthropic` provider, as `api-key` to `azure` and `x-goog-api-key` to `gemini`.
 
-Avoid naming a key variable `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if the same shell runs the clients: Claude Code reads `ANTHROPIC_API_KEY` for its own key, which should be a Enterplace key.
+Avoid naming a key variable `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if the same shell runs the clients: Claude Code reads `ANTHROPIC_API_KEY` for its own key, which should be an Enterplace key.
 
 ## Rules
 

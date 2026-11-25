@@ -61,7 +61,7 @@ The Anthropic type is the `error.type` used on the messages routes. Retry is the
 
 Every refusal before `audit_unavailable` in the table is recorded with its code. A `guardrail_blocked` record also lists what each guardrail found. `audit_unavailable` has no record: that is the problem it reports. The `upstream_*` codes, `bad_path` and the 502 `untranslatable` come after the request was allowed and recorded, so the record says `allow`. With `retries` or a `fallback` on the provider, an `upstream_*` failure, a 429 or a 5xx is tried again before the caller sees it, and an `attempts` record lists every try (see [Providers](providers.html#retries-and-fallbacks)); the caller sees only the last one.
 
-A provider's own error response is not a Enterplace refusal: it passes through unchanged, with `X-Enterplace-Decision` added. Two exceptions keep the caller's error shape: a Bedrock error is put in Anthropic's shape, and an error answer to a translated chat request is put in OpenAI's shape, each with the provider's message.
+A provider's own error response is not an Enterplace refusal: it passes through unchanged, with `X-Enterplace-Decision` added. Two exceptions keep the caller's error shape: a Bedrock error is put in Anthropic's shape, and an error answer to a translated chat request is put in OpenAI's shape, each with the provider's message.
 
 ## Not a refusal
 

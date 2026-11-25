@@ -1,6 +1,6 @@
 # Coding agents
 
-Cursor, Continue, Cline, Aider and OpenCode can each send their model requests to Enterplace instead of to a provider. Give the tool Enterplace's address and a Enterplace key in place of a provider key. Each request is then identified, decided, recorded and only then forwarded.
+Cursor, Continue, Cline, Aider and OpenCode can each send their model requests to Enterplace instead of to a provider. Give the tool Enterplace's address and an Enterplace key in place of a provider key. Each request is then identified, decided, recorded and only then forwarded.
 
 Of the five, only OpenCode has been run through Enterplace. The others are described from their own documentation; the last section says which is which. For Claude Code and Codex, see [Claude Code](claude-code.html) and [Codex](codex.html).
 
@@ -13,7 +13,7 @@ Of the five, only OpenCode has been run through Enterplace. The others are descr
 
 ## Cursor
 
-Cursor's own servers build the final prompt and send the request, also when you give it your own key. Its documentation says so for API keys, and Cursor staff confirm it for the base URL override on Cursor's forum. So a Enterplace on `127.0.0.1` or on a private network cannot be reached from Cursor: Enterplace must have a public HTTPS address (TLS in front of it, see [Operations](operations.html#tls)), and every Enterplace key travels through Cursor's servers.
+Cursor's own servers build the final prompt and send the request, also when you give it your own key. Its documentation says so for API keys, and Cursor staff confirm it for the base URL override on Cursor's forum. So an Enterplace on `127.0.0.1` or on a private network cannot be reached from Cursor: Enterplace must have a public HTTPS address (TLS in front of it, see [Operations](operations.html#tls)), and every Enterplace key travels through Cursor's servers.
 
 - **Base URL:** Cursor Settings, Models, the OpenAI API key section, "Override OpenAI Base URL". Enter Enterplace's public address with `/v1`.
 - **Key:** the "OpenAI API Key" field in the same section. Enter the Enterplace key.
@@ -150,11 +150,11 @@ A refusal is shown with Enterplace's message:
 
 ```text
 > build · gpt-4o
-Error: Refused (model_not_allowed): team "payments" may not use model "gpt-4o" under rule "payments-team". Allowed: gpt-4o-mini. Ask a Enterplace admin to change the policy if you need this one. Decision 01M79QS3FKFHJAQSYW8BMX3E5F.
+Error: Refused (model_not_allowed): team "payments" may not use model "gpt-4o" under rule "payments-team". Allowed: gpt-4o-mini. Ask an Enterplace admin to change the policy if you need this one. Decision 01M79QS3FKFHJAQSYW8BMX3E5F.
 ```
 
 ```text
-Error: Refused (unknown_key): Enterplace does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask a Enterplace admin. Decision 01M79QS9S2XNB6ZDE3MT1TTN59.
+Error: Refused (unknown_key): Enterplace does not know this key. It was never issued or it has been removed. A key just issued works within 2 seconds. Ask an Enterplace admin. Decision 01M79QS9S2XNB6ZDE3MT1TTN59.
 ```
 
 Caveats:

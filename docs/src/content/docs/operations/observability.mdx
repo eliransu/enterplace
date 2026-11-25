@@ -19,7 +19,7 @@ enterplace serve enterplace.policy.yaml --metrics 127.0.0.1:9464
 Metrics: http://127.0.0.1:9464/metrics
 ```
 
-`GET /metrics` is served in the Prometheus text format on that address only. It is off unless `--metrics` names an address, and that address must differ from `--listen`. The gateway's own address never serves `/metrics`, so a caller with a Enterplace key cannot read it. Scrapes are not written to the audit log.
+`GET /metrics` is served in the Prometheus text format on that address only. It is off unless `--metrics` names an address, and that address must differ from `--listen`. The gateway's own address never serves `/metrics`, so a caller with an Enterplace key cannot read it. Scrapes are not written to the audit log.
 
 <Aside type="caution">
 `/metrics` takes no key and shows team, model and provider names and what each team spent. Keep it on loopback or a network only your scraper reaches. Enterplace warns at start when the metrics address is not loopback.

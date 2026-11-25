@@ -141,7 +141,7 @@ async fn allow(state: &AppState, request: Request, call: &mut Call) -> Result<Pl
         return Err(refused(
             StatusCode::UNAUTHORIZED,
             "unknown_key",
-            "Refused: Enterplace does not know this key. It was never issued or it has been removed. Ask a Enterplace admin.",
+            "Refused: Enterplace does not know this key. It was never issued or it has been removed. Ask an Enterplace admin.",
         ));
     };
     call.person = Some(person.clone());
@@ -152,7 +152,7 @@ async fn allow(state: &AppState, request: Request, call: &mut Call) -> Result<Pl
             StatusCode::FORBIDDEN,
             "not_admin",
             format!(
-                "Refused: the admin API is for keys marked `admin: true` or given a role: in the keys file, and the key of \"{}\" is neither. Ask a Enterplace admin.",
+                "Refused: the admin API is for keys marked `admin: true` or given a role: in the keys file, and the key of \"{}\" is neither. Ask an Enterplace admin.",
                 person.name
             ),
         ));
@@ -178,7 +178,7 @@ async fn allow(state: &AppState, request: Request, call: &mut Call) -> Result<Pl
             StatusCode::FORBIDDEN,
             "not_permitted",
             format!(
-                "Refused: {action} needs the {} permission{}, and role \"{}\" of \"{}\" {}. Ask a Enterplace admin.",
+                "Refused: {action} needs the {} permission{}, and role \"{}\" of \"{}\" {}. Ask an Enterplace admin.",
                 needs.word(),
                 if reading {
                     ""

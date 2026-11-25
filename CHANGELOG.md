@@ -200,7 +200,7 @@ groups, team }` names the headers in which a proxy listed in `trusted_proxies` s
   from a Claude Pro, Max, Team or Enterprise login, goes to the provider unchanged with `anthropic-beta` and the rest of
   Claude Code's headers. The provider holds no key. The login is taken off the request before any check and is never
   stored, logged, recorded, hashed into a record, cached, or sent to a guardrail webhook, plugin or trace. A login never
-  reaches a keyed provider (`login_not_accepted`) and a Enterplace key never reaches a passthrough one (`login_needed`),
+  reaches a keyed provider (`login_not_accepted`) and an Enterplace key never reaches a passthrough one (`login_needed`),
   fallbacks included. A passthrough and a keyed provider may list the same model: the request's credential picks.
 - Person tokens: `enterplace_u_...`, free, sent in `x-enterplace-user` through Claude Code's `ANTHROPIC_CUSTOM_HEADERS`. They
   name the person and team for rules, records, guardrails, kill switches and limits, and reach no model on their own
@@ -428,7 +428,7 @@ policy_from: store }` and keeps the admin key in that store, made only when the 
 ### Guardrails: an LLM judge and five more vendors
 
 - New guardrail type `judge`: a model asked through Enterplace's own chat completions route whether the conversation
-  breaks a `rubric`, with a Enterplace key of its own, so each judge call is governed, recorded and charged to that key's
+  breaks a `rubric`, with an Enterplace key of its own, so each judge call is governed, recorded and charged to that key's
   person and team. `FAIL` blocks with the finding `rubric`. Verdicts are reused for `cache_seconds` (300 by
   default). A judge never runs on requests made with its own key.
 - New guardrail types, each asked in the vendor's own API: `prisma_airs` (Palo Alto Networks Prisma AIRS AI
@@ -449,7 +449,7 @@ policy_from: store }` and keeps the admin key in that store, made only when the 
 - New route `POST /v1/ocr` (Mistral's OCR API), priced by the page with the new `per_page` price field.
 - The Enterplace key is read from `api-key`, the header Azure OpenAI's SDKs send, with the same ambiguity check.
 - boto3 and the AWS SDKs reach Bedrock through Enterplace on `/model/<id>/converse`, `/converse-stream`, `/invoke`,
-  `/invoke-with-response-stream` and `/count-tokens` with a Enterplace key (`AWS_BEARER_TOKEN_BEDROCK`, or `x-api-key`
+  `/invoke-with-response-stream` and `/count-tokens` with an Enterplace key (`AWS_BEARER_TOKEN_BEDROCK`, or `x-api-key`
   beside a SigV4 signature, which is removed). The caller's rule decides the model; refusals come back in the AWS
   error shape (`x-amzn-errortype`).
 
@@ -1097,7 +1097,7 @@ login` saved, so the gateway answers with their team's profile. Tool names now m
   `enterplace key rotate --grace 48h` make a new key and keep the old one for the grace, recording every use of it.
 - Access: `from:` address ranges on keys and rules with `trusted_proxies:` for `X-Forwarded-For` (`ip_not_allowed`),
   key `routes` (`route_not_allowed`), key `rpm`, and `jwt:` issuers whose RS256 or
-  ES256 tokens are accepted in place of a Enterplace key and recorded with their issuer and subject.
+  ES256 tokens are accepted in place of an Enterplace key and recorded with their issuer and subject.
 - Routing: `balance: lowest_latency` (90th percentile time to first byte) and `lowest_cost`, deployments kept `for:` a
   team or tag with `x-enterplace-tags` limited to the rule's `tags:`, `region:` labels with `regions:` residency on rules
   (a refusal, never a preference), and `session_affinity` for coding agent sessions. Each choice and its reason is in

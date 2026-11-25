@@ -97,7 +97,7 @@ fn outside(regions: &[String], model: &str) -> Refusal {
         StatusCode::FORBIDDEN,
         "region_not_allowed",
         format!(
-            "Refused: your rule keeps requests in {}, and model \"{model}\" is not an alias with a Bedrock or Vertex AI deployment labelled with one of those regions, so where its batch would run cannot be shown. Use such an alias, or ask a Enterplace admin to add region: to its deployment.",
+            "Refused: your rule keeps requests in {}, and model \"{model}\" is not an alias with a Bedrock or Vertex AI deployment labelled with one of those regions, so where its batch would run cannot be shown. Use such an alias, or ask an Enterplace admin to add region: to its deployment.",
             regions.join(", ")
         ),
     )
@@ -112,7 +112,7 @@ pub(crate) fn settings(
             StatusCode::BAD_REQUEST,
             "batch_not_configured",
             format!(
-                "Refused: model's batches go to provider \"{}\" of kind {}, which has no batch: section naming the bucket its batch jobs read and write. Ask a Enterplace admin to add batch: {{ bucket: ... }} to the provider.",
+                "Refused: model's batches go to provider \"{}\" of kind {}, which has no batch: section naming the bucket its batch jobs read and write. Ask an Enterplace admin to add batch: {{ bucket: ... }} to the provider.",
                 provider.name,
                 provider.kind.word()
             ),

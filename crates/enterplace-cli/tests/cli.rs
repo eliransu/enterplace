@@ -2370,6 +2370,10 @@ fn start_names_every_request_and_hands_its_runner_a_person_token() -> TestResult
             && !keys.contains(&token),
         "only the token's hash is kept: {keys}"
     );
+    // One person on day one: the admin key and the person token carry the same name, and the token says what it is.
+    assert_eq!(keys.matches("name: sarah.miller").count(), 2, "{keys}");
+    assert!(!keys.contains("name: admin"), "{keys}");
+    assert!(keys.contains("person-token"), "{keys}");
     let out = enterplace(&["check", &path(&dir, "enterplace.policy.yaml")], &[])?;
     assert!(out.status.success(), "{}", String::from_utf8(out.stderr)?);
 
@@ -2613,7 +2617,7 @@ fn start_prints_the_dashboard_link_first_and_it_signs_in_once() -> TestResult {
         )
         .unwrap_or_default()
     };
-    // Claude Code with a Enterplace key on a new install: the demo answers messages too.
+    // Claude Code with an Enterplace key on a new install: the demo answers messages too.
     let claude = post(
         "/v1/messages",
         r#"{"model":"enterplace-demo","max_tokens":50,"messages":[{"role":"user","content":"hi"}]}"#,

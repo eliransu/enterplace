@@ -276,7 +276,7 @@ async fn tools_from_two_servers_limited_by_policy_each_call_audited() -> TestRes
     assert!(
         message.contains("tool_not_allowed")
             && message.contains("payments-team")
-            && message.contains("Ask a Enterplace admin"),
+            && message.contains("Ask an Enterplace admin"),
         "{refused}"
     );
     assert_eq!(

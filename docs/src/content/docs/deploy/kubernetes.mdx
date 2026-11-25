@@ -284,7 +284,7 @@ The chart refuses `autoscaling.enabled` without `store:`. With more than one rep
 
 <Steps>
 
-1. Back up Postgres. A newer Enterplace may update the database schema. Upgrade one minor version at a time (0.2 to 0.3, not 0.2 to 0.4): during the rollout the old pods keep serving beside the new ones, and an old pod that restarts still starts. A Enterplace two minor versions behind the database refuses it, naming both versions. See [Rolling upgrades](/operations/store/#rolling-upgrades).
+1. Back up Postgres. A newer Enterplace may update the database schema. Upgrade one minor version at a time (0.2 to 0.3, not 0.2 to 0.4): during the rollout the old pods keep serving beside the new ones, and an old pod that restarts still starts. An Enterplace two minor versions behind the database refuses it, naming both versions. See [Rolling upgrades](/operations/store/#rolling-upgrades).
 
 2. Upgrade.
 

@@ -59,7 +59,7 @@ X-Enterplace-Decision: 01M79...</pre></figure>
     <p>Each one is a few lines in the policy file or one page in the console, and each can run on trial before it refuses anything.</p>
   </div>
   <dl class="facts">
-    <div><dt>Identity</dt><dd>A Enterplace key per person and per workload, shown once and stored as a SHA-256 hash. <code>enterplace login</code> gives a developer an expiring key through your identity provider. Services can send JWTs from a trusted issuer. <a href="docs:/governance/keys/">Keys</a></dd></div>
+    <div><dt>Identity</dt><dd>An Enterplace key per person and per workload, shown once and stored as a SHA-256 hash. <code>enterplace login</code> gives a developer an expiring key through your identity provider. Services can send JWTs from a trusted issuer. <a href="docs:/governance/keys/">Keys</a></dd></div>
     <div><dt>Budgets and rate limits</dt><dd>Dollars, requests per minute, tokens per minute and requests in flight, per organization, team, person, key, customer, tag or model. Shared by every replica on one Postgres store. <a href="docs:/governance/budgets-and-rate-limits/">Budgets and rate limits</a></dd></div>
     <div><dt>Guardrails</dt><dd>Built-in detectors for secrets and personal data that block, mask or warn. Your own patterns and word lists. Vendor guardrails and your own service by webhook. On requests, answers and MCP tool calls. <a href="docs:/governance/guardrails/">Guardrails</a></dd></div>
     <div><dt>Kill switches</dt><dd>Stop a person, a team, a key, a model or everyone, with a reason the caller sees. <a href="docs:/governance/kill-switches/">Kill switches</a></dd></div>

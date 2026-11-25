@@ -1075,7 +1075,7 @@ async fn metrics_count_decisions_upstream_answers_audit_writes_and_spend() -> Te
         assert!(text.contains(line), "{line} missing from:\n{text}");
     }
     assert!(text.contains("# TYPE enterplace_audit_write_seconds histogram"));
-    // The gateway's own router does not serve it: a caller with a Enterplace key cannot read other teams' spend.
+    // The gateway's own router does not serve it: a caller with an Enterplace key cannot read other teams' spend.
     let (status, _, _) =
         answer(&s.gw.router, Request::get("/metrics").body(Body::empty())?).await?;
     assert_ne!(status, StatusCode::OK);

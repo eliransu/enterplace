@@ -1,13 +1,13 @@
 ---
 title: CrewAI
-description: Point a CrewAI agent's LLM at Enterplace with base_url and a Enterplace key.
+description: Point a CrewAI agent's LLM at Enterplace with base_url and an Enterplace key.
 sidebar:
   order: 27
 ---
 
 import { Aside, Tabs, TabItem, Steps, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-CrewAI agents take an `LLM` object. Give it Enterplace's address and a Enterplace key, and each model call a crew makes is identified, decided and recorded.
+CrewAI agents take an `LLM` object. Give it Enterplace's address and an Enterplace key, and each model call a crew makes is identified, decided and recorded.
 
 <Aside type="note">
 Not run. This page follows CrewAI's public documentation as read on 2026-11-15; CrewAI's install is large, so it is not in `scripts/sdk_check.py`.
@@ -35,7 +35,7 @@ print(Crew(agents=[greeter], tasks=[task]).kickoff())
 
 ## Tools and refusals
 
-A crew's tools are declared as function tools, so a rule's [tool permissions](/governance/tool-permissions/) apply by name. Give each crew a Enterplace key of its own, so its spend, its rate and its records are its own: see [Keys and identity](/governance/keys/).
+A crew's tools are declared as function tools, so a rule's [tool permissions](/governance/tool-permissions/) apply by name. Give each crew an Enterplace key of its own, so its spend, its rate and its records are its own: see [Keys and identity](/governance/keys/).
 
 ## Related
 

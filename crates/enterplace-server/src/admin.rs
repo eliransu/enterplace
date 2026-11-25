@@ -571,7 +571,7 @@ async fn admin(state: &AppState, request: Request, decision: &str) -> Result<Res
     done
 }
 
-/// Who calls an admin route: the person of a Enterplace key, or of a JWT from an issuer the policy trusts, with the role
+/// Who calls an admin route: the person of an Enterplace key, or of a JWT from an issuer the policy trusts, with the role
 /// its `role_claim` names. Fills in who the record names. Unknown keys and bad tokens are refused.
 pub(crate) async fn caller(
     state: &AppState,
@@ -607,7 +607,7 @@ pub(crate) async fn caller(
             return Err(refused(
                 StatusCode::UNAUTHORIZED,
                 "unknown_key",
-                "Refused: Enterplace does not know this key. It was never issued or it has been removed. Ask a Enterplace admin.",
+                "Refused: Enterplace does not know this key. It was never issued or it has been removed. Ask an Enterplace admin.",
             ));
         }
     };
@@ -694,7 +694,7 @@ async fn allow(
             StatusCode::FORBIDDEN,
             "not_admin",
             format!(
-                "Refused: the admin API is for keys marked `admin: true` or given a role: in the keys file, and the key of \"{}\" is neither. Ask a Enterplace admin.",
+                "Refused: the admin API is for keys marked `admin: true` or given a role: in the keys file, and the key of \"{}\" is neither. Ask an Enterplace admin.",
                 person.name
             ),
         ));
@@ -712,7 +712,7 @@ async fn allow(
             StatusCode::FORBIDDEN,
             "not_permitted",
             format!(
-                "Refused: role \"{}\" of \"{}\" does not have the {} permission, which {action} needs. Ask a Enterplace admin to add it to the role under roles: in the policy, or to give you another role.",
+                "Refused: role \"{}\" of \"{}\" does not have the {} permission, which {action} needs. Ask an Enterplace admin to add it to the role under roles: in the policy, or to give you another role.",
                 role.name,
                 person.name,
                 needs(action).word()

@@ -119,7 +119,7 @@ async fn the_setup_link_makes_the_first_admin_once_and_that_key_makes_a_governed
         "{keys}"
     );
     assert!(!keys.contains("eve"));
-    // The first admin also gets their own person token, so the Claude Code lines Start here hands them carry it.
+    // The first admin also gets their own person token, so the Claude Code lines on Coding agents carry it.
     assert_eq!(keys.matches("name: maya.cohen").count(), 2, "{keys}");
 
     // The new key is in use within the 2 seconds a reload takes, and makes a governed call.
@@ -146,7 +146,7 @@ async fn the_setup_link_makes_the_first_admin_once_and_that_key_makes_a_governed
         "the setup is recorded"
     );
 
-    // A Enterplace that already has an admin offers no link.
+    // An Enterplace that already has an admin offers no link.
     let again = enterplace_server::governed(&path, None, &|_| Some("provider-secret".into()));
     drop(gw);
     let again = match again {

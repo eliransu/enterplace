@@ -164,7 +164,7 @@ To rotate a key without a restart, use `key_file` instead of `key_env`:
 Enterplace reads the file at start, and refuses to start while it is missing or empty. It then checks the file once a second: a new key in it is used within 2 seconds, without a restart and without a new policy version. A request already sent keeps the key it was sent with. A file that becomes missing or empty is reported, and the key in use is kept. Write the file by renaming a new one over it, so Enterplace never reads half a key. Changing the `key_file` path gives the provider a new route at the next reload.
 
 <Aside type="caution">
-Do not name a provider key variable `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if the same shell runs the clients. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be a Enterplace key.
+Do not name a provider key variable `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if the same shell runs the clients. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be an Enterplace key.
 </Aside>
 
 To manage keys in the console and rotate them on every gateway at once, keep them in the store and name one with `credential:`. See [Provider credentials](/governance/provider-credentials/).

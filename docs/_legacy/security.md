@@ -73,7 +73,7 @@ These are known and not fixed in this version:
 - **Up to a second of records** can be lost on a power failure: they are synced to disk once a second.
 - **The decision record is of the decision**, not of the provider's answer. A usage record (status, tokens, cost) follows each answer, and an attempts record each retried request, but a request that got no answer at all has neither: its `upstream_*` failure is not in the log.
 - **Private addresses are judged by what is written.** A public host name that resolves to a private address is not caught.
-- **The key search is a text match.** A Enterplace key split across headers or encoded is not found and removed. Such a header would still have to pass the name filter above.
+- **The key search is a text match.** An Enterplace key split across headers or encoded is not found and removed. Such a header would still have to pass the name filter above.
 - **A removed key works for up to 2 seconds** after the keys file is saved, until the reload picks the change up. Revoking through the console or the admin API stops it at once.
 - **One node.** No shared state, no high availability. Console sessions and sign-ins in progress live in memory: a restart signs everyone out, and behind a load balancer the provider's callback must reach the node that started the sign-in.
 - **A request the HTTP library rejects** as malformed gets a bare 400 with no decision ID and no record.

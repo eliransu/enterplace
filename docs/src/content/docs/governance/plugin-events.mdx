@@ -544,7 +544,7 @@ The reference plugin in `examples/plugins/event-printer` is one Python file with
 5. The caller gets a refusal instead of the tool call, and the audit log holds the finding by kind:
 
    ```json
-   { "error": { "message": "Refused (guardrail_blocked): Guardrail \"watcher\" refused the model's answer: the plugin found blocked_tool (1). Ask in another way, or ask a Enterplace admin about the guardrail. The answer was produced and is counted in usage. Decision 01JD3X6Q8M2T4V9W0Y1Z3A5B7C.", "type": "enterplace_error", "code": "guardrail_blocked", "decision": "01JD3X6Q8M2T4V9W0Y1Z3A5B7C" } }
+   { "error": { "message": "Refused (guardrail_blocked): Guardrail \"watcher\" refused the model's answer: the plugin found blocked_tool (1). Ask in another way, or ask an Enterplace admin about the guardrail. The answer was produced and is counted in usage. Decision 01JD3X6Q8M2T4V9W0Y1Z3A5B7C.", "type": "enterplace_error", "code": "guardrail_blocked", "decision": "01JD3X6Q8M2T4V9W0Y1Z3A5B7C" } }
    ```
 
 6. Set `PLUGIN_SECRET` for the plugin and `secret_env` on the guardrail to the same secret, and the plugin refuses any delivery that is not signed by your gateway.

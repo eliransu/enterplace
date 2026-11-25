@@ -1,6 +1,6 @@
 # Keys
 
-A Enterplace key identifies one person or one workload. Callers send it in place of a provider key; the provider keys stay with Enterplace.
+An Enterplace key identifies one person or one workload. Callers send it in place of a provider key; the provider keys stay with Enterplace.
 
 ## Make a key
 

@@ -7,10 +7,10 @@ sidebar:
 
 import { Aside, Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-Copilot's bring your own key (BYOK) sends chat and agent requests from the developer's machine straight to the endpoint you configure. Point that endpoint at Enterplace with a Enterplace key, and each request is identified, decided and recorded. Enterplace can be on `127.0.0.1` or a private network: GitHub's servers are not in the path.
+Copilot's bring your own key (BYOK) sends chat and agent requests from the developer's machine straight to the endpoint you configure. Point that endpoint at Enterplace with an Enterplace key, and each request is identified, decided and recorded. Enterplace can be on `127.0.0.1` or a private network: GitHub's servers are not in the path.
 
 <Aside type="tip" title="Before you start">
-You need a running Enterplace and a Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
+You need a running Enterplace and an Enterplace key. `enterplace start` gives both in one command and prints the key as `export ENTERPLACE_KEY=...`: see the [Quickstart](/getting-started/quickstart/). No provider key yet? Put the model `enterplace-demo` in place of the model in the examples below: Enterplace answers it itself, free. After your first prompt, **Requests** in the console shows it with the key's name, the model and the cost.
 </Aside>
 
 ## Setup
@@ -88,7 +88,7 @@ In the GitHub Copilot app, open **Settings**, then **Model providers**, then **A
 ## What Enterplace does not see
 
 - Inline suggestions (code completions), semantic search and other embedding features. They stay on GitHub and are not available through BYOK.
-- Utility tasks in VS Code (titles, commit messages, intent detection), which use GitHub's models while a Copilot token exists. Set `chat.utilityModel` and `chat.utilitySmallModel` to a Enterplace model to send them through Enterplace.
+- Utility tasks in VS Code (titles, commit messages, intent detection), which use GitHub's models while a Copilot token exists. Set `chat.utilityModel` and `chat.utilitySmallModel` to an Enterplace model to send them through Enterplace.
 - Copilot CLI telemetry, unless `COPILOT_OFFLINE=true`, which also limits the CLI to the BYOK provider.
 - Organization or enterprise custom models set up on github.com. GitHub holds that key and calls the provider from its own servers, so a client never reaches Enterplace. Use per-user BYOK instead.
 

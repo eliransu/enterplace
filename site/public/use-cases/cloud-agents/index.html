@@ -232,7 +232,7 @@ enterplace unkill --team support</pre></figure>
 <section class="wrap sec doc">
   <h2>Questions people ask</h2>
   <div class="qa">
-    <details><summary>Our services already hold tokens from our identity provider. Do they need a Enterplace key too?</summary><p>No. Enterplace accepts JWTs from issuers you trust in place of a key, and reads the person and team from claims you name. <a href="https://docs.enterplace.dev/governance/access-control/">Access control</a></p></details>
+    <details><summary>Our services already hold tokens from our identity provider. Do they need an Enterplace key too?</summary><p>No. Enterplace accepts JWTs from issuers you trust in place of a key, and reads the person and team from claims you name. <a href="https://docs.enterplace.dev/governance/access-control/">Access control</a></p></details>
     <details><summary>Does Enterplace change the request?</summary><p>The body is forwarded byte for byte, except where your policy changes it: a guardrail that masks, or a translation you opted into. An unknown query parameter is refused by name, never dropped silently.</p></details>
     <details><summary>What if Enterplace cannot write its audit log?</summary><p>Requests are refused with <code>audit_unavailable</code> until it can. That is the design: no request leaves without a record.</p></details>
     <details><summary>Do the agents' tool calls go through it too?</summary><p>If the tools are MCP servers, yes. Put the servers behind Enterplace's MCP endpoint and each call is checked and recorded like a model call. <a href="/use-cases/mcp-tools/">MCP tools</a></p></details>

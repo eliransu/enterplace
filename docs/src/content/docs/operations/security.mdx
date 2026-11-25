@@ -56,7 +56,7 @@ A request that cannot be identified, decided and recorded is not forwarded.
 
 A rule with `caller_provider_key: allowed` lets callers send their own provider key in `x-enterplace-provider-key`. What changes:
 
-- The caller is still identified by their Enterplace key, and every check of the rule still applies. A provider key never stands in for a Enterplace key.
+- The caller is still identified by their Enterplace key, and every check of the rule still applies. A provider key never stands in for an Enterplace key.
 - The header is removed as soon as it is read: never logged, never echoed, never sent to a guardrail webhook, a trace or a fallback provider. Records hold `caller_provider_key: true` and the first 8 hex characters of its SHA-256.
 - The provider bills the caller's account, under the caller's terms with that provider. Spend is recorded as caller-paid and, with `allowed`, not counted against budgets.
 - Without the opt-in (the default) the header is refused with `caller_provider_key_not_allowed`, so it is never silently dropped or forwarded.
@@ -139,7 +139,7 @@ Anyone who can write the policy file or the keys file decides who may do what. A
 - **The decision record is of the decision.** A usage record follows each answer, and an `attempts` record each retried request. A request that got no answer at all, an `upstream_*` failure, has neither.
 - **Plain HTTP** unless Enterplace serves TLS itself or sits behind a TLS proxy. Keys travel in the clear otherwise.
 - **Private addresses are judged by what is written.** A public host name that resolves to a private address is not caught.
-- **The key search is a text match.** A Enterplace key split across headers or encoded is not found. Such a header still has to pass the name filter.
+- **The key search is a text match.** An Enterplace key split across headers or encoded is not found. Such a header still has to pass the name filter.
 - **A key removed by hand works for up to 2 seconds**, until the reload. Revoking through the console or the admin API stops it at once.
 - **One node, or a store.** Without a [store](/operations/store/), budgets, rate limits, the cache and console sessions live in one process. With one, keys, kill switches and budgets are shared through Postgres; rate limits, the cache and console sessions stay per replica. A restart signs everyone out of the console. Behind a load balancer, the identity provider's callback must reach the node that started the sign-in.
 - **Kill switches across nodes.** In force on the node that sets them before it answers, and on every node serving the same files or the same store within 1 second. With files, two nodes changing switches at the same instant can lose one change; with a store, each change is one statement and none is lost.

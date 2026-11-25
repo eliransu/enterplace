@@ -1,6 +1,6 @@
 # SDKs
 
-OpenAI's and Anthropic's SDKs reach Enterplace by their base URL. Give the client Enterplace's address and a Enterplace key in place of a provider key. Each request is then identified, decided, recorded and only then forwarded.
+OpenAI's and Anthropic's SDKs reach Enterplace by their base URL. Give the client Enterplace's address and an Enterplace key in place of a provider key. Each request is then identified, decided, recorded and only then forwarded.
 
 ## At a glance
 
