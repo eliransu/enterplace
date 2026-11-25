@@ -1029,11 +1029,17 @@ async fn a_flood_of_refused_callbacks_neither_empties_the_replay_list_nor_fills_
         ))));
     let response = s.app.clone().oneshot(request).await?;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    // Found by its address, not taken as the last line: on a slow runner the flooded minute can close here, and its
+    // summary is written after this refusal.
     let records = admin_records(&s)?;
-    let other = records.last().ok_or("no record")?;
+    let other = records
+        .iter()
+        .rev()
+        .find(|r| r["client"] == json!("192.0.2.7"))
+        .ok_or("the other address's refusal was not recorded")?;
     assert_eq!(
-        (&other["action"], &other["client"]),
-        (&json!("console_sign_in"), &json!("192.0.2.7")),
+        (&other["action"], &other["verdict"]),
+        (&json!("console_sign_in"), &json!("refused")),
         "{other}"
     );
     // When the flooded minute closes, one summary carries its true count: the 10,050 refusals and the replay.
