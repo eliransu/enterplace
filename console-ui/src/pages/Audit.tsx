@@ -5,7 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Empty, Head, Problem } from "@/components/page";
+import { Empty, Head, Loading, Problem, Stat } from "@/components/page";
+import { Person } from "@/components/person";
 import { Copy } from "@/components/copy";
 import { api } from "@/lib/api";
 import { useData } from "@/lib/use";
@@ -76,7 +77,7 @@ export function Audit({ query }: PageProps) {
   const ask = new URLSearchParams(KEYS.flatMap((k) => (query.get(k) ? [[k, query.get(k) ?? ""]] : [])));
   const open = !!query.get("record");
   // Live: the list reads the chain again every 5 seconds while no record is open, as the gateway writes records.
-  const { data, error, change } = useData<Data>(`audit${ask.size ? `?${ask}` : ""}`, 5000, open);
+  const { data, error, change, reload } = useData<Data>(`audit${ask.size ? `?${ask}` : ""}`, 5000, open);
   const [q, setQ] = useState(query.get("q") ?? "");
   useEffect(() => setQ(query.get("q") ?? ""), [query]);
 
@@ -96,7 +97,8 @@ export function Audit({ query }: PageProps) {
           </Button>
         ))}
       />
-      {error ? <Problem text={error} /> : null}
+      {error ? <Problem text={error} retry={reload} /> : null}
+      {!data && !error ? <Loading rows={8} /> : null}
       {data?.empty ? <Start empty={data.empty} /> : null}
       {data && data.total > 0 && data.rows ? (
         <>
@@ -185,14 +187,6 @@ function Start({ empty }: { empty: NonNullable<Data["empty"]> }) {
   );
 }
 
-function Stat({ figure, label }: { figure: string; label: string }) {
-  return (
-    <div className="grid gap-1">
-      <p className="t-lg m-0 tabular-nums">{figure}</p>
-      <p className="t-small m-0 text-muted-foreground">{label}</p>
-    </div>
-  );
-}
 
 // The console's Tag in its kinds: a refusal edged in flame, a block filled with it, an allow without a border.
 export function VerdictTag({ tag }: { tag: Tag }) {
@@ -215,10 +209,10 @@ export function VerdictTag({ tag }: { tag: Tag }) {
 function Rows({ data, query }: { data: Data; query: URLSearchParams }) {
   const changes = data.show === "changes";
   return (
-    <Table>
+    <Table long>
       <TableHeader>
         <TableRow>
-          <TableHead>{changes ? "Who" : "Person or workload"}</TableHead>
+          <TableHead>{changes ? "Who" : "Person or app"}</TableHead>
           {changes ? <TableHead>Change and reason</TableHead> : <TableHead>Verdict</TableHead>}
           <TableHead>Time</TableHead>
           {changes ? null : <TableHead>Model</TableHead>}
@@ -228,12 +222,19 @@ function Rows({ data, query }: { data: Data; query: URLSearchParams }) {
         {data.rows?.map((r) => (
           <TableRow key={r.id} aria-selected={r.selected || undefined} className={cn(r.selected && "[&>td]:bg-well")}>
             <TableCell className="break-words whitespace-normal">
-              {r.who}
+              {changes ? r.who : <Person name={r.who} />}
               {r.sub ? <span className="block text-muted-foreground">{r.sub}</span> : null}
             </TableCell>
             <TableCell className="whitespace-normal">
               {changes ? <span className="t-body block">{r.title}</span> : null}
-              <VerdictTag tag={r.verdict} />
+              {r.verdict.kind === "allow" ? (
+                <span className="inline-flex items-center gap-2">
+                  <span aria-hidden="true" className="size-2 rounded-pill border border-foreground bg-lime" />
+                  <VerdictTag tag={r.verdict} />
+                </span>
+              ) : (
+                <VerdictTag tag={r.verdict} />
+              )}
             </TableCell>
             <TableCell>
               {/* The row opens on its time: the ID is in the sheet, a 26-character ID is no label for a row. */}

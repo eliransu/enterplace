@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Head, Panel, Problem } from "@/components/page";
+import { Head, Loading, Panel, Problem } from "@/components/page";
+import { Person } from "@/components/person";
 import { useData } from "@/lib/use";
 import { cn } from "@/lib/utils";
 import type { PageProps } from "@/pages";
@@ -32,6 +33,7 @@ const WINDOWS: Tab[] = [
   { name: "7d", label: "7 days" },
   { name: "30d", label: "30 days" },
 ];
+const LEAD = "Requests, cost and refusals over time, by team, person, model or provider.";
 const UP_FRONT = ["team", "person", "model", "provider"];
 
 /// Picks a window, metric or breakdown and keeps every filter, as the old page's tab links did. `from` goes: a window
@@ -40,7 +42,7 @@ function pick(query: URLSearchParams, name: string, value: string) {
   const next = new URLSearchParams(query);
   next.delete("from");
   next.set(name, value);
-  window.location.hash = `#/analytics?${next}`;
+  window.location.hash = `#/usage?${next}`;
 }
 
 function Tabs({ label, tabs, current, onPick }: { label: string; tabs: Tab[]; current: string; onPick: (name: string) => void }) {
@@ -58,28 +60,35 @@ function Tabs({ label, tabs, current, onPick }: { label: string; tabs: Tab[]; cu
 export function Analytics({ query }: PageProps) {
   // Live: the page reads the log again every 5 seconds, so a request shows in the totals, chart and ranking as it
   // arrives. Nothing on this page is a form that a redraw could lose.
-  const { data, error } = useData<Data>(`analytics${query.size ? `?${query}` : ""}`, 5000);
+  const { data, error, reload } = useData<Data>(`analytics${query.size ? `?${query}` : ""}`, 5000);
   const filtered = [...query.keys()].some((k) => !["window", "by", "metric"].includes(k));
 
   if (error) {
     return (
       <>
-        <Head title="Analytics" lead="" />
-        <Problem text={error} />
+        <Head title="Analytics" lead={LEAD} />
+        <Problem text={error} retry={reload} />
         {filtered ? (
           <Button variant="outline" asChild className="justify-self-start">
-            <a href="#/analytics">Show everything</a>
+            <a href="#/usage">Show everything</a>
           </Button>
         ) : null}
       </>
     );
   }
-  if (!data) return <Head title="Analytics" lead="" />;
+  if (!data) {
+    return (
+      <>
+        <Head title="Analytics" lead={LEAD} />
+        <Loading rows={6} />
+      </>
+    );
+  }
   if (data.empty !== undefined) {
     const empty = data.empty;
     return (
       <>
-        <Head title="Analytics" lead="" />
+        <Head title="Analytics" lead={LEAD} />
         {empty ? (
           <Panel title={empty.title}>
             <p className="t-body m-0 text-muted-foreground">{empty.body}</p>
@@ -105,7 +114,7 @@ export function Analytics({ query }: PageProps) {
     <>
       <Head title="Analytics" lead={data.lead} />
       <Tabs label="Window" tabs={WINDOWS} current={data.window} onPick={(v) => pick(query, "window", v)} />
-      <section className="grid grid-cols-3 gap-4 rounded-panel bg-card p-6">
+      <section className="grid gap-4 rounded-panel bg-card p-6 sm:grid-cols-3">
         {data.stats.map((s) => (
           <div key={s.label} className="grid gap-1">
             <p className="t-lg m-0 tabular-nums">{s.figure}</p>
@@ -144,7 +153,7 @@ export function Analytics({ query }: PageProps) {
             {data.ranking.map((r, i) => (
               <TableRow key={r.value}>
                 <TableCell>
-                  {i + 1}. <a href={r.href}>{r.value}</a>
+                  <span className="text-muted-foreground tabular-nums">{i + 1}.</span> {data.by === "person" ? <Person name={r.value} href={r.href} /> : <a href={r.href}>{r.value}</a>}
                 </TableCell>
                 {[r.requests, r.refused, r.errors, r.tokens, r.usd, r.p50, r.p95].map((v, j) => (
                   <TableCell key={j} className="t-mono-sm text-right tabular-nums">
@@ -202,7 +211,7 @@ function Forecasts({ forecasts }: { forecasts: Forecast[] }) {
           <p className="t-body-strong m-0">No budgets yet</p>
           <p className="t-body m-0 text-muted-foreground">The policy sets no budget, so nothing runs out.</p>
           <Button asChild>
-            <a href="/console/policy">Add a budget to the policy</a>
+            <a href="#/policy">Add a budget</a>
           </Button>
         </div>
       ) : (

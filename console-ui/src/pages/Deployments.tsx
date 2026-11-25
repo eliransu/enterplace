@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Head, Panel, Problem } from "@/components/page";
+import { Empty, Head, Loading, Panel, Problem } from "@/components/page";
 import { api } from "@/lib/api";
 import { useData } from "@/lib/use";
 import { cn } from "@/lib/utils";
@@ -24,23 +24,31 @@ function State({ state, note }: { state: string; note: string }) {
 }
 
 export function Deployments() {
-  const { data, error, change } = useData<View>("deployments", 5000);
+  const { data, error, change, reload } = useData<View>("deployments", 5000);
+  const [testing, setTesting] = useState("");
   const [tested, setTested] = useState<Tested | null>(null);
-  const test = (provider: string) =>
-    change(async () => {
+  const test = (provider: string) => {
+    setTesting(provider);
+    return change(async () => {
       const done = (await api.post("deployments", { provider })) as { message: string; tested: Tested };
       setTested(done.tested);
       return done;
-    });
+    }).finally(() => setTesting(""));
+  };
   return (
     <>
       <Head title="Deployments" lead={data?.lead ?? "Providers and their health."} />
-      {error ? <Problem text={error} /> : null}
+      {error ? <Problem text={error} retry={reload} /> : null}
+      {!data && !error ? <Loading rows={4} /> : null}
       {data ? (
         <>
-          <Panel title={data.deployments.length ? "Deployments" : data.none.title}>
+          <Panel title={data.deployments.length ? "Deployments" : undefined}>
             {data.deployments.length === 0 ? (
-              <p className="t-body m-0 text-muted-foreground">{data.none.body}</p>
+              <Empty title={data.none.title} body={data.none.body}>
+                <Button variant="outline" asChild>
+                  <a href="#/providers">Open providers</a>
+                </Button>
+              </Empty>
             ) : (
               <Table>
                 <TableHeader>
@@ -96,8 +104,8 @@ export function Deployments() {
                       {data.may_test ? (
                         <TableCell className="whitespace-normal">
                           <div className="flex flex-wrap items-center gap-2">
-                            <Button variant="outline" size="sm" onClick={() => test(p.name)}>
-                              Test connection
+                            <Button variant="outline" size="sm" disabled={!!testing} onClick={() => test(p.name)}>
+                              {testing === p.name ? "Testing" : "Test connection"}
                             </Button>
                             {result ? <Badge className={cn(!result.ok && "border-destructive text-destructive-text")}>{result.note ? `${result.tag}, ${result.note}` : result.tag}</Badge> : null}
                           </div>

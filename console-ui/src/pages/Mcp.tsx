@@ -1,7 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Empty, Head, Panel, Problem } from "@/components/page";
+import { Empty, Head, Loading, Panel, Problem } from "@/components/page";
+import { Confirm } from "@/components/confirm";
+import { Person } from "@/components/person";
 import { api } from "@/lib/api";
 import { useData } from "@/lib/use";
 
@@ -34,17 +36,18 @@ function NoServers({ empty }: { empty: Start }) {
   );
 }
 
-function Frame<T extends Base>({ title, fallback, data, error, rows, children }: { title: string; fallback: string; data: T | null; error: string; rows: number; children: React.ReactNode }) {
+function Frame<T extends Base>({ title, fallback, data, error, retry, rows, children }: { title: string; fallback: string; data: T | null; error: string; retry: () => void; rows: number; children: React.ReactNode }) {
   return (
     <>
       <Head title={title} lead={data?.lead ?? fallback} />
-      {error ? <Problem text={error} /> : null}
-      {data?.error ? <Problem text={data.error} /> : null}
+      {error ? <Problem text={error} retry={retry} /> : null}
+      {data?.error ? <Problem text={data.error} retry={retry} /> : null}
+      {!data && !error ? <Loading rows={3} /> : null}
       {data?.empty ? <NoServers empty={data.empty} /> : null}
       {data && !data.empty && !data.error ? (
         rows === 0 ? (
-          <Panel title={data.none.title}>
-            <p className="t-body m-0 text-muted-foreground">{data.none.body}</p>
+          <Panel>
+            <Empty title={data.none.title} body={data.none.body} />
           </Panel>
         ) : (
           children
@@ -55,11 +58,11 @@ function Frame<T extends Base>({ title, fallback, data, error, rows, children }:
 }
 
 export function McpTools() {
-  const { data, error, change } = useData<Base & { tools: Tool[] }>("mcp-tools", EVERY);
+  const { data, error, change, reload } = useData<Base & { tools: Tool[] }>("mcp-tools", EVERY);
   const act = (action: string, tool: string) => change(() => api.post("mcp-tools", { action, tool }));
   return (
-    <Frame title="MCP tools" fallback="Each tool your MCP servers offer, and who may use it." data={data} error={error} rows={data?.tools?.length ?? 0}>
-      <Panel title="Tools" note="A tool is pinned to the description and schema it was first seen with. A change is recorded, and held for approval on a server with tool_changes: block.">
+    <Frame title="Tools" fallback="Each tool your MCP servers offer, and who may use it." data={data} error={error} retry={reload} rows={data?.tools?.length ?? 0}>
+      <Panel title={`${data?.tools.length ?? 0} tools`} note="A tool is pinned to the description and schema it was first seen with. A change is recorded, and held for approval on a server with tool_changes: block.">
         <Table>
           <TableHeader>
             <TableRow>
@@ -94,9 +97,18 @@ export function McpTools() {
                           Approve change
                         </Button>
                       ) : null}
-                      <Button variant="outline" size="sm" onClick={() => act(t.stopped ? "start" : "stop", t.id)}>
-                        {t.stopped ? "Start tool" : "Stop tool"}
-                      </Button>
+                      {t.stopped ? (
+                        <Button variant="outline" size="sm" onClick={() => act("start", t.id)}>
+                          Start tool
+                        </Button>
+                      ) : (
+                        <Confirm
+                          label="Stop tool"
+                          title={`Stop ${t.name}?`}
+                          detail={`Every call to ${t.name} is refused until an admin starts it again, on every gateway within 2 seconds.`}
+                          onConfirm={() => act("stop", t.id)}
+                        />
+                      )}
                     </div>
                   </TableCell>
                 ) : null}
@@ -110,11 +122,11 @@ export function McpTools() {
 }
 
 export function McpApprovals() {
-  const { data, error, change } = useData<Base & { calls: Call[] }>("mcp-approvals", EVERY);
+  const { data, error, change, reload } = useData<Base & { calls: Call[] }>("mcp-approvals", EVERY);
   const decide = (action: string, id: string) => change(() => api.post("mcp-approvals", { action, id }));
   return (
-    <Frame title="MCP approvals" fallback="Tool calls waiting for an admin." data={data} error={error} rows={data?.calls?.length ?? 0}>
-      <Panel title="Waiting" note="A call waits until it is approved or denied here, or its time runs out.">
+    <Frame title="Approvals" fallback="Tool calls waiting for an admin." data={data} error={error} retry={reload} rows={data?.calls?.length ?? 0}>
+      <Panel title={`${data?.calls.length ?? 0} waiting`} note="A call waits until it is approved or denied here, or its time runs out.">
         <Table>
           <TableHeader>
             <TableRow>
@@ -129,21 +141,27 @@ export function McpApprovals() {
               <TableRow key={c.id}>
                 <TableCell className="t-mono">{c.tool}</TableCell>
                 <TableCell className="whitespace-normal">
-                  {c.person} of team {c.team}
+                  <Person name={c.person} /> of team {c.team}
                   <span className="block text-muted-foreground">
                     Rule {c.rule}, asked {c.asked_at}
                   </span>
                 </TableCell>
-                <TableCell className="t-mono-sm max-w-measure whitespace-normal break-all">{c.arguments}</TableCell>
+                <TableCell className="max-w-measure whitespace-normal">
+                  <span className="t-small block text-muted-foreground">The arguments the agent sent:</span>
+                  <code className="t-mono-sm block break-all">{c.arguments}</code>
+                </TableCell>
                 {data.editable ? (
                   <TableCell>
                     <div className="flex flex-wrap gap-2">
                       <Button size="sm" onClick={() => decide("approve", c.id)}>
                         Approve
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => decide("deny", c.id)}>
-                        Deny
-                      </Button>
+                      <Confirm
+                        label="Deny"
+                        title={`Deny this call to ${c.tool}?`}
+                        detail="The agent gets a refusal for this call. The decision is recorded with your name."
+                        onConfirm={() => decide("deny", c.id)}
+                      />
                     </div>
                   </TableCell>
                 ) : null}
@@ -157,11 +175,11 @@ export function McpApprovals() {
 }
 
 export function McpSessions() {
-  const { data, error, change } = useData<Base & { sessions: Session[]; connections: Connection[] }>("mcp-sessions", EVERY);
+  const { data, error, change, reload } = useData<Base & { sessions: Session[]; connections: Connection[] }>("mcp-sessions", EVERY);
   const end = (id: string) => change(() => api.post("mcp-sessions", { id }));
   const rows = (data?.sessions?.length ?? 0) + (data?.connections?.length ?? 0);
   return (
-    <Frame title="MCP sessions" fallback="Connected MCP clients and accounts." data={data} error={error} rows={rows}>
+    <Frame title="Sessions" fallback="Connected MCP clients and accounts." data={data} error={error} retry={reload} rows={rows}>
       {data?.sessions.length ? (
         <Panel title="Clients" note="An ended session's client connects again to go on.">
           <Table>
@@ -186,9 +204,12 @@ export function McpSessions() {
                   <TableCell className="tabular-nums">{s.last_used}</TableCell>
                   {data.editable ? (
                     <TableCell>
-                      <Button variant="outline" size="sm" onClick={() => end(s.id)}>
-                        End session
-                      </Button>
+                      <Confirm
+                        label="End session"
+                        title={`End the session of ${s.who}?`}
+                        detail={`${s.client} loses its connection. It connects again to go on.`}
+                        onConfirm={() => end(s.id)}
+                      />
                     </TableCell>
                   ) : null}
                 </TableRow>
@@ -215,9 +236,12 @@ export function McpSessions() {
                   </TableCell>
                   {data.editable ? (
                     <TableCell>
-                      <Button variant="outline" size="sm" onClick={() => end(c.id)}>
-                        Disconnect
-                      </Button>
+                      <Confirm
+                        label="Disconnect"
+                        title={`Disconnect ${c.person} from ${c.server}?`}
+                        detail={`${c.person} signs in to ${c.server} again to use its tools.`}
+                        onConfirm={() => end(c.id)}
+                      />
                     </TableCell>
                   ) : null}
                 </TableRow>

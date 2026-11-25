@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Head, Panel, Problem } from "@/components/page";
+import { Head, Loading, Panel, Problem } from "@/components/page";
 import { useData } from "@/lib/use";
 
 type Team = { name: string; keys: string; owner: string | null; people: { name: string; admin: boolean }[]; rule: string; budget: string };
@@ -14,12 +14,12 @@ type Data = {
 
 export function Teams() {
   // Live: a key issued or a policy saved shows within the next 5 seconds.
-  const { data, error } = useData<Data>("teams", 5000);
+  const { data, error, reload } = useData<Data>("teams", 5000);
   return (
     <>
       <Head
         title="Teams"
-        lead="Who is in each team."
+        lead="Who is in each team, the rule it falls under, and its budget."
         actions={
           data?.issue ? (
             <Button asChild>
@@ -28,8 +28,9 @@ export function Teams() {
           ) : null
         }
       />
-      {error ? <Problem text={error} /> : null}
-      {data?.error ? <Problem text={data.error} /> : null}
+      {error ? <Problem text={error} retry={reload} /> : null}
+      {data?.error ? <Problem text={data.error} retry={reload} /> : null}
+      {!data && !error ? <Loading rows={4} /> : null}
       {data?.empty ? (
         <Panel title={data.empty.title}>
           <p className="t-body m-0 text-muted-foreground">{data.empty.body}</p>
@@ -45,12 +46,12 @@ export function Teams() {
           </div>
         </Panel>
       ) : data?.teams?.length ? (
-        <Panel title="Teams">
+        <Panel title={`${data.teams.length} ${data.teams.length === 1 ? "team" : "teams"}`}>
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Team</TableHead>
-                <TableHead>People and workloads</TableHead>
+                <TableHead>People and apps</TableHead>
                 <TableHead>Rule</TableHead>
                 <TableHead className="text-right">Budget</TableHead>
               </TableRow>

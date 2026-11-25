@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Empty, Head, Panel, Problem, Refusal } from "@/components/page";
+import { Empty, Head, Panel, Problem, Refusal, Form, Loading } from "@/components/page";
 import { Remove } from "@/components/confirm";
 import { api, part, type Me } from "@/lib/api";
 import { useData, words } from "@/lib/use";
@@ -16,14 +16,14 @@ type Preset = { id: string; name: string; local: boolean; needs_url: boolean; mo
 type Data = { providers: Provider[]; catalog: Preset[]; sealing: boolean };
 
 export function Providers({ me }: { me: Me | null }) {
-  const { data, error, change } = useData<Data>("providers");
+  const { data, error, change, reload } = useData<Data>("providers");
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
   const may = !!me?.edit_policy;
   return (
     <>
       <Head
-        title="Models and providers"
+        title="Providers"
         lead="Each provider, the models it serves, and where a failed request goes next."
         actions={
           <Button disabled={!may || !data} onClick={() => setAdding(true)}>
@@ -31,10 +31,14 @@ export function Providers({ me }: { me: Me | null }) {
           </Button>
         }
       />
-      {error ? <Problem text={error} /> : null}
-      <Panel title="Providers" note="Prices per model are on the Prices page.">
-        {data && data.providers.length === 0 ? (
-          <Empty title="No providers yet" body="Add one from the catalog: paste its key and pick the models it serves." />
+      {error ? <Problem text={error} retry={reload} /> : null}
+      {!data && !error ? <Loading rows={3} /> : null}
+      {data ? (
+      <Panel title={data.providers.length ? `${data.providers.length} ${data.providers.length === 1 ? "provider" : "providers"}` : undefined} note="Prices per model are under Models and prices.">
+        {data.providers.length === 0 ? (
+          <Empty title="No providers yet" body="Add one from the catalog: paste its key and pick the models it serves. Until then, the demo model answers with sample text.">
+            {may ? <Button onClick={() => setAdding(true)}>Add a provider</Button> : null}
+          </Empty>
         ) : (
           <Table>
             <TableHeader>
@@ -86,6 +90,7 @@ export function Providers({ me }: { me: Me | null }) {
           </Table>
         )}
       </Panel>
+      ) : null}
       {data && adding ? <AddProvider data={data} me={me} onClose={() => setAdding(false)} change={change} /> : null}
       {data && editing ? <EditProvider provider={editing} others={data.providers} onClose={() => setEditing(null)} change={change} /> : null}
     </>
@@ -115,7 +120,7 @@ function AddProvider({ data, me, onClose, change }: { data: Data; me: Me | null;
       <DialogContent>
         <DialogTitle>Add a provider</DialogTitle>
         <DialogDescription>Pick it from the catalog. Every gateway sends requests to it within 2 seconds.</DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           <Field id="preset" label="Provider">
             <Select
               value={preset}
@@ -166,7 +171,7 @@ function AddProvider({ data, me, onClose, change }: { data: Data; me: Me | null;
             </Button>
             <Button type="submit">Add provider</Button>
           </DialogFooter>
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
@@ -190,7 +195,7 @@ function EditProvider({ provider, others, onClose, change }: { provider: Provide
       <DialogContent>
         <DialogTitle>Edit {provider.name}</DialogTitle>
         <DialogDescription>The models it serves, and where a request goes when it keeps failing.</DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           <Field id="models" label="Models" hint="Separated by commas. * serves every model the provider has.">
             <Input id="models" className="t-mono" value={models} onChange={(e) => setModels(e.target.value)} required />
           </Field>
@@ -221,7 +226,7 @@ function EditProvider({ provider, others, onClose, change }: { provider: Provide
             </Button>
             <Button type="submit">Save</Button>
           </DialogFooter>
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );

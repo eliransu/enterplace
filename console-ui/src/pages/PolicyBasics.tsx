@@ -3,11 +3,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Empty, Head, Panel, Problem, Refusal } from "@/components/page";
+import { Empty, Head, Panel, Problem, Refusal, Form, Loading } from "@/components/page";
 import { Remove } from "@/components/confirm";
 import { api, part, type Me } from "@/lib/api";
 import { useData, words } from "@/lib/use";
@@ -24,7 +25,8 @@ const WHO: Record<string, string> = { any: "Everyone", team: "A team", name: "A 
 const who = (r: Rule) => (r.who.kind === "any" ? "everyone" : r.who.kind === "other" ? "see the raw policy" : `${r.who.kind === "name" ? "person" : r.who.kind} ${r.who.value}`);
 
 export function PolicyBasics({ me }: { me: Me | null }) {
-  const { data, error, change } = useData<Data>("policy");
+  const { data, error, change, reload } = useData<Data>("policy");
+  const [observing, setObserving] = useState(false);
   const [rule, setRule] = useState<Rule | "new" | null>(null);
   const [limit, setLimit] = useState<Limit | "new" | null>(null);
   const [guard, setGuard] = useState<Guardrail | "new" | null>(null);
@@ -33,15 +35,11 @@ export function PolicyBasics({ me }: { me: Me | null }) {
   return (
     <>
       <Head
-        title="Policy basics"
+        title="Rules and limits"
         lead="Who may use which models, what they may spend, which guardrails run, and where requests go."
-        actions={
-          <Button variant="outline" asChild>
-            <a href="/console/policy">Raw policy (advanced)</a>
-          </Button>
-        }
       />
-      {error ? <Problem text={error} /> : null}
+      {error ? <Problem text={error} retry={reload} /> : null}
+      {!data && !error ? <Loading rows={6} /> : null}
       {data ? (
         <>
           <Panel title="Mode">
@@ -49,10 +47,22 @@ export function PolicyBasics({ me }: { me: Me | null }) {
               <Switch
                 checked={data.mode === "enforce"}
                 disabled={!may}
-                onCheckedChange={(on) => change(() => api.put("policy/mode", { mode: on ? "enforce" : "observe" }))}
+                onCheckedChange={(on) => (on ? change(() => api.put("policy/mode", { mode: "enforce" })) : setObserving(true))}
               />
               {data.mode === "enforce" ? "Enforce: what the policy does not allow is refused." : "Observe: everything goes through, and what the policy would refuse is recorded."}
             </label>
+            <AlertDialog open={observing} onOpenChange={setObserving}>
+              <AlertDialogContent>
+                <AlertDialogTitle>Stop enforcing the policy?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  In observe mode nothing is refused: every request goes through, budgets and guardrails only record what they would stop. Every gateway follows within 2 seconds.
+                </AlertDialogDescription>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => change(() => api.put("policy/mode", { mode: "observe" }))}>Switch to observe</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </Panel>
 
           <Panel
@@ -285,7 +295,7 @@ function RuleForm({ rule, guardrails, onClose, change }: { rule: Rule | null; gu
       <DialogContent>
         <DialogTitle>{rule ? `Edit rule ${rule.name}` : "Add a rule"}</DialogTitle>
         <DialogDescription>Who it is for, the models they may use, and the guardrails their requests pass.</DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           {rule ? null : (
             <Field id="rule-name" label="Name">
               <Input id="rule-name" className="t-mono" value={name} onChange={(e) => setName(e.target.value)} placeholder="payments-team" required />
@@ -329,7 +339,7 @@ function RuleForm({ rule, guardrails, onClose, change }: { rule: Rule | null; gu
           ) : null}
           <Refusal text={refused} />
           <Actions onClose={onClose} label={rule ? "Save" : "Add rule"} />
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
@@ -405,7 +415,7 @@ function LimitForm({ limit, onClose, change }: { limit: Limit | null; onClose: (
       <DialogContent>
         <DialogTitle>{limit ? "Edit the limit" : "Add a limit"}</DialogTitle>
         <DialogDescription>Fill in what to cap. Leave a field empty for no cap on it.</DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           <Field id="scope" label="For">
             <Select value={scope} onValueChange={setScope}>
               <SelectTrigger id="scope">
@@ -459,7 +469,7 @@ function LimitForm({ limit, onClose, change }: { limit: Limit | null; onClose: (
           </div>
           <Refusal text={refused} />
           <Actions onClose={onClose} label="Save" />
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
@@ -516,7 +526,7 @@ function GuardForm({ guard, onClose, change }: { guard: Guardrail | null; onClos
       <DialogContent>
         <DialogTitle>{guard ? `Edit guardrail ${guard.name}` : "Add a guardrail"}</DialogTitle>
         <DialogDescription>A detector requests or answers pass through. The check names any setting its type still needs.</DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           {guard ? null : (
             <Field id="guard-name" label="Name">
               <Input id="guard-name" className="t-mono" value={name} onChange={(ev) => setName(ev.target.value)} placeholder="no-secrets" required />
@@ -606,7 +616,7 @@ function GuardForm({ guard, onClose, change }: { guard: Guardrail | null; onClos
           </Field>
           <Refusal text={refused} />
           <Actions onClose={onClose} label={guard ? "Save" : "Add guardrail"} />
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
@@ -629,7 +639,7 @@ function AliasForm({ alias, onClose, change }: { alias: Alias | null; onClose: (
       <DialogContent>
         <DialogTitle>{alias ? `Edit alias ${alias.name}` : "Add an alias"}</DialogTitle>
         <DialogDescription>Callers send the alias as the model. A rule's models must name it for them to use it.</DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           {alias ? null : (
             <Field id="alias-name" label="Name">
               <Input id="alias-name" className="t-mono" value={name} onChange={(e) => setName(e.target.value)} placeholder="smart" required />
@@ -643,7 +653,7 @@ function AliasForm({ alias, onClose, change }: { alias: Alias | null; onClose: (
           </Field>
           <Refusal text={refused} />
           <Actions onClose={onClose} label={alias ? "Save" : "Add alias"} />
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );

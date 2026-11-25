@@ -1,13 +1,17 @@
 import { useState } from "react";
+import { Copy } from "@/components/copy";
+import { Setup } from "./Setup";
+import { goTo } from "@/lib/use";
+import type { PageProps } from "@/pages";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Empty, Head, Panel, Problem, Refusal } from "@/components/page";
+import { Empty, Head, Panel, Problem, Refusal, Form, Loading, Cut } from "@/components/page";
 import { Remove } from "@/components/confirm";
-import { api, part, type Me } from "@/lib/api";
+import { api, part } from "@/lib/api";
 import { useData, words } from "@/lib/use";
 
 type Access = { rule: string; allow: string[]; deny: string[]; everything: boolean };
@@ -30,9 +34,15 @@ const AUTH: Record<string, string> = {
   oauth: "Each person signs in (OAuth)",
 };
 
-export function McpServers({ me }: { me: Me | null }) {
-  const { data, error, change } = useData<{ servers: Server[] }>("mcp");
-  const [form, setForm] = useState<Server | "new" | null>(null);
+export function McpServers({ me, query }: PageProps) {
+  const { data, error, change, reload } = useData<{ servers: Server[] }>("mcp");
+  const [picked, setForm] = useState<Server | "new" | null>(null);
+  // `?add=1` opens Add a server, so Overview's next step is a link.
+  const form = picked ?? (query.get("add") === "1" && me?.edit_policy ? "new" : null);
+  const close = () => {
+    setForm(null);
+    if (query.get("add")) goTo("/mcp");
+  };
   const [tools, setTools] = useState<Server | null>(null);
   const may = !!me?.edit_policy;
   return (
@@ -41,15 +51,21 @@ export function McpServers({ me }: { me: Me | null }) {
         title="MCP servers"
         lead="The MCP servers agents reach through Enterplace, and which tools each rule may call."
         actions={
-          <Button disabled={!may} onClick={() => setForm("new")}>
-            Add a server
-          </Button>
+          data?.servers.length ? (
+            <Button disabled={!may} onClick={() => setForm("new")}>
+              Add a server
+            </Button>
+          ) : null
         }
       />
-      {error ? <Problem text={error} /> : null}
-      <Panel title="Servers" note="Tools each server lists, their changes and kill switches are under MCP tools.">
-        {data && data.servers.length === 0 ? (
-          <Empty title="No MCP servers yet" body="Add one with its URL, or the program the gateway starts for it." />
+      {error ? <Problem text={error} retry={reload} /> : null}
+      {!data && !error ? <Loading rows={3} /> : null}
+      {data ? (
+      <Panel title={data.servers.length ? `${data.servers.length} ${data.servers.length === 1 ? "server" : "servers"}` : undefined} note="The tools each server lists, their changes and their stop switches are under Tools.">
+        {data.servers.length === 0 ? (
+          <Empty title="No MCP servers yet" body="Add one with its URL, or the program the gateway starts for it. Agents then reach its tools through Enterplace, and each call is recorded under the person who made it.">
+            {may ? <Button onClick={() => setForm("new")}>Add a server</Button> : null}
+          </Empty>
         ) : (
           <Table>
             <TableHeader>
@@ -68,7 +84,12 @@ export function McpServers({ me }: { me: Me | null }) {
                     {s.name}
                     <span className="block text-muted-foreground">{s.transport}</span>
                   </TableCell>
-                  <TableCell className="whitespace-normal">{s.url ?? [s.command, ...s.args].join(" ")}</TableCell>
+                  <TableCell>
+                    <span className="flex items-center gap-2">
+                      <Cut text={s.url ?? [s.command, ...s.args].join(" ")} className="t-mono-sm" />
+                      <Copy text={s.url ?? [s.command, ...s.args].join(" ")} />
+                    </span>
+                  </TableCell>
                   <TableCell>{s.auth === "header" ? `${s.auth_header} from ${s.auth_env}` : AUTH[s.auth] ?? s.auth}</TableCell>
                   <TableCell className="whitespace-normal">
                     {s.access.map((a) => (
@@ -99,7 +120,12 @@ export function McpServers({ me }: { me: Me | null }) {
           </Table>
         )}
       </Panel>
-      {form ? <ServerForm server={form === "new" ? null : form} onClose={() => setForm(null)} change={change} /> : null}
+      ) : null}
+      <section aria-label="Set up" className="grid gap-4">
+        <h2 className="t-sm m-0">Set up MCP tools</h2>
+        <Setup query={query} base="/mcp" track="mcp" />
+      </section>
+      {form ? <ServerForm server={form === "new" ? null : form} onClose={close} change={change} /> : null}
       {tools ? <ToolAccess server={tools} onClose={() => setTools(null)} change={change} /> : null}
     </>
   );
@@ -132,7 +158,7 @@ function ServerForm({ server, onClose, change }: { server: Server | null; onClos
       <DialogContent>
         <DialogTitle>{server ? `Edit ${server.name}` : "Add an MCP server"}</DialogTitle>
         <DialogDescription>Agents see its tools as server.tool. No rule allows them until you say so under Tools.</DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           {server ? null : (
             <Field id="name" label="Name" hint="Letters, digits, - and _, no dot. For example github.">
               <Input id="name" className="t-mono" value={name} onChange={(e) => setName(e.target.value)} required autoComplete="off" />
@@ -195,7 +221,7 @@ function ServerForm({ server, onClose, change }: { server: Server | null; onClos
             </Button>
             <Button type="submit">{server ? "Save" : "Add server"}</Button>
           </DialogFooter>
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
@@ -217,7 +243,7 @@ function ToolAccess({ server, onClose, change }: { server: Server; onClose: () =
       <DialogContent className="max-w-wide">
         <DialogTitle>Tools of {server.name}</DialogTitle>
         <DialogDescription>For each rule: the tools it may call (* for all) and the ones it may never call, by the server's own tool names.</DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           {rows.map((r, i) => (
             <div key={r.rule} className="grid gap-4 md:grid-cols-[1fr_2fr_2fr] md:items-end">
               <span className="t-mono min-h-11 content-center">{r.rule}</span>
@@ -236,7 +262,7 @@ function ToolAccess({ server, onClose, change }: { server: Server; onClose: () =
             </Button>
             <Button type="submit">Save</Button>
           </DialogFooter>
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );

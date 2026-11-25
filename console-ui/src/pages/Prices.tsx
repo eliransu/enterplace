@@ -5,7 +5,7 @@ import { Field } from "@/components/ui/field";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Head, Panel, Problem, Refusal } from "@/components/page";
+import { Head, Panel, Problem, Refusal, Form, Loading } from "@/components/page";
 import { api } from "@/lib/api";
 import { useData } from "@/lib/use";
 import type { PageProps } from "@/pages";
@@ -35,19 +35,16 @@ export function Prices({ query }: PageProps) {
   const adding = query.get("add") === "1";
   const pricing = query.get("price") ?? "";
   // Live: the page reads the policy again every 5 seconds, unless a dialog is open.
-  const { data, error, change } = useData<Data>("prices", 5000, adding || !!pricing);
+  const { data, error, change, reload } = useData<Data>("prices", 5000, adding || !!pricing);
   const editable = !!data?.editable;
   const priced = data?.models?.find((m) => m.model === pricing);
   return (
     <>
       <Head
-        title="Prices"
+        title="Models and prices"
         lead={data?.lead ?? "Each model, its provider and its price."}
         actions={
           <>
-            <Button variant="outline" asChild>
-              <a href="#/providers">Providers and models</a>
-            </Button>
             {editable ? <Button onClick={() => setQuery({ add: "1" })}>Add a model</Button> : null}
           </>
         }
@@ -57,8 +54,9 @@ export function Prices({ query }: PageProps) {
           Read only: prices come from <span className="t-mono">{data.file}</span>. <a href={data.docs}>How to edit here</a>
         </p>
       ) : null}
-      {error ? <Problem text={error} /> : null}
-      {data?.error ? <Problem text={data.error} /> : null}
+      {error ? <Problem text={error} retry={reload} /> : null}
+      {data?.error ? <Problem text={data.error} retry={reload} /> : null}
+      {!data && !error ? <Loading rows={5} /> : null}
       {data?.models ? (
         data.models.length === 0 ? (
           <Panel title={data.empty.title}>
@@ -143,7 +141,7 @@ function AddDialog(props: { providers: string[]; provider: string; model: string
         <DialogDescription>
           Saved as a new policy version. It is checked as enterplace check checks a file and every gateway serves it within 2 seconds, or after a second admin approves it.
         </DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           <Field id="model-provider" label="Provider">
             <Select value={provider} onValueChange={setProvider}>
               <SelectTrigger id="model-provider">
@@ -172,7 +170,7 @@ function AddDialog(props: { providers: string[]; provider: string; model: string
             </Button>
             <Button type="submit">Save version</Button>
           </DialogFooter>
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
@@ -195,7 +193,7 @@ function PriceDialog(props: { model: string; input: string; output: string; base
         <DialogDescription>
           What <span className="t-mono">{props.model}</span> costs, for budgets and the spend page. Saved as a new policy version.
         </DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           <PriceFields id="price" input={input} output={output} setInput={setInput} setOutput={setOutput} />
           <Refusal text={refused} />
           <DialogFooter>
@@ -204,7 +202,7 @@ function PriceDialog(props: { model: string; input: string; output: string; base
             </Button>
             <Button type="submit">Save version</Button>
           </DialogFooter>
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );

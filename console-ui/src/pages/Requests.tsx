@@ -5,7 +5,8 @@ import { Field } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Head, Panel, Problem, Refusal } from "@/components/page";
+import { Head, Loading, Panel, Problem, Refusal } from "@/components/page";
+import { Person, unnamed } from "@/components/person";
 import { Copy } from "@/components/copy";
 import { api, part, Refused } from "@/lib/api";
 import { useData } from "@/lib/use";
@@ -80,8 +81,14 @@ function with_(query: URLSearchParams, name: string, value: string) {
 }
 
 // The tag kinds the API sends, as the console's Tag colors them: a refusal or a failed proof stands out.
+// Lime marks a request that passed, flame one that was stopped: the only two colors in the console.
 function TagOf({ tag }: { tag: Tag }) {
-  return <Badge className={cn((tag.kind === "refused" || tag.kind === "block") && "border-destructive text-destructive-text", tag.kind === "allow" && "border-transparent pl-0 text-muted-foreground")}>{tag.text}</Badge>;
+  return (
+    <Badge className={cn((tag.kind === "refused" || tag.kind === "block") && "border-destructive text-destructive-text", tag.kind === "allow" && "border-transparent pl-0 text-muted-foreground")}>
+      {tag.kind === "allow" ? <span aria-hidden="true" className="size-2 rounded-pill border border-foreground bg-lime" /> : null}
+      {tag.text}
+    </Badge>
+  );
 }
 
 export function Requests({ query }: PageProps) {
@@ -89,23 +96,24 @@ export function Requests({ query }: PageProps) {
   const list = new URLSearchParams(query);
   list.delete("record");
   // Live: the list is read again every 5 seconds, unless a request's sheet is open over it.
-  const { data, error } = useData<Data>(`requests${list.size ? `?${list}` : ""}`, 5000, !!record);
+  const { data, error, reload } = useData<Data>(`requests${list.size ? `?${list}` : ""}`, 5000, !!record);
 
   return (
     <>
       <Head title="Requests" lead={data?.lead ?? "Every request, newest first. New ones appear as they arrive."} />
       {error ? (
         <Panel title="This did not load">
-          <Problem text={error} />
+          <Problem text={error} retry={reload} />
           <Button variant="outline" className="justify-self-start" onClick={() => setQuery(new URLSearchParams())}>
             Show everything
           </Button>
         </Panel>
       ) : null}
+      {!data && !error ? <Loading rows={8} /> : null}
       {data ? (
         <section className="grid gap-6 rounded-panel bg-card p-6">
           {/* Keyed by the query, so a new link refills the fields and a poll never resets what is being typed. */}
-          <Filters key={list.toString()} data={data} query={list} />
+          {data.empty && !list.size ? null : <Filters key={list.toString()} data={data} query={list} />}
           {data.empty ? <EmptyPanel empty={data.empty} /> : <RowsTable data={data} query={list} />}
         </section>
       ) : null}
@@ -224,7 +232,7 @@ function RowsTable({ data, query }: { data: Data; query: URLSearchParams }) {
   const { pager } = data;
   return (
     <>
-      <Table className="t-mono-sm">
+      <Table className="t-mono-sm" long>
         <TableHeader>
           <TableRow>
             <TableHead>Time (UTC)</TableHead>
@@ -247,7 +255,7 @@ function RowsTable({ data, query }: { data: Data; query: URLSearchParams }) {
                 </a>
               </TableCell>
               <TableCell>
-                {narrow("person", r.person)}
+                {unnamed(r.person) ? <Person name={r.person} /> : narrow("person", r.person)}
                 <span className="block text-muted-foreground">{narrow("team", r.team)}</span>
               </TableCell>
               <TableCell>
@@ -291,7 +299,7 @@ function Facts({ facts }: { facts: Pair[] }) {
       {facts.map(([label, value]) => (
         <div key={label} className="contents">
           <dt className="t-tag uppercase text-muted-foreground">{label}</dt>
-          <dd className="t-mono-sm m-0 break-all">{value}</dd>
+          <dd className="t-mono-sm m-0 break-all">{label === "Person" && unnamed(value) ? <Person name={value} /> : value}</dd>
         </div>
       ))}
     </dl>

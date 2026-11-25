@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Head, Panel, Problem, Refusal } from "@/components/page";
+import { Form, Head, Loading, Panel, Problem, Refusal } from "@/components/page";
+import { Confirm } from "@/components/confirm";
 import { api, Refused } from "@/lib/api";
 import { useData } from "@/lib/use";
 import { cn } from "@/lib/utils";
@@ -49,8 +50,9 @@ function Code({ lines, hit }: { lines: Line[]; hit?: number }) {
           data-kind={l.kind || undefined}
           className={cn(
             "flex gap-4 px-6 whitespace-pre",
-            (l.n === hit || l.kind === "add") && l.kind !== "note" && "bg-lime text-on-lime",
-            (l.kind === "del" || l.kind === "error") && "text-destructive-text",
+            (l.n === hit || l.kind === "add") && l.kind !== "note" && "bg-card font-semibold",
+            l.kind === "del" && "text-muted-foreground line-through",
+            l.kind === "error" && "text-destructive-text",
             l.kind === "note" && "whitespace-pre-wrap text-destructive-text",
           )}
         >
@@ -82,7 +84,7 @@ function List({ items }: { items: { key: string; title: string; meta: string; si
 
 export function RawPolicy({ query }: PageProps) {
   // Live: the page reads the policy again every 5 seconds, so a new version or a fixed file shows without a reload.
-  const { data, error } = useData<Raw>("policy/raw", 5000);
+  const { data, error, reload } = useData<Raw>("policy/raw", 5000);
   const hit = Number(query.get("line") ?? "") || undefined;
   const loaded = !!data?.lines;
   useEffect(() => {
@@ -95,32 +97,25 @@ export function RawPolicy({ query }: PageProps) {
   return (
     <>
       <Head
-        title="Raw policy"
+        title="Policy file"
         lead={data?.lead ?? data?.failed?.body ?? "One file decides every request."}
         actions={
           <>
-            <Button variant="outline" asChild>
-              <a href="#/policy">Edit with forms</a>
-            </Button>
             {data?.edit ? (
               <Button asChild>
                 <a href="#/policy/edit">Edit</a>
               </Button>
             ) : null}
             {data?.store ? (
-              <>
-                <Button variant="outline" asChild>
-                  <a href="#/policy/versions">Versions</a>
-                </Button>
-                <Button variant="outline" asChild>
-                  <a href="/console/policy/export">Export YAML</a>
-                </Button>
-              </>
+              <Button variant="outline" asChild>
+                <a href="/console/policy/export">Export YAML</a>
+              </Button>
             ) : null}
           </>
         }
       />
-      {error ? <Problem text={error} /> : null}
+      {error ? <Problem text={error} retry={reload} /> : null}
+      {!data && !error ? <Loading rows={8} /> : null}
       {data?.failed ? (
         <Panel title={data.failed.title}>
           <p className="t-body m-0 text-muted-foreground">{data.failed.body}</p>
@@ -239,6 +234,28 @@ function Report({ run }: { run: Run }) {
   );
 }
 
+/// A button that waits for what it started: disabled until the gateway answers, so it is never sent twice.
+function Busy({ run, children, ...props }: Omit<React.ComponentProps<typeof Button>, "onClick"> & { run: () => Promise<unknown> }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      {...props}
+      disabled={busy || props.disabled}
+      aria-busy={busy || undefined}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await run();
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {children}
+    </Button>
+  );
+}
+
 /// A dry run of `text` over the last `hours`: the report, or the refusal as a toast.
 async function dryRun(text: string, hours: number | string): Promise<Run | null> {
   try {
@@ -256,7 +273,7 @@ async function dryRun(text: string, hours: number | string): Promise<Run | null>
 
 export function PolicyVersions({ query }: PageProps) {
   const version = query.get("version") ?? "";
-  const { data, error, change } = useData<Versions>(`policy/versions${version ? `?version=${encodeURIComponent(version)}` : ""}`, 5000);
+  const { data, error, change, reload } = useData<Versions>(`policy/versions${version ? `?version=${encodeURIComponent(version)}` : ""}`, 5000);
   const [run, setRun] = useState<Run | null>(null);
   useEffect(() => setRun(null), [version]);
   const detail = data?.detail;
@@ -264,12 +281,12 @@ export function PolicyVersions({ query }: PageProps) {
   const labels: Record<string, [string, "default" | "outline" | "destructive"]> = {
     approve: ["Approve and put live", "default"],
     reject: ["Reject", "outline"],
-    rollback: ["Roll back to this version", "destructive"],
+    rollback: ["Roll back to this version", "outline"],
   };
   return (
     <>
       <Head
-        title="Policy versions"
+        title="Versions"
         lead={data?.lead ?? ""}
         actions={
           data?.versions ? (
@@ -286,7 +303,8 @@ export function PolicyVersions({ query }: PageProps) {
           ) : null
         }
       />
-      {error ? <Problem text={error} /> : null}
+      {error ? <Problem text={error} retry={reload} /> : null}
+      {!data && !error ? <Loading rows={5} /> : null}
       {data?.file ? (
         <Panel title={data.file.title}>
           <p className="t-body m-0 text-muted-foreground">{data.file.body}</p>
@@ -314,13 +332,25 @@ export function PolicyVersions({ query }: PageProps) {
             <div className="flex flex-wrap gap-2">
               {detail.actions.map((a) =>
                 a === "dry_run" ? (
-                  <Button key={a} variant="outline" onClick={async () => setRun(await dryRun(detail.text, 24))}>
+                  <Busy key={a} variant="outline" run={async () => setRun(await dryRun(detail.text, 24))}>
                     Dry run, last 24 hours
-                  </Button>
+                  </Busy>
+                ) : a === "rollback" || a === "reject" ? (
+                  <Confirm
+                    key={a}
+                    label={labels[a][0]}
+                    title={a === "rollback" ? `Roll back to version ${detail.id}?` : `Reject version ${detail.id}?`}
+                    detail={
+                      a === "rollback"
+                        ? `Every gateway serves version ${detail.id} within 2 seconds. The versions after it stay in the history.`
+                        : "It never goes live. Its text stays in the history, and the decision is recorded with your name."
+                    }
+                    onConfirm={() => act(a)}
+                  />
                 ) : (
-                  <Button key={a} variant={labels[a]?.[1] ?? "outline"} onClick={() => act(a)}>
+                  <Busy key={a} variant={labels[a]?.[1] ?? "outline"} run={async () => act(a)}>
                     {labels[a]?.[0] ?? a}
-                  </Button>
+                  </Busy>
                 ),
               )}
             </div>
@@ -343,7 +373,7 @@ export function PolicyVersions({ query }: PageProps) {
             <TableBody>
               {data.versions.map((v) => (
                 <TableRow key={v.id} aria-selected={detail?.id === v.id || undefined} className={cn(detail?.id === v.id && "[&>td]:bg-well")}>
-                  <TableCell>
+                  <TableCell className="whitespace-nowrap">
                     <a href={`#/policy/versions?version=${v.id}`}>Version {v.id}</a>
                   </TableCell>
                   <TableCell>
@@ -351,7 +381,7 @@ export function PolicyVersions({ query }: PageProps) {
                   </TableCell>
                   <TableCell>
                     {v.by}
-                    <span className="block text-muted-foreground">{v.at}</span>
+                    <span className="block whitespace-nowrap text-muted-foreground">{v.at}</span>
                   </TableCell>
                   <TableCell className="whitespace-normal">{v.note}</TableCell>
                   <TableCell className="whitespace-normal">{v.decided}</TableCell>
@@ -372,13 +402,13 @@ export function PolicyEditor({ query }: PageProps) {
   const hoursAsked = query.get("hours") ?? "";
   const params = new URLSearchParams(Object.entries({ add, hours: hoursAsked }).filter(([, v]) => v));
   // No polling: the draft is the person's until they save it. A version saved since is refused, not overwritten.
-  const { data, error } = useData<Draft>(`policy/editor${params.size ? `?${params}` : ""}`);
+  const { data, error, reload } = useData<Draft>(`policy/editor${params.size ? `?${params}` : ""}`);
   return (
     <>
       <Head title="Edit the policy" lead={data?.lead ?? ""} />
       {error ? (
         <>
-          <Problem text={error} />
+          <Problem text={error} retry={reload} />
           <div>
             <Button variant="outline" asChild>
               <a href="#/policy/raw">Open the policy</a>
@@ -386,6 +416,7 @@ export function PolicyEditor({ query }: PageProps) {
           </div>
         </>
       ) : null}
+      {!data && !error ? <Loading rows={8} /> : null}
       {data ? <EditorForm key={`${data.base} ${add}`} draft={data} /> : null}
     </>
   );
@@ -417,7 +448,7 @@ function EditorForm({ draft }: { draft: Draft }) {
   return (
     <>
       {run ? <Report run={run} /> : null}
-      <form className="grid gap-6 rounded-panel bg-card p-6" onSubmit={save}>
+      <Form className="grid gap-6 rounded-panel bg-card p-6" onSubmit={save}>
         <Field id="policy-file" label="Import a YAML file, optional" hint="Its text replaces the editor's. Nothing is saved until you save.">
           <Input id="policy-file" type="file" accept=".yaml,.yml,text/yaml" className="py-2" onChange={(e) => load(e.target.files?.[0])} />
         </Field>
@@ -443,12 +474,12 @@ function EditorForm({ draft }: { draft: Draft }) {
           <Button type="button" variant="outline" asChild>
             <a href="#/policy/raw">Cancel</a>
           </Button>
-          <Button type="button" variant="outline" onClick={async () => setRun(await dryRun(text, hours))}>
+          <Busy type="button" variant="outline" run={async () => setRun(await dryRun(text, hours))}>
             Dry run
-          </Button>
+          </Busy>
           <Button type="submit">{draft.save}</Button>
         </div>
-      </form>
+      </Form>
     </>
   );
 }

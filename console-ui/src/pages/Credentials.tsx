@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Empty, Head, Problem, Refusal } from "@/components/page";
+import { Empty, Head, Problem, Refusal, Form, Loading } from "@/components/page";
 import { api } from "@/lib/api";
 import { useData } from "@/lib/use";
 import type { PageProps } from "@/pages";
@@ -36,7 +36,7 @@ function setQuery(next: Record<string, string>) {
 export function Credentials({ query }: PageProps) {
   const dialog = query.get("add") || query.get("rotate") || query.get("remove");
   // Live: a rotation made on another gateway or through the admin API shows within 5 seconds, unless a dialog is open.
-  const { data, error, change } = useData<Data>("credentials", 5000, !!dialog);
+  const { data, error, change, reload } = useData<Data>("credentials", 5000, !!dialog);
 
   // A change made on the server-rendered page, or a link that names one, says so once.
   useEffect(() => {
@@ -50,11 +50,12 @@ export function Credentials({ query }: PageProps) {
 
   const may = !!data?.may_change;
   const list = data?.credentials;
-  const add = may ? <Button onClick={() => setQuery({ add: "1" })}>Add a credential</Button> : null;
+  const add = may ? <Button onClick={() => setQuery({ add: "1" })}>Add a provider key</Button> : null;
   return (
     <>
-      <Head title="Provider credentials" lead={data?.lead ?? "Provider keys, stored encrypted. Never shown after saving."} actions={list ? add : null} />
-      {error ? <Problem text={error} /> : null}
+      <Head title="Provider keys" lead={data?.lead ?? "Provider keys, stored encrypted. Never shown after saving."} actions={list ? add : null} />
+      {error ? <Problem text={error} retry={reload} /> : null}
+      {!data && !error ? <Loading rows={3} /> : null}
       {data?.off ? <Empty title={data.off.title} body={data.off.body} /> : null}
       {list && list.length === 0 && data?.empty ? (
         <section className="grid justify-items-start gap-4 rounded-panel bg-card p-6">
@@ -140,7 +141,7 @@ function AddDialog({ change }: { change: Change }) {
         <DialogDescription>
           The key Enterplace sends to a provider, kept in the store sealed with AES-256-GCM under the master key. After it is saved only its name and last 4 characters are shown.
         </DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           <Field id="credential-name" label="Name" hint="A provider in the policy names it with credential: and this name.">
             <Input id="credential-name" className="t-mono" value={name} onChange={(e) => setName(e.target.value)} placeholder="openai-prod" required autoFocus autoComplete="off" />
           </Field>
@@ -155,7 +156,7 @@ function AddDialog({ change }: { change: Change }) {
             </Button>
             <Button type="submit">Add credential</Button>
           </DialogFooter>
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
@@ -179,7 +180,7 @@ function RotateDialog({ name, change }: { name: string; change: Change }) {
         <DialogDescription>
           Every gateway on this store sends the new value of <span className="t-mono">{name}</span> within 2 seconds, with no restart. Requests already sent finish with the old one.
         </DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           <Secret id="rotate-value" value={value} setValue={setValue} />
           <Refusal text={refused} />
           <DialogFooter>
@@ -188,7 +189,7 @@ function RotateDialog({ name, change }: { name: string; change: Change }) {
             </Button>
             <Button type="submit">Rotate</Button>
           </DialogFooter>
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
@@ -210,7 +211,7 @@ function RemoveDialog({ name, change }: { name: string; change: Change }) {
         <DialogDescription>
           The sealed value of <span className="t-mono">{name}</span> is deleted from the store. This cannot be undone. Type <span className="t-mono">{name}</span> to confirm.
         </DialogDescription>
-        <form className="grid gap-6" onSubmit={submit}>
+        <Form className="grid gap-6" onSubmit={submit}>
           <Field id="remove-type" label="Name, to confirm">
             <Input id="remove-type" className="t-mono" value={typed} onChange={(e) => setTyped(e.target.value)} required autoFocus autoComplete="off" aria-invalid={!!refused} />
           </Field>
@@ -223,7 +224,7 @@ function RemoveDialog({ name, change }: { name: string; change: Change }) {
               Remove credential
             </Button>
           </DialogFooter>
-        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );

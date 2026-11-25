@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Head, Panel, Problem } from "@/components/page";
+import { Head, Loading, Panel, Problem } from "@/components/page";
+import { Person } from "@/components/person";
 import { useData } from "@/lib/use";
 import { cn } from "@/lib/utils";
 
@@ -24,12 +25,12 @@ type Data = {
 
 export function Spend() {
   // Live: the page reads the log again every 5 seconds, so a request's spend shows without a reload.
-  const { data, error } = useData<Data>("spend", 5000);
+  const { data, error, reload } = useData<Data>("spend", 5000);
   return (
     <>
       <Head
-        title="Spend"
-        lead={data?.lead ?? "What each team spends, by model."}
+        title="Spend this month"
+        lead={data?.lead ?? "What each team spends, by model, against its budget."}
         actions={
           data?.action ? (
             <Button variant="outline" asChild>
@@ -38,8 +39,9 @@ export function Spend() {
           ) : null
         }
       />
-      {error ? <Problem text={error} /> : null}
-      {data?.error ? <Problem text={data.error} /> : null}
+      {error ? <Problem text={error} retry={reload} /> : null}
+      {data?.error ? <Problem text={data.error} retry={reload} /> : null}
+      {!data && !error ? <Loading rows={6} /> : null}
       {data?.empty ? <NoticePanel notice={data.empty} /> : null}
       {data?.chart ? (
         <>
@@ -53,7 +55,9 @@ export function Spend() {
                   {data.spenders.map((p) => (
                     <li key={p.name} className="flex flex-wrap items-center justify-between gap-4">
                       <div className="grid gap-1">
-                        <span className="t-body-strong">{p.name}</span>
+                        <span className="t-body-strong">
+                          <Person name={p.name} />
+                        </span>
                         <span className="t-small text-muted-foreground">
                           {p.sent}, most of it on <span className="t-mono whitespace-nowrap">{p.mostly}</span>.
                         </span>
