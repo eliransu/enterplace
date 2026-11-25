@@ -212,15 +212,17 @@ def main():
         try:
             chrome.size(1280)
             chrome.call("Page.navigate", url=link)
-            chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/start') && !!document.querySelector('[data-start-button], [data-checklist]')", "Start here after the link")
-            check("What do you want to start with?" in chrome.js("document.body.innerText"), "the link signed in and the welcome asks what to start with")
+            chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/overview') && !!document.querySelector('a[href=\"#/coding\"]')", "Overview after the link")
+            text = chrome.js("document.body.innerText")
+            check(all(u in text for u in ("Coding agents", "Apps and agents", "MCP tools")), "the link signed in and Overview offers the three use cases")
             chrome.shot(out / "1-welcome.png")
             mark("signed in")
-            click(chrome, "button[data-start-button]")
-            chrome.wait("document.querySelector('#step-1')", "the checklist")
+            # The Coding agents card's link opens that use case's page with its checklist.
+            chrome.js("[...document.querySelectorAll('main a')].find(a => a.getAttribute('href') === '#/coding').click()")
+            chrome.wait("location.hash.startsWith('#/coding') && document.querySelector('#step-1')", "the checklist")
             check("How does your team pay for its coding agents?" in chrome.js("document.body.innerText"), "Coding agents asks how the team pays")
             # The API keys path: connect a model, then a first request with a key.
-            chrome.go(f"http://127.0.0.1:{gport}/console/start?track=coding&pay=api", f"http://127.0.0.1:{gport}/console/app/#/start?track=coding&pay=api")
+            chrome.go(f"http://127.0.0.1:{gport}/console/start?track=coding&pay=api", f"http://127.0.0.1:{gport}/console/app/#/coding?track=coding&pay=api")
             chrome.wait("document.body.innerText.includes('Connect a model')", "the first step is Connect a model")
             chrome.shot(out / "2-connect.png")
             press(chrome, "Try without a key")
@@ -255,10 +257,10 @@ def main():
         try:
             chrome.size(1280)
             chrome.call("Page.navigate", url=link)
-            chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/start') && !!document.querySelector('[data-start-button], [data-checklist]')", "Start here after the link")
-            click(chrome, "button[data-start-button]")
-            chrome.wait("document.querySelector('#step-1')", "the checklist")
-            chrome.go(f"http://127.0.0.1:{gport}/console/start?track=coding&pay=api", f"http://127.0.0.1:{gport}/console/app/#/start?track=coding&pay=api")
+            chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/overview') && !!document.querySelector('a[href=\"#/coding\"]')", "Overview after the link")
+            chrome.js("[...document.querySelectorAll('main a')].find(a => a.getAttribute('href') === '#/coding').click()")
+            chrome.wait("location.hash.startsWith('#/coding') && document.querySelector('#step-1')", "the checklist")
+            chrome.go(f"http://127.0.0.1:{gport}/console/start?track=coding&pay=api", f"http://127.0.0.1:{gport}/console/app/#/coding?track=coding&pay=api")
             chrome.wait("document.querySelector('form[data-action=connect] [name=key]')", "the Connect a model form")
             # OpenAI is the provider the form starts on.
             chrome.js(f"document.querySelector('form[data-action=connect] [name=key]').value = {json.dumps(MOCK_KEY)}")
@@ -300,11 +302,11 @@ def main():
             except RuntimeError:
                 pass  # this Chrome keeps the clipboard closed; the button's text is checked instead
             chrome.call("Page.navigate", url=link)
-            chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/start') && !!document.querySelector('[data-start-button], [data-checklist]')", "Start here after the link")
-            click(chrome, "button[data-start-button]")
+            chrome.wait("location.pathname === '/console/app/' && location.hash.startsWith('#/overview') && !!document.querySelector('a[href=\"#/coding\"]')", "Overview after the link")
+            chrome.js("[...document.querySelectorAll('main a')].find(a => a.getAttribute('href') === '#/coding').click()")
             # API keys are the default way to pay; Claude subscriptions are the other answer.
-            chrome.wait("document.querySelector('#step-1')", "the checklist")
-            chrome.go(f"{gateway}/console/start?track=coding&pay=subscriptions", f"{gateway}/console/app/#/start?track=coding&pay=subscriptions")
+            chrome.wait("location.hash.startsWith('#/coding') && document.querySelector('#step-1')", "the checklist")
+            chrome.go(f"{gateway}/console/start?track=coding&pay=subscriptions", f"{gateway}/console/app/#/coding?track=coding&pay=subscriptions")
             chrome.wait("document.querySelector('#step-1[data-state=done]') && document.querySelector('#lines-subscription')", "Claude subscriptions on after enterplace start")
             text = chrome.js("document.body.innerText")
             check("Claude subscription" in text and "ANTHROPIC_API_KEY=" not in text,
@@ -344,7 +346,7 @@ def main():
             got = Anthropic.seen[-1]
             check(got["fake"] and "x-enterplace-user" not in got["headers"] and "x-api-key" not in got["headers"],
                   "Anthropic got the caller's login unchanged, no person token and no key of Enterplace's")
-            chrome.go(f"{gateway}/console/start?track=coding&pay=subscriptions", f"{gateway}/console/app/#/start?track=coding&pay=subscriptions")
+            chrome.go(f"{gateway}/console/start?track=coding&pay=subscriptions", f"{gateway}/console/app/#/coding?track=coding&pay=subscriptions")
             chrome.wait("document.querySelector('#step-2[data-state=done]') || document.body.innerText.includes('Your first requests arrived')",
                         "Point Claude Code at Enterplace to turn done", 15)
             chrome.go(f"{gateway}/console/app/#/requests")
