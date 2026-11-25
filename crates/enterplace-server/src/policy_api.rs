@@ -453,7 +453,7 @@ pub(crate) async fn changed(
             "Version {} is saved and waits for a second admin: POST /admin/policy/versions/{}/approve. The live version stays in force until then.",
             v.id, v.id
         ),
-        "live" => format!("Version {} is live. Every gateway on this store uses it within 2 seconds.", v.id),
+        "live" => format!("Version {} is saved as live. Each gateway takes it within 2 seconds, or refuses it with a reason: GET /admin/replicas shows the version each one runs.", v.id),
         _ => format!("Version {} is {}.", v.id, v.state),
     }
     .into();
