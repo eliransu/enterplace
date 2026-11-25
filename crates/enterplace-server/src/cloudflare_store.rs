@@ -1355,4 +1355,33 @@ impl Store for CfStore {
             json!({ "sha256": id_sha256 }),
         );
     }
+
+    fn sign_in_lock(
+        &self,
+        scope: String,
+        failed: Option<core_store::SignInLimit>,
+    ) -> Pending<Option<u64>> {
+        let inner = self.inner.clone();
+        let failed = failed.map(|limit| {
+            json!({
+                "max": limit.max,
+                "window": limit.window.as_secs_f64(),
+                "lock": limit.lock.as_secs_f64(),
+            })
+        });
+        self.ask(async move {
+            let answer = inner
+                .ask_up("sign_in_lock", json!({ "scope": scope, "failed": failed }))
+                .await?;
+            Ok(answer["seconds"].as_u64())
+        })
+    }
+
+    fn sign_in_clear(&self, scope: String) {
+        self.retried(
+            "a console sign-in",
+            "sign_in_clear",
+            json!({ "scope": scope }),
+        );
+    }
 }

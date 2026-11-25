@@ -79,6 +79,7 @@ Fields present only in some cases:
 | `key_models` | `true` | A `model_not_allowed` refusal by the key's own `models:` list |
 | `routing` | object | The model is an alias: `balance`, `reason`, `deployment`, and `region`, `regions` and `for` when they apply. See [Routing strategies](/routing/strategies/#the-record) |
 | `tags` | array | The request's tags: its key's and those sent in `x-enterplace-tags` |
+| `client_cert` | string | The connection presented a client certificate Enterplace verified ([Mutual TLS](/governance/mutual-tls/)): its subject common name, or its first subject alternative name |
 | `key_rotated` | object | The key was rotated and is in its grace: `{"replaced_by": "8a41c2d0", "expires": "2026-11-16T09:14:02Z"}` |
 | `auth`, `jwt_issuer`, `jwt_subject` | string | The caller sent a [JWT](/governance/access-control/#jwts-from-your-identity-provider): `auth` is `jwt`, with the token's issuer and subject. Never the token |
 | `ip_not_allowed` | string | An `ip_not_allowed` refusal: `key` or `rule`, whichever `from` list refused it |

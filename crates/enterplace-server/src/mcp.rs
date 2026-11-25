@@ -717,6 +717,7 @@ async fn answer(
     let (person, key_sha256, via) = mcp
         .authenticate(policy, &parts.headers, &resource, asked)
         .await?;
+    crate::cert_bound(&person, parts.extensions.get())?;
     asked.key = Some(person.key.clone());
     asked.key_sha256 = key_sha256.clone();
     asked.via = via;

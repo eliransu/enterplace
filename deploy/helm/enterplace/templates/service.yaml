@@ -17,3 +17,21 @@ spec:
       port: {{ .Values.metrics.port }}
       targetPort: metrics
     {{- end }}
+{{- if .Values.admin.enabled }}
+---
+# The console, the admin API and /metrics: a Service of its own, never behind the chart's Ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "enterplace.fullname" . }}-admin
+  labels:
+    {{- include "enterplace.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "enterplace.selector" . | nindent 4 }}
+  ports:
+    - name: admin
+      port: {{ .Values.admin.port }}
+      targetPort: admin
+{{- end }}

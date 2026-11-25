@@ -92,6 +92,22 @@ enterplace store import --keys enterplace.keys.yaml --policy enterplace.policy.y
 
 This copies every key of the file, and the kill switches in `enterplace.kills.json` beside it, into the store. Keys already there are left as they are, so running it twice is safe. The file itself is not changed. While the policy has `store:`, Enterplace does not read it: keep it as a backup or delete it.
 
+### Migrations as a step of their own
+
+By default each gateway creates and updates the store's tables when it starts. Two gateways that start together take turns, so this is safe. Some clusters forbid schema changes from serving pods: their database user may read and write rows and nothing else. Run the migration as its own step there, and tell the gateways to change no table.
+
+```bash
+enterplace store migrate --policy enterplace.policy.yaml
+enterplace serve enterplace.policy.yaml --no-migrate
+```
+
+- `enterplace store migrate` makes every table a gateway of that version uses, the ones a gateway makes later included (batches, the request log, the MCP gateway), then stops. From the image it also makes the tables of the features your license unlocks. Running it again changes nothing.
+- `enterplace serve --no-migrate` compares the schema with what it needs and runs no DDL. When the schema is behind, it refuses to start and names `enterplace store migrate`.
+- Give the migration step a database user that may create tables, and the gateways one that may not.
+- On the Cloudflare store (`store: { cloudflare: true }`) `--no-migrate` changes nothing: the Durable Object creates and updates its own tables, and no gateway holds a database user. `enterplace store migrate` still works there and makes the features' tables ahead of time.
+
+On Kubernetes the chart does both: `migrations.job.enabled: true` runs the step as a pre-install and pre-upgrade Job and starts the pods with `--no-migrate`. See [Kubernetes](/deploy/kubernetes/#an-admin-port-and-a-migration-job).
+
 ## What is stored, and what is not
 
 | In the store | Not in the store |

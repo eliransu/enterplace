@@ -1209,6 +1209,11 @@ async fn sign_in(
     let form = Form::parse(&body);
     let email = form.get("email").trim().to_lowercase();
     let password = form.get("password").to_string();
+    // Locked out after repeated failures, by source address and by account, on every gateway of the store.
+    let guard = match console.sign_in_guard(&headers, Some(&email)).await {
+        Ok(guard) => guard,
+        Err(locked) => return locked,
+    };
     let found = async {
         let client = members.db.client().await?;
         let row = client
@@ -1251,12 +1256,14 @@ async fn sign_in(
                 Some("bad_password"),
             )
             .await;
+        console.sign_in_failed(&guard).await;
         return sign_in_form(
             StatusCode::UNAUTHORIZED,
             "That email and password do not match an account.",
             &email,
         );
     };
+    console.sign_in_succeeded(&guard);
     console
         .sign_in_account(&id, &who, &headers, &uri, &tls)
         .await

@@ -7,6 +7,29 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Enterprise checklist: migrations as a step, an admin address, mutual TLS
+
+- `enterplace store migrate [--policy <file>]` creates or updates every table of the store and stops. `enterplace serve
+  --no-migrate` changes no table and refuses to start on a schema that is behind, naming the command. For clusters
+  that forbid schema changes from serving pods. Helm: `migrations.job.enabled` runs it as a pre-install and
+  pre-upgrade Job and starts the pods with `--no-migrate`.
+- `admin_listen:` in the policy, or `enterplace serve --admin-listen <host:port>`, serves the console, the admin API and
+  `/metrics` on an address of their own. The address callers use then serves the model routes alone and answers
+  `404 not_on_this_listener` to `/console`, `/admin` and `/metrics`. Helm: `admin.enabled` adds the port and a
+  Service `<release>-admin` the Ingress never routes to, and `networkPolicy.adminFrom` says who reaches it.
+- Mutual TLS toward callers: `tls: { client_ca_file, require }` makes Enterplace ask for a client certificate and verify
+  it in the handshake. A key with `cert: <name>` works only on a connection that presented the certificate with that
+  subject common name or subject alternative name, on every route that takes a key and at console sign-in. New
+  refusal code: `cert_required` (403). Model route records carry `client_cert`.
+- Mutual TLS toward providers: `client_cert_file`, `client_key_file` and `ca_file` on a provider present Enterplace's own
+  certificate to a private endpoint and trust its CA.
+- Console sign-in lockout: five failed admin key or password sign-ins within 15 minutes lock out their source
+  address (and, for password sign-in, the account) for 30 minutes: `429`, `Retry-After`, code `sign_in_locked`.
+  With a store the count is shared by every replica (new table `enterplace_sign_in_failures`, core migration 8). The
+  failure that locks is recorded as `console_sign_in_locked`.
+- `tls: { cert_file, key_file }` in the policy stands in for `--tls-cert` and `--tls-key`.
+- The enterprise binary's `serve` takes every flag of the open source one. It ignored `--tls-cert` and `--tls-key`
+  before and served plain HTTP; it now serves HTTPS with them, and refuses a flag it does not know.
 ### License
 
 - The open source part is now under the MIT License, as LiteLLM's is. The root `LICENSE` says at the top that

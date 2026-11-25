@@ -25,6 +25,7 @@ mod start;
 mod teams;
 pub use api::{Answer, Fail, answer, bad, body_of, ok, signed_in, text};
 pub use start::{empty_json, empty_page, origin as gateway_origin};
+pub mod tls;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -50,6 +51,18 @@ use enterplace_core::{
     policy::{Permission, Role, builtin_role},
 };
 use serde_json::{Map, Value, json};
+
+/// The names of the client certificate a connection presented and Enterplace verified (`tls: { client_ca_file }`): its
+/// subject common name and subject alternative names. The server puts it on each request of that connection.
+#[derive(Clone, Debug)]
+pub struct ClientCert(pub Arc<Vec<String>>);
+
+impl ClientCert {
+    /// Whether the certificate carries `name`, the `cert:` a key is bound to.
+    pub fn is(&self, name: &str) -> bool {
+        self.0.iter().any(|n| n == name)
+    }
+}
 
 /// The files the console reads and the keys file it writes.
 #[derive(Clone, Debug)]
@@ -80,6 +93,15 @@ const SSO_PENDING: Duration = Duration::from_secs(10 * 60);
 /// Most finished sign-ins remembered to refuse a second use of their state. A full list forgets the one that expires
 /// first; the provider's code is one use too, so a replay of a forgotten state still fails there.
 const MAX_USED: usize = 10_000;
+/// Failed sign-ins from one source address, or to one account, within [`SignInLimit::window`] that lock it out, and
+/// for how long: within what PCI DSS 8.3.4 asks (at most 10 attempts, at least 30 minutes).
+// ponytail: fixed. A policy setting (console: { lockout: ... }) when someone's rules ask for other numbers.
+const SIGN_IN_LIMIT: enterplace_core::store::SignInLimit = enterplace_core::store::SignInLimit {
+    max: 5,
+    window: Duration::from_secs(15 * 60),
+    lock: Duration::from_secs(30 * 60),
+};
+
 /// Sign-ins started within one minute that make the console write one record about it, at most once a minute.
 const FLOOD: u64 = 100;
 
@@ -221,6 +243,9 @@ struct Inner {
     mine: Mutex<HashMap<String, String>>,
     accounts: Option<Accounts>,
     watch: Option<Watch>,
+    /// Failed sign-ins per scope without a store: how many, since when, and until when the scope is locked out.
+    /// With a store they are rows in it, so every gateway counts and refuses together.
+    failures: Mutex<HashMap<String, (u32, Instant, Option<Instant>)>>,
     /// Nav entries and the sign-in link an extension added, set on every request for the pages to draw.
     extra: Arc<html::Extra>,
 }
@@ -555,6 +580,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         mine: Mutex::default(),
         accounts: extension.accounts,
         watch: extension.watch,
+        failures: Mutex::default(),
         extra: Arc::new(html::Extra {
             nav: extension.nav,
             sign_in: extension.sign_in,
@@ -1120,6 +1146,141 @@ impl Console {
     }
 }
 
+/// What a sign-in attempt is counted under: its source address, and the account it names when it names one.
+/// From [`Console::sign_in_guard`], for [`Console::sign_in_failed`] and [`Console::sign_in_succeeded`].
+pub struct SignInGuard(Vec<String>);
+
+/// Sign-in lockout: after [`SIGN_IN_LIMIT`] failed sign-ins from one source address or to one account, every
+/// sign-in from that address or to that account is refused until the lockout ends, on every gateway of a store.
+impl Console {
+    /// The client's own address for a sign-in: the connection's, or the one a trusted proxy names, so people
+    /// behind one load balancer are not counted as one source.
+    fn source(&self, headers: &HeaderMap) -> String {
+        let peer = client();
+        let c = self.config();
+        let forwarded: Vec<&str> = headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        let resolved = match (peer, config::load(&c.policy, Some(&c.keys))) {
+            (Some(peer), Ok(loaded)) => Some(loaded.policy.client_ip(peer, &forwarded)),
+            (peer, _) => peer,
+        };
+        flood_key(resolved)
+    }
+
+    async fn locked(&self, scope: &str, failed: bool) -> Option<u64> {
+        let limit = failed.then_some(SIGN_IN_LIMIT);
+        if let Some(store) = self.store() {
+            // A store that cannot be reached locks no one out: it opens no session either.
+            return store.sign_in_lock(scope.to_string(), limit).await.ok()?;
+        }
+        let now = Instant::now();
+        let mut all = self
+            .0
+            .failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let stale = |(_, since, locked): &(u32, Instant, Option<Instant>)| {
+            now.duration_since(*since) > SIGN_IN_LIMIT.window
+                && locked.is_none_or(|until| until <= now)
+        };
+        // ponytail: one entry per address or account that failed within the window; a flood from many addresses
+        // grows the map until their windows end.
+        if all.len() >= 4096 {
+            all.retain(|_, entry| !stale(entry));
+        }
+        if failed {
+            let entry = all.entry(scope.to_string()).or_insert((0, now, None));
+            if stale(entry) {
+                *entry = (0, now, None);
+            }
+            entry.0 += 1;
+            if entry.0 >= SIGN_IN_LIMIT.max {
+                entry.2 = Some(now + SIGN_IN_LIMIT.lock);
+            }
+        }
+        let until = all.get(scope).and_then(|entry| entry.2)?;
+        (until > now).then(|| until.duration_since(now).as_secs().max(1))
+    }
+
+    /// Call before checking a credential. `Err` is the answer to send when the source address, or `account` (an
+    /// email, say), is locked out: 429 with Retry-After, and the credential must not be checked.
+    pub async fn sign_in_guard(
+        &self,
+        headers: &HeaderMap,
+        account: Option<&str>,
+    ) -> Result<SignInGuard, Response> {
+        let mut scopes = vec![format!("source:{}", self.source(headers))];
+        if let Some(account) = account.filter(|a| !a.is_empty()) {
+            // By hash: what a stranger typed as an account name is not kept.
+            let hash = id::sha256_hex(account.to_lowercase().as_bytes());
+            scopes.push(format!("account:{}", &hash[..32]));
+        }
+        let mut left = None;
+        for scope in &scopes {
+            left = left.max(self.locked(scope, false).await);
+        }
+        match left {
+            None => Ok(SignInGuard(scopes)),
+            Some(seconds) => {
+                let mut response = bare_page(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "Too many failed sign-ins",
+                    &format!(
+                        r#"<h1 class="t-lg" style="margin: 0">Too many failed sign-ins</h1><p class="t-lead g-muted" style="margin: 0">Sign-in from this address or to this account is locked for {} more minute{} after {} failed attempts. Wait, or ask a Enterplace admin: the lockout is in the audit log as console_sign_in_locked.</p><p class="t-small g-muted" style="margin: 0">Code: sign_in_locked</p>"#,
+                        seconds.div_ceil(60),
+                        if seconds.div_ceil(60) == 1 { "" } else { "s" },
+                        SIGN_IN_LIMIT.max
+                    ),
+                );
+                response
+                    .headers_mut()
+                    .insert(header::RETRY_AFTER, seconds.into());
+                Err(response)
+            }
+        }
+    }
+
+    /// Counts a failed sign-in. The attempt that locks a scope out is recorded as `console_sign_in_locked`;
+    /// attempts refused while it is locked are not recorded one by one, so a flood cannot fill the audit log.
+    pub async fn sign_in_failed(&self, guard: &SignInGuard) {
+        for scope in &guard.0 {
+            if let Some(seconds) = self.locked(scope, true).await {
+                let act = Act {
+                    action: "console_sign_in_locked",
+                    by: None,
+                    key: None,
+                    target: json!({
+                        "scope": scope,
+                        "failures": SIGN_IN_LIMIT.max,
+                        "within_seconds": SIGN_IN_LIMIT.window.as_secs(),
+                        "locked_seconds": seconds,
+                    }),
+                };
+                let _ = record(self, &act, None, None).await;
+            }
+        }
+    }
+
+    /// Forgets the failures counted for this attempt's source and account, after a good sign-in.
+    pub fn sign_in_succeeded(&self, guard: &SignInGuard) {
+        for scope in &guard.0 {
+            match self.store() {
+                Some(store) => store.sign_in_clear(scope.clone()),
+                None => {
+                    self.0
+                        .failures
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .remove(scope);
+                }
+            }
+        }
+    }
+}
+
 /// What an [`Extension`]'s handlers use: the console's sessions, look and audit records.
 impl Console {
     /// Who finished a single sign-on started at `/console/sso/cli/login?cli_port=0`, as (email, team), in exchange
@@ -1261,6 +1422,7 @@ async fn sign_in(
     headers: HeaderMap,
     uri: Uri,
     tls: Tls,
+    cert: Option<axum::Extension<ClientCert>>,
     body: String,
 ) -> Response {
     if !same_origin(&headers) {
@@ -1268,6 +1430,10 @@ async fn sign_in(
     }
     let form = Form::parse(&body);
     let key = pasted_key(form.get("key"));
+    let guard = match console.sign_in_guard(&headers, None).await {
+        Ok(guard) => guard,
+        Err(locked) => return locked,
+    };
     let keys = &console.config().keys;
     let entry = if key.is_empty() {
         None
@@ -1284,6 +1450,7 @@ async fn sign_in(
             };
             // The refusal stands whether or not it was recorded.
             let _ = record(&console, &act, Some("not_admin"), None).await;
+            console.sign_in_failed(&guard).await;
         }
         // One message for an unknown key and a key that is not an admin's: the page does not tell which keys exist.
         let error = if key.is_empty() {
@@ -1307,12 +1474,30 @@ async fn sign_in(
         key: None,
         target: Value::Null,
     };
+    // A key bound to a client certificate signs in only on a connection that presented it, as on every other route.
+    if let Some(bound) = &entry.options.cert
+        && !cert.is_some_and(|cert| cert.0.is(bound))
+    {
+        let _ = record(&console, &act, Some("cert_required"), None).await;
+        return page(
+            StatusCode::FORBIDDEN,
+            pages::sign_in(
+                &format!(
+                    "This key is bound to the client certificate named {}, and this connection did not present it. Connect with that certificate.",
+                    html::esc(bound)
+                ),
+                "",
+                console.sso_on(),
+            ),
+        );
+    }
     if record(&console, &act, None, None).await.is_err() {
         return page(
             StatusCode::SERVICE_UNAVAILABLE,
             pages::sign_in("", NOT_RECORDED, console.sso_on()),
         );
     }
+    console.sign_in_succeeded(&guard);
     let session = match console.open_session(Who::Key(entry.sha256)).await {
         Ok(session) => session,
         Err(err) => {

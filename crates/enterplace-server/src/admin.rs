@@ -257,11 +257,13 @@ struct NewKey {
     /// Guardrails the key adds to its rule's, by name.
     #[serde(default)]
     guardrails: Option<Value>,
+    #[serde(default)]
+    cert: Option<Value>,
 }
 
 /// The key fields `PATCH /admin/keys/<prefix>` changes. Name, team, org, role and admin are not among them: a new
 /// name or organization is a new key, and rights are given only when a key is issued.
-const UPDATABLE: &str = "expires, budget, models, tpm, rpm, parallel, customer, tags, metadata, routes, from, mcp_tools and guardrails";
+const UPDATABLE: &str = "expires, budget, models, tpm, rpm, parallel, customer, tags, metadata, routes, from, mcp_tools, guardrails and cert";
 
 /// Sets one field of `entry` from its JSON value, or says what is wrong with it. `null` clears the field.
 fn apply(
@@ -367,6 +369,13 @@ fn apply(
         "routes" => entry.options.routes = list()?,
         "mcp_tools" => entry.options.mcp_tools = list()?,
         "guardrails" => entry.options.guardrails = list()?,
+        "cert" => {
+            entry.options.cert = match value {
+                Value::Null => None,
+                Value::String(name) => Some(name.clone()),
+                _ => return Err("cert is the name of the client certificate the key is bound to (its subject common name or a subject alternative name), or null to unbind it".into()),
+            }
+        }
         "from" => entry.options.from = config::cidrs(&list()?)?,
         "metadata" => {
             entry.options.metadata = match value {
@@ -417,6 +426,7 @@ fn key_json(entry: &config::KeyEntry) -> Value {
         "replaced_by": o.replaced_by,
         "mcp_tools": o.mcp_tools,
         "guardrails": o.guardrails,
+        "cert": o.cert,
     })
 }
 
@@ -664,6 +674,7 @@ async fn allow(
     };
     let key = caller_key(&parts.headers)?;
     let person = &caller(state, policy, key, call).await?;
+    crate::cert_bound(person, parts.extensions.get())?;
     // `enterplace logout` revokes the key it sends, whoever's it is: no one needs to be an admin to give up their own key.
     if call.action == Some("revoke_own_key") {
         if person.jwt.is_some() {
@@ -1004,7 +1015,7 @@ async fn allow(
         "issue_key" => {
             let (bytes, _held) = read_body(Some(&person.name), state, &parts.headers, body).await?;
             let mut new: NewKey = serde_json::from_slice(&bytes).map_err(|err| {
-                refused(StatusCode::BAD_REQUEST, "invalid_request", format!("Refused: send a JSON object with \"name\" and \"team\", and optionally \"expires\", \"budget\", \"models\", \"tpm\", \"org\", \"customer\", \"tags\", \"parallel\", \"role\", \"rpm\", \"metadata\", \"routes\", \"from\" and \"mcp_tools\" ({err})."))
+                refused(StatusCode::BAD_REQUEST, "invalid_request", format!("Refused: send a JSON object with \"name\" and \"team\", and optionally \"expires\", \"budget\", \"models\", \"tpm\", \"org\", \"customer\", \"tags\", \"parallel\", \"role\", \"rpm\", \"metadata\", \"routes\", \"from\", \"mcp_tools\" and \"cert\" ({err})."))
             })?;
             let mut extra = config::KeyEntry::default();
             for (field, value) in [
@@ -1014,6 +1025,7 @@ async fn allow(
                 ("from", &new.from),
                 ("mcp_tools", &new.mcp_tools),
                 ("guardrails", &new.guardrails),
+                ("cert", &new.cert),
             ] {
                 if let Some(value) = value {
                     apply(&mut extra, field, value, &[]).map_err(|problem| {

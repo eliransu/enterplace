@@ -75,6 +75,7 @@ use hyper_util::{
     service::TowerToHyperService,
 };
 use posthog_rs::Event;
+pub use reload::migrate_store;
 pub use reload::{
     Governed, Host, OrgChain, Reload, Reloader, Trigger, governed, governed_with, open_store,
 };
@@ -470,6 +471,10 @@ pub struct ProviderRoute {
     pub passthrough: bool,
     /// A passthrough request without x-enterplace-user is recorded as an unknown person, not refused.
     pub identity_optional: bool,
+    /// The PEM client certificate chain and key presented to it (mutual TLS), read when the route is built.
+    pub client_cert: Option<(PathBuf, PathBuf)>,
+    /// A PEM file of CAs trusted for it besides the Mozilla roots: a private endpoint's own CA.
+    pub ca_file: Option<PathBuf>,
 }
 
 /// What the server needs to start.
@@ -537,7 +542,25 @@ pub struct Extension {
     /// Judges every conversation as typed events (contract v2), in process: what a `type: events` guardrail's
     /// service does over HTTP. For a vendor adapter or a licensed feature built into the binary.
     pub events: Option<Arc<dyn EventsPlugin>>,
+    /// Names the caller of a request that carries no Enterplace key and came through one of `trusted_proxies`.
+    pub identity: Option<Arc<dyn Identify>>,
 }
+
+/// Names who a keyless request on the model routes is from, when the binary can tell from what an authenticating
+/// proxy put on it. The gateway calls it only for a connection whose peer address is in the policy's
+/// `trusted_proxies`: anyone else can write a header, so no one else is asked about.
+pub trait Identify: Send + Sync {
+    /// `None` when the request names no one (it is then refused as one with no key). `Err` is a refusal's code and
+    /// message. The person is decided, limited and recorded as a key holder is.
+    fn identify(
+        &self,
+        policy: &Policy,
+        headers: &HeaderMap,
+    ) -> Option<Result<Principal, (&'static str, String)>>;
+}
+
+/// The issuer a [`Principal`] named by [`Identify`] carries in its `jwt` field, and `auth` in its records.
+pub const IDENTITY_HEADERS: &str = "identity_headers";
 
 /// Who and what a transform is rewriting for.
 #[derive(Clone, Copy, Debug)]
@@ -663,6 +686,8 @@ impl std::error::Error for ConfigError {}
 #[derive(Clone, Copy)]
 pub(crate) struct ClientAddr(SocketAddr);
 
+pub use enterplace_console::{ClientCert, tls};
+
 /// The client's own address: the connection's, or, from a trusted proxy, the one it names in X-Forwarded-For.
 pub(crate) fn client_ip(
     policy: &Policy,
@@ -729,7 +754,7 @@ struct AppState {
     // One pooled client for the life of the process: connections to the provider are reused across requests.
     client: Client<HttpsConnector<HttpConnector>, Body>,
     // Clients for providers with a connect timeout of their own, by that timeout.
-    clients: Arc<std::sync::Mutex<std::collections::HashMap<Duration, Upstreams>>>,
+    clients: Arc<std::sync::Mutex<std::collections::HashMap<(Duration, String), Upstreams>>>,
     // Clients through a provider's proxy, by its connect timeout and the proxy.
     proxied: Arc<std::sync::Mutex<std::collections::HashMap<(Duration, String), Proxied>>>,
     live: Live,
@@ -768,6 +793,8 @@ struct AppState {
     raises: Arc<govern::Raises>,
     // The MCP gateway, once built, for the admin API's routes over its sessions.
     mcp: Arc<std::sync::OnceLock<std::sync::Weak<mcp::Mcp>>>,
+    // Names keyless callers behind a trusted proxy.
+    identity: Option<Arc<dyn Identify>>,
 }
 
 /// The client every call out is made with.
@@ -816,6 +843,8 @@ struct Upstream {
     oci: Option<Arc<oci::Signer>>,
     passthrough: bool,
     identity_optional: bool,
+    /// The TLS configuration that presents its client certificate, and the name its pooled clients go by.
+    tls: Option<(String, Arc<enterplace_console::tls::rustls::ClientConfig>)>,
 }
 
 /// A provider's HTTP proxy: where requests are tunnelled through (CONNECT), and its Basic credentials.
@@ -1048,6 +1077,29 @@ pub(crate) fn upstream_of(route: &ProviderRoute) -> Result<Upstream, ConfigError
         oci: route.oci.clone(),
         passthrough: route.passthrough,
         identity_optional: route.identity_optional,
+        tls: (route.client_cert.is_some() || route.ca_file.is_some())
+            .then(|| {
+                enterplace_console::tls::client_config_for(
+                    route.ca_file.as_deref(),
+                    route
+                        .client_cert
+                        .as_ref()
+                        .map(|(cert, key)| (cert.as_path(), key.as_path())),
+                    &format!(
+                        "ca_file, client_cert_file and client_key_file of provider \"{}\"",
+                        route.name
+                    ),
+                )
+                // Its pooled clients are named by the files, so two providers with the same ones share a pool.
+                .map(|config| {
+                    (
+                        format!("{:?}\n{:?}", route.ca_file, route.client_cert),
+                        Arc::new(config),
+                    )
+                })
+                .map_err(ConfigError)
+            })
+            .transpose()?,
     })
 }
 
@@ -1101,6 +1153,7 @@ fn build(
             oci: None,
             passthrough: false,
             identity_optional: false,
+            tls: None,
         });
     }
     let console = config.console;
@@ -1152,7 +1205,7 @@ fn build(
             .map_err(ConfigError)?;
         owned.replay(path, &spend).map_err(ConfigError)?;
     }
-    let client = client_with(config.timeouts.connect);
+    let client = client_with(config.timeouts.connect, None);
     // Spans are finished from the audit records, so traces need the audit log.
     let tracer = match (config.traces, &config.audit) {
         (Some(export), Some(audit)) => {
@@ -1209,6 +1262,7 @@ fn build(
                 .map(|r| r.keys_path().with_file_name("enterplace-raises.json")),
         )),
         mcp: Arc::default(),
+        identity: config.extension.identity.clone(),
     };
     let keep = Arc::new(state.clone());
     if let Some((url, every)) =
@@ -1960,6 +2014,10 @@ struct Seen<'a> {
     budget_raise: Option<serde_json::Value>,
     /// Where the request's time went so far.
     stages: stages::Stages,
+    /// The verified client certificate of the connection, when it presented one.
+    client_cert: Option<ClientCert>,
+    /// Who an [`Identify`] hook says a keyless request is from.
+    named: Option<Principal>,
 }
 
 /// `POST /v1/guardrails/check`: runs the caller's rule's guardrails on text the caller sends, and answers with what
@@ -2465,7 +2523,27 @@ async fn check<'a>(
         (Some(token), _) => token,
         // An unknown person's: identify finds the person made below.
         (None, Some(_)) => String::new(),
-        (None, None) => caller_key(&parts.headers)?.to_string(),
+        (None, None) => match caller_key(&parts.headers) {
+            Ok(key) => key.to_string(),
+            // No key at all: an authenticating proxy the policy trusts may have named the caller.
+            Err(refusal) if refusal.code == "no_key" => {
+                let peer = parts.extensions.get::<ClientAddr>().map(|a| a.0.ip());
+                let named = state
+                    .identity
+                    .as_ref()
+                    .filter(|_| peer.is_some_and(|peer| policy.trusted_proxy(peer)))
+                    .and_then(|hook| hook.identify(policy, &parts.headers));
+                match named {
+                    Some(Ok(person)) => seen.named = Some(person),
+                    Some(Err((code, message))) => {
+                        return Err(Refusal::new(StatusCode::UNAUTHORIZED, code, message));
+                    }
+                    None => return Err(refusal),
+                }
+                String::new()
+            }
+            Err(refusal) => return Err(refusal),
+        },
     };
     let provider_key = caller_provider_key(&parts.headers)?;
     if !key.is_empty() {
@@ -2506,6 +2584,13 @@ async fn check<'a>(
     }
     // The key must not travel on in any other header either, under whatever name the caller chose for it.
     let mut parts = parts;
+    // What the proxy said of the caller is Enterplace's to read, not the provider's.
+    if let Some(named) = policy.identity_headers() {
+        parts.headers.remove(named.user.as_str());
+        if let Some(groups) = &named.groups {
+            parts.headers.remove(groups.as_str());
+        }
+    }
     // Taken out at once: nothing after this (guardrail webhooks, traces, the provider) can see it in the headers.
     parts.headers.remove(CALLER_PROVIDER_KEY);
     // Compared without regard to case, and on the random part alone as well, so a key that was upper-cased
@@ -3230,6 +3315,10 @@ pub(crate) async fn identify<'a>(
     // A stranger is refused before their body is read, so an unknown caller cannot make the gateway buffer anything.
     // A JWT from an issuer the policy trusts stands in for a key; it is checked before anything else is read too.
     let identified: Option<&'a Principal> = match policy.identify(key) {
+        _ if seen.named.is_some() => seen
+            .named
+            .take()
+            .map(|person| minted.get_or_init(|| person)),
         Some(person) => Some(person),
         // A passthrough request without x-enterplace-user: its unknown person was made from its session before this.
         None if key.is_empty() => minted.get(),
@@ -3282,6 +3371,9 @@ pub(crate) async fn identify<'a>(
             ),
         ));
     }
+    // A key bound to a client certificate is refused anywhere but on a connection that presented it: the key alone,
+    // copied off the workload, is then of no use.
+    cert_bound(person, seen.client_cert.as_ref())?;
     // A JWT caller is named by its issuer and subject, as a key by its hash, so a key_prefix switch can stop it.
     let key_sha256 = match &person.jwt {
         Some(jwt) => id::sha256_hex(format!("{}\n{}", jwt.issuer, jwt.subject).as_bytes()),
@@ -3343,6 +3435,29 @@ pub(crate) async fn identify<'a>(
         seen.rotated = Some(serde_json::json!({ "replaced_by": next, "expires": person.expires }));
     }
     Ok((person, key_sha256))
+}
+
+/// Refuses a key whose `cert:` binds it to a client certificate the connection did not present.
+pub(crate) fn cert_bound(person: &Principal, cert: Option<&ClientCert>) -> Result<(), Refusal> {
+    let Some(bound) = &person.options.cert else {
+        return Ok(());
+    };
+    if cert.is_some_and(|cert| cert.is(bound)) {
+        return Ok(());
+    }
+    Err(Refusal::new(
+        StatusCode::FORBIDDEN,
+        "cert_required",
+        format!(
+            "Refused: the key {} of \"{}\" is bound to the client certificate named \"{bound}\", and this connection {}. Connect with that certificate (its subject common name or a subject alternative name must be \"{bound}\"), or ask a Enterplace admin to change the key's cert.",
+            person.key,
+            person.name,
+            match cert {
+                Some(cert) => format!("presented one named {}", cert.0.join(", ")),
+                None => "presented none Enterplace verified (the policy needs tls: client_ca_file, and Enterplace must terminate TLS itself)".to_string(),
+            }
+        ),
+    ))
 }
 
 /// Refuses a request a kill switch stops, naming the switch, its reason and who set it. A switch list that cannot
@@ -4893,7 +5008,10 @@ async fn decide(
             dimensions.insert(name, value);
         }
     }
-    let mut seen = Seen::default();
+    let mut seen = Seen {
+        client_cert: request.extensions().get::<ClientCert>().cloned(),
+        ..Seen::default()
+    };
     let checking = Instant::now();
     let mut outcome = check(
         state, version, policy, request, &mut seen, &minted, client_ip,
@@ -5421,10 +5539,19 @@ async fn decide(
         if let Some(rotated) = &seen.rotated {
             record.insert("key_rotated".into(), rotated.clone());
         }
-        if let Some(jwt) = seen.person.and_then(|p| p.jwt.as_ref()) {
-            record.insert("auth".into(), "jwt".into());
-            record.insert("jwt_issuer".into(), jwt.issuer.as_str().into());
-            record.insert("jwt_subject".into(), jwt.subject.as_str().into());
+        match seen.person.and_then(|p| p.jwt.as_ref()) {
+            Some(named) if named.issuer == IDENTITY_HEADERS => {
+                record.insert("auth".into(), IDENTITY_HEADERS.into());
+            }
+            Some(jwt) => {
+                record.insert("auth".into(), "jwt".into());
+                record.insert("jwt_issuer".into(), jwt.issuer.as_str().into());
+                record.insert("jwt_subject".into(), jwt.subject.as_str().into());
+            }
+            None => {}
+        }
+        if let Some(cert) = &seen.client_cert {
+            record.insert("client_cert".into(), cert.0.first().cloned().into());
         }
         mark_would_refuse(
             &mut record,
@@ -7651,8 +7778,12 @@ impl AppState {
     }
 
     /// The pooled client whose connections give up after `connect`. One per distinct setting, made on first use.
-    fn client_for(&self, connect: Duration) -> Client<HttpsConnector<HttpConnector>, Body> {
-        if connect == self.timeouts.connect {
+    fn client_for(
+        &self,
+        connect: Duration,
+        tls: Option<&(String, Arc<enterplace_console::tls::rustls::ClientConfig>)>,
+    ) -> Client<HttpsConnector<HttpConnector>, Body> {
+        if connect == self.timeouts.connect && tls.is_none() {
             return self.client.clone();
         }
         let mut clients = self
@@ -7660,8 +7791,8 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         clients
-            .entry(connect)
-            .or_insert_with(|| client_with(connect))
+            .entry((connect, tls.map(|t| t.0.clone()).unwrap_or_default()))
+            .or_insert_with(|| client_with(connect, tls.map(|t| (*t.1).clone())))
             .clone()
     }
 }
@@ -7724,7 +7855,11 @@ pub(crate) async fn tunnel(
 }
 
 /// A client whose connections go through `proxy` (HTTP CONNECT), giving up after `connect`.
-fn proxied_with(connect: Duration, proxy: &Proxy) -> Proxied {
+fn proxied_with(
+    connect: Duration,
+    proxy: &Proxy,
+    tls: Option<enterplace_console::tls::rustls::ClientConfig>,
+) -> Proxied {
     let mut connector = HttpConnector::new();
     connector.set_connect_timeout(Some(connect));
     connector.enforce_http(false);
@@ -7734,8 +7869,7 @@ fn proxied_with(connect: Duration, proxy: &Proxy) -> Proxied {
         tunnel = tunnel.with_auth(auth.clone());
     }
     crate::ring_default();
-    let connector = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_webpki_roots()
+    let connector = https(tls)
         .https_or_http()
         .enable_http1()
         .wrap_connector(tunnel);
@@ -7748,14 +7882,26 @@ pub(crate) fn ring_default() {
     let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
 }
 
+/// The HTTPS connector of a client to providers: `tls` when the provider has a client certificate.
+fn https(
+    tls: Option<enterplace_console::tls::rustls::ClientConfig>,
+) -> hyper_rustls::HttpsConnectorBuilder<hyper_rustls::builderstates::WantsSchemes> {
+    match tls {
+        Some(tls) => enterplace_console::tls::https_with(Some(tls)),
+        None => enterplace_console::tls::https(),
+    }
+}
+
 /// A client with its own connection pool, whose connections give up after `connect`.
-fn client_with(connect: Duration) -> Client<HttpsConnector<HttpConnector>, Body> {
+fn client_with(
+    connect: Duration,
+    tls: Option<enterplace_console::tls::rustls::ClientConfig>,
+) -> Client<HttpsConnector<HttpConnector>, Body> {
     let mut connector = HttpConnector::new();
     connector.set_connect_timeout(Some(connect));
     connector.enforce_http(false);
     crate::ring_default();
-    let connector = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_webpki_roots()
+    let connector = https(tls)
         .https_or_http()
         .enable_http1()
         .wrap_connector(connector);
@@ -9092,7 +9238,7 @@ async fn attempt_timed(
     let captured = hyper_util::client::legacy::connect::capture_connection(&mut request);
     let outcome = match &provider.proxy {
         None => {
-            let client = state.client_for(limits.connect);
+            let client = state.client_for(limits.connect, provider.tls.as_ref());
             let sent = client.request(request);
             tokio::time::timeout(limits.first_byte, connected(sent, captured, started)).await
         }
@@ -9101,8 +9247,21 @@ async fn attempt_timed(
                 .proxied
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .entry((limits.connect, proxy.id.clone()))
-                .or_insert_with(|| proxied_with(limits.connect, proxy))
+                .entry((
+                    limits.connect,
+                    format!(
+                        "{}\n{}",
+                        proxy.id,
+                        provider.tls.as_ref().map_or("", |t| t.0.as_str())
+                    ),
+                ))
+                .or_insert_with(|| {
+                    proxied_with(
+                        limits.connect,
+                        proxy,
+                        provider.tls.as_ref().map(|t| (*t.1).clone()),
+                    )
+                })
                 .clone();
             let sent = client.request(request);
             tokio::time::timeout(limits.first_byte, connected(sent, captured, started)).await
@@ -10023,29 +10182,49 @@ pub async fn serve_on_tls(
 
 /// Reads a PEM certificate chain and private key for `enterplace serve --tls-cert --tls-key`.
 pub fn tls_acceptor(cert: &Path, key: &Path) -> Result<tokio_rustls::TlsAcceptor, String> {
-    use tokio_rustls::rustls::{
-        self,
-        pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
+    tls_acceptor_with(cert, key, None)
+}
+
+/// [`tls_acceptor`], asking each client for a certificate signed by a CA of the PEM file in `client_ca` (mutual
+/// TLS). With `true` a client without one is turned away in the handshake; with `false` one is verified when
+/// presented. The certificate's names reach each request as [`ClientCert`].
+pub fn tls_acceptor_with(
+    cert: &Path,
+    key: &Path,
+    client_ca: Option<(&Path, bool)>,
+) -> Result<tokio_rustls::TlsAcceptor, String> {
+    use enterplace_console::tls::{self, rustls};
+    let (certs, private) = tls::identity(cert, key, "--tls-cert and --tls-key")?;
+    let provider = tls::provider();
+    let builder = rustls::ServerConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .map_err(|err| format!("TLS could not be set up: {err}. Report this as a bug."))?;
+    let builder = match client_ca {
+        None => builder.with_no_client_auth(),
+        Some((path, require)) => {
+            let mut roots = rustls::RootCertStore::empty();
+            for ca in tls::certificates(path, "tls: client_ca_file")? {
+                roots.add(ca).map_err(|err| {
+                    format!("a certificate in {} (tls: client_ca_file) cannot be used as a CA: {err}. Give the PEM certificate of the CA that signs your callers' certificates.", path.display())
+                })?;
+            }
+            let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+                Arc::new(roots),
+                provider,
+            );
+            let verifier = if require {
+                verifier
+            } else {
+                verifier.allow_unauthenticated()
+            };
+            builder.with_client_cert_verifier(verifier.build().map_err(|err| {
+                format!("client certificates cannot be checked against {} (tls: client_ca_file): {err}. Give the PEM certificate of the CA that signs your callers' certificates.", path.display())
+            })?)
+        }
     };
-    let certs = CertificateDer::pem_file_iter(cert)
-        .and_then(|certs| certs.collect::<Result<Vec<_>, _>>())
-        .map_err(|err| format!("could not read a certificate from {} (--tls-cert): {err}. Give a PEM file that starts with -----BEGIN CERTIFICATE-----, the server certificate first and then any intermediates.", cert.display()))?;
-    if certs.is_empty() {
-        return Err(format!(
-            "{} (--tls-cert) holds no certificate. Give a PEM file that starts with -----BEGIN CERTIFICATE-----.",
-            cert.display()
-        ));
-    }
-    let private = PrivateKeyDer::from_pem_file(key).map_err(|err| format!("could not read a private key from {} (--tls-key): {err}. Give the PEM private key of the certificate (PKCS#8, PKCS#1 or SEC1), unencrypted.", key.display()))?;
-    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .map_err(|err| format!("TLS could not be set up: {err}. Report this as a bug."))?
-    .with_no_client_auth()
-    .with_single_cert(certs, private)
-    .map_err(|err| format!("the key in {} does not match the certificate in {}, or is not usable: {err}. Give the key the certificate was issued for.", key.display(), cert.display()))?;
-    let mut config = config;
+    let mut config = builder
+        .with_single_cert(certs, private)
+        .map_err(|err| format!("the key in {} does not match the certificate in {}, or is not usable: {err}. Give the key the certificate was issued for.", key.display(), cert.display()))?;
     // HTTP/1 only, as on plain HTTP (see accept_loop): announcing h2 would make clients try it.
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
     Ok(tokio_rustls::TlsAcceptor::from(Arc::new(config)))
@@ -10106,9 +10285,9 @@ async fn accept_loop(
                         tokio::time::sleep_until(started + deadline).await;
                         asked.load(std::sync::atomic::Ordering::Relaxed)
                     };
-                    let service = TowerToHyperService::new(service);
                     match tls {
                         None => {
+                            let service = TowerToHyperService::new(service);
                             let connection = watcher.watch(builder.serve_connection(TokioIo::new(stream), service));
                             run_connection(connection, first_request).await;
                         }
@@ -10117,6 +10296,19 @@ async fn accept_loop(
                             let Ok(Ok(stream)) = tokio::time::timeout_at(started + deadline, tls.accept(stream)).await else {
                                 return;
                             };
+                            // The client certificate, already verified against tls: client_ca_file in the handshake.
+                            let cert = stream
+                                .get_ref()
+                                .1
+                                .peer_certificates()
+                                .and_then(|chain| chain.first())
+                                .map(|leaf| ClientCert(Arc::new(enterplace_core::x509::names(leaf))));
+                            let service = TowerToHyperService::new(service.map_request(move |mut request: axum::http::Request<_>| {
+                                if let Some(cert) = &cert {
+                                    request.extensions_mut().insert(cert.clone());
+                                }
+                                request
+                            }));
                             let connection = watcher.watch(builder.serve_connection(TokioIo::new(stream), service));
                             run_connection(connection, first_request).await;
                         }
@@ -10276,6 +10468,68 @@ fn parse_addr(raw: &str, source: &str) -> Result<SocketAddr, String> {
     })
 }
 
+/// How `enterplace serve <policy>` is asked to run, beyond the policy file.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ServeOptions<'a> {
+    pub keys: Option<&'a Path>,
+    /// `--listen`: the address of the model routes (and of everything else without an admin address).
+    pub listen: Option<&'a str>,
+    /// `--metrics`: an address that serves `GET /metrics` alone.
+    pub metrics: Option<&'a str>,
+    /// `--tls-cert` and `--tls-key`. The policy's `tls: { cert_file, key_file }` stands in for them.
+    pub tls: Option<(&'a Path, &'a Path)>,
+    /// `--admin-listen`: an address of their own for the console, the admin API and /metrics. The policy's
+    /// `admin_listen:` stands in for it.
+    pub admin_listen: Option<&'a str>,
+    /// `--no-migrate`: change no table of the store, and refuse to start when its schema is behind.
+    pub no_migrate: bool,
+}
+
+/// The paths only the admin listener serves when there is one: the console, the admin API and /metrics.
+fn admin_path(path: &str) -> bool {
+    ["/console", "/admin", "/metrics"]
+        .iter()
+        .any(|prefix| enterplace_core::policy::segment_prefix(path, prefix))
+}
+
+fn not_here(what: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::json!({ "error": { "type": "enterplace_error", "code": "not_on_this_listener", "message": what } })
+            .to_string(),
+    )
+        .into_response()
+}
+
+/// With `admin_listen`: the data listener's router answers no console, admin API or metrics path.
+pub fn data_only(router: Router) -> Router {
+    router.layer(axum::middleware::from_fn(
+        |request: Request, next: axum::middleware::Next| async move {
+            if admin_path(request.uri().path()) {
+                return not_here("This address serves the model routes only. The console, the admin API and /metrics are on the gateway's admin address (admin_listen); ask whoever runs Enterplace for it.");
+            }
+            next.run(request).await
+        },
+    ))
+}
+
+/// With `admin_listen`: the admin listener's router answers the console, the admin API, /metrics and the health
+/// checks, and nothing else.
+pub fn admin_only(router: Router, metrics: Router) -> Router {
+    router
+        .merge(metrics)
+        .layer(axum::middleware::from_fn(
+            |request: Request, next: axum::middleware::Next| async move {
+                let path = request.uri().path();
+                if !admin_path(path) && !matches!(path, "/healthz" | "/readyz") {
+                    return not_here("This is the gateway's admin address: it serves the console, the admin API, /metrics and the health checks. Send model requests to the gateway's own address (--listen).");
+                }
+                next.run(request).await
+            },
+        ))
+}
+
 /// `enterplace serve <policy>`: checks the files, opens the audit log, and serves with every request identified, decided
 /// and recorded. The files are checked again once a second and on SIGHUP, and a change that passes is used at once.
 pub async fn serve_policy(
@@ -10286,10 +10540,14 @@ pub async fn serve_policy(
     metrics: Option<&str>,
     tls: Option<(&Path, &Path)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    serve_policy_with(name, policy_path, keys_path, listen, metrics, tls, &|_| {
-        Ok(Extension::default())
-    })
-    .await
+    let options = ServeOptions {
+        keys: keys_path,
+        listen,
+        metrics,
+        tls,
+        ..ServeOptions::default()
+    };
+    serve_policy_with(name, policy_path, &options, &|_| Ok(Extension::default())).await
 }
 
 /// `serve_policy`, with what an embedding binary adds: `extend` runs once the files are checked and the store is
@@ -10297,22 +10555,57 @@ pub async fn serve_policy(
 pub async fn serve_policy_with(
     name: &str,
     policy_path: &Path,
-    keys_path: Option<&Path>,
-    listen: Option<&str>,
-    metrics: Option<&str>,
-    tls: Option<(&Path, &Path)>,
+    options: &ServeOptions<'_>,
     extend: &(dyn Fn(Host<'_>) -> Result<Extension, String> + Sync),
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // The addresses and the TLS files are checked before anything is written to the audit log.
-    let tls = tls.map(|(cert, key)| tls_acceptor(cert, key)).transpose()?;
+    let keys_path = options.keys;
+    // The addresses and the TLS files are checked before anything is written to the audit log. `tls:` and
+    // `admin_listen:` are read from the policy file as it is on disk: a store's version sets neither.
+    let (file_tls, file_admin) = std::fs::read_to_string(policy_path)
+        .ok()
+        .and_then(|text| {
+            let keys = keys_path.map_or_else(
+                || enterplace_core::config::keys_path_for(policy_path),
+                Path::to_path_buf,
+            );
+            enterplace_core::config::load_texts(policy_path, &text, &keys, "").ok()
+        })
+        .map(|loaded| (loaded.tls, loaded.admin_listen))
+        .unwrap_or_default();
+    let pair = options.tls.or(file_tls
+        .cert
+        .as_ref()
+        .map(|(cert, key)| (cert.as_path(), key.as_path())));
+    let client_ca = file_tls
+        .client_ca_file
+        .as_deref()
+        .map(|ca| (ca, file_tls.require));
+    if client_ca.is_some() && pair.is_none() {
+        return Err("the policy asks callers for a client certificate (tls: client_ca_file), and Enterplace is not serving TLS, so it could never see one. Give it a certificate with --tls-cert and --tls-key (or tls: cert_file and key_file), or remove client_ca_file when a proxy in front terminates TLS.".into());
+    }
+    let tls = pair
+        .map(|(cert, key)| tls_acceptor_with(cert, key, client_ca))
+        .transpose()?;
     let scheme = if tls.is_some() { "https" } else { "http" };
-    let addr = parse_addr(listen.unwrap_or(DEFAULT_ADDR), "--listen")?;
-    let metrics_addr = metrics
+    let addr = parse_addr(options.listen.unwrap_or(DEFAULT_ADDR), "--listen")?;
+    let metrics_addr = options
+        .metrics
         .map(|raw| parse_addr(raw, "--metrics"))
         .transpose()?;
     if metrics_addr == Some(addr) {
         return Err("--metrics and --listen name the same address. Give /metrics a port of its own, for example --metrics 127.0.0.1:9464.".into());
     }
+    let admin_addr = match options.admin_listen {
+        Some(raw) => Some(parse_addr(raw, "--admin-listen")?),
+        None => file_admin,
+    };
+    // Port 0 asks the system for a free port each time, so two of them never collide.
+    if admin_addr
+        .is_some_and(|admin| admin.port() != 0 && (admin == addr || Some(admin) == metrics_addr))
+    {
+        return Err("the admin address (--admin-listen or admin_listen:) is the same as --listen or --metrics. Give the console and the admin API a port of their own, for example admin_listen: 127.0.0.1:9090.".into());
+    }
+    store::set_no_migrate(options.no_migrate);
     // A variable that points at a secret manager is read now: a start that cannot read one says which, and stops.
     let read = enterplace_core::secrets::load()?;
     if read > 0 {
@@ -10321,12 +10614,27 @@ pub async fn serve_policy_with(
             enterplace_core::count(read, "secret")
         );
     }
-    let started = governed_with(
+    let mut started = governed_with(
         policy_path,
         keys_path,
         &enterplace_core::secrets::var,
         extend,
     )?;
+    let admin = match admin_addr {
+        Some(admin_addr) => {
+            let listener = tokio::net::TcpListener::bind(admin_addr).await.map_err(|err| {
+                format!("could not listen on {admin_addr} for the console and the admin API: {err}. Is the port in use? Choose another with --admin-listen or admin_listen:.")
+            })?;
+            let router = admin_only(started.router.clone(), started.metrics.clone());
+            started.router = data_only(started.router);
+            Some((
+                listener.local_addr().unwrap_or(admin_addr),
+                listener,
+                router,
+            ))
+        }
+        None => None,
+    };
     let loaded = &started.loaded;
     // Listen first, then say so: "listening" must be true when it is printed.
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|err| {
@@ -10342,6 +10650,21 @@ pub async fn serve_policy_with(
         start_block(mode, scheme, addr, loaded);
     }
     println!("{name} listening on {scheme}://{addr}");
+    // The console's address: the admin listener's when there is one.
+    let model_addr = addr;
+    let addr = admin
+        .as_ref()
+        .map_or(addr, |(admin_addr, _, _)| *admin_addr);
+    if admin.is_some() {
+        println!(
+            "Admin: the console, the admin API and /metrics are served on {scheme}://{addr} only; {scheme}://{model_addr} serves the model routes."
+        );
+        if !addr.ip().is_loopback() {
+            eprintln!(
+                "warning: /metrics on {addr} takes no key. Keep the admin address on a network only admins and your scraper reach (a NetworkPolicy, a private subnet)."
+            );
+        }
+    }
     if let Some(token) = &started.setup {
         // A wildcard address is not one a browser can open: show the same port on this machine.
         let shown = if addr.ip().is_unspecified() {
@@ -10422,6 +10745,7 @@ pub async fn serve_policy_with(
             "warning: no keys in {keys_from}, so every request will be refused. Add one with `enterplace key new <name> --team <team>`: it is used within 2 seconds.",
         );
     }
+    let addr = model_addr;
     if !addr.ip().is_loopback() && tls.is_none() && start.as_deref() == Some("container") {
         println!(
             "Plain HTTP on {addr}: fine for a trial on this machine. For a team, put TLS in front (docs: Deploy)."
@@ -10455,18 +10779,17 @@ pub async fn serve_policy_with(
             }
         });
     }
-    match tls {
-        Some(tls) => {
-            serve_on_tls(
-                listener,
-                started.router,
-                Timeouts::default(),
-                stop_signal(),
-                tls,
-            )
-            .await;
+    let on = |listener, router, tls: Option<tokio_rustls::TlsAcceptor>| {
+        accept_loop(listener, router, Timeouts::default(), stop_signal(), tls)
+    };
+    match admin {
+        Some((_, admin_listener, admin_router)) => {
+            tokio::join!(
+                on(listener, started.router, tls.clone()),
+                on(admin_listener, admin_router, tls)
+            );
         }
-        None => serve_on(listener, started.router, Timeouts::default(), stop_signal()).await,
+        None => on(listener, started.router, tls).await,
     }
     flush(started.log.clone()).await;
     Ok(())

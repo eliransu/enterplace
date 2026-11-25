@@ -322,6 +322,9 @@ fn entry_text(name: &str, team: &str, hash: &str, attributes: &Attributes) -> St
         let from: Vec<String> = o.from.iter().map(ToString::to_string).collect();
         entry.push_str(&format!("    from: {}\n", json(from.into())));
     }
+    if let Some(cert) = &o.cert {
+        entry.push_str(&format!("    cert: {}\n", json(cert.clone().into())));
+    }
     if let Some(prefix) = &o.replaced_by {
         entry.push_str(&format!("    replaced_by: \"{prefix}\"\n"));
     }
@@ -357,6 +360,9 @@ pub fn options_json(options: &KeyOptions) -> Option<String> {
     if !options.from.is_empty() {
         let from: Vec<String> = options.from.iter().map(ToString::to_string).collect();
         map.insert("from".into(), from.into());
+    }
+    if let Some(cert) = &options.cert {
+        map.insert("cert".into(), cert.clone().into());
     }
     if let Some(prefix) = &options.replaced_by {
         map.insert("replaced_by".into(), prefix.clone().into());
@@ -409,6 +415,10 @@ pub fn options_from_json(text: &str) -> Result<KeyOptions, String> {
         mcp_tools: list("mcp_tools")?,
         guardrails: list("guardrails")?,
         from: config::cidrs(&list("from")?)?,
+        cert: value
+            .get("cert")
+            .map(|c| c.as_str().map(str::to_string).ok_or_else(|| wrong("cert")))
+            .transpose()?,
         replaced_by: value
             .get("replaced_by")
             .map(|p| {
@@ -1198,6 +1208,7 @@ mod tests {
             replaced_by: None,
             mcp_tools: vec!["github.*".into(), "!github.delete_repo".into()],
             guardrails: vec!["no-secrets".into()],
+            cert: Some("spiffe://corp/billing".into()),
         };
         // The hierarchy's fields are written beside the options, a tag YAML reads specially ("yes") as text.
         let attributes = Attributes {

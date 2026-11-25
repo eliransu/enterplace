@@ -1,6 +1,6 @@
 # Store migrations by namespace: entries, SHA-256 of them. Written by a test (see RELEASING.md), read by
 # scripts/version.py: a change since the previous tag needs a minor version bump.
-core 7 9274d625f0feefc6e771bdb70a2c6aaded7da8024b3c5765b265382f2164ab13
+core 8 cb225793a1f2a8d3c23f9ad66074b9d2536f544984a7bf18e8495a920199081d
 enterplace_policy 1 96473f0099a276fd8e5722b11b45dd1e41da7d95be8e145b8bc1fd118470239b
 enterplace_routing 4 fd4f94379248059d596372c03342029e87a5eea52396bc5ad900400e639b7278
 enterplace_ha 1 cbe01e1fb90f63b8792f7a0356e9e02be03b95978ec010f9846d33af047a85cb

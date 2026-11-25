@@ -1,0 +1,34 @@
+# The console and admin API on a port and Service of their own, and migrations as a pre-upgrade Job with the pods
+# on --no-migrate. For `helm lint` and `helm template` in CI. Not for installing.
+replicaCount: 2
+admin:
+  enabled: true
+migrations:
+  job:
+    enabled: true
+    envFromSecrets:
+      - enterplace-migrate-secrets
+masterKey:
+  existingSecret: enterplace-master-key
+ingress:
+  enabled: true
+networkPolicy:
+  enabled: true
+  adminFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: platform-admin
+policy: |
+  version: 1
+  providers:
+    - name: openai
+      kind: openai
+      url: https://api.openai.com/v1
+      key_env: OPENAI_PROVIDER_KEY
+      models: [gpt-4o-mini]
+  rules:
+    - name: everyone
+      principals: { any: true }
+      models: [gpt-4o-mini]
+  store: { postgres_url_env: DATABASE_URL }
+  audit: { path: /var/lib/enterplace/enterplace-audit.jsonl }

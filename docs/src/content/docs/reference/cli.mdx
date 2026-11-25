@@ -98,6 +98,7 @@ Runs the gateway: every request is identified, checked against the policy and re
 
 ```text
 enterplace serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>]
+             [--admin-listen <host:port>] [--no-migrate]
 ```
 
 | Flag | Default | Description |
@@ -108,6 +109,8 @@ enterplace serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <hos
 | `--metrics <host:port>` | off | Serves `GET /metrics` on this address only. Must differ from `--listen` |
 | `--tls-cert <pem>` | off | Certificate chain, PEM, server certificate first. Needs `--tls-key` |
 | `--tls-key <pem>` | off | The certificate's unencrypted private key, PEM (PKCS#8, PKCS#1 or SEC1). Needs `--tls-cert` |
+| `--admin-listen <host:port>` | off | Serves the console, the admin API and `/metrics` on this address only, so `--listen` serves the model routes alone. The policy's `admin_listen:` does the same. See [An admin address of its own](/operations/deployment/#an-admin-address-of-its-own) |
+| `--no-migrate` | off | Changes no table of the store, and refuses to start when its schema is behind. Run `enterplace store migrate` first |
 
 ```bash
 OPENAI_PROVIDER_KEY=sk-... enterplace serve enterplace.policy.yaml --listen 0.0.0.0:8443 \
@@ -134,6 +137,21 @@ ENTERPLACE_UPSTREAM=http://127.0.0.1:9000 enterplace serve --unchecked
 ```
 
 `enterplace serve` with no policy file is an error that names both forms.
+
+## store migrate
+
+Creates or updates every table of the store the policy's `store:` names, then stops. Run it as a step of its own (an init container, the Helm chart's migration Job) where the gateways start with `serve --no-migrate`.
+
+```text
+enterplace store migrate [--policy <file>] [--keys <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--policy <file>` | `enterplace.policy.yaml` | The policy whose `store:` names the database |
+| `--keys <file>` | `enterplace.keys.yaml` beside the policy | The keys file the gateways serve with |
+
+It reads the same environment as `serve`: the variable `postgres_url_env` names, and `ENTERPLACE_MASTER_KEY` when you use one. From the image (Enterplace Enterprise), it also makes the tables of the features the license in `ENTERPLACE_LICENSE` unlocks. Running it twice changes nothing. Exit `0` when the schema is up to date, `2` otherwise. See [Migrations as a step of their own](/operations/store/#migrations-as-a-step-of-their-own).
 
 ## check
 

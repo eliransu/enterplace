@@ -80,6 +80,24 @@ Revoking removes the entry from the keys file and stops the key at once. The con
 The console and the admin API write the keys file. Mount it writable, and keep it readable by Enterplace's user only.
 </Aside>
 
+### Lockout after failed sign-ins
+
+Five failed sign-ins within 15 minutes lock out where they came from for 30 minutes.
+
+| Counted per | Applies to |
+|---|---|
+| Source address (an IPv6 address by its /64) | Admin key sign-in, and email and password sign-in ([Members](/operations/members/)) |
+| Account (the email) | Email and password sign-in |
+
+- While locked out, every sign-in from that address or to that account answers `429` with `Retry-After` and the code `sign_in_locked`. The key or password is not checked, the right one included.
+- A good sign-in forgets the failures counted before it. An empty form is not an attempt.
+- With a [store](/operations/store/), failures are counted in Postgres: five failures spread over several replicas lock out on all of them. Without one, each process counts its own.
+- Behind a load balancer, list it under [`trusted_proxies`](/governance/access-control/#behind-a-load-balancer). The source is then the address it names in `X-Forwarded-For`, not the balancer's, which every person shares.
+- The failure that locks a source or an account out is recorded once as `console_sign_in_locked`. Attempts refused during the lockout are not recorded one by one, so a flood cannot fill the audit log.
+- To end a lockout early with a store: `DELETE FROM enterplace_sign_in_failures WHERE scope = 'source:203.0.113.7'`. Without one, restart Enterplace.
+
+Single sign-on is not counted: the identity provider checks the password and applies its own lockout.
+
 ## What is recorded
 
 Each action is an `admin` record with `"via": "console"`, written before the action is done. An action that cannot be recorded is not done.
@@ -90,6 +108,7 @@ Each action is an `admin` record with `"via": "console"`, written before the act
 | `console_sign_out` | A sign-out |
 | `issue_key`, `revoke_key` | A key issued or revoked, with its name, team, hash prefix and admin flag in `target` |
 | `self_issue_key` | A key issued to a person by `enterplace login` |
+| `console_sign_in_locked` | The failed sign-in that locked out a source address or an account: `target.scope` (`source:<address>` or `account:<hash of the email>`), `target.failures`, `target.within_seconds` and `target.locked_seconds` |
 | `console_sso_starts` | 100 or more single sign-on starts in one minute, written at most once a minute |
 | `console_sso_refusals` | Refused sign-ins from one client address past the first 100 in a minute, summed in one record with the count per code |
 

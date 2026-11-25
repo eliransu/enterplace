@@ -136,6 +136,7 @@ Besides name, team, `admin`, `expires`, `budget`, `models` and `tpm`, a key may 
 | `from` | list | [Address ranges](/governance/access-control/#source-address-ranges) the key may be used from | `ip_not_allowed` (403) |
 | `mcp_tools` | list | MCP tools this key may use, within its rule's `tools:`: `<server>.<tool>`, `<server>.*`, `*`, or `!<server>.<tool>` to leave one out. It only narrows the rule. Empty leaves the rule's list. See [Tool permissions](/governance/tool-permissions/#mcp-tools-per-key-and-per-request) | `tool_not_allowed` |
 | `guardrails` | list | Guardrails the key adds to its rule's, by name. They only add. See [Guardrails](/governance/guardrails/#default-guardrails-and-guardrails-per-key) | `guardrail_blocked` (403) |
+| `cert` | string | The client certificate the key is bound to, by its subject common name or a subject alternative name. The key works only on a connection that presented it. See [Mutual TLS](/governance/mutual-tls/#bind-a-key-to-a-certificate) | `cert_required` (403) |
 | `replaced_by` | string | Set by a [rotation](#rotate-a-key): the key that replaces this one | |
 
 ```yaml title="enterplace.keys.yaml"
@@ -398,6 +399,7 @@ enterplace key prune --keys enterplace.keys.yaml
 | `route_not_allowed` | 403 | The key's `routes` do not include the request's path. |
 | `parallel_limited` | 429 | The key has `parallel` requests in flight already. `Retry-After: 1`. |
 | `ip_not_allowed` | 403 | The request came from outside the key's `from`. |
+| `cert_required` | 403 | The key has a `cert`, and the connection did not present that client certificate. |
 
 ## Related
 

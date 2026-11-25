@@ -208,6 +208,42 @@ curl -s https://enterplace.example.com/healthz
 
 `networkPolicy.enabled: true` limits who reaches the pods (`networkPolicy.from`) and where they connect (`networkPolicy.egress`, default any host on 443). Add your database's port to `egress` when it is not 443.
 
+## An admin port and a migration Job
+
+Two chart options for clusters with stricter rules.
+
+```yaml title="enterplace-values.yaml"
+admin:
+  enabled: true        # the console, the admin API and /metrics on port 9090, Service <release>-admin
+migrations:
+  job:
+    enabled: true      # enterplace store migrate before each install and upgrade; pods run --no-migrate
+    envFromSecrets:
+      - enterplace-migrate-secrets   # a DATABASE_URL whose user may create tables
+networkPolicy:
+  enabled: true
+  adminFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: platform-admin
+```
+
+- **`admin.enabled`** starts the pods with `--admin-listen 0.0.0.0:9090` and adds the Service `<release>-admin`. The gateway Service and the Ingress carry the model routes alone: `/console`, `/admin` and `/metrics` answer `404` there. Open the console with `kubectl port-forward svc/enterplace-admin 9090`, or an internal Ingress of yours on that Service.
+- **`networkPolicy.adminFrom`** lists who may reach the admin port. Empty allows pods of the release's namespace only.
+- **`migrations.job.enabled`** runs `enterplace store migrate` as a Helm pre-install and pre-upgrade hook, and the pods change no table. A pod that meets a schema that is behind refuses to start and says so in its log. The Job needs a database that exists before the release, so the chart refuses it with the trial `postgres.enabled`.
+
+The rendered rule for the admin port:
+
+```yaml
+ingress:
+  - ports:
+      - port: admin
+    from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: platform-admin
+```
+
 ## Change the policy
 
 Change `policy` in `enterplace-values.yaml` and run the same `helm upgrade`. The pods do not restart: the kubelet updates the mounted file within about a minute, and each pod checks it and uses it within 2 seconds, or keeps the old one and records `config_rejected`. With `existingPolicyConfigMap`, update the ConfigMap instead:

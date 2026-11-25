@@ -5,6 +5,12 @@
 {{- if and .Values.postgres.enabled (not $store) }}
 {{- fail "postgres.enabled starts a database that nothing uses until the policy has `store: { postgres_url_env: DATABASE_URL }`. Add it to policy." }}
 {{- end }}
+{{- if and .Values.migrations.job.enabled (not $store) }}
+{{- fail "migrations.job.enabled migrates the policy's store, and the policy has no `store:` section. Add `store: { postgres_url_env: DATABASE_URL }` to policy, or turn the Job off." }}
+{{- end }}
+{{- if and .Values.migrations.job.enabled .Values.postgres.enabled }}
+{{- fail "migrations.job.enabled runs before the release's own resources exist, so it cannot migrate the trial postgres (postgres.enabled), which the release creates. Use a database that exists already, or turn the Job off: the pods then migrate at start." }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -85,6 +91,13 @@ spec:
             - --metrics
             - 0.0.0.0:{{ .Values.metrics.port }}
             {{- end }}
+            {{- if .Values.admin.enabled }}
+            - --admin-listen
+            - 0.0.0.0:{{ .Values.admin.port }}
+            {{- end }}
+            {{- if .Values.migrations.job.enabled }}
+            - --no-migrate
+            {{- end }}
           {{- if or .Values.envFromSecrets .Values.postgres.enabled }}
           envFrom:
             {{- range .Values.envFromSecrets }}
@@ -130,6 +143,10 @@ spec:
             {{- if .Values.metrics.enabled }}
             - name: metrics
               containerPort: {{ .Values.metrics.port }}
+            {{- end }}
+            {{- if .Values.admin.enabled }}
+            - name: admin
+              containerPort: {{ .Values.admin.port }}
             {{- end }}
           # /readyz is 503 while a request would be refused (the store unreachable, no keys, draining after SIGTERM);
           # /healthz only when the audit log cannot be written, which a restart fixes.

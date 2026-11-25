@@ -157,6 +157,7 @@ async fn allow(state: &AppState, request: Request, call: &mut Call) -> Result<Pl
     };
     let key = caller_key(&parts.headers)?;
     let person = &crate::admin::caller(state, policy, key, call).await?;
+    crate::cert_bound(person, parts.extensions.get())?;
     // The policy governs every organization: its API needs edit_policy, from a role not kept to one of them.
     match policy.role_of(person) {
         Some(role)

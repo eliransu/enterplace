@@ -1752,6 +1752,63 @@ async fn console_page(gw: &Governed, cookie: &str) -> Result<StatusCode, Error> 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn failed_console_sign_ins_are_counted_and_locked_out_across_every_gateway() -> TestResult {
+    let Some(url) = database("lockout").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let a = gateway(&dir("lockout-a")?, &url, port)?;
+    add_key(&a, "ops", "ops", ADMIN, true)?;
+    let b = gateway(&dir("lockout-b")?, &url, port)?;
+    let attempt =
+        async |gw: &enterplace_server::Governed,
+               key: &str,
+               from: u8|
+               -> Result<StatusCode, Box<dyn std::error::Error>> {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/console/sign-in")
+                .header(header::HOST, "enterplace.test")
+                .header(header::ORIGIN, "http://enterplace.test")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("key={key}")))?;
+            request.extensions_mut().insert(axum::extract::ConnectInfo(
+                std::net::SocketAddr::from(([203, 0, 113, from], 40000)),
+            ));
+            Ok(gw.router.clone().oneshot(request).await?.status())
+        };
+    // Five failures spread over both gateways: neither saw five, together they did.
+    for n in 0..5 {
+        let gw = if n % 2 == 0 { &a } else { &b };
+        assert_eq!(
+            attempt(gw, "enterplace_not_a_key", 7).await?,
+            StatusCode::UNAUTHORIZED,
+            "failure {n}"
+        );
+    }
+    for gw in [&a, &b] {
+        assert_eq!(
+            attempt(gw, ADMIN, 7).await?,
+            StatusCode::TOO_MANY_REQUESTS,
+            "the source is locked out on every gateway, the right key included"
+        );
+    }
+    // Another source is not, and its good sign-in is not held against anyone.
+    assert_eq!(attempt(&b, ADMIN, 8).await?, StatusCode::SEE_OTHER);
+    // Exactly one lockout record across both audit logs: the gateway that counted the fifth failure wrote it.
+    let mut locked = 0;
+    for gw in [&a, &b] {
+        gw.log.flush();
+        locked += std::fs::read_to_string(&gw.loaded.audit_path)?
+            .lines()
+            .filter(|l| l.contains("console_sign_in_locked"))
+            .count();
+    }
+    assert_eq!(locked, 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_console_sign_in_on_one_gateway_is_good_on_all_and_a_sign_out_ends_it_everywhere()
 -> TestResult {
     let Some(url) = database("sessions").await? else {

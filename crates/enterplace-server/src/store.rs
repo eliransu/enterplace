@@ -143,6 +143,16 @@ CREATE TABLE enterplace_writer (id integer PRIMARY KEY CHECK (id = 1), version t
     "
 CREATE TABLE enterplace_settings (name text PRIMARY KEY, value text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
 ",
+    // Migration 8: failed console sign-ins per source address and account, and until when each is locked out, so
+    // every gateway counts and refuses together.
+    "
+CREATE TABLE enterplace_sign_in_failures (
+    scope text PRIMARY KEY,
+    failures integer NOT NULL,
+    since timestamptz NOT NULL,
+    locked_until timestamptz
+);
+",
 ];
 
 /// Whether a Enterplace of version `own` may use a database whose schema a Enterplace of version `writer` moved ahead of it.
@@ -848,6 +858,40 @@ impl rustls::client::danger::ServerCertVerifier for AnyName {
     }
 }
 
+/// Set by `enterplace serve --no-migrate`: every migration list is compared with the database and never applied.
+static NO_MIGRATE: AtomicBool = AtomicBool::new(false);
+
+/// Makes this process check the store's schema instead of changing it (`enterplace serve --no-migrate`): a start on a
+/// database that is behind is refused, naming `enterplace store migrate`. For clusters where serving pods may not run
+/// DDL; the migration runs as its own step (an init container, a Helm Job).
+pub fn set_no_migrate(on: bool) {
+    NO_MIGRATE.store(on, Ordering::Relaxed);
+}
+
+fn no_migrate() -> bool {
+    NO_MIGRATE.load(Ordering::Relaxed)
+}
+
+async fn exists(
+    tx: &tokio_postgres::Transaction<'_>,
+    table: &str,
+) -> Result<bool, tokio_postgres::Error> {
+    tx.query_one("SELECT to_regclass($1) IS NOT NULL", &[&table])
+        .await?
+        .try_get(0)
+}
+
+/// With `--no-migrate`: fine when the tables are current, refused when they are behind.
+fn stale(what: &str, applied: i32, known: i32) -> Result<(), String> {
+    if applied >= known {
+        return Ok(());
+    }
+    Err(format!(
+        "the store's schema is behind: {what} tables are at version {applied} and this Enterplace ({}) needs {known}. It was started with --no-migrate, so it changes no table. Run `enterplace store migrate --policy <policy>` with the same version and environment (an init container or the Helm chart's migration Job), then start again.",
+        enterplace_core::VERSION
+    ))
+}
+
 /// Creates or updates the tables, one Enterplace at a time, and refuses a database a newer Enterplace has written.
 async fn migrate(client: &mut Client) -> Result<(), String> {
     let failed = |err: tokio_postgres::Error| {
@@ -855,21 +899,29 @@ async fn migrate(client: &mut Client) -> Result<(), String> {
             "the store's tables could not be created or updated: {err}. The connection string's user needs CREATE on the database. Fix that and start again."
         )
     };
+    let check_only = no_migrate();
     let tx = client.transaction().await.map_err(failed)?;
-    // Two replicas starting together would both create the tables: the second waits here for the first.
-    tx.batch_execute(
-        "SELECT pg_advisory_xact_lock(7349127341); CREATE TABLE IF NOT EXISTS enterplace_schema (version integer NOT NULL);",
-    )
-    .await
-    .map_err(failed)?;
-    let row = tx
-        .query_one(
+    let there = !check_only || exists(&tx, "enterplace_schema").await.map_err(failed)?;
+    if !check_only {
+        // Two replicas starting together would both create the tables: the second waits here for the first.
+        tx.batch_execute(
+            "SELECT pg_advisory_xact_lock(7349127341); CREATE TABLE IF NOT EXISTS enterplace_schema (version integer NOT NULL);",
+        )
+        .await
+        .map_err(failed)?;
+    }
+    let applied: i32 = if there {
+        tx.query_one(
             "SELECT coalesce(max(version), 0) FROM enterplace_schema",
             &[],
         )
         .await
-        .map_err(failed)?;
-    let applied: i32 = row.try_get(0).map_err(failed)?;
+        .map_err(failed)?
+        .try_get(0)
+        .map_err(failed)?
+    } else {
+        0
+    };
     let known = i32::try_from(MIGRATIONS.len()).unwrap_or(i32::MAX);
     let own = enterplace_core::VERSION;
     if applied > known {
@@ -880,6 +932,9 @@ async fn migrate(client: &mut Client) -> Result<(), String> {
                 by.as_deref().unwrap_or("version unknown")
             ));
         }
+    }
+    if check_only {
+        return stale("the gateway's own", applied, known);
     }
     for (number, sql) in MIGRATIONS.iter().enumerate().skip(applied as usize) {
         tx.batch_execute(sql).await.map_err(failed)?;
@@ -1413,6 +1468,15 @@ impl Inner {
                 client.execute("DELETE FROM enterplace_sessions WHERE expires < now()", &[]),
             )
             .await;
+            // Failed sign-ins long past any window, whose lockout, if any, has ended.
+            let _ = tokio::time::timeout(
+                WAIT,
+                client.execute(
+                    "DELETE FROM enterplace_sign_in_failures WHERE since < now() - interval '1 day' AND coalesce(locked_until, since) < now()",
+                    &[],
+                ),
+            )
+            .await;
             let _ = tokio::time::timeout(
                 WAIT,
                 client.execute(
@@ -1862,19 +1926,26 @@ async fn migrate_namespace(
             "the {namespace} tables could not be created or updated: {err}. The connection string's user needs CREATE on the database. Fix that and start again."
         )
     };
+    let check_only = no_migrate();
     let tx = client.transaction().await.map_err(failed)?;
-    tx.batch_execute(
-        "SELECT pg_advisory_xact_lock(7349127341); CREATE TABLE IF NOT EXISTS enterplace_migrations (namespace text PRIMARY KEY, version integer NOT NULL);",
-    )
-    .await
-    .map_err(failed)?;
-    let row = tx
-        .query_opt(
+    let there = !check_only || exists(&tx, "enterplace_migrations").await.map_err(failed)?;
+    if !check_only {
+        tx.batch_execute(
+            "SELECT pg_advisory_xact_lock(7349127341); CREATE TABLE IF NOT EXISTS enterplace_migrations (namespace text PRIMARY KEY, version integer NOT NULL);",
+        )
+        .await
+        .map_err(failed)?;
+    }
+    let row = if there {
+        tx.query_opt(
             "SELECT version FROM enterplace_migrations WHERE namespace = $1",
             &[&namespace],
         )
         .await
-        .map_err(failed)?;
+        .map_err(failed)?
+    } else {
+        None
+    };
     let applied: i32 = row
         .map(|r| r.try_get(0))
         .transpose()
@@ -1893,6 +1964,9 @@ async fn migrate_namespace(
                 enterplace_core::VERSION
             ));
         }
+    }
+    if check_only {
+        return stale(namespace, applied, known);
     }
     for (number, sql) in migrations
         .iter()
@@ -3052,6 +3126,67 @@ impl Store for PgStore {
             row.map(|row| row.try_get(0).map_err(|err| err.to_string()))
                 .transpose()
         })
+    }
+
+    fn sign_in_lock(
+        &self,
+        scope: String,
+        failed: Option<enterplace_core::store::SignInLimit>,
+    ) -> Pending<Option<u64>> {
+        let inner = self.inner.clone();
+        self.ask(async move {
+            let client = inner.client()?;
+            let row = match failed {
+                // One statement, so two gateways counting the same scope at once cannot both miss the limit.
+                Some(limit) => client
+                    .query_opt(
+                        "INSERT INTO enterplace_sign_in_failures AS f (scope, failures, since) VALUES ($1, 1, now()) \
+                         ON CONFLICT (scope) DO UPDATE SET \
+                           failures = CASE WHEN f.since < now() - $2 * interval '1 second' THEN 1 ELSE f.failures + 1 END, \
+                           since = CASE WHEN f.since < now() - $2 * interval '1 second' THEN now() ELSE f.since END, \
+                           locked_until = CASE WHEN f.since >= now() - $2 * interval '1 second' AND f.failures + 1 >= $3 \
+                             THEN now() + $4 * interval '1 second' ELSE f.locked_until END \
+                         RETURNING extract(epoch FROM locked_until - now())::float8",
+                        &[
+                            &scope,
+                            &limit.window.as_secs_f64(),
+                            &i32::try_from(limit.max).unwrap_or(i32::MAX),
+                            &limit.lock.as_secs_f64(),
+                        ],
+                    )
+                    .await,
+                None => client
+                    .query_opt(
+                        "SELECT extract(epoch FROM locked_until - now())::float8 FROM enterplace_sign_in_failures WHERE scope = $1",
+                        &[&scope],
+                    )
+                    .await,
+            }
+            .map_err(|err| err.to_string())?;
+            let left: Option<f64> = row
+                .map(|row| row.try_get(0))
+                .transpose()
+                .map_err(|err| err.to_string())?
+                .flatten();
+            Ok(left.filter(|left| *left > 0.0).map(|left| left.ceil() as u64))
+        })
+    }
+
+    fn sign_in_clear(&self, scope: String) {
+        self.retried("a console sign-in", move |inner| {
+            let scope = scope.clone();
+            async move {
+                inner
+                    .client()?
+                    .execute(
+                        "DELETE FROM enterplace_sign_in_failures WHERE scope = $1",
+                        &[&scope],
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_err(|err| err.to_string())
+            }
+        });
     }
 
     fn end_session(&self, id_sha256: String) {

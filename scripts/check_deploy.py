@@ -127,6 +127,31 @@ def main() -> None:
         assert [m["type"] for m in hpa["metrics"]] == ["Resource", "Pods"], hpa["metrics"]
         assert "replicas" not in scaled[("StatefulSet", "enterplace")]["spec"], "the HPA owns the replica count"
         assert scaled[("PodDisruptionBudget", "enterplace")]["spec"]["maxUnavailable"] == 1
+        # The admin listener and the migration Job: the console has a port and Service of its own that the Ingress
+        # never routes to, the NetworkPolicy opens it to adminFrom alone, the Job migrates before the pods start,
+        # and the pods change no table.
+        with tempfile.TemporaryDirectory() as tmp:
+            rendered = pathlib.Path(tmp) / "chart.yaml"
+            rendered.write_text(subprocess.run(["helm", "template", "enterplace", str(CHART), "-f", str(CHART / "ci" / "admin-and-migrate.yaml")], check=True, capture_output=True, text=True).stdout)
+            split = {(d["kind"], d["metadata"]["name"]): d for d in load_all(rendered)}
+        args = split[("StatefulSet", "enterplace")]["spec"]["template"]["spec"]["containers"][0]["args"]
+        assert args[args.index("--admin-listen") + 1] == "0.0.0.0:9090" and "--no-migrate" in args, args
+        assert [p["name"] for p in split[("Service", "enterplace")]["spec"]["ports"]] == ["http"], "the gateway Service carries the model routes alone"
+        assert [p["name"] for p in split[("Service", "enterplace-admin")]["spec"]["ports"]] == ["admin"]
+        backend = split[("Ingress", "enterplace")]["spec"]["rules"][0]["http"]["paths"][0]["backend"]["service"]
+        assert backend["name"] == "enterplace" and backend["port"] == {"name": "http"}, "the Ingress must never route to the admin port"
+        admin_rule = [r for r in split[("NetworkPolicy", "enterplace")]["spec"]["ingress"] if r["ports"] == [{"port": "admin"}]]
+        assert admin_rule and admin_rule[0]["from"][0]["namespaceSelector"]["matchLabels"] == {"kubernetes.io/metadata.name": "platform-admin"}, admin_rule
+        job = split[("Job", "enterplace-migrate")]
+        assert "pre-upgrade" in job["metadata"]["annotations"]["helm.sh/hook"]
+        job_pod = job["spec"]["template"]["spec"]
+        assert job_pod["containers"][0]["args"][:2] == ["store", "migrate"], job_pod
+        assert job_pod["containers"][0]["envFrom"] == [{"secretRef": {"name": "enterplace-migrate-secrets"}}], "the Job takes its own database user"
+        assert job_pod["securityContext"]["runAsNonRoot"] and job_pod["containers"][0]["securityContext"]["readOnlyRootFilesystem"]
+        assert split[("ConfigMap", "enterplace-migrate-policy")]["metadata"]["annotations"]["helm.sh/hook-weight"] == "-5", "the Job's policy exists before the Job"
+        for flags, why in ((["--set", "migrations.job.enabled=true"], "no `store:`"), (["-f", str(CHART / "ci" / "store.yaml"), "--set", "migrations.job.enabled=true"], "trial postgres")):
+            refused = subprocess.run(["helm", "template", "enterplace", str(CHART), *flags], capture_output=True, text=True)
+            assert refused.returncode and why in refused.stderr, f"a migration Job with {why} must be refused: {refused.stderr}"
         refused = subprocess.run(["helm", "template", "enterplace", str(CHART), "--set", "autoscaling.enabled=true"], capture_output=True, text=True)
         assert refused.returncode and "store:" in refused.stderr, "autoscaling without a store must be refused"
         print("helm lint (with each ci/ values file) and helm template passed; the pod's security settings hold; HPA and PDB render as set")

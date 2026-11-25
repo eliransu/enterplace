@@ -70,6 +70,9 @@ pub struct KeyOptions {
     /// Guardrails this key adds to its rule's, by the name the policy's `guardrails:` defines each under. They
     /// only add: a key never runs fewer guardrails than its rule.
     pub guardrails: Vec<String>,
+    /// The client certificate this key is bound to, by its subject common name or a subject alternative name: the
+    /// key is refused on a connection that did not present it (`tls: { client_ca_file }`).
+    pub cert: Option<String>,
 }
 
 impl KeyOptions {
@@ -1299,6 +1302,8 @@ pub struct Policy {
     jwt: Vec<JwtTrust>,
     /// Proxies whose `X-Forwarded-For` names the client. A request from anywhere else is taken by its own address.
     trusted_proxies: Vec<Cidr>,
+    /// `identity_headers:`: the headers an authenticating proxy names the caller in.
+    identity_headers: Option<IdentityHeaders>,
     /// `cors:`: the browser origins that may call the gateway's routes. None, the default, answers no origin.
     cors: Option<Cors>,
     mode: Mode,
@@ -1308,6 +1313,19 @@ pub struct Policy {
     model_groups: Vec<(String, Vec<String>)>,
     /// `key_bounds:` by role name; the empty name is the one for every role without its own, and for `enterplace login`.
     key_bounds: Vec<(String, KeyBounds)>,
+}
+
+/// `identity_headers:` in the policy: the request headers (lower case) in which a proxy that authenticates people
+/// (oauth2-proxy, an ingress with OIDC, Cloudflare Access behind a tunnel) names the caller. They are read only on
+/// a connection from `trusted_proxies`; anyone else can write a header.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdentityHeaders {
+    /// The header that holds the person: their email or user name.
+    pub user: String,
+    /// The header that holds their groups, separated by commas, mapped by `sso_values` to roles and teams.
+    pub groups: Option<String>,
+    /// The team of a person whose groups put them in none.
+    pub team: Option<String>,
 }
 
 /// `cors:` in the policy: pages served from these origins may call Enterplace from the browser.
@@ -1573,6 +1591,20 @@ impl Policy {
     pub fn with_trusted_proxies(mut self, proxies: Vec<Cidr>) -> Self {
         self.trusted_proxies = proxies;
         self
+    }
+
+    pub fn with_identity_headers(mut self, headers: Option<IdentityHeaders>) -> Self {
+        self.identity_headers = headers;
+        self
+    }
+
+    pub fn identity_headers(&self) -> Option<&IdentityHeaders> {
+        self.identity_headers.as_ref()
+    }
+
+    /// Whether `peer`, the address a connection came from, is one of `trusted_proxies`.
+    pub fn trusted_proxy(&self, peer: IpAddr) -> bool {
+        self.trusted_proxies.iter().any(|c| c.contains(peer))
     }
 
     pub fn with_cors(mut self, cors: Option<Cors>) -> Self {

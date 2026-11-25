@@ -26,6 +26,17 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     {{- end }}
+    {{- if .Values.admin.enabled }}
+    # The console, the admin API and /metrics: this namespace, or adminFrom alone.
+    - ports:
+        - port: admin
+      from:
+        {{- if .Values.networkPolicy.adminFrom }}
+        {{- toYaml .Values.networkPolicy.adminFrom | nindent 8 }}
+        {{- else }}
+        - podSelector: {}
+        {{- end }}
+    {{- end }}
   egress:
     - ports:
         - port: 53

@@ -72,6 +72,8 @@ const MIGRATIONS: string[][] = [
     "CREATE TABLE raises (id TEXT PRIMARY KEY, body TEXT NOT NULL)",
     "INSERT INTO versions VALUES ('keys', 0), ('kills', 0), ('cooldowns', 0), ('credentials', 0), ('policy', 0), ('events', 0), ('raises', 0)",
   ],
+  // Failed console sign-ins per source address and account, and until when each is locked out.
+  ["CREATE TABLE sign_in_failures (scope TEXT PRIMARY KEY, failures INTEGER NOT NULL, since INTEGER NOT NULL, locked_until INTEGER)"],
 ];
 
 /** The versions the poll compares, each naming what is read again when it changes. */
@@ -250,6 +252,8 @@ export class StoreCore {
       this.run("DELETE FROM gateway_health WHERE updated < ?", now - loadFor);
       this.run("DELETE FROM deployment_load WHERE updated < ?", now - loadFor);
       this.run("DELETE FROM sessions WHERE expires < ?", now);
+      // Failed sign-ins long past any window, whose lockout, if any, has ended.
+      this.run("DELETE FROM sign_in_failures WHERE since < ? AND coalesce(locked_until, since) < ?", now - 86_400_000, now);
       this.run("DELETE FROM affinity WHERE seen < ?", now - b.idle * 1000);
       this.run("DELETE FROM latency WHERE updated < ?", now - b.latency_for * 1000);
       this.run("DELETE FROM replicas WHERE seen < ?", now - 86_400_000);
@@ -481,6 +485,33 @@ export class StoreCore {
 
   on_end_session(b: any) {
     this.run("DELETE FROM sessions WHERE sha256 = ?", b.sha256);
+    return {};
+  }
+
+  // Counts a failed console sign-in under its scope when `failed` is given ({ max, window, lock } in seconds), then
+  // says how many seconds the scope is still locked out for. The object runs one call at a time, so two gateways
+  // counting the same scope cannot both miss the limit.
+  on_sign_in_lock(b: any, now: number) {
+    const f = b.failed;
+    if (f) {
+      const row = this.one("SELECT failures, since, locked_until FROM sign_in_failures WHERE scope = ?", b.scope);
+      const fresh = !row || Number(row.since) < now - f.window * 1000;
+      const failures = fresh ? 1 : Number(row.failures) + 1;
+      const locked = failures >= f.max ? now + f.lock * 1000 : (row?.locked_until ?? null);
+      this.run(
+        "INSERT INTO sign_in_failures VALUES (?, ?, ?, ?) ON CONFLICT (scope) DO UPDATE SET failures = excluded.failures, since = excluded.since, locked_until = excluded.locked_until",
+        b.scope,
+        failures,
+        fresh ? now : Number(row.since),
+        locked,
+      );
+    }
+    const until = this.one("SELECT locked_until FROM sign_in_failures WHERE scope = ?", b.scope)?.locked_until;
+    return { seconds: until != null && Number(until) > now ? Math.ceil((Number(until) - now) / 1000) : null };
+  }
+
+  on_sign_in_clear(b: any) {
+    this.run("DELETE FROM sign_in_failures WHERE scope = ?", b.scope);
     return {};
   }
 

@@ -3290,3 +3290,95 @@ async fn teams_list_each_team_with_its_people_rule_owner_and_budget() -> TestRes
     );
     Ok(())
 }
+
+/// A sign-in attempt from `from`, as the server marks each request with its peer address.
+fn attempt(key: &str, from: [u8; 4]) -> Result<Request<Body>, axum::http::Error> {
+    let mut request = post("/console/sign-in", "", &format!("key={key}"))?;
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            from, 40000,
+        ))));
+    Ok(request)
+}
+
+#[tokio::test]
+async fn five_failed_sign_ins_lock_the_source_out_and_the_lockout_is_recorded_once() -> TestResult {
+    let s = setup("lockout")?;
+    let (here, elsewhere) = ([198, 51, 100, 7], [198, 51, 100, 8]);
+    for n in 1..=5 {
+        let (status, _, _) = send(&s.app, attempt("enterplace_wrong_key_x", here)?).await?;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "failure {n}");
+    }
+    // Locked: the right key is not even looked at, and the answer says for how long.
+    for key in [ADMIN_KEY, "enterplace_wrong_key_x"] {
+        let (status, headers, page) = send(&s.app, attempt(key, here)?).await?;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{page}");
+        let wait: u64 = headers
+            .get(header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok())
+            .ok_or("no Retry-After")?;
+        assert!((29 * 60..=30 * 60).contains(&wait), "{wait}");
+        assert!(
+            page.contains("sign_in_locked") && page.contains("30 more minutes"),
+            "{page}"
+        );
+    }
+    // Another address signs in as before.
+    let (status, _, _) = send(&s.app, attempt(ADMIN_KEY, elsewhere)?).await?;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let records = admin_records(&s)?;
+    let of = |action: &str, code: serde_json::Value| {
+        records
+            .iter()
+            .filter(|r| r["action"] == action && r["code"] == code)
+            .count()
+    };
+    assert_eq!(
+        of("console_sign_in", "not_admin".into()),
+        5,
+        "each failure is recorded"
+    );
+    let locked: Vec<_> = records
+        .iter()
+        .filter(|r| r["action"] == "console_sign_in_locked")
+        .collect();
+    assert_eq!(
+        locked.len(),
+        1,
+        "the lockout is recorded once, not per refused attempt"
+    );
+    assert_eq!(locked[0]["target"]["scope"], "source:198.51.100.7");
+    assert_eq!(locked[0]["target"]["failures"], 5);
+    assert_eq!(locked[0]["target"]["locked_seconds"], 1800);
+    assert_eq!(locked[0]["client"], "198.51.100.7");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_good_sign_in_forgets_the_failures_before_it_and_an_empty_form_counts_as_none()
+-> TestResult {
+    let s = setup("lockout-reset")?;
+    let here = [198, 51, 100, 9];
+    for round in 0..2 {
+        for _ in 0..4 {
+            let (status, _, _) = send(&s.app, attempt("enterplace_wrong_key_x", here)?).await?;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "round {round}");
+            let (status, _, _) = send(&s.app, attempt("", here)?).await?;
+            assert_eq!(
+                status,
+                StatusCode::UNAUTHORIZED,
+                "an empty form is not an attempt"
+            );
+        }
+        let (status, _, _) = send(&s.app, attempt(ADMIN_KEY, here)?).await?;
+        assert_eq!(
+            status,
+            StatusCode::SEE_OTHER,
+            "round {round}: four failures, then in"
+        );
+    }
+    Ok(())
+}

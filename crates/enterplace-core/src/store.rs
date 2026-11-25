@@ -13,6 +13,14 @@ use std::{
 
 use crate::{config::KeyEntry, keyfile::Revoked, kill::Kill, policy::Period};
 
+/// How many failed console sign-ins lock a scope, counted within which time, and for how long.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SignInLimit {
+    pub max: u32,
+    pub window: Duration,
+    pub lock: Duration,
+}
+
 /// The answer of a call that waits on the database, on the request path.
 pub type Pending<T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send>>;
 
@@ -357,6 +365,15 @@ pub trait Store: Credentials + Send + Sync + std::fmt::Debug {
     fn session(&self, id_sha256: String) -> Pending<Option<String>>;
     /// Ends a console session on every gateway. Does not wait: retried while the database is away.
     fn end_session(&self, id_sha256: String);
+    /// Console sign-in lockout, shared by every gateway. With `failed`, counts one failed sign-in under `scope` (a
+    /// source address or an account): the count starts again once `window` has passed since its first failure, and
+    /// reaching `max` locks the scope for `lock`. Without, only reads. Returns the seconds the scope is still
+    /// locked for, or `None` when it is not.
+    fn sign_in_lock(&self, _scope: String, _failed: Option<SignInLimit>) -> Pending<Option<u64>> {
+        Box::pin(async { Ok(None) })
+    }
+    /// Forgets the failed sign-ins counted under `scope`, after a good one. Does not wait.
+    fn sign_in_clear(&self, _scope: String) {}
     /// Replaces the settings of the key with `entry.sha256` (name, team and hash stay). `Ok(false)` when there is
     /// no such key. Blocks until the database answers.
     fn update_key(&self, _entry: &KeyEntry) -> Result<bool, String> {

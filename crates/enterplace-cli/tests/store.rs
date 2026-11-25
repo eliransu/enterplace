@@ -213,6 +213,8 @@ fn two_serve_processes_on_one_database_share_keys_and_kill_switches() -> TestRes
     eprintln!(
         "a key made with `enterplace key new` was accepted by the other process after {took:?}"
     );
+    // The kill goes through `a`, which refuses a switch for a person it does not know yet: wait until it does.
+    until(&a, &maya, Duration::from_secs(2), known)?;
 
     let home = path(&a_dir, "config");
     let a_url = format!("http://{a}");
@@ -395,5 +397,91 @@ fn start_in_a_container_with_database_url_keeps_its_admin_key_in_the_store_once(
         &db,
     )?;
     assert_eq!(listed.matches("admin\tadmin").count(), 1, "{listed}");
+    Ok(())
+}
+
+#[test]
+fn migrate_is_a_step_of_its_own_and_serve_no_migrate_changes_no_table() -> TestResult {
+    let Some(db) = database("migrate")? else {
+        return Ok(());
+    };
+    let url = db.as_str().to_string();
+    let dir = workdir("migrate")?;
+    let policy = path(&dir, "enterplace.policy.yaml");
+    let env = [
+        ("DATABASE_URL", url.as_str()),
+        ("ENTERPLACE_TEST_PROVIDER_KEY", "provider-secret"),
+    ];
+    let no_migrate = ["serve", &policy, "--listen", "127.0.0.1:0", "--no-migrate"];
+
+    // A new database: a gateway told not to migrate refuses to start, names the step to run, and made no table.
+    let out = enterplace(&no_migrate, &env)?;
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr)?;
+    assert!(
+        stderr.contains("enterplace store migrate") && stderr.contains("--no-migrate"),
+        "{stderr}"
+    );
+    let tables = |url: &str| -> Result<i64, Error> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async {
+            let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls).await?;
+            tokio::spawn(connection);
+            let row = client
+                .query_one(
+                    "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'",
+                    &[],
+                )
+                .await?;
+            Ok(row.try_get(0)?)
+        })
+    };
+    assert_eq!(tables(&url)?, 0, "--no-migrate created a table");
+
+    // The step of its own: every table, the lazily made ones included; a second run changes nothing.
+    let said = ok(&["store", "migrate", "--policy", &policy], &env)?;
+    assert!(said.contains("up to date"), "{said}");
+    let made = tables(&url)?;
+    assert!(made > 10, "{made} tables");
+    ok(&["store", "migrate", "--policy", &policy], &env)?;
+    assert_eq!(tables(&url)?, made);
+
+    // Now the gateway starts without migrating, and still makes no table.
+    let stdout = dir.join("stdout.txt");
+    let child = Command::new(env!("CARGO_BIN_EXE_enterplace"))
+        .args(no_migrate)
+        .envs(env)
+        .stdout(std::fs::File::create(&stdout)?)
+        .stderr(std::fs::File::create(dir.join("stderr.txt"))?)
+        .spawn()?;
+    let _running = Running(child);
+    let start = Instant::now();
+    while !std::fs::read_to_string(&stdout)
+        .unwrap_or_default()
+        .contains(" listening on http://")
+    {
+        if start.elapsed() > Duration::from_secs(10) {
+            let stderr = std::fs::read_to_string(dir.join("stderr.txt")).unwrap_or_default();
+            return Err(
+                format!("serve --no-migrate did not start on a migrated store: {stderr}").into(),
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(tables(&url)?, made);
+
+    // Without a store there is nothing to migrate, and the command says so.
+    std::fs::write(
+        dir.join("plain.yaml"),
+        POLICY.replace("store: { postgres_url_env: DATABASE_URL }\n", ""),
+    )?;
+    let out = enterplace(
+        &["store", "migrate", "--policy", &path(&dir, "plain.yaml")],
+        &env,
+    )?;
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8(out.stderr)?.contains("no store: section"));
     Ok(())
 }

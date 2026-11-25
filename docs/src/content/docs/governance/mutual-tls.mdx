@@ -1,0 +1,98 @@
+---
+title: Mutual TLS
+description: Ask callers for a client certificate, bind a key to a certificate so the key alone is of no use, and present Enterplace's own certificate to a private provider endpoint.
+sidebar:
+  order: 9
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+With mutual TLS both ends of a connection prove who they are with a certificate. Enterplace does it in two directions: it can require and verify a client certificate from its callers, and it can present one of its own to a provider.
+
+## Ask callers for a certificate
+
+Enterplace must serve HTTPS itself (`--tls-cert` and `--tls-key`, or `tls: cert_file` and `key_file`). Then name the CA that signs your callers' certificates:
+
+```yaml title="enterplace.policy.yaml (excerpt)"
+tls:
+  client_ca_file: /etc/enterplace/tls/client-ca.pem
+  require: true
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `client_ca_file` | path | none | PEM file with the CA certificates that sign your callers' certificates |
+| `require` | boolean | `true` | `true`: a connection without a valid client certificate is closed in the TLS handshake, before any request is read. `false`: a certificate is verified when presented, and callers without one are still served |
+| `cert_file`, `key_file` | path | none | Enterplace's own certificate chain and key, where `--tls-cert` and `--tls-key` do not give them |
+
+- A certificate from another CA, expired or not yet valid is turned away in the handshake.
+- A caller still sends a Enterplace key. The certificate says which workload connected; the key says who is asking and what they may do.
+- Every decision record of a model route, on a connection with a certificate, carries `client_cert`: the certificate's subject common name, or its first subject alternative name when it has no common name.
+- `require: true` applies to every address Enterplace serves, the admin address and the console included, so browsers need a certificate too. Use `require: false` and bound keys when people sign in to the console without one.
+- `tls:` is read at start. A change needs a restart.
+
+<Aside type="note">
+With a proxy or load balancer that ends TLS in front of Enterplace, the proxy sees the client certificate and Enterplace does not. Verify certificates at the proxy then, and leave `client_ca_file` out: Enterplace refuses to start with `client_ca_file` when it does not serve TLS itself.
+</Aside>
+
+## Bind a key to a certificate
+
+A key with `cert:` works only on a connection that presented that certificate. A copy of the key, taken off the workload, is refused everywhere else.
+
+```yaml title="enterplace.keys.yaml"
+keys:
+  - name: billing-service
+    team: payments
+    sha256: 0d6c...(64 hex characters)
+    cert: spiffe://corp/billing
+```
+
+`cert` is one name of the certificate: its subject common name, or a subject alternative name (a DNS name, a URI such as a SPIFFE ID, or an email). On a running gateway:
+
+```bash
+enterplace key update 5d1e4a07 --cert billing.internal --url https://enterplace.example.com
+enterplace key update 5d1e4a07 --cert none
+```
+
+The binding holds on the model routes, files and batches, realtime sessions, `/mcp`, the admin API and console sign-in. A request with a bound key and no matching certificate is refused with `cert_required` (403) and recorded.
+
+## Present a certificate to a provider
+
+A private model endpoint or an internal gateway may ask Enterplace for a client certificate, and may use a CA of its own.
+
+```yaml title="enterplace.policy.yaml (excerpt)"
+providers:
+  - name: internal-llm
+    kind: openai
+    url: https://llm.internal.example.com/v1
+    key_env: INTERNAL_LLM_KEY
+    models: [team-model]
+    allow_private: true
+    client_cert_file: /etc/enterplace/tls/enterplace-client.pem
+    client_key_file: /etc/enterplace/tls/enterplace-client-key.pem
+    ca_file: /etc/enterplace/tls/internal-ca.pem
+```
+
+| Field | Description |
+|---|---|
+| `client_cert_file` | PEM certificate chain Enterplace presents to this provider. Needs `client_key_file` |
+| `client_key_file` | The certificate's unencrypted PEM private key |
+| `ca_file` | PEM file of CAs trusted for this provider, besides the public roots built in |
+
+The files are read when the provider is loaded, at start and on a policy reload that changes the provider. A file that is missing or a key that does not match stops the start, naming the file and the provider. The certificate is used for chat, messages, embeddings and the other model routes, batches and realtime sessions to that provider.
+
+## Errors
+
+| Code | HTTP | When |
+|---|---|---|
+| `cert_required` | 403 | The key has a `cert`, and the connection presented no verified certificate with that name |
+
+A caller without a required certificate gets no HTTP answer: the TLS handshake fails.
+
+## Related
+
+<CardGrid>
+  <LinkCard title="Keys" href="/governance/keys/" description="Every field a key may carry." />
+  <LinkCard title="Access control" href="/governance/access-control/" description="Address ranges, CORS and JWTs." />
+  <LinkCard title="Deployment" href="/operations/deployment/#https" description="Serve HTTPS with Enterplace's own certificate." />
+</CardGrid>

@@ -15,9 +15,11 @@ getrandom.workspace = true
 # Single sign-on calls the identity provider (discovery, keys, token), over the same TLS client the server uses.
 hyper-util.workspace = true
 hyper-rustls.workspace = true
-# Only to make ring the rustls default: posthog-rs brings aws-lc-rs into the build too. Already in the build.
-tokio-rustls.workspace = true
 http-body-util.workspace = true
+# The TLS configurations of every crate are made in one place (src/tls.rs), on ring: posthog-rs brings aws-lc-rs
+# into the build too. Both are already in the build through hyper-rustls; named here to call them directly.
+tokio-rustls.workspace = true
+webpki-roots.workspace = true
 # Verifies ID token signatures (RS256, ES256). Already in the build through rustls; named here to call it directly.
 ring = "0.17"
 # SAML responses are XML: a namespace-aware tree for exclusive canonicalization and signature checks. No

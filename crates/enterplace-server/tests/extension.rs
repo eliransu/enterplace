@@ -190,13 +190,14 @@ async fn a_namespace_migrates_on_its_own_and_its_connection_holds_transactions()
             ("mcp".to_string(), 1),
         ]
     );
-    // The gateway's own schema version is untouched by the namespace: its seven migrations (keys, shared limits and
-    // sessions, credentials, the hierarchy's key fields, key options, the newest version to migrate, settings).
+    // The gateway's own schema version is untouched by the namespace: its eight migrations (keys, shared limits and
+    // sessions, credentials, the hierarchy's key fields, key options, the newest version to migrate, settings, console
+    // sign-in failures).
     let core: i32 = client
         .query_one("SELECT max(version) FROM enterplace_schema", &[])
         .await?
         .try_get(0)?;
-    assert_eq!(core, 7);
+    assert_eq!(core, 8);
 
     // Its own connection, so a transaction is safe on it.
     let tx = client.transaction().await?;

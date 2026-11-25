@@ -69,10 +69,20 @@ pub(crate) fn routes() -> Router<AppState> {
             get(
                 |State(state): State<AppState>,
                  addr: Option<axum::Extension<crate::ClientAddr>>,
+                 cert: Option<axum::Extension<crate::ClientCert>>,
                  headers: HeaderMap,
                  uri: Uri,
                  ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>| async move {
-                    open(state, addr.map(|a| a.0), headers, uri, ws, Api::OpenAi).await
+                    open(
+                        state,
+                        addr.map(|a| a.0),
+                        cert.map(|c| c.0),
+                        headers,
+                        uri,
+                        ws,
+                        Api::OpenAi,
+                    )
+                    .await
                 },
             ),
         )
@@ -81,10 +91,20 @@ pub(crate) fn routes() -> Router<AppState> {
             get(
                 |State(state): State<AppState>,
                  addr: Option<axum::Extension<crate::ClientAddr>>,
+                 cert: Option<axum::Extension<crate::ClientCert>>,
                  headers: HeaderMap,
                  uri: Uri,
                  ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>| async move {
-                    open(state, addr.map(|a| a.0), headers, uri, ws, Api::Gemini).await
+                    open(
+                        state,
+                        addr.map(|a| a.0),
+                        cert.map(|c| c.0),
+                        headers,
+                        uri,
+                        ws,
+                        Api::Gemini,
+                    )
+                    .await
                 },
             ),
         )
@@ -103,9 +123,19 @@ enum Api {
 pub(crate) async fn passthrough(state: AppState, request: axum::extract::Request) -> Response {
     use axum::extract::FromRequestParts;
     let addr = request.extensions().get::<crate::ClientAddr>().cloned();
+    let cert = request.extensions().get::<crate::ClientCert>().cloned();
     let (mut parts, _) = request.into_parts();
     let ws = WebSocketUpgrade::from_request_parts(&mut parts, &state).await;
-    open(state, addr, parts.headers, parts.uri, ws, Api::Passthrough).await
+    open(
+        state,
+        addr,
+        cert,
+        parts.headers,
+        parts.uri,
+        ws,
+        Api::Passthrough,
+    )
+    .await
 }
 
 impl Api {
@@ -155,6 +185,7 @@ struct Open {
 async fn open(
     state: AppState,
     addr: Option<crate::ClientAddr>,
+    cert: Option<crate::ClientCert>,
     headers: HeaderMap,
     uri: Uri,
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
@@ -168,7 +199,10 @@ async fn open(
     let client_ip = crate::client_ip(policy, addr.as_ref(), &headers);
     // Holds the person a JWT names, for as long as the record of this session needs it.
     let minted = std::sync::OnceLock::new();
-    let mut seen = Seen::default();
+    let mut seen = Seen {
+        client_cert: cert,
+        ..Seen::default()
+    };
     let admitted = admit(
         &state, &version, policy, &headers, &uri, &ws, api, client_ip, &minted, &mut seen,
     )
@@ -1251,18 +1285,13 @@ async fn dial(
             )
         })??;
     let stream: Box<dyn Io> = if tls {
-        let mut roots = rustls::RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = rustls::ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .map_err(|e| e.to_string())?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+        let config = match &provider.tls {
+            Some((_, config)) => config.clone(),
+            None => Arc::new(enterplace_console::tls::client_config()?),
+        };
         let name = rustls::pki_types::ServerName::try_from(host).map_err(|e| e.to_string())?;
         Box::new(
-            tokio_rustls::TlsConnector::from(Arc::new(config))
+            tokio_rustls::TlsConnector::from(config)
                 .connect(name, tcp)
                 .await
                 .map_err(|e| e.to_string())?,

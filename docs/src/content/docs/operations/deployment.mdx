@@ -134,6 +134,27 @@ Enterplace listens on `127.0.0.1:8080` unless `--listen` names another address. 
 
 On an address other machines can reach without TLS, Enterplace starts and warns that keys travel over plain HTTP.
 
+### An admin address of its own
+
+By default one address serves everything: the model routes, the console at `/console`, the admin API at `/admin` and the health checks. To keep the console and the admin API off the address your callers use, give them their own:
+
+```yaml title="enterplace.policy.yaml (excerpt)"
+admin_listen: 127.0.0.1:9090
+```
+
+`enterplace serve --admin-listen 127.0.0.1:9090` does the same and wins over the policy.
+
+| Address | Serves | Answers `404 not_on_this_listener` to |
+|---|---|---|
+| `--listen` | The model routes, `/mcp`, the device and watch routes, `/healthz`, `/readyz` | `/console`, `/admin`, `/metrics` |
+| `admin_listen` | `/console`, `/admin`, `/metrics`, `/healthz`, `/readyz` | Everything else |
+
+- The refusal on the callers' address does not name the admin address.
+- `/metrics` on the admin address takes no key, like `--metrics`. Keep the admin address on a network only admins and your scraper reach.
+- With `--tls-cert` and `--tls-key`, both addresses serve HTTPS with the same certificate.
+- The address is read at start. Changing `admin_listen` needs a restart.
+- The one-time setup link and the console link in the start lines point at the admin address.
+
 ## HTTPS
 
 Enterplace serves HTTPS itself when you give it a certificate and its key.
@@ -153,6 +174,8 @@ enterplace serve enterplace.policy.yaml --listen 0.0.0.0:8443 \
 - A plain HTTP request to the TLS port gets no answer.
 - The files are read once at start. Restart Enterplace to use a renewed certificate.
 - The console marks its session cookie `Secure` on a TLS connection.
+- The policy can name the files instead: `tls: { cert_file: ..., key_file: ... }`. The flags win.
+- To ask callers for a client certificate, see [Mutual TLS](/governance/mutual-tls/).
 
 A certificate for a test:
 

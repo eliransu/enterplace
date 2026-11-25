@@ -1298,6 +1298,7 @@ async fn prepare<'a>(
         .starts_with("/v1/async/")
         .then(|| (parts.headers.clone(), parts.extensions.clone()));
     let key = crate::caller_key(&parts.headers)?.to_string();
+    seen.client_cert = parts.extensions.get::<crate::ClientCert>().cloned();
     let client_ip = crate::client_ip(policy, parts.extensions.get(), &parts.headers);
     let (person, key_sha256) = crate::identify(
         state,

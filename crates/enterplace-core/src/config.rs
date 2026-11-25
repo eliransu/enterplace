@@ -229,6 +229,18 @@ const KNOWN: &[&str] = &[
     "person_claim",
     "team_claim",
     "trusted_proxies",
+    "admin_listen",
+    "tls",
+    "cert_file",
+    "client_ca_file",
+    "require",
+    "client_cert_file",
+    "ca_file",
+    "client_key_file",
+    "identity_headers",
+    "user",
+    "groups",
+    "cert",
     "cors",
     "allowed_origins",
     "from",
@@ -340,6 +352,13 @@ struct PolicyFile {
     jwt: Vec<JwtFile>,
     #[serde(default)]
     trusted_proxies: Vec<String>,
+    /// The address the console, the admin API and /metrics are served on, apart from the model routes.
+    #[serde(default)]
+    admin_listen: Option<String>,
+    #[serde(default)]
+    tls: Option<TlsFile>,
+    #[serde(default)]
+    identity_headers: Option<IdentityHeadersFile>,
     #[serde(default)]
     cors: Option<CorsFile>,
     /// The applications rules name in `applications:`, each with what it is for.
@@ -384,6 +403,90 @@ struct ApplicationFile {
     name: String,
     #[serde(default)]
     intent: Option<String>,
+}
+
+/// `tls:`: the certificate Enterplace serves HTTPS with, and the CA whose client certificates it asks callers for.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TlsFile {
+    #[serde(default)]
+    cert_file: Option<PathBuf>,
+    #[serde(default)]
+    key_file: Option<PathBuf>,
+    #[serde(default)]
+    client_ca_file: Option<PathBuf>,
+    #[serde(default)]
+    require: Option<bool>,
+}
+
+/// `tls:` as checked.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Tls {
+    /// The PEM certificate chain and key Enterplace serves HTTPS with, where `--tls-cert` and `--tls-key` do not.
+    pub cert: Option<(PathBuf, PathBuf)>,
+    /// A PEM file of the CAs whose client certificates are accepted (mutual TLS).
+    pub client_ca_file: Option<PathBuf>,
+    /// Whether a connection without a client certificate is closed. False verifies one when it is presented.
+    pub require: bool,
+}
+
+/// `identity_headers:`: the headers an authenticating proxy in `trusted_proxies` names the caller in.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IdentityHeadersFile {
+    user: String,
+    #[serde(default)]
+    groups: Option<String>,
+    #[serde(default)]
+    team: Option<String>,
+}
+
+fn tls_of(file: &TlsFile) -> Result<Tls, String> {
+    let cert = match (&file.cert_file, &file.key_file) {
+        (Some(cert), Some(key)) => Some((cert.clone(), key.clone())),
+        (None, None) => None,
+        _ => return Err("cert_file and key_file go together: the PEM certificate chain and its private key. Give both, or neither and pass --tls-cert and --tls-key".into()),
+    };
+    if file.require.is_some() && file.client_ca_file.is_none() {
+        return Err("require says whether a client certificate is demanded, and there is no client_ca_file to check one against. Add client_ca_file: the PEM file of the CA that signs your callers' certificates".into());
+    }
+    Ok(Tls {
+        cert,
+        client_ca_file: file.client_ca_file.clone(),
+        require: file.require.unwrap_or(true),
+    })
+}
+
+fn identity_headers_of(
+    file: &IdentityHeadersFile,
+    proxies: usize,
+) -> Result<crate::policy::IdentityHeaders, String> {
+    let header = |name: &str| {
+        let name = name.trim().to_ascii_lowercase();
+        (!name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+        .then_some(name)
+    };
+    let bad = "user and groups name request headers, such as user: X-Forwarded-User and groups: X-Forwarded-Groups";
+    let user = header(&file.user).ok_or(bad)?;
+    let groups = file
+        .groups
+        .as_deref()
+        .map(|g| header(g).ok_or(bad))
+        .transpose()?;
+    if file.team.as_deref().is_some_and(|t| !valid_name(t)) {
+        return Err("team is the team of a caller whose groups put them in none, in letters, digits, '.', '-', '_' and '@'".into());
+    }
+    if proxies == 0 {
+        return Err("identity headers are taken only from a trusted proxy, and trusted_proxies is empty, so no request could ever carry one. List the addresses of the authenticating proxy under trusted_proxies".into());
+    }
+    Ok(crate::policy::IdentityHeaders {
+        user,
+        groups,
+        team: file.team.clone(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -987,6 +1090,13 @@ struct ProviderFile {
     // With `auth: passthrough`: whether a request must name its person in x-enterplace-user (`required`, the default).
     #[serde(default)]
     identity: Option<String>,
+    // A client certificate and its key (PEM) presented to the provider: mutual TLS to a private endpoint.
+    #[serde(default)]
+    ca_file: Option<PathBuf>,
+    #[serde(default)]
+    client_cert_file: Option<PathBuf>,
+    #[serde(default)]
+    client_key_file: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -1828,6 +1938,8 @@ struct KeyFile {
     /// Guardrails this key adds to its rule's, by name.
     #[serde(default)]
     guardrails: Vec<String>,
+    #[serde(default)]
+    cert: Option<String>,
 }
 
 /// One entry of a keys file, as checked.
@@ -1911,6 +2023,13 @@ pub fn key_options_problem(options: &KeyOptions) -> Option<String> {
         return Some(format!(
             "metadata holds at most {MAX_LIST} entries, each name in letters, digits, '.', '-', '_' and '@' and each value at most {MAX_METADATA_VALUE} characters on one line, for example metadata: {{ owner: maya, ticket: OPS-12 }}"
         ));
+    }
+    if options
+        .cert
+        .as_ref()
+        .is_some_and(|c| c.is_empty() || c.chars().count() > 256 || c.chars().any(char::is_control))
+    {
+        return Some("cert is the name of the client certificate this key is bound to: its subject common name or one of its subject alternative names (a DNS name, a URI or an email), at most 256 characters, for example cert: billing.internal".into());
     }
     if options
         .replaced_by
@@ -2496,6 +2615,10 @@ pub struct Provider {
     pub passthrough: bool,
     /// `identity: optional`: a passthrough request without x-enterplace-user is recorded as an unknown person.
     pub identity_optional: bool,
+    /// The PEM client certificate chain and key Enterplace presents to the provider (mutual TLS).
+    pub client_cert: Option<(PathBuf, PathBuf)>,
+    /// A PEM file of CAs trusted for this provider besides the public roots: a private endpoint's own CA.
+    pub ca_file: Option<PathBuf>,
 }
 
 /// How a Bedrock or Vertex AI provider runs batches through `/v1/batches`.
@@ -2548,6 +2671,10 @@ pub struct Loaded {
     pub mcp: Vec<crate::mcp::Server>,
     /// The shared store, when the policy sets `store:`. Keys and kill switches are then read from it, not files.
     pub store: Option<StoreSetting>,
+    /// `admin_listen:`: the address of the console, the admin API and /metrics, apart from the model routes.
+    pub admin_listen: Option<std::net::SocketAddr>,
+    /// `tls:`: Enterplace's own certificate, and the client certificates it asks for.
+    pub tls: Tls,
 }
 
 /// "1 provider: openai at https://api.openai.com", for messages.
@@ -5317,6 +5444,12 @@ fn providers(
                 ));
             }
         }
+        if entry.client_cert_file.is_some() != entry.client_key_file.is_some() {
+            errors.push(format!(
+                "{}: client_cert_file and client_key_file go together: the PEM certificate Enterplace presents to this provider and its private key. Give both or neither.",
+                at(if entry.client_cert_file.is_some() { "client_cert_file" } else { "client_key_file" })
+            ));
+        }
         if entry.proxy_env.as_deref().is_some_and(|v| !env_name(v)) {
             errors.push(format!(
                 "{}: proxy_env names the environment variable that holds the proxy URL, such as `proxy_env: OPENAI_PROXY`.",
@@ -5383,6 +5516,11 @@ fn providers(
                 chat_as_responses: entry.chat_as_responses.unwrap_or(false),
                 passthrough,
                 identity_optional: passthrough && entry.identity.as_deref() == Some("optional"),
+                ca_file: entry.ca_file.clone(),
+                client_cert: entry
+                    .client_cert_file
+                    .clone()
+                    .zip(entry.client_key_file.clone()),
                 oci_signing: entry.oci_signing.as_ref().map(|oci| OciSigning {
                     tenancy: oci.tenancy.clone(),
                     user: oci.user.clone(),
@@ -5515,6 +5653,7 @@ fn keys(file: &Path, text: &str, errors: &mut Vec<String>) -> Vec<KeyEntry> {
             replaced_by: entry.replaced_by.map(|p| p.to_ascii_lowercase()),
             mcp_tools: entry.mcp_tools,
             guardrails: entry.guardrails,
+            cert: entry.cert,
         };
         if let Some(problem) = key_options_problem(&options) {
             errors.push(format!("{at}: {problem}."));
@@ -5922,6 +6061,38 @@ pub fn load_texts(
             Vec::new()
         }
     };
+    let top = |key: &str, problem: String, errors: &mut Vec<String>| {
+        errors.push(format!(
+            "{}:{}: {key}: {problem}.",
+            policy_path.display(),
+            line_of_key(policy_text, key, 1, usize::MAX)
+        ));
+    };
+    let admin_listen = parsed.admin_listen.as_deref().and_then(|raw| {
+        raw.trim()
+            .parse::<std::net::SocketAddr>()
+            .map_err(|_| top("admin_listen", format!("\"{raw}\" is not an IP address and port. Write the address the console, the admin API and /metrics are served on, such as admin_listen: 127.0.0.1:9090 or 0.0.0.0:9090"), &mut errors))
+            .ok()
+    });
+    let tls = parsed
+        .tls
+        .as_ref()
+        .map(tls_of)
+        .transpose()
+        .unwrap_or_else(|problem| {
+            top("tls", problem, &mut errors);
+            None
+        })
+        .unwrap_or_default();
+    let identity_headers = parsed
+        .identity_headers
+        .as_ref()
+        .map(|file| identity_headers_of(file, trusted_proxies.len()))
+        .transpose()
+        .unwrap_or_else(|problem| {
+            top("identity_headers", problem, &mut errors);
+            None
+        });
     let cors = match parsed.cors.as_ref().map(cors_of).transpose() {
         Ok(cors) => cors,
         Err(problem) => {
@@ -5949,6 +6120,7 @@ pub fn load_texts(
                 .with_orgs(parsed.orgs.clone())
                 .with_jwt(jwt)
                 .with_trusted_proxies(trusted_proxies)
+                .with_identity_headers(identity_headers)
                 .with_cors(cors)
                 .with_guardrail_defs(guardrail_defs)
                 .with_model_groups(parsed.model_groups.clone().into_iter().collect())
@@ -5967,6 +6139,8 @@ pub fn load_texts(
             aliases,
             mcp,
             store,
+            admin_listen,
+            tls,
         }),
         _ => Err(errors),
     }
@@ -5983,6 +6157,11 @@ pub fn needs_restart(old: &Loaded, new: &Loaded) -> Vec<String> {
             old.audit_path.display(),
             new.audit_path.display()
         ));
+    }
+    if old.admin_listen != new.admin_listen || old.tls != new.tls {
+        reasons.push(
+            "admin_listen or tls changed. Listeners and their certificates are set up once, at start: restart Enterplace to apply it.".to_string(),
+        );
     }
     if old.audit_per_org != new.audit_per_org {
         reasons.push(
@@ -6025,6 +6204,8 @@ pub fn same_connection(a: &Provider, b: &Provider) -> bool {
         && a.timeouts == b.timeouts
         && a.project_id == b.project_id
         && a.oci_signing == b.oci_signing
+        && a.client_cert == b.client_cert
+        && a.ca_file == b.ca_file
 }
 
 /// What `enterplace check` warns about in a policy that loads: observe mode, and models no provider serves.

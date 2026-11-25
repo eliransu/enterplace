@@ -109,6 +109,25 @@ service:
   type: ClusterIP
   port: 8080
 
+admin:
+  # Serves the console, the admin API and /metrics on a port of their own (`--admin-listen`), behind a Service of
+  # their own (<release>-admin), so the gateway port and the Ingress carry the model routes alone. Reach the console
+  # with `kubectl port-forward svc/<release>-admin 9090`, or an internal Ingress of yours on that Service. With
+  # networkPolicy.enabled, the port is open to `networkPolicy.adminFrom` only (empty: this namespace).
+  enabled: false
+  port: 9090
+
+migrations:
+  # Runs `enterplace store migrate` as a Job before each install and upgrade (a Helm hook), and starts the pods with
+  # `--no-migrate`: they change no table, and refuse to start on a schema that is behind. For clusters where the
+  # serving pods' database user may not run DDL: give the Job its own user through `job.envFromSecrets`. Needs the
+  # policy's `store:` and a database that exists before the release (not the trial postgres below).
+  job:
+    enabled: false
+    # Secrets loaded as environment variables in the Job, instead of envFromSecrets: for a DATABASE_URL whose user
+    # may create tables. Empty: the Job uses envFromSecrets.
+    envFromSecrets: []
+
 metrics:
   # Serves GET /metrics on a port of its own. It takes no key and shows team, model and spend: keep it on the
   # cluster network, never on the Ingress.
@@ -137,6 +156,13 @@ networkPolicy:
   enabled: false
   from: []
   metricsFrom: []
+  # Who may reach the admin port (admin.enabled): the console, the admin API and /metrics. Empty: pods of this
+  # namespace only. For example the namespace of your bastion or internal ingress:
+  #   adminFrom:
+  #     - namespaceSelector:
+  #         matchLabels:
+  #           kubernetes.io/metadata.name: platform-admin
+  adminFrom: []
   # Where Enterplace may connect: providers, the database, the OTLP collector, the proxy. Default: any host on 443.
   egress:
     - ports:

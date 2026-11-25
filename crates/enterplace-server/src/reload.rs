@@ -274,6 +274,36 @@ fn credential_prints(
         .collect()
 }
 
+/// `enterplace store migrate`: opens the policy's store, which creates or updates the gateway's own tables, then the
+/// tables its features make as they start (batches, the request index, the MCP gateway), then `more`, the tables of
+/// a binary that embeds the gateway. On the Cloudflare store the Durable Object keeps the gateway's own tables
+/// itself, and the features' are made there the same way. `Ok(false)` when the policy has no `store:`.
+pub fn migrate_store(
+    policy_path: &Path,
+    keys_path: &Path,
+    env: &dyn Fn(&str) -> Option<String>,
+    more: &dyn Fn(&crate::sql::Db) -> Result<(), String>,
+) -> Result<bool, String> {
+    crate::store::set_no_migrate(false);
+    let (_, Some(db)) = open_shared(policy_path, keys_path, env)? else {
+        return Ok(false);
+    };
+    for (namespace, list) in crate::store::PgStore::migration_lists() {
+        // Brought up to date when the store was opened.
+        if !matches!(
+            namespace,
+            "core" | "enterplace_policy" | "enterplace_routing" | "enterplace_ha"
+        ) {
+            db.migrate(namespace, list, &[])?;
+        }
+    }
+    more(&db)?;
+    if let Some(pg) = db.postgres() {
+        pg.close();
+    }
+    Ok(true)
+}
+
 /// Connects to the store when the policy has `store:`, and serves the keys file's path from it, so every reader
 /// and writer of the keys (command line, admin API, console) uses the database. `None` without `store:`.
 pub fn open_store(
@@ -541,6 +571,8 @@ fn route(
         chat_as_responses: provider.chat_as_responses,
         passthrough: provider.passthrough,
         identity_optional: provider.identity_optional,
+        client_cert: provider.client_cert.clone(),
+        ca_file: provider.ca_file.clone(),
         oci: provider
             .oci_signing
             .as_ref()

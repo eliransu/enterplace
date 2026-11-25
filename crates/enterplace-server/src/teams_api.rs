@@ -146,6 +146,7 @@ async fn allow(state: &AppState, request: Request, call: &mut Call) -> Result<Pl
     };
     call.person = Some(person.clone());
     call.key = Some(person.key.clone());
+    crate::cert_bound(person, parts.extensions.get())?;
     let Some(role) = policy.role_of(person) else {
         return Err(refused(
             StatusCode::FORBIDDEN,

@@ -100,6 +100,33 @@ fn migrate(pg: &Store, namespace: &str) -> Result<(), String> {
     }
 }
 
+/// Creates or updates the tables of every feature the license unlocks, in the order they depend on each other.
+/// `extend` runs it at start; `enterplace store migrate` runs it as a step of its own, with the same license.
+pub fn migrate_unlocked(status: &Status, pg: &Store) -> Result<(), String> {
+    let on = |feature| status.unlocked(feature);
+    let members_on = on(members::FEATURE);
+    let (siem_on, alerts_on) = (on(siem::SIEM) || on(siem::RETENTION), on(alerts::FEATURE));
+    let (devices_on, watch_on) = (on(devices::FEATURE), on(watch::FEATURE));
+    if !(members_on || siem_on || alerts_on || devices_on || watch_on) {
+        return Ok(());
+    }
+    migrate(pg, "enterprise.split")?;
+    for (wanted, namespace) in [
+        (members_on, "enterprise.members"),
+        // SCIM provisions the people that members keeps, so it needs both.
+        (members_on && on(scim::FEATURE), "enterprise.scim"),
+        (siem_on || alerts_on, "enterprise.siem"),
+        (alerts_on, "enterprise.alerts"),
+        (devices_on, "enterprise.devices"),
+        (watch_on, "enterprise.watch"),
+    ] {
+        if wanted {
+            migrate(pg, namespace)?;
+        }
+    }
+    Ok(())
+}
+
 /// What the enterprise binary adds to the gateway it serves, for `status` (the license loaded at start).
 pub fn extend(status: &Status, host: Host<'_>) -> Result<Extension, String> {
     extend_with(
@@ -222,25 +249,7 @@ pub fn extend_with(
         );
         return Ok(extension);
     };
-    migrate(pg, "enterprise.split")?;
-    if members_on {
-        migrate(pg, "enterprise.members")?;
-    }
-    if scim_on {
-        migrate(pg, "enterprise.scim")?;
-    }
-    if siem_on || retention_on || alerts_on {
-        migrate(pg, "enterprise.siem")?;
-    }
-    if alerts_on {
-        migrate(pg, "enterprise.alerts")?;
-    }
-    if devices_on {
-        migrate(pg, "enterprise.devices")?;
-    }
-    if watch_on {
-        migrate(pg, "enterprise.watch")?;
-    }
+    migrate_unlocked(status, pg)?;
     let db = Arc::new(Db::new(pg.clone()));
     if watch_on {
         watch::register(

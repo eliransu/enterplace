@@ -79,6 +79,77 @@ fn spki(der: &[u8]) -> Option<PublicKey> {
     }
 }
 
+const COMMON_NAME: &[u8] = &[0x55, 0x04, 0x03];
+const SUBJECT_ALT_NAME: &[u8] = &[0x55, 0x1d, 0x11];
+
+/// The names a DER certificate gives its holder: the subject's common name first, then its subject alternative
+/// names that are an email, a DNS name or a URI (RFC 5280 sections 4.1.2.6 and 4.2.1.6). Empty when the certificate
+/// does not parse or names no one. The caller has verified the certificate's chain: nothing is checked here.
+pub fn names(der: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(mut tbs) = inside(der, 0x30).and_then(|cert| inside(cert, 0x30)) else {
+        return out;
+    };
+    if tbs.first() == Some(&0xa0) {
+        tbs = element(tbs).map_or(&[][..], |e| e.2);
+    }
+    // serial, signature algorithm, issuer, validity.
+    for _ in 0..4 {
+        tbs = element(tbs).map_or(&[][..], |e| e.2);
+    }
+    let Some((0x30, mut subject, mut rest)) = element(tbs) else {
+        return out;
+    };
+    let text = |bytes: &[u8]| {
+        std::str::from_utf8(bytes)
+            .ok()
+            .filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
+            .map(str::to_string)
+    };
+    while let Some((0x31, mut set, after)) = element(subject) {
+        subject = after;
+        while let Some((0x30, pair, after)) = element(set) {
+            set = after;
+            if let Some((0x06, COMMON_NAME, value)) = element(pair)
+                && let Some(name) = element(value).and_then(|(_, v, _)| text(v))
+            {
+                out.push(name);
+            }
+        }
+    }
+    // The public key, then the optional unique IDs, then the extensions in [3].
+    while let Some((tag, content, after)) = element(rest) {
+        rest = after;
+        if tag != 0xa3 {
+            continue;
+        }
+        let mut extensions = inside(content, 0x30).unwrap_or_default();
+        while let Some((0x30, extension, after)) = element(extensions) {
+            extensions = after;
+            let Some((0x06, SUBJECT_ALT_NAME, mut value)) = element(extension) else {
+                continue;
+            };
+            // An optional `critical` BOOLEAN comes before the OCTET STRING that holds the names.
+            if value.first() == Some(&0x01) {
+                value = element(value).map_or(&[][..], |e| e.2);
+            }
+            let mut general = inside(value, 0x04)
+                .and_then(|octets| inside(octets, 0x30))
+                .unwrap_or_default();
+            while let Some((tag, name, after)) = element(general) {
+                general = after;
+                // rfc822Name [1], dNSName [2], uniformResourceIdentifier [6].
+                if matches!(tag, 0x81 | 0x82 | 0x86)
+                    && let Some(name) = text(name)
+                {
+                    out.push(name);
+                }
+            }
+        }
+    }
+    out
+}
+
 const STANDARD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// Standard base64 (RFC 4648 section 4), padding optional, whitespace skipped as PEM and XML wrap it.
@@ -134,6 +205,26 @@ mod tests {
         assert_eq!(base64_decode("Zm9v\n YmE="), Some(b"fooba".to_vec()));
         assert_eq!(base64_decode("Zm=9v"), None);
         assert_eq!(base64_decode("Zm9v*"), None);
+    }
+
+    #[test]
+    fn a_certificate_names_its_holder_by_common_name_and_alternative_names() -> Result<(), String> {
+        // The client certificate of the mutual TLS tests: CN billing-svc with a DNS, a URI and an email name.
+        let pem = include_str!("../../enterplace-server/tests/tls/client.pem");
+        let body: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
+        let der = base64_decode(&body).ok_or("the fixture is not base64")?;
+        assert_eq!(
+            names(&der),
+            [
+                "billing-svc",
+                "billing.internal",
+                "spiffe://corp/billing",
+                "billing@example.com"
+            ]
+        );
+        assert!(names(&der[..der.len() / 2]).len() <= 1);
+        assert!(names(b"not a certificate").is_empty());
+        Ok(())
     }
 
     #[test]

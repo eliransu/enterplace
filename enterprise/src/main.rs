@@ -37,8 +37,12 @@ const USAGE: &str = "usage:
       watch): for people on Claude Team or Enterprise seats, whose requests cannot go through a gateway. Creates a
       watch token through the admin API with the admin key in ENTERPLACE_ADMIN_KEY, or uses the one --token gives.
   enterplace serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>]
-      Run the gateway on local files, as `enterplace serve` does.
+      [--tls-cert <pem> --tls-key <pem>] [--admin-listen <host:port>] [--no-migrate]
+      Run the gateway on local files, as `enterplace serve` does, with the same flags.
   enterplace serve --unchecked
+  enterplace store migrate [--policy <file>] [--keys <file>]
+      Create or update every table of the store, those of the licensed features included, then stop: the step
+      to run before gateways started with `serve --no-migrate`.
   enterplace license show [--keys <file>]
       Show the license in ENTERPLACE_LICENSE (or the file ENTERPLACE_LICENSE_FILE names): customer, features, seats used
       (people in the keys file, default enterplace.keys.yaml) of allowed, expiry and grace state. Checked offline.
@@ -314,39 +318,55 @@ async fn main() -> ExitCode {
                 .await
                 .map_err(|err| err.to_string())
         }
-        Some("serve") if args.len() >= 2 => match start_license(
-            flag(&args, "--keys")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| enterplace_core::config::keys_path_for(Path::new(&args[1]))),
-        ) {
-            Err(err) => Err(err),
-            Ok(()) => match enterprise::restore_audit(
-                Path::new(&args[1]),
-                flag(&args, "--keys").map(Path::new),
-            ) {
-                Err(err) => Err(err),
-                Ok(()) => {
-                    if license::unlocked("secrets") {
-                        start_secret_managers();
+        Some("serve") if args.len() >= 2 => {
+            let rest: Vec<&str> = args[1..].iter().map(String::as_str).collect();
+            // The same flags as the open source `enterplace serve`, an unknown one refused as it is there.
+            match enterplace_cli::serve_args(&rest) {
+                None => Err(format!(
+                    "`enterplace {}` is missing an argument or has one Enterplace does not know.\nUsage: enterplace serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>] [--admin-listen <host:port>] [--no-migrate]",
+                    args.join(" ")
+                )),
+                Some((policy, options)) => match start_license(
+                    options
+                        .keys
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| enterplace_core::config::keys_path_for(policy)),
+                )
+                .and_then(|()| enterprise::restore_audit(policy, options.keys))
+                {
+                    Err(err) => Err(err),
+                    Ok(()) => {
+                        if license::unlocked("secrets") {
+                            start_secret_managers();
+                        }
+                        let served =
+                            enterplace_server::serve_policy_with(&name, policy, &options, &|host| {
+                                enterprise::extend(license::current(), host)
+                            })
+                            .await
+                            .map_err(|err| err.to_string());
+                        tokio::task::spawn_blocking(enterprise::finish_audit)
+                            .await
+                            .ok();
+                        served
                     }
-                    let served = enterplace_server::serve_policy_with(
-                        &name,
-                        Path::new(&args[1]),
-                        flag(&args, "--keys").map(Path::new),
-                        flag(&args, "--listen"),
-                        flag(&args, "--metrics"),
-                        None,
-                        &|host| enterprise::extend(license::current(), host),
+                },
+            }
+        }
+        // The open source tables, then those of the features the license unlocks: what `serve` would create.
+        Some("store") if args.get(1).map(String::as_str) == Some("migrate") => {
+            match (license::start(), flag(&args, "--policy"), flag(&args, "--keys")) {
+                (Err(err), _, _) => Err(err),
+                (Ok(_), policy, keys) if args.len() == 2 + 2 * (usize::from(policy.is_some()) + usize::from(keys.is_some())) => {
+                    enterplace_cli::store_migrate(
+                        Path::new(policy.unwrap_or("enterplace.policy.yaml")),
+                        keys.map(Path::new),
+                        &|pg| enterprise::migrate_unlocked(license::current(), pg),
                     )
-                    .await
-                    .map_err(|err| err.to_string());
-                    tokio::task::spawn_blocking(enterprise::finish_audit)
-                        .await
-                        .ok();
-                    served
                 }
-            },
-        },
+                _ => Err("Usage: enterplace store migrate [--policy <file>] [--keys <file>]".to_owned()),
+            }
+        }
         // `serve` without a policy and `help` stay here, so the open source server never starts unlicensed from this binary.
         Some(command) if !matches!(command, "serve" | "help" | "--help" | "-h") => {
             return enterplace_cli::run(&args).await;

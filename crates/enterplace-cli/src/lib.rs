@@ -72,7 +72,7 @@ Commands:
         Show a key's settings and what it spent today and this month (across every gateway on a store).
   key update <hash prefix> [--expires <date>] [--budget <usd>/<period>[@<tz>]] [--models <a,b>] [--tpm <n>]
           [--rpm <n>] [--parallel <n>] [--customer <name>] [--tags <a,b>] [--routes </v1/...,...>] [--from <cidr,cidr>]
-          [--metadata <k=v,k=v>] [--url <enterplace url>]
+          [--metadata <k=v,k=v>] [--cert <name>] [--url <enterplace url>]
         Change a key's settings on a running gateway. `none` removes one, for example --rpm none. Each change is
         recorded in the audit log with what the field was and what it became.
   key rotate <hash prefix> [--grace <48h|30m|7d|0>] [--url <enterplace url>]
@@ -134,11 +134,18 @@ Commands:
         expect: true or false. The corpus has one JSON object per line: {\"text\": \"...\"} or {\"body\": {...}}.
         --since reads captured request bodies; the audit log holds no text, so without capture it says so.
   serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>]
-        [--tls-cert <pem> --tls-key <pem>]
+        [--tls-cert <pem> --tls-key <pem>] [--admin-listen <host:port>] [--no-migrate]
         Run the gateway: every request is identified, checked against the policy and recorded.
         Listens on 127.0.0.1:8080 unless --listen says otherwise. --metrics serves GET /metrics
         (Prometheus) on an address of its own; it takes no key, so keep it on loopback or a private network.
-        --tls-cert and --tls-key (both, PEM) make Enterplace serve HTTPS itself.
+        --tls-cert and --tls-key (both, PEM) make Enterplace serve HTTPS itself; the policy's tls: client_ca_file
+        then asks callers for a client certificate. --admin-listen (or admin_listen: in the policy) serves the
+        console, the admin API and /metrics on that address alone, so --listen serves only the model routes.
+        --no-migrate changes no table of the store and refuses to start when its schema is behind.
+  store migrate [--policy <file>] [--keys <file>]
+        Create or update every table of the store the policy's store: names (default enterplace.policy.yaml), then
+        stop. Run it as its own step (an init container, the Helm chart's migration Job) where the serving pods
+        start with --no-migrate.
   audit verify [<file>] [--org <org>] [--expect-last <hash>]
         Check that the audit log is one unbroken chain: no record changed, inserted or reordered.
         Prints the count and the last hash, to keep elsewhere. With --expect-last, it also checks
@@ -213,35 +220,16 @@ pub async fn run(args: &[String]) -> ExitCode {
     let done = match args.as_slice() {
         ["serve", "--unchecked"] => Some(serve_unchecked(true).await),
         ["serve"] => Some(serve_unchecked(false).await),
-        ["serve", rest @ ..] => match options(
-            rest,
-            &["--keys", "--listen", "--metrics", "--tls-cert", "--tls-key"],
-        ) {
-            // TLS needs both files: one without the other is refused, never served as plain HTTP.
-            Some((positional, named))
-                if positional.len() == 1
-                    && named.contains_key("--tls-cert") == named.contains_key("--tls-key") =>
-            {
+        ["serve", rest @ ..] => match serve_args(rest) {
+            Some((policy, options)) => {
                 let name = format!("enterplace {}", enterplace_core::VERSION);
-                let keys = named.get("--keys").map(Path::new);
-                let listen = named.get("--listen").copied();
-                let metrics = named.get("--metrics").copied();
-                let tls = named
-                    .get("--tls-cert")
-                    .zip(named.get("--tls-key"))
-                    .map(|(cert, key)| (Path::new(*cert), Path::new(*key)));
-                let served = enterplace_server::serve_policy(
-                    &name,
-                    Path::new(positional[0]),
-                    keys,
-                    listen,
-                    metrics,
-                    tls,
-                )
+                let served = enterplace_server::serve_policy_with(&name, policy, &options, &|_| {
+                    Ok(enterplace_server::Extension::default())
+                })
                 .await;
                 Some(served.map_or_else(fail, |()| ExitCode::SUCCESS))
             }
-            _ => None,
+            None => None,
         },
         ["explain", rest @ ..] => match options(
             rest,
@@ -461,6 +449,7 @@ pub async fn run(args: &[String]) -> ExitCode {
                 "--routes",
                 "--from",
                 "--metadata",
+                "--cert",
             ],
         ) {
             Some((positional, named))
@@ -507,6 +496,22 @@ pub async fn run(args: &[String]) -> ExitCode {
                 _ => None,
             }
         }
+        ["store", "migrate", rest @ ..] => match options(rest, &["--keys", "--policy"]) {
+            Some((positional, named)) if positional.is_empty() => Some(
+                store_migrate(
+                    Path::new(
+                        named
+                            .get("--policy")
+                            .copied()
+                            .unwrap_or("enterplace.policy.yaml"),
+                    ),
+                    named.get("--keys").map(Path::new),
+                    &|_| Ok(()),
+                )
+                .map_or_else(fail, |()| ExitCode::SUCCESS),
+            ),
+            _ => None,
+        },
         ["store", "import", rest @ ..] => match options(rest, &["--keys", "--policy"]) {
             Some((positional, named)) if positional.is_empty() && named.contains_key("--keys") => {
                 Some(
@@ -728,7 +733,7 @@ pub async fn run(args: &[String]) -> ExitCode {
             ["key", "prune", ..] => Some("enterplace key prune [--keys <file>] [--policy <file>]"),
             ["key", "info", ..] => Some("enterplace key info <hash prefix> [--url <enterplace url>]"),
             ["key", "update", ..] => Some(
-                "enterplace key update <hash prefix> [--expires <date>] [--budget <usd>/<period>[@<tz>]] [--models <a,b>] [--tpm <n>] [--rpm <n>] [--parallel <n>] [--customer <name>] [--tags <a,b>] [--routes <a,b>] [--from <cidr,cidr>] [--metadata <k=v,k=v>] [--url <enterplace url>] (at least one change; none removes a setting)",
+                "enterplace key update <hash prefix> [--expires <date>] [--budget <usd>/<period>[@<tz>]] [--models <a,b>] [--tpm <n>] [--rpm <n>] [--parallel <n>] [--customer <name>] [--tags <a,b>] [--routes <a,b>] [--from <cidr,cidr>] [--metadata <k=v,k=v>] [--cert <name>] [--url <enterplace url>] (at least one change; none removes a setting)",
             ),
             ["key", "rotate", ..] => {
                 Some("enterplace key rotate <hash prefix> [--grace <48h|30m|7d|0>] [--url <enterplace url>]")
@@ -739,7 +744,8 @@ pub async fn run(args: &[String]) -> ExitCode {
             ["usage", ..] => Some(
                 "enterplace usage [--since <7d|24h|2026-11-01>] [--group-by <team|person|model|provider|key|tag|org|customer|day|hour>] [--csv] [--url <enterplace url>]",
             ),
-            ["store", ..] => Some("enterplace store import --keys <file> [--policy <file>]"),
+            ["store", "migrate", ..] => Some("enterplace store migrate [--policy <file>] [--keys <file>]"),
+            ["store", ..] => Some("enterplace store import --keys <file> [--policy <file>], or enterplace store migrate [--policy <file>]"),
             ["prices", ..] => Some("enterplace prices <model> [--policy <file>]"),
             ["import", ..] => Some(
                 "enterplace import litellm <config.yaml> [--keys-from <csv or json export>] [--out <policy file>], or enterplace import litellm --url <proxy> --master-key-env <VAR> [--out <policy file>] [--keys-out <keys file>]",
@@ -748,7 +754,7 @@ pub async fn run(args: &[String]) -> ExitCode {
                 "enterplace key new <name> --team <team> [--admin | --identity-only] [--expires <date>] [--budget <usd>/<period>] [--models <a,b>] [--tpm <n>] [--org <org>] [--customer <name>] [--tags <a,b>] [--parallel <n>] [--role <role>] [--url <gateway url>] [--quiet] [--keys <file>] [--policy <file>]",
             ),
             ["serve", ..] => Some(
-                "enterplace serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>]",
+                "enterplace serve <policy> [--keys <file>] [--listen <host:port>] [--metrics <host:port>] [--tls-cert <pem> --tls-key <pem>] [--admin-listen <host:port>] [--no-migrate]",
             ),
             ["audit", "repair", ..] => Some("enterplace audit repair [<file>] [--yes]"),
             ["audit", "coverage", ..] => Some("enterplace audit coverage [<file>] [--keys <file>] [--devices <file>]"),
@@ -1646,6 +1652,83 @@ fn key_revoke(keys: &Path, prefix: &str) -> Result<(), String> {
             "no key hash starts with {prefix}. `enterplace key list` shows the keys and their hash prefixes."
         )),
     }
+}
+
+/// The policy and the options of `enterplace serve <policy> ...`, or `None` when an argument is unknown, repeated or
+/// missing its value. A binary that embeds the gateway parses its own `serve` with it, so both take the same flags.
+pub fn serve_args<'a>(rest: &[&'a str]) -> Option<(&'a Path, enterplace_server::ServeOptions<'a>)> {
+    let no_migrate = rest.iter().filter(|a| **a == "--no-migrate").count();
+    let rest: Vec<&str> = rest
+        .iter()
+        .copied()
+        .filter(|a| *a != "--no-migrate")
+        .collect();
+    let (positional, named) = options(
+        &rest,
+        &[
+            "--keys",
+            "--listen",
+            "--metrics",
+            "--tls-cert",
+            "--tls-key",
+            "--admin-listen",
+        ],
+    )?;
+    // TLS needs both files: one without the other is refused, never served as plain HTTP.
+    if positional.len() != 1
+        || no_migrate > 1
+        || named.contains_key("--tls-cert") != named.contains_key("--tls-key")
+    {
+        return None;
+    }
+    Some((
+        Path::new(positional[0]),
+        enterplace_server::ServeOptions {
+            keys: named.get("--keys").copied().map(Path::new),
+            listen: named.get("--listen").copied(),
+            metrics: named.get("--metrics").copied(),
+            tls: named
+                .get("--tls-cert")
+                .copied()
+                .zip(named.get("--tls-key").copied())
+                .map(|(cert, key)| (Path::new(cert), Path::new(key))),
+            admin_listen: named.get("--admin-listen").copied(),
+            no_migrate: no_migrate == 1,
+        },
+    ))
+}
+
+/// `enterplace store migrate`: creates or updates every table of the policy's store and stops, so the gateways can
+/// run with `serve --no-migrate`. `more` applies the tables of a binary that embeds the gateway.
+pub fn store_migrate(
+    policy: &Path,
+    keys: Option<&Path>,
+    more: &dyn Fn(&enterplace_server::sql::Db) -> Result<(), String>,
+) -> Result<(), String> {
+    std::fs::metadata(policy).map_err(|err| {
+        format!(
+            "{} cannot be read: {err}. Name the policy that has the store: section with --policy.",
+            policy.display()
+        )
+    })?;
+    let keys = keys.map_or_else(|| config::keys_path_for(policy), Path::to_path_buf);
+    let migrated = enterplace_server::migrate_store(
+        policy,
+        &keys,
+        &|variable| std::env::var(variable).ok(),
+        more,
+    )?;
+    if !migrated {
+        return Err(format!(
+            "{} has no store: section, so there is no database to migrate. Add `store: {{ postgres_url_env: DATABASE_URL }}` to it first.",
+            policy.display()
+        ));
+    }
+    println!(
+        "The store's schema is up to date for enterplace {}. Gateways of this version can start with --no-migrate.",
+        enterplace_core::VERSION
+    );
+    Ok(())
 }
 
 /// Copies a keys file's entries, and the switches beside it, into the store. Both files are read before the store
