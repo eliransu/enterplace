@@ -13,6 +13,8 @@ A deployment is a provider and model an [alias](/routing/aliases/) names. Enterp
 
 With a [store](/operations/store/), every gateway writes what it knows of each deployment to the store every 2 seconds and reads the others' reports, so the page is the same whichever replica answers it. Without a store it shows this gateway alone. The answer says which in `counted_by` (`store` or `this gateway`) and how many gateways reported in `gateways`.
 
+The page's Gateways panel lists every gateway on the store with its version, its health and the policy version it runs. One silent for 10 seconds is `silent`; one with no heartbeat for over an hour is `stopped` and folded away behind **Show stopped gateways (N)**, so the running ones read at a glance. The store forgets a gateway a day after its last heartbeat.
+
 | Field | Meaning | Across gateways |
 |---|---|---|
 | `state` | `up`, `cooling` (passed over after a failure) or `down` (its last probe got no answer, a 429 or a 5xx) | Cooling on any gateway is cooling: the store shares cooldowns |

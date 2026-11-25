@@ -494,7 +494,14 @@ async fn view(
                     "this gateway".to_string()
                 }
             );
-            // Every gateway on the store, from the heartbeats each writes; without a store this one runs alone.
+            // Every gateway on the store, from the heartbeats each writes; without a store this one runs alone. One
+            // silent for over an hour is marked stopped: the page folds those away, and the store forgets them after
+            // a day.
+            let stopped_before = enterplace_core::audit::rfc3339(
+                std::time::SystemTime::now()
+                    .checked_sub(STOPPED_AFTER)
+                    .unwrap_or(std::time::UNIX_EPOCH),
+            );
             let (gateways, gateways_note) = match state.pool.store() {
                 Some(store) => (
                     store
@@ -507,6 +514,7 @@ async fn view(
                                 "host": if r.host.is_empty() { r.gateway.clone() } else { r.host.clone() },
                                 "version": r.version,
                                 "healthy": r.healthy,
+                                "stopped": !r.healthy && stopped(&r.seen, &stopped_before),
                                 "meta": format!("Started {}, last heartbeat {}.{}", r.started, r.seen, r.policy_note()),
                             })
                         })
@@ -602,9 +610,25 @@ async fn test(
     )
 }
 
+/// A gateway silent this long is listed as stopped, folded away on Deployments.
+const STOPPED_AFTER: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Whether a heartbeat written at `seen` is older than `before`. Both are UTC timestamps, compared to the second.
+fn stopped(seen: &str, before: &str) -> bool {
+    seen.get(..19).unwrap_or(seen) < before.get(..19).unwrap_or(before)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gateway_silent_for_over_an_hour_is_stopped() {
+        let before = "2026-11-25T09:00:00.120Z";
+        assert!(stopped("2026-11-25T07:59:58Z", before));
+        assert!(!stopped("2026-11-25T09:00:00Z", before));
+        assert!(!stopped("2026-11-25T09:30:00Z", before));
+    }
 
     #[test]
     fn gateways_reports_merge_into_one_view() {

@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 type Deployment = { deployment: string; state: "up" | "cooling" | "down"; note: string; aliases: string; probe: string; limits: string; load: string; latency: string; errors: string };
 type Provider = { name: string; kind: string; keys: string };
 type Tested = { provider: string; ok: boolean; tag: string; note: string; detail: string };
-type Gateway = { host: string; version: string; healthy: boolean; meta: string };
+type Gateway = { host: string; version: string; healthy: boolean; stopped?: boolean; meta: string };
 type View = { lead: string; gateways: Gateway[]; gateways_note: string; may_test: boolean; deployments: Deployment[]; providers: Provider[]; none: { title: string; body: string } };
 
 function State({ state, note }: { state: string; note: string }) {
@@ -28,6 +28,10 @@ export function Deployments() {
   const { data, error, change, reload } = useData<View>("deployments", 5000);
   const [testing, setTesting] = useState("");
   const [tested, setTested] = useState<Tested | null>(null);
+  const [showStopped, setShowStopped] = useState(false);
+  // A gateway silent for over an hour has stopped: folded away so the running ones read at a glance.
+  const stopped = data?.gateways.filter((g) => g.stopped).length ?? 0;
+  const gateways = (data?.gateways ?? []).filter((g) => showStopped || !g.stopped);
   const test = (provider: string) => {
     setTesting(provider);
     return change(async () => {
@@ -53,7 +57,7 @@ export function Deployments() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.gateways.map((g, i) => (
+                {gateways.map((g, i) => (
                   <TableRow key={`${g.host} ${i}`}>
                     <TableCell className="whitespace-normal">
                       <span className="t-mono block">{g.host}</span>
@@ -61,12 +65,19 @@ export function Deployments() {
                     </TableCell>
                     <TableCell className="t-mono">{g.version}</TableCell>
                     <TableCell>
-                      <Badge className={cn(g.healthy && "border-transparent pl-0 text-muted-foreground")}>{g.healthy ? "healthy" : "silent"}</Badge>
+                      <Badge className={cn(g.healthy && "border-transparent pl-0 text-muted-foreground")}>{g.healthy ? "healthy" : g.stopped ? "stopped" : "silent"}</Badge>
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+            {stopped ? (
+              <div>
+                <Button variant="outline" size="sm" aria-expanded={showStopped} onClick={() => setShowStopped((v) => !v)}>
+                  {showStopped ? `Hide stopped gateways (${stopped})` : `Show stopped gateways (${stopped})`}
+                </Button>
+              </div>
+            ) : null}
           </Panel>
           <Panel title={data.deployments.length ? "Deployments" : undefined}>
             {data.deployments.length === 0 ? (

@@ -35,6 +35,11 @@ one repository. How a release is made: RELEASING.md.
 - `enterplace key import <people.csv> [--out <file>]` does the same on the gateway's machine and writes the keys once
   to a file readable by its owner only.
 
+### Stopped gateways fold away
+
+- Deployments folds a gateway with no heartbeat for over an hour behind "Show stopped gateways (N)" and tags it
+  `stopped` (`stopped` in the console API). The store still forgets it a day after its last heartbeat.
+
 ### The dry run replays limits
 
 - A policy dry run (Policy, Edit, "Dry run", and `POST /admin/policy/dry-run`) replays the draft's budgets, tokens per
