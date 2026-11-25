@@ -133,7 +133,8 @@ def start(binary: pathlib.Path, folder: pathlib.Path, port: int, home: pathlib.P
         if not line:
             break
         head.append(line.rstrip("\n"))
-        if line.strip().startswith("export ENTERPLACE_KEY="):
+        # The start block ends with the Overview hint, after the admin key and the person token.
+        if line.strip().startswith("In the dashboard, pick a use case"):
             break
     threading.Thread(target=lambda: [None for _ in proc.stdout], daemon=True).start()
     return proc, head
@@ -308,12 +309,12 @@ def main():
             text = chrome.js("document.body.innerText")
             check("Claude subscription" in text and "ANTHROPIC_API_KEY=" not in text,
                   "subscriptions need no API key")
-            # The link signed the person in with their own person token: it is in the lines from the first view.
+            # enterplace start printed the person token once; the console names it with a placeholder, never a second token.
+            token = next((l.split("x-enterplace-user: ", 1)[1].split('"', 1)[0] for l in head if "x-enterplace-user: " in l), "")
+            check(token.startswith("enterplace_u_"), f"enterplace start printed the person token ({token[:12]}...)")
             lines = chrome.js("document.getElementById('lines-subscription').innerText")
-            token = lines.split("x-enterplace-user: ", 1)[-1].split('"', 1)[0].strip()
-            check(token.startswith("enterplace_u_"), f"the signed-in person's token is in the lines ({token[:12]}...)")
-            check(f"export ANTHROPIC_BASE_URL={gateway}" in lines and f'ANTHROPIC_CUSTOM_HEADERS="x-enterplace-user: {token}"' in lines,
-                  "the lines are the base URL and the person token")
+            check(f"export ANTHROPIC_BASE_URL={gateway}" in lines and "x-enterplace-user: <the person token enterplace start printed for " in lines,
+                  "the lines are the base URL and the placeholder for the printed person token")
             chrome.shot(out / "7-subscriptions.png")
             press(chrome, "Copy for your agent")
             time.sleep(0.5)
@@ -322,7 +323,9 @@ def main():
             prompt = copied or chrome.js("fetch('/console/api/start?track=coding&pay=subscriptions').then(r => r.json()).then(s => s.steps[1].agent)")
             check(chrome.js("[...document.querySelectorAll('main button')].some(b => b.textContent === 'Copied' || b.textContent === 'Copy for your agent')"),
                   "the Copy for your agent button ran")
-            check(token in prompt and gateway in prompt and "x-enterplace-user" in prompt, "Copy for your agent holds the token and the gateway")
+            # The token was shown once, so the prompt asks the person for it instead of holding it.
+            check("x-enterplace-user" in prompt and gateway in prompt and token not in prompt,
+                  "Copy for your agent names the header and the gateway, and asks for the printed token")
             md = re.search(r"https://docs\.enterplace\.dev/(\S+?)\.md", prompt)
             check(md is not None, "Copy for your agent links the docs as Markdown")
             built = ROOT / "docs" / "dist" / f"{md.group(1)}.md"

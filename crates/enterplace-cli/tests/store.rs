@@ -385,7 +385,15 @@ fn start_in_a_container_with_database_url_keeps_its_admin_key_in_the_store_once(
         &["key", "list", "--keys", &path(&dir, "enterplace.keys.yaml")],
         &db,
     )?;
-    assert!(listed.contains("admin\tadmin"), "{listed}");
+    // The admin key is named after the OS user, so count by the admin column, not the name.
+    let admins = |listed: &str| {
+        listed
+            .lines()
+            .skip(1)
+            .filter(|row| row.split('\t').nth(3) == Some("admin"))
+            .count()
+    };
+    assert_eq!(admins(&listed), 1, "{listed}");
 
     // The disk is wiped (a redeploy on Render, App Platform or Cloud Run): the policy is written again, the store
     // already holds an admin key, so no second one is made or printed.
@@ -396,7 +404,7 @@ fn start_in_a_container_with_database_url_keeps_its_admin_key_in_the_store_once(
         &["key", "list", "--keys", &path(&dir, "enterplace.keys.yaml")],
         &db,
     )?;
-    assert_eq!(listed.matches("admin\tadmin").count(), 1, "{listed}");
+    assert_eq!(admins(&listed), 1, "{listed}");
     Ok(())
 }
 
