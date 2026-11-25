@@ -173,7 +173,7 @@ export function RawPolicy({ query }: PageProps) {
                       key: `${r.host} ${i}`,
                       title: r.host,
                       meta: r.meta,
-                      side: <VerdictTag tag={r.healthy ? { kind: "allow", word: "Healthy", detail: "" } : { kind: "refused", word: "Silent", detail: "" }} />,
+                      side: <VerdictTag tag={r.healthy ? { kind: "", word: "Healthy", detail: "" } : { kind: "warn", word: "Silent", detail: "" }} />,
                     }))}
                   />
                 </Panel>

@@ -762,6 +762,66 @@ pub(crate) fn guardrail_prompt(base: &str, policy: &str, in_store: bool) -> Stri
     )
 }
 
+/// "Copy for your agent" on Limits: budgets and token rates per team or person, as policy lines, and the check.
+pub(crate) fn limit_prompt(base: &str, policy: &str, in_store: bool) -> String {
+    let save = if in_store {
+        format!(
+            "This policy is kept in the store, so the file is not read: paste the lines into the policy editor at {base}/console/app/#/policy/edit, press Dry run, and save."
+        )
+    } else {
+        "Save the file; the gateway reads it within 2 seconds of a save that passes the check."
+            .into()
+    };
+    task_prompt(
+        base,
+        "Set budgets and token limits per team and per person in Enterplace",
+        &[("Policy file", policy.to_string())],
+        &[
+            "1. Ask me, if I have not said them: which teams and people, and for each a budget in US dollars (per day, week or month) and tokens per day.".into(),
+            "2. Under `limits:` in the policy, add one entry per team or person, like these:".into(),
+            "```yaml\nlimits:\n  - team: payments\n    budget: { usd: 500, per: month }\n    rate: { tpd: 2000000 }\n  - person: maya.cohen\n    rate: { tpd: 300000 }\n  - team: \"*\"   # the same cap for each team on its own\n    budget: { usd: 200, per: month }\n```".into(),
+            format!("3. Run `enterplace check {policy}` and fix every problem it names. {save}"),
+        ],
+        &format!(
+            "The limits show under Limits at {base}/console/app/#/policy and in each team's row at {base}/console/app/#/teams. A request over one is refused, and Requests names the limit: Refused: rate limited, team payments tokens per day."
+        ),
+        "/governance/budgets-and-rate-limits/",
+    )
+}
+
+/// "Copy for your agent" on Bring everyone in: single sign-on with `enterplace login`, so each developer gets their own
+/// key named by their email, and an agent sets it up alone.
+pub(crate) fn sign_on_prompt(base: &str, policy: &str, in_store: bool) -> String {
+    let save = if in_store {
+        format!(
+            "This policy is kept in the store, so the file is not read: paste the section into the policy editor at {base}/console/app/#/policy/edit and save, after the check passes on a copy of the file with it."
+        )
+    } else {
+        "Add the section to the policy file; the gateway reads it within 2 seconds of a save that passes the check.".into()
+    };
+    task_prompt(
+        base,
+        "Let every developer get their own Enterplace key through single sign-on",
+        &[
+            ("Policy file", policy.to_string()),
+            ("Redirect URL to register", format!("{base}/console/sso/callback")),
+        ],
+        &[
+            "1. Ask me, if I have not said them: the identity provider (Okta, Microsoft Entra ID, Google, Keycloak or any OpenID Connect provider), its issuer URL, the company email domain, the group whose members are console admins, and the team new people go to.".into(),
+            "2. Tell me to register Enterplace at the provider as an OpenID Connect web application with the redirect URL above, with `email` and the groups claim in the ID token, and to give you the client ID. I set the client secret myself on every gateway as ENTERPLACE_SSO_SECRET; never ask me to paste it to you.".into(),
+            "3. Under `console:` in the policy, add (with my answers):".into(),
+            "```yaml\nconsole:\n  sso:\n    issuer: https://login.example.com\n    client_id: enterplace-console\n    client_secret_env: ENTERPLACE_SSO_SECRET\n    redirect_url: <the redirect URL above>\n    allowed_domains: [example.com]\n    role_claim: groups\n    admin_values: [enterplace-admins]\n    self_issue:\n      allowed_domains: [example.com]\n      team: developers\n      expires_days: 30\n```".into(),
+            "4. To put people in their own teams by group, list them under `teams:` with `sso_values`, for example `teams: [{ name: payments, sso_values: [payments-eng] }]`.".into(),
+            format!("5. Run `enterplace check {policy}` and fix every problem it names. {save}"),
+            format!("6. Write me the message for developers: install the enterplace CLI, run `enterplace login {base}`, sign in in the browser, and paste the lines it prints into their shell profile."),
+        ],
+        &format!(
+            "{base}/console/sign-in shows Sign in with single sign-on, and `enterplace login {base}` on a developer's machine prints a key; the developer then shows under People at {base}/console/app/#/people, named by their email."
+        ),
+        "/governance/single-sign-on/",
+    )
+}
+
 /// "Copy for your agent" on Stop traffic and Restore traffic: `enterplace kill` and `unkill` with every flag, so an
 /// agent stops or restores traffic alone. `stopped`: the switch to turn off, else the prompt stops traffic.
 pub(crate) fn kill_prompt(base: &str, stopped: Option<&enterplace_core::kill::Kill>) -> String {

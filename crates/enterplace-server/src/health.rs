@@ -494,8 +494,39 @@ async fn view(
                     "this gateway".to_string()
                 }
             );
+            // Every gateway on the store, from the heartbeats each writes; without a store this one runs alone.
+            let (gateways, gateways_note) = match state.pool.store() {
+                Some(store) => (
+                    store
+                        .replicas()
+                        .await
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|r| {
+                            json!({
+                                "host": if r.host.is_empty() { r.gateway.clone() } else { r.host.clone() },
+                                "version": r.version,
+                                "healthy": r.healthy,
+                                "meta": format!("Started {}, last heartbeat {}.", r.started, r.seen),
+                            })
+                        })
+                        .collect::<Vec<Value>>(),
+                    "Each gateway on the store writes a heartbeat every few seconds; one silent for 10 seconds is shown as silent. Two versions side by side mean an upgrade is under way.".to_string(),
+                ),
+                None => (
+                    vec![json!({
+                        "host": std::env::var("HOSTNAME").ok().filter(|h| !h.is_empty()).unwrap_or_else(|| "this gateway".into()),
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "healthy": true,
+                        "meta": "The gateway serving this console.",
+                    })],
+                    "This gateway runs alone: without a store: section in the policy, gateways share nothing and none lists the others. Point every gateway at one store (Postgres or Cloudflare) to see each here with its version and health.".to_string(),
+                ),
+            };
             Ok(ok(json!({
                 "lead": lead,
+                "gateways": gateways,
+                "gateways_note": gateways_note,
                 "may_test": may_test(&admin),
                 "deployments": rows("deployments", deployment_row),
                 "providers": rows("providers", provider_row),

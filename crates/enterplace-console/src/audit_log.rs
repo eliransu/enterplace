@@ -1283,8 +1283,8 @@ impl Filter<'_> {
 }
 
 /// An admin action in words: what was done, and what was tried when it was refused.
-fn action_word(action: &str) -> (&str, &str) {
-    match action {
+fn action_word(action: &str) -> (String, String) {
+    let (done, tried) = match action {
         "console_sign_in" => ("signed in", "sign-in"),
         "console_sign_out" => ("signed out", "sign-out"),
         "issue_key" => ("issued a key", "key issue"),
@@ -1298,8 +1298,18 @@ fn action_word(action: &str) -> (&str, &str) {
         "start_choice" => ("chose a track", "track choice"),
         "self_issue_key" => ("enterplace login key", "enterplace login"),
         "revoke_own_key" => ("enterplace logout", "enterplace logout"),
-        other => (other, other),
-    }
+        "propose_policy" | "edit_policy" => ("saved a policy version", "policy version"),
+        "rollback_policy" => ("rolled the policy back", "policy rollback"),
+        "approve_policy" => ("approved a policy version", "policy approval"),
+        "reject_policy" => ("rejected a policy version", "policy rejection"),
+        "dry_run_policy" => ("ran a dry run", "dry run"),
+        // Every other change says its action in words: set_mode reads "set mode", never the code.
+        other => {
+            let words = other.replace('_', " ");
+            return (words.clone(), words);
+        }
+    };
+    (done.to_string(), tried.to_string())
 }
 
 /// The FindingBadge of one guardrail finding.
@@ -1318,9 +1328,9 @@ fn verdict(record: &Value) -> Value {
         "admin" => {
             let (done, tried) = action_word(s(record, "action"));
             return if s(record, "verdict") == "allow" {
-                tag("", "Admin:", done)
+                tag("", "Admin:", &done)
             } else {
-                tag("refused", "Refused:", tried)
+                tag("refused", "Refused:", &tried)
             };
         }
         "config_loaded" => return tag("", "Change", "policy loaded"),
@@ -1341,7 +1351,7 @@ fn verdict(record: &Value) -> Value {
     }
     match (s(record, "verdict"), s(record, "code")) {
         (_, "guardrail_blocked") => badge("block", found(record, "block").unwrap_or("guardrail")),
-        ("refused", code) => tag("refused", "Refused:", &code_words(code)),
+        ("refused", _) => tag("refused", "Refused:", &crate::pages::refusal_words(record)),
         ("allow", _) => match (found(record, "mask"), found(record, "warn")) {
             (Some(kind), _) => badge("mask", kind),
             (None, Some(kind)) => badge("warn", kind),
@@ -2039,7 +2049,31 @@ fn admin_story(record: &Value) -> Story {
                 )
             }
         }
-        other => (String::from(other), String::from(other)),
+        "rollback_policy" => {
+            let to = target.get("version").and_then(Value::as_i64).unwrap_or(0);
+            (
+                format!("rolled the policy back to version {to}"),
+                format!("roll the policy back to version {to}"),
+            )
+        }
+        "dry_run_policy" => (
+            "ran a dry run of a policy draft over recent requests".into(),
+            "run a dry run of a policy draft".into(),
+        ),
+        // A policy change made in a form or the editor carries the line it was saved with.
+        other => match s(target, "note") {
+            "" => {
+                let (done, tried) = action_word(other);
+                (done, tried)
+            }
+            note => {
+                let note = String::from(note.trim_end_matches('.'));
+                (
+                    format!("changed the policy: {note}"),
+                    format!("change the policy: {note}"),
+                )
+            }
+        },
     };
     let who = match s(record, "person") {
         "" | "unknown" => "Someone".to_string(),

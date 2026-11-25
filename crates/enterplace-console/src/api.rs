@@ -693,6 +693,13 @@ async fn provider_add(
                 "Your role may not change the policy. Ask an admin whose role has edit_policy to add a provider.".into(),
             ));
         }
+        // A gateway refuses a policy whose provider key variable is unset and keeps the one it has: saved, it would
+        // read as in force while no gateway used it.
+        if key.is_empty() && !key_env.is_empty() && std::env::var_os(&key_env).is_none() {
+            return Err(bad(format!(
+                "{key_env} is not set where Enterplace runs, so every gateway would refuse the policy with this provider and keep the one it has. Paste the key above to keep it sealed in Enterplace, or set {key_env} on every gateway (export {key_env}=...), restart them, and add the provider again."
+            )));
+        }
         if !key.is_empty() {
             seal(&console, &admin, &name, preset.id, &key).await?;
         }
@@ -1133,8 +1140,14 @@ async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Respo
             &policy.display().to_string(),
             enterplace_core::store::policy_store(policy).is_some(),
         );
+        let limit_agent = crate::start::limit_prompt(
+            &crate::base(),
+            &policy.display().to_string(),
+            enterplace_core::store::policy_store(policy).is_some(),
+        );
         Ok(ok(json!({
             "guard_agent": agent,
+            "limit_agent": limit_agent,
             "mode": tree.get("mode").and_then(Value::as_str).unwrap_or("enforce"),
             "rules": rules,
             "limits": limits,

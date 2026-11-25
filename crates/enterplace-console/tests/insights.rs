@@ -821,3 +821,50 @@ async fn a_warned_request_says_what_the_guardrail_found() -> TestResult {
     );
     Ok(())
 }
+
+/// A request a limit refused says which limit, in Requests and the Audit log: an ops engineer finds who hit what
+/// without opening each record.
+#[tokio::test]
+async fn a_request_refused_by_a_limit_names_the_limit() -> TestResult {
+    let s = setup("limit-named")?;
+    let mut r = enterplace_core::audit::record(&Entry {
+        id: "01LIM0000000000000000000006",
+        person: Some("maya.cohen"),
+        team: Some("payments"),
+        method: "POST",
+        path: "/v1/chat/completions",
+        model: Some("gpt-4o-mini"),
+        allowed: false,
+        code: Some("rate_limited"),
+        rule: Some("payments-team"),
+        ..Entry::default()
+    });
+    r.insert(
+        "applied".into(),
+        json!({ "of": "team", "scope": "team:payments", "limit": "tpd", "source": "limits { team: payments } (line 5)", "value": 300 }),
+    );
+    s.log.append_record(&r)?;
+    s.log.flush();
+    let cookie = sign_in(&s.app, NOA).await?;
+    let (_, list) = api(&s.app, "/console/api/requests", &cookie).await?;
+    let row = list["rows"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|r| r["id"] == "01LIM0000000000000000000006")
+        })
+        .cloned()
+        .unwrap_or(Value::Null);
+    assert_eq!(
+        row["outcome"]["text"], "Refused: rate limited, team payments tokens per day 300",
+        "{row}"
+    );
+    let (_, audit) = api(&s.app, "/console/api/audit?verdict=refused", &cookie).await?;
+    assert!(
+        audit["rows"].as_array().is_some_and(|rows| rows
+            .iter()
+            .any(|r| r["verdict"]["detail"] == "rate limited, team payments tokens per day 300")),
+        "{audit}"
+    );
+    Ok(())
+}

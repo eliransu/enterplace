@@ -3396,6 +3396,26 @@ async fn teams_list_each_team_with_its_people_rule_owner_and_budget() -> TestRes
     );
     assert_eq!(teams[0]["budget"], "$1.00 a month", "{page}");
 
+    // A limits: entry for the team counts beside its rule's budget, and the column says it too.
+    std::fs::write(
+        s.dir.join("enterplace.policy.yaml"),
+        POLICY.to_string()
+            + "limits:\n  - team: payments\n    budget: { usd: 50, per: month }\n    rate: { tpd: 300 }\n",
+    )?;
+    let (_, _, page) = call(
+        &s.app,
+        "GET",
+        "/console/api/teams",
+        &cookie,
+        serde_json::Value::Null,
+    )
+    .await?;
+    let teams = page["teams"].as_array().cloned().unwrap_or_default();
+    assert_eq!(
+        teams[0]["budget"], "$50.00 a month, 300 tokens per day",
+        "{page}"
+    );
+
     // Only admin keys: no team yet, and the way to make one.
     std::fs::write(s.dir.join("enterplace.policy.yaml"), POLICY)?;
     std::fs::write(

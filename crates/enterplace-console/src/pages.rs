@@ -273,6 +273,52 @@ pub(crate) fn code_words(code: &str) -> String {
     }
 }
 
+/// The refusal code of a record in words, with the limit that refused it when one did: "rate limited, team payments
+/// tokens per day 300". A limit names its scope, so whoever reads the list sees who hit what.
+pub(crate) fn refusal_words(record: &serde_json::Value) -> String {
+    let field = |v: &serde_json::Value, k: &str| {
+        v.get(k)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let words = code_words(&field(record, "code"));
+    let Some(applied) = record.get("applied").filter(|a| a.is_object()) else {
+        return words;
+    };
+    let scope = match field(applied, "scope").split_once(':') {
+        Some((kind, name)) => format!("{} {name}", kind.replace('_', " ")),
+        None if field(applied, "of") == "global" => "everyone".to_string(),
+        None => field(applied, "of"),
+    };
+    let limit = field(applied, "limit");
+    let what = match limit.as_str() {
+        "rpm" => "requests per minute",
+        "rph" => "requests per hour",
+        "rpd" => "requests per day",
+        "tpm" => "tokens per minute",
+        "tpd" => "tokens per day",
+        "parallel" | "max_parallel" => "requests in flight",
+        "budget" => "budget",
+        other => other,
+    };
+    let value = match applied.get("value") {
+        Some(v) if limit == "budget" => v.as_f64().map(crate::figures::money).unwrap_or_default(),
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        _ => String::new(),
+    };
+    let detail = [scope.as_str(), what, value.as_str()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if detail.is_empty() {
+        words
+    } else {
+        format!("{words}, {detail}")
+    }
+}
+
 /// "1 November 2020" for a date or time the keys file or a record writes, or `short`: "1 Nov".
 pub(crate) fn day_words(date: &str, short: bool) -> String {
     let part =

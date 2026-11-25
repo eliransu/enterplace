@@ -92,7 +92,17 @@ fn outcome(row: &Row) -> Value {
         Outcome::Refused if row.code == "guardrail_blocked" => ("block", "Blocked".to_string()),
         Outcome::Refused => (
             "refused",
-            format!("Refused: {}", crate::pages::code_words(&row.code)),
+            format!(
+                "Refused: {}",
+                if row.line.contains("\"applied\"") {
+                    serde_json::from_str::<Value>(&row.line).map_or_else(
+                        |_| crate::pages::code_words(&row.code),
+                        |r| crate::pages::refusal_words(&r),
+                    )
+                } else {
+                    crate::pages::code_words(&row.code)
+                }
+            ),
         ),
         Outcome::Error => (
             "warn",

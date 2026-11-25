@@ -13,7 +13,8 @@ import { cn } from "@/lib/utils";
 type Deployment = { deployment: string; state: "up" | "cooling" | "down"; note: string; aliases: string; probe: string; limits: string; load: string; latency: string; errors: string };
 type Provider = { name: string; kind: string; keys: string };
 type Tested = { provider: string; ok: boolean; tag: string; note: string; detail: string };
-type View = { lead: string; may_test: boolean; deployments: Deployment[]; providers: Provider[]; none: { title: string; body: string } };
+type Gateway = { host: string; version: string; healthy: boolean; meta: string };
+type View = { lead: string; gateways: Gateway[]; gateways_note: string; may_test: boolean; deployments: Deployment[]; providers: Provider[]; none: { title: string; body: string } };
 
 function State({ state, note }: { state: string; note: string }) {
   return (
@@ -42,6 +43,31 @@ export function Deployments() {
       {!data && !error ? <Loading rows={4} /> : null}
       {data ? (
         <>
+          <Panel title="Gateways" note={data.gateways_note}>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Gateway</TableHead>
+                  <TableHead>Version</TableHead>
+                  <TableHead>Health</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.gateways.map((g, i) => (
+                  <TableRow key={`${g.host} ${i}`}>
+                    <TableCell className="whitespace-normal">
+                      <span className="t-mono block">{g.host}</span>
+                      <span className="block text-muted-foreground">{g.meta}</span>
+                    </TableCell>
+                    <TableCell className="t-mono">{g.version}</TableCell>
+                    <TableCell>
+                      <Badge className={cn(g.healthy && "border-transparent pl-0 text-muted-foreground")}>{g.healthy ? "healthy" : "silent"}</Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Panel>
           <Panel title={data.deployments.length ? "Deployments" : undefined}>
             {data.deployments.length === 0 ? (
               <Empty title={data.none.title} body={data.none.body}>

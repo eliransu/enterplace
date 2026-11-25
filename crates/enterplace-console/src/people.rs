@@ -201,6 +201,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
                 "read_only": admin.read_only,
                 "may": may,
                 "stop_agent": crate::start::kill_prompt(&crate::base(), None),
+                "bring": bring(&config.policy, &config.keys),
                 "start_command": format!("enterplace key new sarah.miller --team platform --url {}", crate::base()),
                 "docs": format!("{}/governance/keys/", crate::start::DOCS),
                 // What fills an empty page, as Start here words it for every page.
@@ -258,6 +259,38 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
         }
         .await,
     )
+}
+
+/// How 200 people get keys without an admin issuing each: single sign-on with `enterplace login`, SCIM, or a list.
+/// What the policy has set decides which the panel says is on.
+fn bring(policy: &std::path::Path, keys: &std::path::Path) -> Value {
+    let loaded = config::load(policy, Some(keys)).ok();
+    let sso = loaded
+        .as_ref()
+        .is_some_and(|l| l.sso.is_some() || l.saml.is_some());
+    let login = loaded.as_ref().is_some_and(|l| {
+        l.sso.as_ref().is_some_and(|s| s.self_issue.is_some())
+            || l.saml.as_ref().is_some_and(|s| s.self_issue.is_some())
+    });
+    let base = crate::base();
+    let state = match (sso, login) {
+        (true, true) => format!(
+            "On: developers run enterplace login {base} and get their own key, named by their email, in the team their groups map to."
+        ),
+        (true, false) => "Single sign-on is on for the console, and enterplace login is off: add self_issue under it so developers get their own keys.".to_string(),
+        _ => "Not set up: the policy has no console.sso, so each key is issued by an admin.".to_string(),
+    };
+    json!({
+        "on": sso && login,
+        "state": state,
+        "agent": crate::start::sign_on_prompt(
+            &base,
+            &policy.display().to_string(),
+            enterplace_core::store::policy_store(policy).is_some(),
+        ),
+        "docs": format!("{}/governance/single-sign-on/", crate::start::DOCS),
+        "scim_docs": format!("{}/operations/scim/", crate::start::DOCS),
+    })
 }
 
 fn entries_json(console: &Console, admin: &Admin, entries: &[KeyEntry]) -> Value {

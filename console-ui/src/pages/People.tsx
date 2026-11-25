@@ -88,6 +88,7 @@ export type Keys = {
   };
   start_command: string;
   stop_agent: string;
+  bring?: Bring;
   docs: string;
   empty: {
     title: string;
@@ -121,7 +122,10 @@ export const isService = (e: Entry) => e.kind === "workload key";
 /// The keys file, read again every 5 seconds unless a dialog on `query` is open, and the key shown once after a change.
 export function useKeys(query: URLSearchParams) {
   const dialog =
-    query.get("issue") || query.get("revoke") || query.get("edit") || query.get("stop");
+    query.get("issue") ||
+    query.get("revoke") ||
+    query.get("edit") ||
+    query.get("stop");
   const [made, setMade] = useState<Made | null>(null);
   const keys = useData<Keys>("people", 5000, !!dialog || !!made);
   return { ...keys, made, setMade };
@@ -188,6 +192,7 @@ export function People({ query }: PageProps) {
         }
       />
       <ReadOnly data={data} />
+      {data?.bring ? <Bring bring={data.bring} /> : null}
       {error ? <Problem text={error} retry={reload} /> : null}
       {data?.error ? <Problem text={data.error} retry={reload} /> : null}
       {!data && !error ? <Loading rows={5} /> : null}
@@ -861,7 +866,11 @@ function EditDialog({
                   type="button"
                   variant="outline"
                   onClick={() =>
-                    goTo(route, { stop: "1", scope: "person", value: entry.name })
+                    goTo(route, {
+                      stop: "1",
+                      scope: "person",
+                      value: entry.name,
+                    })
                   }
                 >
                   Stop traffic now
@@ -937,6 +946,36 @@ const STOP_SCOPES: Record<string, string> = {
   key_prefix: "A key (first 8 hex of its hash)",
   all: "Everyone",
 };
+
+type Bring = { on: boolean; state: string; agent: string; docs: string; scim_docs: string };
+
+/// How a whole company gets keys without an admin issuing each one: the paths, which is on, and the agent prompt.
+export function Bring({ bring }: { bring: Bring }) {
+  return (
+    <Panel title="Bring everyone in" actions={<Copy text={bring.agent} label="Copy for your agent" />}>
+      <div className="grid gap-4">
+        <p className="t-body m-0">{bring.state}</p>
+        <ul className="t-body m-0 grid list-disc gap-2 pl-6">
+          <li>
+            Single sign-on and <span className="t-mono">enterplace login</span>, for a whole company: each developer signs in once and gets their own expiring key, named by their email, in the team their groups map to.
+          </li>
+          <li>SCIM, in Enterplace Enterprise with a store: your identity provider adds people and teams, and removing someone revokes their keys.</li>
+          <li>
+            A few people or apps: Issue a key here, or <span className="t-mono">enterplace key new &lt;name&gt; --team &lt;team&gt;</span> on the gateway's machine, once per line of a list.
+          </li>
+        </ul>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <a href={bring.docs}>Read Single sign-on</a>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <a href={bring.scim_docs}>Read SCIM provisioning</a>
+          </Button>
+        </div>
+      </div>
+    </Panel>
+  );
+}
 
 /// A kill switch: refuses every request of a person, a team, a key or a model, or all of them, within 2 seconds,
 /// until Restore traffic on the Audit log. Recorded with the reason, which the people stopped see in their tool.

@@ -472,6 +472,21 @@ async fn the_console_shows_deployments_tests_a_provider_and_a_requests_time_by_s
         "{}",
         view["lead"]
     );
+    // Every gateway with its version and health: without a store, this one alone, and the page says how to see more.
+    let gateways = view["gateways"].as_array().cloned().unwrap_or_default();
+    assert!(
+        gateways.len() == 1
+            && gateways[0]["version"] == env!("CARGO_PKG_VERSION")
+            && gateways[0]["healthy"] == true,
+        "{}",
+        view["gateways"]
+    );
+    assert!(
+        view["gateways_note"]
+            .as_str()
+            .is_some_and(|n| n.contains("store:")),
+        "{view}"
+    );
     let shown = view["deployments"].to_string();
     for wanted in ["gone/g", "mock/m", "cooling", "rpm 100"] {
         assert!(shown.contains(wanted), "{wanted} missing from {shown}");

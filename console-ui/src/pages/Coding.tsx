@@ -23,7 +23,7 @@ import { Empty, Head, Loading, Panel, Problem } from "@/components/page";
 import { api, type Me } from "@/lib/api";
 import { count, goTo, useData } from "@/lib/use";
 import { Setup } from "./Setup";
-import { isService, KeyDialogs, KeyTable, ReadOnly, useKeys } from "./People";
+import { Bring, isService, KeyDialogs, KeyTable, ReadOnly, useKeys } from "./People";
 import { CODING_TOOLS, nameWarning, unnamedIn, type Ranking } from "./Overview";
 import type { PageProps } from "@/pages";
 
@@ -52,6 +52,7 @@ export function Coding({ query }: PageProps) {
         <Setup query={query} base={ROUTE} track="coding" />
       </section>
       <Tools />
+      {keys.data?.bring ? <Bring bring={keys.data.bring} /> : null}
       <ReadOnly data={keys.data} />
       {keys.error ? <Problem text={keys.error} retry={keys.reload} /> : null}
       {!keys.data && !keys.error ? <Loading rows={3} /> : null}

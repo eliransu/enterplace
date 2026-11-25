@@ -53,7 +53,7 @@ export function Teams() {
                 <TableHead>Team</TableHead>
                 <TableHead>People and apps</TableHead>
                 <TableHead>Rule</TableHead>
-                <TableHead className="text-right">Budget</TableHead>
+                <TableHead className="text-right">Budget and limits</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

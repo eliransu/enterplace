@@ -173,13 +173,32 @@ async fn providers_are_listed_added_edited_and_removed() -> TestResult {
             .is_some_and(|c| c.iter().any(|p| p["id"] == "anthropic"))
     );
 
-    // Add, from the catalog, with the key in an environment variable.
+    // A variable that is not set where Enterplace runs is refused: every gateway would refuse the policy with it and
+    // keep the one it has, while the console said it was in force.
+    let before = s.policy()?;
+    let (status, refused) = call(
+        &s,
+        "POST",
+        "/console/api/providers",
+        &cookie,
+        Some(json!({ "preset": "groq", "key_env": "ENTERPLACE_TEST_UNSET_GROQ_KEY", "models": "llama-3.3-70b" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        error(&refused).contains("ENTERPLACE_TEST_UNSET_GROQ_KEY is not set")
+            && error(&refused).contains("Paste the key"),
+        "{refused}"
+    );
+    assert_eq!(s.policy()?, before);
+    // Add, from the catalog, with the key in an environment variable. Cargo sets CARGO_MANIFEST_DIR for the test,
+    // so it stands for a variable that holds a key here.
     let (status, done) = call(
         &s,
         "POST",
         "/console/api/providers",
         &cookie,
-        Some(json!({ "preset": "groq", "key_env": "GROQ_API_KEY", "models": "llama-3.3-70b, llama-3.1-8b" })),
+        Some(json!({ "preset": "groq", "key_env": "CARGO_MANIFEST_DIR", "models": "llama-3.3-70b, llama-3.1-8b" })),
     )
     .await?;
     assert_eq!(status, StatusCode::OK, "{done}");
@@ -193,7 +212,7 @@ async fn providers_are_listed_added_edited_and_removed() -> TestResult {
     assert!(
         policy.contains("name: groq")
             && policy.contains("preset: groq")
-            && policy.contains("key_env: GROQ_API_KEY"),
+            && policy.contains("key_env: CARGO_MANIFEST_DIR"),
         "{policy}"
     );
 
@@ -406,6 +425,18 @@ async fn policy_basics_change_rules_limits_guardrails_aliases_and_mode() -> Test
     let (_, policy) = call(&s, "GET", "/console/api/policy", &cookie, None).await?;
     assert_eq!(policy["rules"][0]["name"], "payments");
     assert_eq!(policy["rules"][1]["name"], "everyone");
+    // Copy for your agent on Limits: per team and person, with tokens per day, the check and the docs page.
+    let limits = policy["limit_agent"].as_str().unwrap_or("");
+    for part in [
+        "limits:",
+        "team: payments",
+        "tpd:",
+        "person:",
+        "enterplace check",
+        "budgets-and-rate-limits.md",
+    ] {
+        assert!(limits.contains(part), "{part}: {limits}");
+    }
     // Copy for your agent on Guardrails: the lines, the file they go in, the check, and the docs page.
     let agent = policy["guard_agent"].as_str().unwrap_or("");
     for part in [
@@ -853,7 +884,7 @@ async fn a_commented_policy_keeps_its_comments_through_add_edit_and_remove() -> 
             "POST",
             "/console/api/providers",
             Some(
-                json!({ "preset": "groq", "key_env": "GROQ_API_KEY", "models": ["llama-3.3-70b"] }),
+                json!({ "preset": "groq", "key_env": "CARGO_MANIFEST_DIR", "models": ["llama-3.3-70b"] }),
             ),
         ),
         (
@@ -1145,6 +1176,26 @@ async fn in_store_mode_each_change_is_a_new_live_version_and_the_file_is_untouch
     assert!(error(&refused).contains("enterplace check"), "{refused}");
     assert_eq!(store.policy_versions()?.len(), 2);
     assert!(s.audit()?.contains(r#""action":"add_limit""#));
+    // The Audit log's Changes say what changed in words, never the action's code.
+    let (_, changes) = call(
+        &s,
+        "GET",
+        "/console/api/audit?verdict=changes",
+        &cookie,
+        None,
+    )
+    .await?;
+    let rows = changes["rows"].as_array().cloned().unwrap_or_default();
+    assert!(
+        rows.iter().any(|r| r["title"]
+            .as_str()
+            .is_some_and(|t| t.contains("changed the policy: Add a limit"))),
+        "{changes}"
+    );
+    assert!(
+        !changes.to_string().contains("add_limit\""),
+        "an action code in the list: {changes}"
+    );
     Ok(())
 }
 
@@ -1770,5 +1821,34 @@ async fn stop_and_restore_traffic_go_through_the_store_when_one_is_configured() 
     assert!(store.kills().is_empty(), "{:?}", store.kills());
     let (_, page) = call(&s, "GET", "/console/api/audit", &cookie, None).await?;
     assert_eq!(page["kills"], json!([]), "{page}");
+    Ok(())
+}
+
+/// People says how 200 people get keys without an admin issuing each: single sign-on with `enterplace login`, off
+/// until the policy sets it, and an agent prompt that sets it up with the redirect URL, the policy lines and the check.
+#[tokio::test]
+async fn people_says_how_everyone_gets_a_key_and_hands_single_sign_on_to_an_agent() -> TestResult {
+    let s = setup("bring")?;
+    let cookie = sign_in(&s, ADMIN_KEY).await?;
+    let (status, page) = call(&s, "GET", "/console/api/people", &cookie, None).await?;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["bring"]["on"], false, "{page}");
+    assert!(
+        page["bring"]["state"]
+            .as_str()
+            .is_some_and(|t| t.contains("no console.sso")),
+        "{page}"
+    );
+    let agent = page["bring"]["agent"].as_str().unwrap_or("");
+    for part in [
+        "/console/sso/callback",
+        "self_issue:",
+        "ENTERPLACE_SSO_SECRET",
+        "enterplace check",
+        "enterplace login",
+        "https://docs.enterplace.dev/governance/single-sign-on.md",
+    ] {
+        assert!(agent.contains(part), "{part}: {agent}");
+    }
     Ok(())
 }

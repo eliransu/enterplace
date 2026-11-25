@@ -45,6 +45,33 @@ fn moved(uri: &Uri) -> Response {
     redirect(&to)
 }
 
+/// What one limits: entry caps, as the Limits table says it: "$500 a month", "300 tokens per day".
+fn limit_words(entry: &serde_json::Map<String, Value>) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(b) = entry.get("budget").and_then(Value::as_object) {
+        let usd = b.get("usd").and_then(Value::as_f64).unwrap_or(0.0);
+        let per = b.get("per").and_then(Value::as_str).unwrap_or("window");
+        out.push(format!("{} a {per}", money(usd)));
+    }
+    if let Some(rate) = entry.get("rate").and_then(Value::as_object) {
+        for (key, words) in [
+            ("rpm", "requests per minute"),
+            ("rph", "requests per hour"),
+            ("rpd", "requests per day"),
+            ("tpm", "tokens per minute"),
+            ("tpd", "tokens per day"),
+        ] {
+            if let Some(n) = rate.get(key) {
+                out.push(format!("{n} {words}"));
+            }
+        }
+    }
+    if let Some(n) = entry.get("parallel") {
+        out.push(format!("{n} requests in flight"));
+    }
+    out
+}
+
 async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
     answer(
         async {
@@ -89,6 +116,18 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
                 }
                 return Ok(ok(json!({ "issue": issue, "teams": [], "empty": empty })));
             }
+            // The limits: entries written for one team, which count beside its rule's budget.
+            let tree = config::policy_text(&c.policy)
+                .ok()
+                .and_then(|t| enterplace_core::versions::tree(&t).ok())
+                .unwrap_or_default();
+            let limits: Vec<&serde_json::Map<String, Value>> = tree
+                .get("limits")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_object)
+                .collect();
             let mut rows = Vec::new();
             for (team, people) in &mut teams {
                 people.sort_unstable();
@@ -100,10 +139,22 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
                     ..Default::default()
                 };
                 let rule = loaded.policy.rule_for(&probe);
-                let budget = rule.and_then(|r| r.limits.budget()).map_or_else(
-                    || "none".to_string(),
-                    |b| format!("{} a {}", money(b.usd), b.per.describe()),
-                );
+                let mut budget: Vec<String> = rule
+                    .and_then(|r| r.limits.budget())
+                    .map(|b| format!("{} a {}", money(b.usd), b.per.describe()))
+                    .into_iter()
+                    .collect();
+                for entry in limits
+                    .iter()
+                    .filter(|l| l.get("team").and_then(Value::as_str) == Some(*team))
+                {
+                    budget.extend(limit_words(entry));
+                }
+                let budget = if budget.is_empty() {
+                    "none".to_string()
+                } else {
+                    budget.join(", ")
+                };
                 let rule = rule.map_or_else(
                     || "none: refused".to_string(),
                     |r| match &r.who {

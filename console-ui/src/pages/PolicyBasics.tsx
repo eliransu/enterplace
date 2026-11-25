@@ -19,7 +19,7 @@ type Entry = Record<string, unknown>;
 type Limit = { index: number; entry: Entry };
 type Guardrail = { name: string; type: string; action: string | null; on: boolean; entry: Entry };
 type Alias = { name: string; deployments: { provider: string; model: string }[]; fallbacks: string[] };
-type Data = { mode: string; rules: Rule[]; limits: Limit[]; guardrails: Guardrail[]; aliases: Alias[]; guard_agent: string };
+type Data = { mode: string; rules: Rule[]; limits: Limit[]; guardrails: Guardrail[]; aliases: Alias[]; guard_agent: string; limit_agent: string };
 type Change = (run: () => Promise<{ message: string }>) => Promise<string>;
 
 const WHO: Record<string, string> = { any: "Everyone", team: "A team", name: "A person", tag: "A tag" };
@@ -115,9 +115,12 @@ export function PolicyBasics({ me }: { me: Me | null }) {
             title="Limits"
             note="Budgets in US dollars, request and token rates, and requests in flight, for everyone or one scope. A request counts against every limit that applies to it."
             actions={
-              <Button size="sm" disabled={!may} onClick={() => setLimit("new")}>
-                Add a limit
-              </Button>
+              <>
+                <Copy text={data.limit_agent} label="Copy for your agent" />
+                <Button size="sm" disabled={!may} onClick={() => setLimit("new")}>
+                  Add a limit
+                </Button>
+              </>
             }
           >
             {data.limits.length === 0 ? (
