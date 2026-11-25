@@ -15,5 +15,7 @@
     "governance",
     "self-hosted"
   ],
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "documentationUrl": "https://docs.enterplace.dev/integrations/claude-code/",
+  "supportUrl": "https://github.com/eliransu/enterplace/issues"
 }
