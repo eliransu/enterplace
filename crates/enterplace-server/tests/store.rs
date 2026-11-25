@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -676,20 +676,36 @@ async fn a_customer_budget_and_a_parallel_limit_hold_across_two_gateways() -> Te
 struct Relay {
     port: u16,
     down: Arc<AtomicBool>,
+    /// The connections it carries. Each one notices the cut on its own, so a cut is complete only at zero.
+    open: Arc<AtomicUsize>,
+}
+
+/// One relayed connection, counted in [`Relay::open`] until it is dropped.
+struct Carried(Arc<AtomicUsize>);
+
+impl Drop for Carried {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 async fn relay(to: (String, u16)) -> Result<Relay, Error> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
     let down = Arc::new(AtomicBool::new(false));
-    let cut = down.clone();
+    let open = Arc::new(AtomicUsize::new(0));
+    let (cut, count) = (down.clone(), open.clone());
     tokio::spawn(async move {
         while let Ok((mut inbound, _)) = listener.accept().await {
+            // Counted before the cut is checked, so a connection the test does not see counted sees the cut.
+            count.fetch_add(1, Ordering::SeqCst);
+            let carried = Carried(count.clone());
             if cut.load(Ordering::SeqCst) {
                 continue;
             }
             let (to, cut) = (to.clone(), cut.clone());
             tokio::spawn(async move {
+                let _carried = carried;
                 let Ok(mut outbound) = tokio::net::TcpStream::connect(to).await else {
                     return;
                 };
@@ -707,7 +723,7 @@ async fn relay(to: (String, u16)) -> Result<Relay, Error> {
             });
         }
     });
-    Ok(Relay { port, down })
+    Ok(Relay { port, down, open })
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -767,8 +783,17 @@ async fn with_postgres_down_known_keys_work_and_budgeted_requests_are_refused() 
     assert_eq!(body["checks"]["store"]["ready"], true);
 
     relay.down.store(true, Ordering::SeqCst);
-    // Polled now rather than waited for: the relay drops its connections as it notices the cut, and the first poll
-    // after that finds the store gone.
+    // Each relayed connection notices the cut on its own, within moments. The Cloudflare store's HTTP client keeps
+    // several of them open, and one not yet cut carries a poll through, so the outage starts once all are gone.
+    let cut_at = Instant::now();
+    while relay.open.load(Ordering::SeqCst) > 0 {
+        assert!(
+            cut_at.elapsed() < Duration::from_secs(5),
+            "the relay never closed its connections"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // Polled now rather than waited for: the first poll after the cut finds the store gone.
     let store =
         enterplace_core::store::attached(&a.loaded.keys_path).ok_or("the gateway has no store")?;
     let poll = || {

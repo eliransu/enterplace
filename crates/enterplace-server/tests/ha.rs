@@ -217,6 +217,34 @@ where
     }
 }
 
+/// Waits for the one row a cached answer writes to `table` (`answer_cache` or `answer_vectors`), on either store.
+async fn stored(url: &str, table: &str) -> TestResult {
+    let what = format!("the answer is in the store's {table}");
+    if TestStore::cloudflare() {
+        let sql = format!("SELECT count(*) FROM {table}");
+        return eventually(Duration::from_secs(3), &what, || async {
+            let answer = enterplace_server::cloudflare_store::call(
+                url,
+                "sql",
+                serde_json::json!({ "statements": [{ "sql": sql, "params": [] }] }),
+            )
+            .await?;
+            Ok(answer["results"][0]["rows"][0][0] == 1)
+        })
+        .await;
+    }
+    let reader = enterplace_server::store::open("ENTERPLACE_STORE_URL", url)?;
+    let connection = reader.connect().await?;
+    let sql = format!("SELECT count(*) FROM enterplace_{table}");
+    let found = eventually(Duration::from_secs(3), &what, || async {
+        let row = connection.query_one(&sql, &[]).await?;
+        Ok(row.try_get::<_, i64>(0)? == 1)
+    })
+    .await;
+    reader.close();
+    found
+}
+
 const FREE: &str = r#"{"model":"free","messages":[{"role":"user","content":"hello"}]}"#;
 const PRICED: &str = r#"{"model":"m","max_tokens":3,"messages":[]}"#;
 
@@ -238,24 +266,9 @@ async fn an_answer_cached_on_one_gateway_is_served_by_the_other_in_its_scope_onl
     assert!(!hit);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-    // The answer is written to the store without the request waiting for it. Counted with SQL, so on Postgres; b
-    // serving it below shows it on either store.
-    if !TestStore::cloudflare() {
-        let reader = enterplace_server::store::open("ENTERPLACE_STORE_URL", &url)?;
-        let connection = reader.connect().await?;
-        eventually(
-            Duration::from_secs(3),
-            "the answer is in the store",
-            || async {
-                let row = connection
-                    .query_one("SELECT count(*) FROM enterplace_answer_cache", &[])
-                    .await?;
-                Ok(row.try_get::<_, i64>(0)? == 1)
-            },
-        )
-        .await?;
-        reader.close();
-    }
+    // The answer is written to the store without the request waiting for it, so b is asked only once it is there:
+    // asked sooner, b misses, asks the provider itself and keeps that answer instead.
+    stored(&url, "answer_cache").await?;
     // Gateway b never saw the request: it reads the answer from the store, and the provider is not asked again.
     let app = b.router.clone();
     eventually(
@@ -311,6 +324,8 @@ async fn a_question_in_other_words_is_served_on_the_other_gateway_from_the_seman
     )
     .await?;
     assert_eq!((status, hit), (StatusCode::OK, false), "{first}");
+    // Written behind the request, as in the exact cache: the embedding is what b matches the other words against.
+    stored(&url, "answer_vectors").await?;
     let app = b.router.clone();
     eventually(
         Duration::from_secs(3),
