@@ -25,9 +25,29 @@ type Change = (run: () => Promise<{ message: string }>) => Promise<string>;
 const WHO: Record<string, string> = { any: "Everyone", team: "A team", name: "A person", tag: "A tag" };
 const who = (r: Rule) => (r.who.kind === "any" ? "everyone" : r.who.kind === "other" ? "see the raw policy" : `${r.who.kind === "name" ? "person" : r.who.kind} ${r.who.value}`);
 
+/// The confirmation before enforcing: the switch on Rules and limits and the observe-mode banner on every page open
+/// this same dialog.
+export function EnforceDialog({ open, onOpenChange, onConfirm }: { open: boolean; onOpenChange: (open: boolean) => void; onConfirm: () => void }) {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogTitle>Turn on enforcement?</AlertDialogTitle>
+        <AlertDialogDescription>
+          Rules, limits and guardrails then refuse what the policy does not allow, instead of only recording it. Every gateway follows within 2 seconds. What observe mode only recorded is refused from now on: the Audit log shows those requests.
+        </AlertDialogDescription>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm}>Turn on enforcement</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 export function PolicyBasics({ me }: { me: Me | null }) {
   const { data, error, change, reload } = useData<Data>("policy");
   const [observing, setObserving] = useState(false);
+  const [enforcing, setEnforcing] = useState(false);
   const [rule, setRule] = useState<Rule | "new" | null>(null);
   const [limit, setLimit] = useState<Limit | "new" | null>(null);
   const [guard, setGuard] = useState<Guardrail | "new" | null>(null);
@@ -49,10 +69,11 @@ export function PolicyBasics({ me }: { me: Me | null }) {
               <Switch
                 checked={data.mode === "enforce"}
                 disabled={!may}
-                onCheckedChange={(on) => (on ? change(() => api.put("policy/mode", { mode: "enforce" })) : setObserving(true))}
+                onCheckedChange={(on) => (on ? setEnforcing(true) : setObserving(true))}
               />
               {data.mode === "enforce" ? "Enforce: what the policy does not allow is refused." : "Observe: rules, limits and guardrails only record what they would refuse. A request without a valid key or person token, an unknown model and a kill switch are still refused."}
             </label>
+            <EnforceDialog open={enforcing} onOpenChange={setEnforcing} onConfirm={() => change(() => api.put("policy/mode", { mode: "enforce" }))} />
             <AlertDialog open={observing} onOpenChange={setObserving}>
               <AlertDialogContent>
                 <AlertDialogTitle>Stop enforcing the policy?</AlertDialogTitle>

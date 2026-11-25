@@ -46,6 +46,11 @@ one repository. How a release is made: RELEASING.md.
   from each provider's own model list): 83 providers beyond OpenAI, Anthropic and Gemini, Groq among them
   (`catalog::DEFAULT_MODELS`). Local servers, and providers whose model IDs could not be confirmed, start empty.
 
+### Turn on enforcement from the banner
+
+- The observe-mode banner's "Turn on enforcement" opens the enforcement confirmation on the page it is clicked on,
+  the same dialog the Mode switch now shows before enforcing.
+
 ### The dry run replays limits
 
 - A policy dry run (Policy, Edit, "Dry run", and `POST /admin/policy/dry-run`) replays the draft's budgets, tokens per

@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { RouteTabs } from "@/components/page";
 import { cn } from "@/lib/utils";
-import type { Me } from "@/lib/api";
+import { api, type Me } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { EnforceDialog } from "@/pages/PolicyBasics";
 import { LiveContext, useLiveFeed, useLiveStream } from "@/lib/live";
 import { useData } from "@/lib/use";
 import { find, GROUPS, HOME, moved as movedTo, SECTIONS, type Section } from "@/pages";
@@ -67,7 +69,8 @@ function Shell() {
   const { route, query } = useHash();
   const { section, tab } = find(route);
   // Read again on every change, so the name setting and the role are current on every page.
-  const { data: me } = useData<Me>("me");
+  const { data: me, change } = useData<Me>("me");
+  const [enforcing, setEnforcing] = useState(false);
   const live = useLiveFeed();
   // The MCP extension still names its old server-rendered pages; they are tabs of MCP tools now.
   const tools =
@@ -230,7 +233,18 @@ function Shell() {
               would refuse. A request without a valid key or person token, an
               unknown model and a kill switch are still refused.
             </span>
-            <a href="#/policy">Turn on enforcement</a>
+            {me.edit_policy ? (
+              <Button variant="outline" size="sm" onClick={() => setEnforcing(true)}>
+                Turn on enforcement
+              </Button>
+            ) : (
+              <a href="#/policy">Turn on enforcement</a>
+            )}
+            <EnforceDialog
+              open={enforcing}
+              onOpenChange={setEnforcing}
+              onConfirm={() => change(() => api.put("policy/mode", { mode: "enforce" }))}
+            />
           </div>
         ) : null}
         {tabs.length > 1 ? (

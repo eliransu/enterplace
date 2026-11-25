@@ -220,7 +220,7 @@ What it still refuses, because forwarding would open the gateway:
 - a model no provider serves (`unknown_model`)
 - a [kill switch](/governance/kill-switches/): a stop button always works
 
-Spend and limits still count. A request a budget would refuse is charged to that budget's counter, and a request over `rpm`, `tpm` or `parallel` holds its tokens and its place as an enforced one does, so the numbers are real when you switch to enforce. `enterplace check` warns while observe mode is on, and the console's audit log shows "Observe mode: nothing is blocked". Remove the line, or write `mode: enforce`, and the next request after the [reload](#reloading) is enforced.
+Spend and limits still count. A request a budget would refuse is charged to that budget's counter, and a request over `rpm`, `tpm` or `parallel` holds its tokens and its place as an enforced one does, so the numbers are real when you switch to enforce. `enterplace check` warns while observe mode is on, and the console's audit log shows "Observe mode: nothing is blocked". Remove the line, or write `mode: enforce`, and the next request after the [reload](#reloading) is enforced. In the console, every page shows a banner while observe mode is on; its **Turn on enforcement** opens the same confirmation as the Mode switch on Rules and limits, right where it is clicked.
 
 To try one feature while the rest is enforced, give it a `shadow_until` date instead: a rule, each budget, and each `limits:` entry take one, as guardrails do. Until that date it records what it would refuse; after it, it enforces. See [Budgets and rate limits](/governance/budgets-and-rate-limits/#trying-a-limit-first).
 

@@ -253,6 +253,23 @@ def run(chrome: Chrome, base: str, key: str, enterplace: str, folder: pathlib.Pa
     check(out.returncode == 0 and len(last) == 64,
           f"the console's last hash passes enterplace audit verify --expect-last ({out.stdout.strip() or out.stderr.strip()})")
 
+    # Observe mode: the banner's Turn on enforcement opens the switch's confirmation on the page it is clicked on.
+    policy = folder / "enterplace.policy.yaml"
+    policy.write_text(policy.read_text() + "mode: observe\n")
+    time.sleep(2)
+    chrome.go(f"{base}/console/app/#/people")
+    chrome.wait("[...document.querySelectorAll('[role=\"status\"] button')].some(b => b.textContent.includes('Turn on enforcement'))",
+                "the observe mode banner")
+    chrome.js("[...document.querySelectorAll('[role=\"status\"] button')].find(b => b.textContent.includes('Turn on enforcement')).click()")
+    chrome.wait("document.querySelector('[role=\"alertdialog\"]')", "the enforcement confirmation")
+    check(chrome.js("location.hash.startsWith('#/people')"), "the confirmation opens where the banner is clicked")
+    chrome.js("[...document.querySelectorAll('[role=\"alertdialog\"] button')].find(b => b.textContent === 'Turn on enforcement').click()")
+    for _ in range(50):
+        if "mode: observe" not in policy.read_text():
+            break
+        time.sleep(0.1)
+    check("mode: observe" not in policy.read_text(), "confirming turns on enforcement")
+
     # A form from another site is refused, with the console's own page.
     chrome.go(evil)
     chrome.wait("location.pathname === '/console/sign-in' && document.readyState === 'complete'", "the cross-site post")
