@@ -1,0 +1,19 @@
+{
+  "name": "enterplace",
+  "displayName": "Enterplace",
+  "description": "Set up Claude Code to send its traffic through a local Enterplace gateway",
+  "author": {
+    "name": "Enterplace",
+    "url": "https://enterplace.dev"
+  },
+  "homepage": "https://docs.enterplace.dev/integrations/claude-code/",
+  "repository": "https://github.com/eliransu/enterplace",
+  "license": "MIT",
+  "keywords": [
+    "gateway",
+    "proxy",
+    "governance",
+    "self-hosted"
+  ],
+  "version": "0.1.0"
+}

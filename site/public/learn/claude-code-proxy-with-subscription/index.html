@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code through a proxy or gateway with a subscription login (ANTHROPIC_BASE_URL)</title>
+<meta name="description" content="How to send Claude Code through your own gateway while developers keep their Claude Pro, Max, Team or Enterprise login. The settings, the two variables that must stay unset, and the errors you meet on the way.">
+<meta name="theme-color" content="#0e0e0e" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<link rel="canonical" href="https://enterplace.dev/learn/claude-code-proxy-with-subscription/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Enterplace">
+<meta property="og:url" content="https://enterplace.dev/learn/claude-code-proxy-with-subscription/">
+<meta property="og:title" content="Claude Code through a proxy or gateway with a subscription login (ANTHROPIC_BASE_URL)">
+<meta property="og:description" content="How to send Claude Code through your own gateway while developers keep their Claude Pro, Max, Team or Enterprise login. The settings, the two variables that must stay unset, and the errors you meet on the way.">
+<meta property="og:image" content="https://enterplace.dev/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/fonts/FamiljenGrotesk-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<script>try { var t = new URLSearchParams(location.search).get('theme') || localStorage.getItem('theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+<link rel="stylesheet" href="/styles.css">
+<script src="/site.js" defer></script>
+<script src="/_t.js" defer></script>
+</head>
+<body class="">
+<a class="skip" href="#main">Skip to the content</a>
+
+<header class="hdr" id="hdr">
+  <div class="wrap hdr-in">
+    <a class="brand" href="/" aria-label="Enterplace, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+enterplace</a>
+
+    <a class="theme gh-phone" href="https://github.com/eliransu/enterplace" aria-label="Enterplace on GitHub, open source"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg></a>
+
+    <button class="burger" type="button" aria-expanded="false" aria-controls="nav" aria-label="Menu"><span></span></button>
+
+    <nav class="nav" id="nav" aria-label="Main">
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="product" aria-expanded="false" aria-controls="menu-product">Product<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu" id="menu-product">
+          <a href="/product/"><strong>How it works</strong><span>The request path, the controls, the audit log and the console</span></a>
+          <a href="/deploy/"><strong>Deploy</strong><span>Docker, Kubernetes, AWS, Google Cloud, Azure, Cloudflare</span></a>
+          <a href="/security/"><strong>Security</strong><span>What Enterplace protects, and where it stops</span></a>
+          <a href="/compare/"><strong>Compare</strong><span>Enterplace next to LiteLLM and Bifrost, with sources</span></a>
+        </div>
+      </div>
+
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="use-cases" aria-expanded="false" aria-controls="menu-use-cases">Use cases<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu menu-wide" id="menu-use-cases">
+          <div class="menu-col">
+            <p class="menu-title">By what you run</p>
+            <a href="/use-cases/claude-team/"><strong>Claude Team and Enterprise</strong><span>One paste in claude.ai, every Claude Code user</span></a>
+            <a href="/use-cases/coding-agents/"><strong>Coding agents</strong><span>Codex, Claude Code, Copilot, Cursor, Gemini CLI</span></a>
+            <a href="/use-cases/cloud-agents/"><strong>Cloud and production agents</strong><span>Apps and agents calling models from your cloud</span></a>
+            <a href="/use-cases/mcp-tools/"><strong>MCP tools</strong><span>Your MCP servers behind one endpoint</span></a>
+            <a href="/use-cases/local-models/"><strong>Local and self-hosted models</strong><span>Ollama, vLLM, on-prem, air-gapped</span></a>
+            <a href="/use-cases/regulated-data/"><strong>Regulated data and residency</strong><span>Regions, masking and records</span></a>
+            <a href="/use-cases/cost-control/"><strong>Cost control</strong><span>Spend per person, budgets, forecasts</span></a>
+          </div>
+          <div class="menu-col">
+            <p class="menu-title">By role</p>
+            <a href="/for/security/"><strong>Security</strong><span>What left the company, with proof</span></a>
+            <a href="/for/platform/"><strong>Platform</strong><span>Model access without provider keys on laptops</span></a>
+            <a href="/for/finance/"><strong>Finance</strong><span>Who spent it, and will the budget last</span></a>
+            <a href="/for/engineering-leaders/"><strong>Engineering leaders</strong><span>Coding agents for every developer, tracked</span></a>
+            <a class="menu-all" href="/use-cases/">All use cases</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="nav-item">
+        <button class="nav-btn" type="button" data-group="learn" data-here aria-expanded="false" aria-controls="menu-learn">Learn<svg class="chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+        <div class="menu" id="menu-learn">
+          <a href="/learn/what-is-an-ai-gateway/"><strong>What is an AI gateway</strong><span>The idea in plain words, with one picture</span></a>
+          <a href="/learn/why-companies-need-one/"><strong>Why companies need one</strong><span>Five questions most companies cannot answer</span></a>
+          <a href="/learn/five-steps/"><strong>The five steps</strong><span>See, Know, Limit, Protect, Prove</span></a>
+          <a href="/learn/rollout-plan/"><strong>Rollout plan</strong><span>One page to forward to your team</span></a>
+          <a href="/learn/glossary/"><strong>Glossary</strong><span>The words, explained</span></a>
+        </div>
+      </div>
+
+      <a class="nav-link" data-group="enterprise" href="/enterprise/">Enterprise</a>
+      <a class="nav-link" href="https://docs.enterplace.dev/">Docs</a>
+
+      <div class="nav-actions">
+        <a class="btn btn-main btn-sm" href="https://docs.enterplace.dev/getting-started/quickstart/">Get started</a>
+        <a class="theme gh-wide" href="https://github.com/eliransu/enterplace" aria-label="Enterplace on GitHub, open source">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+        </a>
+        <button class="theme" type="button" aria-label="Switch between light and dark">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18" ></path><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"></path></svg>
+        </button>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/learn/">Learn</a><span>Claude Code through a gateway</span></nav>
+  <h1>Claude Code through a gateway, on a subscription login</h1>
+  <p class="lead">Most proxy guides for Claude Code start with "create an API key". Teams on Claude seats do not want one. This page shows the setup where each developer keeps the Claude login they already have.</p>
+</section>
+
+<div class="wrap article">
+  <nav class="toc" aria-label="On this page">
+    <a href="#how">How it works</a>
+    <a href="#setup">The setup</a>
+    <a href="#who">Say who is calling</a>
+    <a href="#fleet">Roll it out</a>
+    <a href="#errors">When it does not work</a>
+    <a href="#not">What it does not do</a>
+  </nav>
+  <article class="prose">
+    <h2 id="how">How it works</h2>
+    <p>Claude Code sends every request to the address in <code>ANTHROPIC_BASE_URL</code>. On a subscription, each request carries the developer's own Claude login in the <code>Authorization</code> header.</p>
+    <p>A gateway can handle that login in two ways. It can swap it for an API key the gateway holds, which moves the team from seats to per-request billing. Or it can pass the login through unchanged, so Anthropic sees the same request it would have seen without a gateway. This page is about the second way.</p>
+    <p>Enterplace calls it subscription passthrough. The login is taken off the request before any check reads it, sent to Anthropic and to nothing else, and never stored, logged or hashed into a record.</p>
+
+    <h2 id="setup">The setup</h2>
+    <figure class="code"><figcaption>On the machine that runs the gateway</figcaption><pre>curl -fsSL https://enterplace.dev/install.sh | sh
+enterplace start</pre></figure>
+    <p><code>enterplace start</code> writes a policy that already holds the passthrough provider. If you write the policy yourself, this is the part that matters:</p>
+    <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>version: 1
+providers:
+  - name: claude-subscriptions
+    kind: anthropic
+    url: https://api.anthropic.com
+    auth: passthrough
+    identity: optional
+    models: ["claude-*"]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]</pre></figure>
+    <p>Then one setting in Claude Code:</p>
+    <figure class="code"><figcaption>~/.claude/settings.json</figcaption><pre>{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080"
+  }
+}</pre></figure>
+    <p>Run <code>claude</code> and send a prompt. The console's Requests page shows it, under the person <code>unknown</code> for now.</p>
+
+    <h2 id="who">Say who is calling</h2>
+    <p>The Claude login goes to Anthropic, so the gateway needs its own way to know the person. That is a second header, which Claude Code sends from <code>ANTHROPIC_CUSTOM_HEADERS</code>.</p>
+    <figure class="code"><figcaption>~/.claude/settings.json</figcaption><pre>{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://enterplace.example.com",
+    "ANTHROPIC_CUSTOM_HEADERS": "x-enterplace-user: enterplace_u_..."
+  }
+}</pre></figure>
+    <p>The value is a person token. It names the person and their team and reaches no model on its own, so a leaked token gives nobody model access. An admin makes one in the console or with <code>enterplace key new maya.cohen --team payments --identity-only</code>. With single sign-on, <code>enterplace login</code> writes both lines for the developer.</p>
+
+    <h2 id="fleet">Roll it out to every laptop</h2>
+    <p>Claude Code reads the same <code>env</code> block from its managed settings file, which an MDM such as Jamf or Intune can place on each machine.</p>
+    <ul class="ticks">
+      <li>macOS: <code>/Library/Application Support/ClaudeCode/managed-settings.json</code></li>
+      <li>Linux and WSL: <code>/etc/claude-code/managed-settings.json</code></li>
+      <li>Windows: <code>C:\Program Files\ClaudeCode\managed-settings.json</code></li>
+    </ul>
+
+    <h2 id="errors">When it does not work</h2>
+    <table class="tbl">
+      <thead><tr><th>What you see</th><th>Cause</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td>Requests never reach the gateway</td><td>The session runs in the Code tab of the Claude desktop app, which sets <code>ANTHROPIC_BASE_URL</code> itself</td><td>Use the terminal or the VS Code extension. Check with <code>echo $ANTHROPIC_BASE_URL</code> inside a session</td></tr>
+        <tr><td>Claude Code asks for, or bills, an API key</td><td><code>ANTHROPIC_API_KEY</code> or <code>ANTHROPIC_AUTH_TOKEN</code> is set somewhere</td><td>Unset both, in the shell profile and in settings files, then sign in with <code>/login</code></td></tr>
+        <tr><td>403 <code>person_needed</code></td><td>The provider has <code>identity: required</code> and the request has no person header</td><td>Add the person token, or set <code>identity: optional</code> while you roll out</td></tr>
+        <tr><td>403 <code>person_token_only</code></td><td>The person token was sent as the only credential</td><td>Keep the Claude login; the token goes in <code>ANTHROPIC_CUSTOM_HEADERS</code>, not in <code>ANTHROPIC_API_KEY</code></td></tr>
+        <tr><td>403 <code>login_not_accepted</code></td><td>The model is served only by a provider that takes an API key</td><td>List the model on the passthrough provider</td></tr>
+      </tbody>
+    </table>
+    <p>Claude Code labels any 403 "Failed to authenticate". The text after that label is the gateway's own message, and it names the cause.</p>
+
+    <h2 id="not">What it does not do</h2>
+    <ul class="ticks out">
+      <li><strong>It does not change your plan's allowance.</strong> The seat's own limits at Anthropic stay as they are. A gateway can add stricter limits of its own, in tokens and requests per person.</li>
+      <li><strong>It does not give real dollar figures.</strong> A seat is paid by the month. Cost is shown as an estimate at API list prices.</li>
+      <li><strong>It does not settle the terms question for you.</strong> Check that routing your plan's traffic through your own gateway fits Anthropic's terms for that plan.</li>
+    </ul>
+    <p>Next: <a href="/learn/track-claude-code-usage-per-developer/">see usage per developer</a> and <a href="/learn/limit-claude-code-per-developer/">set a daily limit per developer</a>. The full reference is <a href="https://docs.enterplace.dev/integrations/claude-code/">Claude Code in the docs</a>.</p>
+  </article>
+</div>
+
+<section class="cta">
+  <div class="cta-box">
+    <h2>Start with step one. Block nothing, and find out what is in use.</h2>
+    <div class="actions">
+      <a class="btn btn-ink" href="https://docs.enterplace.dev/getting-started/quickstart/">Read the quickstart</a>
+      <a class="btn btn-ink-line" href="/learn/five-steps/">See the five steps</a>
+      <a class="btn btn-ink-line" href="/deploy/">Deploy in your cloud</a>
+    </div>
+  </div>
+</section>
+
+
+</main>
+
+<footer class="ftr">
+  <div class="wrap ftr-top">
+    <div class="ftr-about">
+      <a class="brand" href="/" aria-label="Enterplace, home"><svg class="mark" width="26" height="24" viewBox="0 0 52 48" aria-hidden="true"><circle class="mark-disc" cx="12" cy="24" r="12"></circle><rect class="mark-bar" x="32" y="0" width="16" height="48" rx="8"></rect></svg>
+enterplace</a>
+      <p>A self-hosted AI gateway, governance first. One Docker image plus Postgres, in your cloud.</p>
+    </div>
+    <nav class="ftr-cols" aria-label="Site map">
+      <div>
+        <h2>Product</h2>
+        <a href="/product/">How it works</a>
+        <a href="/deploy/">Deploy</a>
+        <a href="/security/">Security</a>
+        <a href="/compare/">Compare</a>
+        <a href="/enterprise/">Enterprise</a>
+      </div>
+      <div>
+        <h2>Use cases</h2>
+        <a href="/use-cases/claude-team/">Claude Team and Enterprise</a>
+        <a href="/use-cases/coding-agents/">Coding agents</a>
+        <a href="/use-cases/cloud-agents/">Cloud and production agents</a>
+        <a href="/use-cases/mcp-tools/">MCP tools</a>
+        <a href="/use-cases/local-models/">Local and self-hosted models</a>
+        <a href="/use-cases/regulated-data/">Regulated data and residency</a>
+        <a href="/use-cases/cost-control/">Cost control</a>
+      </div>
+      <div>
+        <h2>By role</h2>
+        <a href="/for/security/">Security</a>
+        <a href="/for/platform/">Platform</a>
+        <a href="/for/finance/">Finance</a>
+        <a href="/for/engineering-leaders/">Engineering leaders</a>
+      </div>
+      <div>
+        <h2>Learn</h2>
+        <a href="/learn/what-is-an-ai-gateway/">What is an AI gateway</a>
+        <a href="/learn/why-companies-need-one/">Why companies need one</a>
+        <a href="/learn/five-steps/">The five steps</a>
+        <a href="/learn/rollout-plan/">Rollout plan</a>
+        <a href="/learn/glossary/">Glossary</a>
+        <a href="/learn/track-claude-code-usage-per-developer/">Claude Code usage per developer</a>
+        <a href="/learn/what-is-an-mcp-gateway/">What is an MCP gateway</a>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <a href="https://docs.enterplace.dev/">Docs</a>
+        <a href="https://docs.enterplace.dev/getting-started/quickstart/">Quickstart</a>
+        <a href="https://docs.enterplace.dev/getting-started/status/">Project status</a>
+        <a href="https://docs.enterplace.dev/getting-started/changelog/">Changelog</a>
+        <a href="https://github.com/eliransu/enterplace">GitHub</a>
+      </div>
+    </nav>
+  </div>
+  <p class="wrap ftr-legal">Open source core under MIT, <a href="https://github.com/eliransu/enterplace">on GitHub</a>. Version 0.1.0, pre-1.0. Product and company names belong to their owners and are used to name integrations.</p>
+</footer>
+</body>
+</html>

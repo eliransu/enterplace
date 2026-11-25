@@ -1,6 +1,18 @@
 apiVersion: v2
 name: enterplace
-description: Enterplace Enterprise, the self-hosted AI gateway. Each replica keeps its own audit chain on its own volume.
+description: Enterplace, the open source self-hosted AI gateway and MCP gateway. Each replica keeps its own audit chain on its own volume.
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
+home: https://enterplace.dev
+icon: https://enterplace.dev/apple-touch-icon.png
+sources:
+  - https://github.com/eliransu/enterplace
+keywords: [ai-gateway, llm, mcp, proxy, governance, openai, anthropic]
+annotations:
+  artifacthub.io/category: ai-machine-learning
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://docs.enterplace.dev/deploy/kubernetes/
+    - name: Support
+      url: https://github.com/eliransu/enterplace/issues

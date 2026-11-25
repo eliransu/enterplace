@@ -1,0 +1,86 @@
+<!--
+title: How to track Claude Code usage per developer
+description: Three ways to see which developer used Claude Code, on which model and for how many tokens: your plan's admin pages, Claude Code's own telemetry, and a gateway. What each one shows, what it cannot show, and the exact settings.
+nav: learn
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/learn/">Learn</a><span>Claude Code usage per developer</span></nav>
+  <h1>How to track Claude Code usage per developer</h1>
+  <p class="lead">A team on Claude Code gets one bill, or one seat count. This page lists the three ways to break it down by person, what each one shows, and the settings for each.</p>
+</section>
+
+<div class="wrap article">
+  <nav class="toc" aria-label="On this page">
+    <a href="#short">The short answer</a>
+    <a href="#admin">1. Your plan's admin pages</a>
+    <a href="#telemetry">2. Claude Code telemetry</a>
+    <a href="#gateway">3. A gateway</a>
+    <a href="#compare">Side by side</a>
+    <a href="#catch">Two catches</a>
+  </nav>
+  <article class="prose">
+    <h2 id="short">The short answer</h2>
+    <p>There are three places the numbers can come from. Pick by what you need to do with them.</p>
+    <ul class="ticks">
+      <li><strong>You only want totals per seat.</strong> Start with the admin pages of your Claude plan. Nothing to install.</li>
+      <li><strong>You want tokens, models and tools per person, and nothing may sit in the request path.</strong> Turn on Claude Code's own telemetry and send it to a collector.</li>
+      <li><strong>You also want to set limits, stop secrets in prompts or keep an audit record.</strong> Route Claude Code through a gateway. Developers keep their Claude subscription login.</li>
+    </ul>
+
+    <h2 id="admin">1. Your plan's admin pages</h2>
+    <p>Claude Team and Enterprise plans have admin pages, and an API account has a usage page per key. Look there first, because it costs nothing. What you get depends on the plan, and it is a view inside the vendor's product: you cannot join it with your other AI tools, set your own limits per person from it, or export a record you control.</p>
+
+    <h2 id="telemetry">2. Claude Code's own telemetry</h2>
+    <p>Claude Code can send usage telemetry over OpenTelemetry to an address you choose. It reports who used it, the model, tokens by type, an estimated cost, which tools ran or were rejected, and counts such as lines changed and commits. Requests still go straight to Anthropic, so nothing can be refused or changed.</p>
+    <figure class="code"><figcaption>Managed settings, or the env block of ~/.claude/settings.json</figcaption><pre>{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector.example.com",
+    "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer ..."
+  }
+}</pre></figure>
+    <p>Any OpenTelemetry collector takes this. You then need somewhere to store it and a dashboard that groups by person. On Claude Team, an owner can paste the block once under Organization settings, Claude Code, Managed settings, and every seat picks it up at its next start.</p>
+    <p>Enterplace can be that collector: its watch mode takes the same telemetry and shows it per person, team and model next to the rest of your AI traffic. Watch mode is part of Enterplace Enterprise. <a href="docs:/integrations/claude-team/">Watch mode in the docs</a></p>
+
+    <h2 id="gateway">3. A gateway in the request path</h2>
+    <p>Claude Code sends its requests to whatever <code>ANTHROPIC_BASE_URL</code> names. Point it at a gateway you run, and the gateway sees every request before it goes to Anthropic: the person, the model, the tokens Anthropic reports back.</p>
+    <p>With Enterplace this works on Claude subscriptions. Claude Code keeps its own login, Enterplace passes that login to Anthropic unchanged and never stores it, and a person token in a header says who sent the request. Nobody needs an API key. This part is open source.</p>
+    <figure class="code"><figcaption>On the machine that runs the gateway</figcaption><pre>curl -fsSL https://enterplace.dev/install.sh | sh
+enterplace start</pre></figure>
+    <figure class="code"><figcaption>~/.claude/settings.json on each laptop</figcaption><pre>{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://enterplace.example.com",
+    "ANTHROPIC_CUSTOM_HEADERS": "x-enterplace-user: enterplace_u_..."
+  }
+}</pre></figure>
+    <p>Leave <code>ANTHROPIC_API_KEY</code> and <code>ANTHROPIC_AUTH_TOKEN</code> unset: with either set, Claude Code stops using the subscription. You can also start with the first line only. Requests then arrive under the person <code>unknown</code>, told apart by session, and you hand out person tokens later.</p>
+    <p>The console's Requests and Analytics pages then rank requests, tokens and cost by person, team, model and coding agent. <a href="docs:/integrations/claude-code/">Claude Code setup in the docs</a></p>
+
+    <h2 id="compare">Side by side</h2>
+    <table class="tbl">
+      <thead><tr><th></th><th>Admin pages</th><th>Telemetry</th><th>Gateway</th></tr></thead>
+      <tbody>
+        <tr><td>Setup per developer</td><td>None</td><td>None with managed settings</td><td>Two settings</td></tr>
+        <tr><td>Tokens and model per person</td><td>Depends on the plan</td><td>Yes, as Claude Code reports them</td><td>Yes, from Anthropic's answer</td></tr>
+        <tr><td>Lines changed, commits, tool calls</td><td>Depends on the plan</td><td>Yes</td><td>Tool calls only</td></tr>
+        <tr><td>Other tools in the same view (Codex, Cursor, apps)</td><td>No</td><td>Only tools that export telemetry</td><td>Yes, any tool with a base URL setting</td></tr>
+        <tr><td>Limits per person, blocked models</td><td>What the plan offers</td><td>No</td><td>Yes</td></tr>
+        <tr><td>Check prompts for secrets</td><td>No</td><td>No</td><td>Yes</td></tr>
+        <tr><td>A record you hold</td><td>No</td><td>Yes, in your collector</td><td>Yes, a hash-chained audit log</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="catch">Two catches worth knowing</h2>
+    <ul class="ticks out">
+      <li><strong>Cost on a subscription is an estimate.</strong> A seat is paid by the month, not by the request. Telemetry and gateways price the tokens at the API list price. Read the figure as relative usage between people, not as an invoice.</li>
+      <li><strong>The desktop app's Code tab does not follow the setting.</strong> The Code tab of the Claude desktop app sets <code>ANTHROPIC_BASE_URL</code> itself, so its sessions never reach a gateway. The terminal and the VS Code extension do follow it. Run <code>echo $ANTHROPIC_BASE_URL</code> inside a session to check.</li>
+    </ul>
+    <p>Before you route a plan's traffic through your own gateway, check that it fits Anthropic's terms for that plan.</p>
+    <p>Next: <a href="/learn/limit-claude-code-per-developer/">set a daily limit per developer</a>, or the wider rollout for every coding agent on the <a href="/use-cases/coding-agents/">coding agents page</a>.</p>
+  </article>
+</div>
+
+{{> cta}}

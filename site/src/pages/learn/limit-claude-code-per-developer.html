@@ -1,0 +1,72 @@
+<!--
+title: How to set a daily limit per developer on Claude Code
+description: Put a token or request limit per developer and per team on Claude Code, on subscription seats or API keys, try it without blocking anyone, and see what the developer is shown when the limit is reached.
+nav: learn
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/learn/">Learn</a><span>Limits per developer</span></nav>
+  <h1>How to set a daily limit per developer on Claude Code</h1>
+  <p class="lead">An agent left running overnight can use a week of budget before anyone looks. Claude Code has no setting for "this person, this much per day". A gateway in front of it does. This page shows the lines.</p>
+</section>
+
+<div class="wrap article">
+  <nav class="toc" aria-label="On this page">
+    <a href="#where">Where a limit can live</a>
+    <a href="#seats">On subscription seats</a>
+    <a href="#keys">On API keys</a>
+    <a href="#try">Try it before it blocks</a>
+    <a href="#sees">What the developer sees</a>
+    <a href="#stop">The stop button</a>
+  </nav>
+  <article class="prose">
+    <h2 id="where">Where a limit can live</h2>
+    <p>A limit per person needs something that counts each person's requests as they happen. Claude Code talks to Anthropic directly, so by default nothing of yours sits there. Point Claude Code at a gateway with <code>ANTHROPIC_BASE_URL</code>, give each developer a name on their requests, and the gateway can count and refuse. The setup is on <a href="/learn/claude-code-proxy-with-subscription/">Claude Code through a gateway</a>.</p>
+    <p>The examples below are Enterplace policy. The limits are checked when a request is admitted.</p>
+
+    <h2 id="seats">On subscription seats: limit tokens and requests</h2>
+    <p>A seat is paid by the month, so a dollar budget has nothing real to count. Tokens are what a subscription is metered in. Limit those.</p>
+    <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]
+    <span class="c"># per person: 5 million tokens and 2,000 requests a day</span>
+    rate: { tpd: 5000000, rpd: 2000 }
+limits:
+  <span class="c"># per team</span>
+  - { team: payments, rate: { tpd: 20000000 } }</pre></figure>
+    <p><code>tpd</code> counts prompt and answer tokens per calendar day, UTC. A request is admitted while the day's count is under the limit and counted with what its answer used, so one request may end above the number. The next one is refused until midnight UTC.</p>
+    <p>To limit seats in dollars anyway, at the API list price estimate, add <code>budget_basis: api_equivalent</code> to the rule next to a <code>budget</code>.</p>
+    <p>This does not change the seat's own allowance at Anthropic. It adds a stricter limit of yours in front of it.</p>
+
+    <h2 id="keys">On API keys: limit dollars</h2>
+    <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>limits:
+  - { team: "*", budget: { usd: 500, per: month } }
+  - { person: "*", budget: { usd: 20, per: day } }
+  - { person: maya.cohen, budget: { usd: 60, per: day } }</pre></figure>
+    <p>A budget reserves the most a request could cost before it is sent, and gives back the difference when the answer ends. Claude Code asks for a large <code>max_tokens</code> on every request, so each one reserves far more than it usually spends, and a small budget can refuse requests that would have fitted. Two fixes:</p>
+    <ul class="ticks">
+      <li>Run <code>export CLAUDE_CODE_MAX_OUTPUT_TOKENS=8000</code> before <code>claude</code>, so each request reserves less.</li>
+      <li>Size the budget for the reserve of several requests in flight, not for the average spend.</li>
+    </ul>
+
+    <h2 id="try">Try it before it blocks anyone</h2>
+    <p>A limit you guessed will be wrong for someone. Two ways to see what a number would do first:</p>
+    <ul class="ticks">
+      <li><strong>Observe mode.</strong> With <code>mode: observe</code> at the top of the policy, nothing is refused. A request over a limit is forwarded and recorded as <code>would_refuse</code>.</li>
+      <li><strong>A trial date on one limit.</strong> <code>shadow_until: 2026-12-15</code> on a budget or a <code>limits:</code> entry does the same for that limit alone, and it starts enforcing on the date.</li>
+    </ul>
+    <p>After a week, the records show who would have been stopped and how often. Raise the number for the people whose work needs it, then enforce.</p>
+
+    <h2 id="sees">What the developer sees</h2>
+    <p>A refusal uses Anthropic's error shape, so Claude Code prints the gateway's own message in the terminal: the limit, the scope it belongs to and when it starts again. A token or request limit also sets <code>Retry-After</code>.</p>
+    <p>On API keys, a developer can keep the remaining budget in view. <code>enterplace budget status --short</code> prints what their key has left, and Claude Code's status line can run it:</p>
+    <figure class="code"><figcaption>Under the prompt</figcaption><pre>[Sonnet] Enterplace: $412.37 left (resets 2026-12-01 00:00 UTC)</pre></figure>
+
+    <h2 id="stop">The stop button</h2>
+    <p>A limit handles the slow case. For the fast one, a runaway agent at two in the morning, a kill switch stops a person, a team, a key or a model at once, with no policy change, and lifts the same way.</p>
+    <figure class="code"><figcaption>Stop one person's requests</figcaption><pre>enterplace kill --person emily.davis</pre></figure>
+    <p>Next: <a href="/learn/track-claude-code-usage-per-developer/">see usage per developer</a> before you pick the numbers. The full reference is <a href="docs:/governance/budgets-and-rate-limits/">budgets and rate limits in the docs</a>.</p>
+  </article>
+</div>
+
+{{> cta}}

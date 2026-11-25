@@ -1,0 +1,92 @@
+<!--
+title: Claude Code through a proxy or gateway with a subscription login (ANTHROPIC_BASE_URL)
+description: How to send Claude Code through your own gateway while developers keep their Claude Pro, Max, Team or Enterprise login. The settings, the two variables that must stay unset, and the errors you meet on the way.
+nav: learn
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/learn/">Learn</a><span>Claude Code through a gateway</span></nav>
+  <h1>Claude Code through a gateway, on a subscription login</h1>
+  <p class="lead">Most proxy guides for Claude Code start with "create an API key". Teams on Claude seats do not want one. This page shows the setup where each developer keeps the Claude login they already have.</p>
+</section>
+
+<div class="wrap article">
+  <nav class="toc" aria-label="On this page">
+    <a href="#how">How it works</a>
+    <a href="#setup">The setup</a>
+    <a href="#who">Say who is calling</a>
+    <a href="#fleet">Roll it out</a>
+    <a href="#errors">When it does not work</a>
+    <a href="#not">What it does not do</a>
+  </nav>
+  <article class="prose">
+    <h2 id="how">How it works</h2>
+    <p>Claude Code sends every request to the address in <code>ANTHROPIC_BASE_URL</code>. On a subscription, each request carries the developer's own Claude login in the <code>Authorization</code> header.</p>
+    <p>A gateway can handle that login in two ways. It can swap it for an API key the gateway holds, which moves the team from seats to per-request billing. Or it can pass the login through unchanged, so Anthropic sees the same request it would have seen without a gateway. This page is about the second way.</p>
+    <p>Enterplace calls it subscription passthrough. The login is taken off the request before any check reads it, sent to Anthropic and to nothing else, and never stored, logged or hashed into a record.</p>
+
+    <h2 id="setup">The setup</h2>
+    <figure class="code"><figcaption>On the machine that runs the gateway</figcaption><pre>curl -fsSL https://enterplace.dev/install.sh | sh
+enterplace start</pre></figure>
+    <p><code>enterplace start</code> writes a policy that already holds the passthrough provider. If you write the policy yourself, this is the part that matters:</p>
+    <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>version: 1
+providers:
+  - name: claude-subscriptions
+    kind: anthropic
+    url: https://api.anthropic.com
+    auth: passthrough
+    identity: optional
+    models: ["claude-*"]
+rules:
+  - name: everyone
+    principals: { any: true }
+    models: ["*"]</pre></figure>
+    <p>Then one setting in Claude Code:</p>
+    <figure class="code"><figcaption>~/.claude/settings.json</figcaption><pre>{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080"
+  }
+}</pre></figure>
+    <p>Run <code>claude</code> and send a prompt. The console's Requests page shows it, under the person <code>unknown</code> for now.</p>
+
+    <h2 id="who">Say who is calling</h2>
+    <p>The Claude login goes to Anthropic, so the gateway needs its own way to know the person. That is a second header, which Claude Code sends from <code>ANTHROPIC_CUSTOM_HEADERS</code>.</p>
+    <figure class="code"><figcaption>~/.claude/settings.json</figcaption><pre>{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://enterplace.example.com",
+    "ANTHROPIC_CUSTOM_HEADERS": "x-enterplace-user: enterplace_u_..."
+  }
+}</pre></figure>
+    <p>The value is a person token. It names the person and their team and reaches no model on its own, so a leaked token gives nobody model access. An admin makes one in the console or with <code>enterplace key new maya.cohen --team payments --identity-only</code>. With single sign-on, <code>enterplace login</code> writes both lines for the developer.</p>
+
+    <h2 id="fleet">Roll it out to every laptop</h2>
+    <p>Claude Code reads the same <code>env</code> block from its managed settings file, which an MDM such as Jamf or Intune can place on each machine.</p>
+    <ul class="ticks">
+      <li>macOS: <code>/Library/Application Support/ClaudeCode/managed-settings.json</code></li>
+      <li>Linux and WSL: <code>/etc/claude-code/managed-settings.json</code></li>
+      <li>Windows: <code>C:\Program Files\ClaudeCode\managed-settings.json</code></li>
+    </ul>
+
+    <h2 id="errors">When it does not work</h2>
+    <table class="tbl">
+      <thead><tr><th>What you see</th><th>Cause</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td>Requests never reach the gateway</td><td>The session runs in the Code tab of the Claude desktop app, which sets <code>ANTHROPIC_BASE_URL</code> itself</td><td>Use the terminal or the VS Code extension. Check with <code>echo $ANTHROPIC_BASE_URL</code> inside a session</td></tr>
+        <tr><td>Claude Code asks for, or bills, an API key</td><td><code>ANTHROPIC_API_KEY</code> or <code>ANTHROPIC_AUTH_TOKEN</code> is set somewhere</td><td>Unset both, in the shell profile and in settings files, then sign in with <code>/login</code></td></tr>
+        <tr><td>403 <code>person_needed</code></td><td>The provider has <code>identity: required</code> and the request has no person header</td><td>Add the person token, or set <code>identity: optional</code> while you roll out</td></tr>
+        <tr><td>403 <code>person_token_only</code></td><td>The person token was sent as the only credential</td><td>Keep the Claude login; the token goes in <code>ANTHROPIC_CUSTOM_HEADERS</code>, not in <code>ANTHROPIC_API_KEY</code></td></tr>
+        <tr><td>403 <code>login_not_accepted</code></td><td>The model is served only by a provider that takes an API key</td><td>List the model on the passthrough provider</td></tr>
+      </tbody>
+    </table>
+    <p>Claude Code labels any 403 "Failed to authenticate". The text after that label is the gateway's own message, and it names the cause.</p>
+
+    <h2 id="not">What it does not do</h2>
+    <ul class="ticks out">
+      <li><strong>It does not change your plan's allowance.</strong> The seat's own limits at Anthropic stay as they are. A gateway can add stricter limits of its own, in tokens and requests per person.</li>
+      <li><strong>It does not give real dollar figures.</strong> A seat is paid by the month. Cost is shown as an estimate at API list prices.</li>
+      <li><strong>It does not settle the terms question for you.</strong> Check that routing your plan's traffic through your own gateway fits Anthropic's terms for that plan.</li>
+    </ul>
+    <p>Next: <a href="/learn/track-claude-code-usage-per-developer/">see usage per developer</a> and <a href="/learn/limit-claude-code-per-developer/">set a daily limit per developer</a>. The full reference is <a href="docs:/integrations/claude-code/">Claude Code in the docs</a>.</p>
+  </article>
+</div>
+
+{{> cta}}

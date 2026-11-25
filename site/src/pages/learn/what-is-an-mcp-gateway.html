@@ -1,0 +1,87 @@
+<!--
+title: What is an MCP gateway? A plain explanation
+description: An MCP gateway is one endpoint in front of your MCP servers. It decides which person or agent may call which tool, holds the servers' credentials, and records every tool call. What it does, what it does not, and when you need one.
+nav: learn
+-->
+<section class="wrap head">
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/learn/">Learn</a><span>What is an MCP gateway</span></nav>
+  <h1>What is an MCP gateway?</h1>
+  <p class="lead">An MCP gateway is one endpoint that sits between your agents and your MCP servers. Every tool call passes through it, so it is the one place where you can say who may call what, and keep a record.</p>
+</section>
+
+<div class="wrap article">
+  <nav class="toc" aria-label="On this page">
+    <a href="#problem">The problem</a>
+    <a href="#does">What it does</a>
+    <a href="#example">An example</a>
+    <a href="#not">What it is not</a>
+    <a href="#need">Do you need one</a>
+    <a href="#enterplace">In Enterplace</a>
+  </nav>
+  <article class="prose">
+    <h2 id="problem">The problem it solves</h2>
+    <p>MCP, the Model Context Protocol, is how an agent reaches tools: create an issue on GitHub, query the data warehouse, run a deploy. Each MCP server offers a list of tools, and an agent connected to it can call all of them.</p>
+    <p>That is fine for one developer and one server. In a company it turns into four problems:</p>
+    <ul class="ticks out">
+      <li><strong>A shared token per server.</strong> Every agent calls the GitHub server with the same credential. The server's log shows one caller, and it is not a person.</li>
+      <li><strong>Every tool for everyone.</strong> An agent that needs to read issues can also delete a repository, because the server offers both.</li>
+      <li><strong>Tools that change under you.</strong> A tool's description and schema are instructions to the model. A server that changes them can change what an agent does, and nobody is told.</li>
+      <li><strong>No record.</strong> You can see that a deploy ran at night. You cannot see which agent asked, for whom, with what arguments.</li>
+    </ul>
+
+    <h2 id="does">What an MCP gateway does</h2>
+    <p>Agents connect to the gateway instead of to each server. The gateway connects to the servers. Five jobs follow from that position.</p>
+    <ul class="ticks">
+      <li><strong>One endpoint.</strong> The tools of every server are served at one address. A client is configured once.</li>
+      <li><strong>A name on every call.</strong> The caller signs in to the gateway as a person or a service. The servers' own credentials stay in the gateway and never reach a laptop.</li>
+      <li><strong>A tool list per rule.</strong> Each person or agent sees only the tools their rule allows. A tool that is not listed is not shown at all.</li>
+      <li><strong>Approval for the dangerous ones.</strong> A call to a named tool can wait until an admin approves it, with the caller and the arguments in front of them.</li>
+      <li><strong>A record.</strong> Every tool call is written down before it reaches a server: who, which tool, allowed or refused, and why.</li>
+    </ul>
+
+    <h2 id="example">An example</h2>
+    <p>The payments team's agents may create and list GitHub issues and search the docs. Josh on the platform team may merge pull requests, and each merge waits for an admin.</p>
+    <figure class="code"><figcaption>enterplace.policy.yaml</figcaption><pre>mcp:
+  - name: github
+    url: https://api.githubcopilot.com/mcp
+    headers_env: { Authorization: GITHUB_MCP_AUTHORIZATION }
+  - name: docs
+    url: http://127.0.0.1:9000/mcp
+    allow_private: true
+rules:
+  - name: payments-team
+    principals: { team: payments }
+    models: [claude-sonnet-5-5]
+    tools: [github.create_issue, github.list_issues, docs.*]
+  - name: platform-team
+    principals: { team: platform }
+    models: [claude-sonnet-5-5]
+    tools: [github.*]
+    approve_tools: [github.merge_pull_request]</pre></figure>
+    <p>Emily, an intern with no tools in her rule, asks her agent to query the warehouse. The agent never sees a warehouse tool, so it cannot call one. Josh's agent calls <code>github.merge_pull_request</code>. The call is held, an admin sees who asked and with what arguments, approves it, and the record says who approved.</p>
+
+    <h2 id="not">What an MCP gateway is not</h2>
+    <ul class="ticks out">
+      <li><strong>It is not an MCP server.</strong> It has no tools of its own. It serves the tools of the servers you list.</li>
+      <li><strong>It does not see everything.</strong> It sees the calls sent through it. An agent that still connects to a server directly is invisible to it.</li>
+      <li><strong>It does not make a tool safe.</strong> It decides who may call a tool and records that they did. What the tool does with the arguments is still the server's business.</li>
+      <li><strong>It is not the same as an AI gateway.</strong> An <a href="/learn/what-is-an-ai-gateway/">AI gateway</a> sits in front of model providers and handles prompts, tokens and cost. An MCP gateway sits in front of tools. Some products do both, so one rule covers a person's models and tools.</li>
+    </ul>
+
+    <h2 id="need">Do you need one?</h2>
+    <p>Probably not if a few developers each run local MCP servers for their own work. Probably yes if any of these is true:</p>
+    <ul class="ticks">
+      <li>Agents call tools that change systems: merge code, run a deploy, write to the warehouse.</li>
+      <li>An MCP server's token is shared by more people than you can name.</li>
+      <li>Security has asked which agents can reach which systems, and the answer is a guess.</li>
+      <li>You connect to MCP servers that someone else operates and can change.</li>
+    </ul>
+
+    <h2 id="enterplace">How Enterplace does it</h2>
+    <p>Enterplace is an AI gateway and an MCP gateway in one program, open source and self-hosted. The servers go under <code>mcp:</code> in the same policy file as the model rules, and their tools are served at <code>/mcp</code> as <code>server.tool</code>. It speaks Streamable HTTP, the older SSE transport and stdio to the servers.</p>
+    <p>It also pins each tool the first time it sees it, with a hash of the description and schema. When a server changes a tool, the change is recorded, or held until an admin approves it if you set <code>tool_changes: block</code>.</p>
+    <p>The steps, with the lines for each, are on the <a href="/use-cases/mcp-tools/">MCP tools page</a>. The reference is <a href="docs:/governance/mcp-gateway/">MCP gateway in the docs</a>.</p>
+  </article>
+</div>
+
+{{> cta}}
