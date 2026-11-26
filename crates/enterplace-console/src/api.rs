@@ -1470,11 +1470,52 @@ fn limit_at<'a>(
     }
 }
 
+/// A limit for a team no key names and no request came from is most likely a typo: it would cap nobody. It is
+/// refused unless the form says the team is new (`create: true`). Keeping an edit's own team never asks.
+async fn new_team(console: &Console, body: &Map<String, Value>) -> Result<(), String> {
+    let team = text(body, "value");
+    if text(body, "scope") != "team"
+        || team.is_empty()
+        || team == "*"
+        || body.get("create") == Some(&Value::Bool(true))
+        || body
+            .get("was")
+            .and_then(|w| w.get("team"))
+            .and_then(Value::as_str)
+            == Some(team)
+    {
+        return Ok(());
+    }
+    let c = console.config();
+    if let Ok(loaded) = config::load(&c.policy, Some(&c.keys))
+        && (loaded.policy.entries().any(|(_, w)| w.team == team)
+            || loaded.policy.teams().iter().any(|t| t.name == team))
+    {
+        return Ok(());
+    }
+    let mut query = enterplace_core::insights::Query {
+        limit: 1,
+        ..Default::default()
+    };
+    query.labels.push(("team".into(), team.into()));
+    if crate::insights::rows(console, &query)
+        .await
+        .is_ok_and(|rows| !rows.is_empty())
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "There is no team {team}: no key names it and no request came from it, so this limit would cap nobody. Pick a team from the list, or choose Create team {team} if it is a new team."
+    ))
+}
+
 async fn limit_add(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {
     answer(
         async {
             let admin = signed_in(&console, &headers, true).await?;
             let body = body_of(&bytes)?;
+            // Checked here, refused in the edit: a role that may not edit the policy hears that first.
+            let team = new_team(&console, &body).await;
             let target = json!({ "limit": body });
             commit(
                 &console,
@@ -1484,6 +1525,7 @@ async fn limit_add(State(console): State<Console>, headers: HeaderMap, bytes: By
                 target,
                 |tree| {
                     let entry = limit_entry(&body, None)?;
+                    team?;
                     section(tree, "limits")?.push(entry);
                     Ok(())
                 },
@@ -1504,6 +1546,8 @@ async fn limit_edit(
         async {
             let admin = signed_in(&console, &headers, true).await?;
             let body = body_of(&bytes)?;
+            // Checked here, refused in the edit: a role that may not edit the policy hears that first.
+            let team = new_team(&console, &body).await;
             let target = json!({ "limit": body });
             commit(
                 &console,
@@ -1514,6 +1558,7 @@ async fn limit_edit(
                 |tree| {
                     let at = limit_at(tree, index, &body)?;
                     *at = limit_entry(&body, at.as_object())?;
+                    team?;
                     Ok(())
                 },
             )

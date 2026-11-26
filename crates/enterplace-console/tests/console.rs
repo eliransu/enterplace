@@ -1225,7 +1225,7 @@ async fn spend_shows_this_months_usage_against_the_budgets() -> TestResult {
             "    models: [\"*\"]\n",
             "    models: [\"*\"]\nprices:\n  local: { input: 0, output: 0 }\n",
         );
-    std::fs::write(s.dir.join("enterplace.policy.yaml"), budgeted)?;
+    std::fs::write(s.dir.join("enterplace.policy.yaml"), &budgeted)?;
     // The setup holds the server's log open: usage records join that chain, as the server writes them.
     let log = &s.log;
     let usage =
@@ -1259,6 +1259,30 @@ async fn spend_shows_this_months_usage_against_the_budgets() -> TestResult {
         Some(0.6),
         0.6,
     ))?;
+    // Each usage record follows its request, as the gateway writes them: the budget list counts it by its request.
+    let policy_sha = sha256_hex(budgeted.as_bytes());
+    for (id, person, team, model) in [
+        (
+            "01AAAAAAAAAAAAAAAAAAAAAAA4",
+            "maya.cohen",
+            "payments",
+            "gpt-4o-mini",
+        ),
+        ("01AAAAAAAAAAAAAAAAAAAAAAA5", "noa.bar", "platform", "local"),
+    ] {
+        log.append(&Entry {
+            id,
+            method: "POST",
+            path: "/v1/chat/completions",
+            policy_sha256: &policy_sha,
+            person: Some(person),
+            team: Some(team),
+            model: Some(model),
+            allowed: true,
+            provider: "openai",
+            ..Entry::default()
+        })?;
+    }
     log.append_record(&usage(
         "01AAAAAAAAAAAAAAAAAAAAAAA4",
         "maya.cohen",
@@ -1284,15 +1308,17 @@ async fn spend_shows_this_months_usage_against_the_budgets() -> TestResult {
     );
     assert_eq!(
         page["action"],
-        serde_json::json!({ "label": "Edit the payments budget in the policy", "href": "/console/policy?line=10" })
+        serde_json::json!({ "label": "Edit the payments budget in the policy", "href": "/console/policy?line=10" }),
+        "{page}"
     );
     let meter = page["budgets"]["meters"]
         .as_array()
-        .and_then(|m| m.iter().find(|m| m["label"] == "payments"))
-        .ok_or("no payments meter")?;
+        .and_then(|m| m.iter().find(|m| m["label"] == "team payments"))
+        .ok_or_else(|| format!("no payments meter: {page}"))?;
+    // The same list Usage forecasts, so the two pages agree.
     assert_eq!(
         (meter["text"].as_str(), meter["over"].as_bool()),
-        (Some("$1.10 of $1.00"), Some(true)),
+        (Some("$1.10 of $1.00 per month"), Some(true)),
         "{meter}"
     );
     // The pace line and the day the budget ran out, on the chart.
@@ -1327,8 +1353,8 @@ async fn spend_shows_this_months_usage_against_the_budgets() -> TestResult {
     assert_eq!(page["stopped"], "2");
     // Usage records belong to this page, not to the list of decisions.
     let list = audit(&s.app, &cookie, "").await?;
-    // The three requests of the setup and the sign-in's admin record; none of the three usage records.
-    assert_eq!(list["pager"]["text"], "1 to 4 of 4 decisions", "{list}");
+    // The five requests and the sign-in's admin record; none of the three usage records.
+    assert_eq!(list["pager"]["text"], "1 to 6 of 6 decisions", "{list}");
     // m12-3: Verify chain now walks every record of the chain, usage ones too, as enterplace audit verify counts them.
     let lines = std::fs::read_to_string(s.audit())?.lines().count();
     assert!(
@@ -1824,8 +1850,6 @@ fn limited(s: &Setup) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(s.keys(), &keys)?;
     let (keys_sha, maya) = (sha256_hex(keys.as_bytes()), sha256_hex(MAYA_KEY.as_bytes()));
     let policy_sha = sha256_hex(POLICY.as_bytes());
-    s.log
-        .append_record(&usage_record("maya.cohen", &maya[..8], 0.82))?;
     let base = Entry {
         method: "POST",
         path: "/v1/chat/completions",
@@ -1833,6 +1857,19 @@ fn limited(s: &Setup) -> Result<(), Box<dyn std::error::Error>> {
         keys_sha256: &keys_sha,
         ..Entry::default()
     };
+    // The usage record follows its request, as the gateway writes them.
+    s.log.append(&Entry {
+        id: "01AAAAAAAAAAAAAAAAAAAAAAU1",
+        person: Some("maya.cohen"),
+        team: Some("payments"),
+        key: Some(&maya[..8]),
+        model: Some("gpt-4o-mini"),
+        allowed: true,
+        provider: "openai",
+        ..base.clone()
+    })?;
+    s.log
+        .append_record(&usage_record("maya.cohen", &maya[..8], 0.82))?;
     s.log.append(&Entry {
         id: "01AAAAAAAAAAAAAAAAAAAAAAK1",
         person: Some("maya.cohen"),
@@ -2057,7 +2094,7 @@ async fn spend_lists_key_budgets_with_the_team_ones() -> TestResult {
     assert!(
         page["budgets"]["meters"].as_array().is_some_and(|m| m
             .iter()
-            .any(|m| m["label"] == "maya.cohen's key" && m["text"] == "$0.82 of $1.00 today")),
+            .any(|m| m["label"] == "maya.cohen's key" && m["text"] == "$0.82 of $1.00 per day")),
         "{page}"
     );
     Ok(())

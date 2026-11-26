@@ -75,6 +75,8 @@ export type Entry = {
   status: Status;
   editable: boolean;
   fields: Fields;
+  /// Every limit a request with this key counts against, with where each is set.
+  limits?: string[];
 };
 export type Keys = {
   keys_file: string;
@@ -669,7 +671,7 @@ function IssueDialog(props: {
               per={per}
               setBudget={setBudget}
               setPer={setPer}
-              hint={`Most the ${what} may spend, on top of its rule's budget.`}
+              hint={`Most the ${what} may spend, on top of its rule's budget. With a budget, a request holds what its longest possible answer could cost before it is sent: set max_tokens on each request, or one near the limit is refused.`}
             />
           )}
           {service ? null : (
@@ -824,6 +826,19 @@ function EditDialog({
           <dt className="t-tag uppercase text-muted-foreground">Key hash</dt>
           <dd className="m-0">{entry.hash}</dd>
         </dl>
+        {entry.limits?.length ? (
+          <div className="grid gap-2">
+            <span className="t-tag uppercase text-muted-foreground">Limits that apply to this key</span>
+            <ul className="t-small m-0 grid gap-1 pl-6">
+              {entry.limits.map((l) => (
+                <li key={l}>{l}</li>
+              ))}
+            </ul>
+            <a className="t-small" href="#/policy?at=limits">
+              Change team and person limits in Rules and limits
+            </a>
+          </div>
+        ) : null}
         <Form className="grid gap-6" onSubmit={save}>
           {/* An expiry with a time (an enterplace login key) stays text: a date input cannot show it. */}
           <Field id="key-expires" label="Expires, optional">
@@ -841,7 +856,7 @@ function EditDialog({
             per={per}
             setBudget={setBudget}
             setPer={setPer}
-            hint="Most the key may spend, on top of its rule's budget. Empty for none."
+            hint="Most the key may spend, on top of its rule's budget. Empty for none. With a budget, a request holds what its longest possible answer could cost before it is sent: set max_tokens on each request, or one near the limit is refused."
           />
           <Field
             id="key-models"

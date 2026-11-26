@@ -343,6 +343,7 @@ fn entries_json(console: &Console, admin: &Admin, entries: &[KeyEntry]) -> Value
     let now = enterplace_core::audit::timestamp();
     let soon = pages::date_in(14);
     let may_restore = admin.may(Permission::Kill);
+    let loaded = config::load(&config.policy, Some(&config.keys)).ok();
     Value::Array(
         entries
             .iter()
@@ -383,10 +384,45 @@ fn entries_json(console: &Console, admin: &Admin, entries: &[KeyEntry]) -> Value
                         "tpm": entry.tpm.map(|t| t.to_string()).unwrap_or_default(),
                         "replaced_by": entry.options.replaced_by,
                     },
+                    "limits": loaded.as_ref().map(|l| applies(&l.policy, hash)).unwrap_or_default(),
                 })
             })
             .collect(),
     )
+}
+
+/// Every limit a request with this key counts against, in plain words with where each is set: its rule's, its
+/// own, and the limits entries for its team, person and everyone. Limits on one model or tag are left out.
+fn applies(policy: &enterplace_core::policy::Policy, hash: &str) -> Vec<String> {
+    use enterplace_core::policy::{Context, Limit};
+    let Some((_, who)) = policy.entries().find(|(_, p)| p.key == hash) else {
+        return Vec::new();
+    };
+    let Some(rule) = policy.rule_for(who) else {
+        return Vec::new();
+    };
+    policy
+        .applied(who, rule, Context::default())
+        .iter()
+        .map(|a| {
+            let what = match a.limit {
+                Limit::Budget(b) => format!("{} a {}", figures::money(b.usd), b.per.describe()),
+                Limit::Rpm(n) => format!("{n} requests per minute"),
+                Limit::Tpm(n) => format!("{n} tokens per minute"),
+                Limit::Tpd(n) => format!("{n} tokens per day"),
+                Limit::Parallel(n) => format!("{n} requests in flight"),
+                Limit::Requests(n, Period::Hour) => format!("{n} requests per hour"),
+                Limit::Requests(n, Period::Day) => format!("{n} requests per day"),
+                Limit::Requests(n, _) => format!("{n} requests per session"),
+            };
+            let observe = if a.shadow.is_some() {
+                ", only recorded for now"
+            } else {
+                ""
+            };
+            format!("{what}, set by {}{observe}", a.source)
+        })
+        .collect()
 }
 
 fn field<'a>(body: &'a Map<String, Value>, name: &str) -> &'a str {

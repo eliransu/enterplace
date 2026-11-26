@@ -77,7 +77,14 @@ export function Teams() {
                     </div>
                   </TableCell>
                   <TableCell className="align-top">{t.rule}</TableCell>
-                  <TableCell className="text-right align-top tabular-nums">{t.budget}</TableCell>
+                  <TableCell className="text-right align-top tabular-nums">
+                    {t.budget}
+                    <span className="block">
+                      <Button variant="ghost" size="sm" asChild>
+                        <a href={`#/policy?add=limit&team=${encodeURIComponent(t.name)}`}>{t.budget === "none" ? "Set budget" : "Change budget"}</a>
+                      </Button>
+                    </span>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

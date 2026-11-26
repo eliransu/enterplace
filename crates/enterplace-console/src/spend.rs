@@ -56,7 +56,17 @@ async fn spend(State(console): State<Console>, headers: HeaderMap) -> Response {
             // ponytail: the whole audit log is read on every request, as the audit page does.
             let log = records_for(&admin, &config.audit);
             let loaded = config::load(&config.policy, Some(&config.keys));
-            Ok(ok(view(&log, &loaded)))
+            let mut page = view(&log, &loaded);
+            // The budgets are the list Usage forecasts, so both pages give one answer: every rule, key and
+            // limits: entry, each over its own window.
+            if page.get("budgets").is_some() && loaded.is_ok() {
+                let now = enterplace_core::insights::now_secs();
+                let list = crate::analytics::forecasts(&console, &admin, now).await;
+                if list.as_array().is_some_and(|l| !l.is_empty()) {
+                    page["budgets"] = json!({ "meters": list });
+                }
+            }
+            Ok(ok(page))
         }
         .await,
     )
@@ -333,7 +343,7 @@ fn view(log: &Result<Option<String>, String>, loaded: &Result<Loaded, Vec<String
                 } else {
                     "No request so far had a price."
                 },
-                "action": link("Add a budget", "/console/start?track=limit#step-5"),
+                "action": link("Add a budget", "/console/app/#/policy?add=limit"),
             }))
         };
         return json!({ "lead": lead_none, "empty": empty });
@@ -410,7 +420,10 @@ fn view(log: &Result<Option<String>, String>, loaded: &Result<Loaded, Vec<String
             &format!("/console/policy?line={}", meter.rule_line),
         ),
         None if meters.is_empty() => Value::Null,
-        None => link("Edit the budgets in the policy", "/console/policy"),
+        None => link(
+            "Edit the budgets in Rules and limits",
+            "/console/app/#/policy?at=limits",
+        ),
     };
 
     // The chart: one bar per day of the month, the pace that keeps every monthly budget inside its limit, and the
@@ -533,7 +546,7 @@ fn view(log: &Result<Option<String>, String>, loaded: &Result<Loaded, Vec<String
                 "Spend is being recorded: {} in {name} so far. Nothing stops it, because the policy sets no budget for any team.",
                 money(total)
             ),
-            "action": link("Add a budget to the policy", "/console/policy"),
+            "action": link("Add a budget", "/console/app/#/policy?add=limit"),
         }})
     } else {
         let list: Vec<Value> = meters

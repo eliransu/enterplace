@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
@@ -11,8 +11,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Empty, Head, Panel, Problem, Refusal, Form, Loading } from "@/components/page";
 import { Remove } from "@/components/confirm";
 import { Copy } from "@/components/copy";
-import { api, part, type Me } from "@/lib/api";
+import { TeamPicker } from "@/components/team-picker";
+import { api, part } from "@/lib/api";
 import { useData, words } from "@/lib/use";
+import type { PageProps } from "@/pages";
 
 type Rule = { name: string; who: { kind: string; value: string }; models: string[]; guardrails: string[] };
 type Entry = Record<string, unknown>;
@@ -44,7 +46,7 @@ export function EnforceDialog({ open, onOpenChange, onConfirm }: { open: boolean
   );
 }
 
-export function PolicyBasics({ me }: { me: Me | null }) {
+export function PolicyBasics({ me, query }: PageProps) {
   const { data, error, change, reload } = useData<Data>("policy");
   const [observing, setObserving] = useState(false);
   const [enforcing, setEnforcing] = useState(false);
@@ -54,6 +56,27 @@ export function PolicyBasics({ me }: { me: Me | null }) {
   const [alias, setAlias] = useState<Alias | "new" | null>(null);
   const [testing, setTesting] = useState<Guardrail | null>(null);
   const may = !!me?.edit_policy;
+  // `?add=limit&team=payments` (from Overview, Spend and Teams) opens that team's limit, or Add a limit filled in
+  // for it; `?at=limits` scrolls to Limits. Once per visit, so a reload of the data does not reopen it.
+  const [prefill, setPrefill] = useState("");
+  const opened = useRef(false);
+  useEffect(() => {
+    if (!data || opened.current) return;
+    opened.current = true;
+    const add = query.get("add") === "limit";
+    if (add && may) {
+      const team = query.get("team") ?? "";
+      const own = team ? data.limits.find((l) => l.entry.team === team && l.entry.org === undefined) : undefined;
+      setPrefill(team);
+      setLimit(own ?? "new");
+    }
+    if (add || query.get("at") === "limits") document.getElementById("limits")?.scrollIntoView();
+  }, [data, query, may]);
+  const closeLimit = () => {
+    setLimit(null);
+    setPrefill("");
+    if (query.get("add")) window.history.replaceState(null, "", "#/policy");
+  };
   return (
     <>
       <Head
@@ -132,6 +155,7 @@ export function PolicyBasics({ me }: { me: Me | null }) {
             )}
           </Panel>
 
+          <div id="limits" className="grid">
           <Panel
             title="Limits"
             note="Budgets in US dollars, request and token rates, and requests in flight, for everyone or one scope. A request counts against every limit that applies to it."
@@ -183,6 +207,7 @@ export function PolicyBasics({ me }: { me: Me | null }) {
               </Table>
             )}
           </Panel>
+          </div>
 
           <Panel
             title="Guardrails"
@@ -293,7 +318,7 @@ export function PolicyBasics({ me }: { me: Me | null }) {
         </>
       ) : null}
       {data && rule ? <RuleForm rule={rule === "new" ? null : rule} guardrails={data.guardrails} onClose={() => setRule(null)} change={change} /> : null}
-      {limit ? <LimitForm limit={limit === "new" ? null : limit} onClose={() => setLimit(null)} change={change} /> : null}
+      {limit ? <LimitForm limit={limit === "new" ? null : limit} team={prefill} onClose={closeLimit} change={change} /> : null}
       {guard ? <GuardForm guard={guard === "new" ? null : guard} onClose={() => setGuard(null)} change={change} /> : null}
       {testing ? <GuardTest guard={testing} onClose={() => setTesting(null)} /> : null}
       {alias ? <AliasForm alias={alias === "new" ? null : alias} onClose={() => setAlias(null)} change={change} /> : null}
@@ -432,13 +457,15 @@ function limitRate(e: Entry) {
   return parts.join(", ") || "none";
 }
 
-function LimitForm({ limit, onClose, change }: { limit: Limit | null; onClose: () => void; change: Change }) {
+function LimitForm({ limit, team, onClose, change }: { limit: Limit | null; team: string; onClose: () => void; change: Change }) {
   const e = limit?.entry ?? {};
   const [scope0, value0] = scopeOf(e);
   const b = budgetOf(e);
   const r = (e.rate ?? {}) as Record<string, unknown>;
   const [scope, setScope] = useState(limit ? scope0 : "team");
-  const [value, setValue] = useState(value0);
+  const [value, setValue] = useState(limit ? value0 : team);
+  // A team no key names yet is only taken when picked as Create team: the server refuses it otherwise.
+  const [create, setCreate] = useState(false);
   const [org, setOrg] = useState(scope0 !== "org" && e.org !== undefined ? String(e.org) : "");
   const [usd, setUsd] = useState(b ? String(b.usd) : "");
   const [per, setPer] = useState(b && typeof b.per === "string" ? b.per : "month");
@@ -447,7 +474,7 @@ function LimitForm({ limit, onClose, change }: { limit: Limit | null; onClose: (
   const [refused, setRefused] = useState("");
   const submit = async (ev: React.FormEvent) => {
     ev.preventDefault();
-    const body = { scope, value, org, usd, per, parallel, ...rates, ...(limit ? { was: limit.entry } : {}) };
+    const body = { scope, value, org, usd, per, parallel, create, ...rates, ...(limit ? { was: limit.entry } : {}) };
     const answer = await change(() => (limit ? api.put(`policy/limits/${limit.index}`, body) : api.post("policy/limits", body)));
     if (answer) setRefused(answer);
     else onClose();
@@ -474,7 +501,18 @@ function LimitForm({ limit, onClose, change }: { limit: Limit | null; onClose: (
           </Field>
           {scope === "global" ? null : (
             <Field id="scope-value" label="Name" hint={'"*" sets the same limit for each one.'}>
-              <Input id="scope-value" className="t-mono" value={value} onChange={(ev) => setValue(ev.target.value)} required />
+              {scope === "team" ? (
+                <TeamPicker
+                  id="scope-value"
+                  value={value}
+                  onChange={(v, made) => {
+                    setValue(v);
+                    setCreate(made);
+                  }}
+                />
+              ) : (
+                <Input id="scope-value" className="t-mono" value={value} onChange={(ev) => setValue(ev.target.value)} required />
+              )}
             </Field>
           )}
           {scope === "global" || scope === "org" ? null : (

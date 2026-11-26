@@ -333,6 +333,34 @@ async fn an_empty_install_opens_on_the_welcome_and_the_choice_is_kept() -> TestR
 }
 
 #[tokio::test]
+async fn the_budget_step_is_done_only_when_every_team_with_traffic_has_a_budget() -> TestResult {
+    let s = setup("budget-each")?;
+    let cookie = sign_in(&s.app, ADMIN_KEY).await?;
+    request(&s, "01START0000000000000000B01", "noa.bar", "platform")?;
+    request(&s, "01START0000000000000000B02", "maya.cohen", "payments")?;
+    change(&s.app, &cookie, "pick", json!({ "choice": "limit" })).await?;
+    let budget = |teams: &[&str]| {
+        let lines: String = teams
+            .iter()
+            .map(|t| format!("  - {{ team: {t}, budget: {{ usd: 100, per: month }} }}\n"))
+            .collect();
+        std::fs::write(
+            s.dir.join("enterplace.policy.yaml"),
+            format!("{POLICY}limits:\n{lines}"),
+        )
+    };
+    budget(&["platform"])?;
+    let state = start(&s.app, &cookie, "").await?;
+    let each = step(&state, "Set a monthly budget for each team");
+    assert_ne!(each["state"], "done", "{state}");
+    budget(&["platform", "payments"])?;
+    let state = start(&s.app, &cookie, "").await?;
+    let each = step(&state, "Set a monthly budget for each team");
+    assert_eq!(each["state"], "done", "{state}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn each_choice_has_its_checklist_with_lines_from_the_real_config() -> TestResult {
     let s = setup("choices")?;
     let cookie = sign_in(&s.app, ADMIN_KEY).await?;
@@ -649,7 +677,7 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
     assert_eq!(raw["next"]["title"], "One rule lets everyone in", "{raw}");
     assert_eq!(
         raw["next"]["action"]["href"],
-        "/console/start?track=limit#step-5"
+        "/console/app/#/policy?add=limit"
     );
     assert_eq!(raw["next"]["action"]["label"], "Add a budget");
     assert_eq!(
@@ -717,7 +745,7 @@ async fn empty_pages_say_what_fills_them_and_open_the_start_here_step() -> TestR
     assert_eq!(spend["empty"]["title"], "No spend and no budgets yet");
     assert_eq!(
         spend["empty"]["action"]["href"],
-        "/console/start?track=limit#step-5"
+        "/console/app/#/policy?add=limit"
     );
     assert_eq!(
         spend["empty"]["docs"],
