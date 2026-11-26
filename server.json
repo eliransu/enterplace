@@ -2,15 +2,21 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.eliransu/enterplace",
   "title": "Enterplace",
-  "description": "Self-hosted MCP gateway: many MCP servers behind one endpoint, with per-tool policy and audit.",
-  "version": "0.1.0",
-  "repository": { "url": "https://github.com/eliransu/enterplace", "source": "github" },
+  "description": "Your organization's MCP gateway: MCP servers behind one endpoint, per-tool policy, named calls.",
+  "version": "0.2.0",
+  "repository": {
+    "url": "https://github.com/eliransu/enterplace",
+    "source": "github"
+  },
   "websiteUrl": "https://docs.enterplace.dev/governance/mcp-gateway/",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/eliransu/enterplace:0.1.0",
-      "transport": { "type": "streamable-http", "url": "http://localhost:8080/mcp" }
+      "identifier": "ghcr.io/eliransu/enterplace:0.2.0",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:8080/mcp"
+      }
     }
   ]
 }
