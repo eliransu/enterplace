@@ -7,6 +7,7 @@
 mod analytics;
 mod api;
 mod audit_log;
+mod callers;
 pub mod cli;
 mod credentials;
 mod edit;
@@ -637,6 +638,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
         .merge(credentials::routes())
         .merge(analytics::routes())
         .merge(requests::routes())
+        .merge(callers::routes())
         .merge(spend::routes())
         .merge(audit_log::routes())
         .merge(start::routes())

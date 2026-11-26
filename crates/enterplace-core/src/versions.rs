@@ -910,10 +910,24 @@ pub fn dry_run_shared(
 }
 
 /// The codes a policy decision refuses with. Other refusals happen before or after it and are not replayed.
-const POLICY_CODES: [&str; 3] = ["no_rule", "model_not_allowed", "unknown_model"];
+const POLICY_CODES: [&str; 5] = [
+    "no_rule",
+    "model_not_allowed",
+    "unknown_model",
+    "awaiting_approval",
+    "caller_blocked",
+];
 
-/// What the draft decides for one caller and model, as a request record would say it.
+/// What the draft decides for one caller and model, as a request record would say it. `new_callers:` decides
+/// before the rules, as the gateway does when it identifies the caller.
 fn decided(draft: &Loaded, who: &Principal, model: &str) -> (String, String) {
+    match draft.policy.caller_verdict(who) {
+        crate::policy::CallerVerdict::Held => return ("awaiting_approval".into(), String::new()),
+        crate::policy::CallerVerdict::Blocked | crate::policy::CallerVerdict::NewBlocked => {
+            return ("caller_blocked".into(), String::new());
+        }
+        crate::policy::CallerVerdict::Known | crate::policy::CallerVerdict::New => {}
+    }
     match draft.policy.decide(who, model) {
         Decision::Allow(rule) => {
             let served = draft
@@ -1416,6 +1430,39 @@ prices:
         );
         assert_eq!(run.other_rule.len(), 1, "{run:?}");
         assert_eq!(run.other_rule[0].id, "r3");
+        Ok(())
+    }
+
+    #[test]
+    fn a_dry_run_shows_who_holding_new_callers_would_refuse_and_who_allowing_one_lets_in()
+    -> TestResult {
+        let live = load(POLICY)?;
+        let log = [
+            r#"{"n":1,"id":"r1","time":"2026-11-14T08:00:00.000Z","person":"dana.levi","team":"interns","key":"22222222","model":"gpt-4o-mini","verdict":"allow","code":null,"rule":"everyone"}"#,
+            r#"{"n":2,"id":"r2","time":"2026-11-14T08:01:00.000Z","person":"billing-bot","team":"apps","key":"44444444","model":"gpt-4o-mini","verdict":"refused","code":"awaiting_approval","rule":null}"#,
+        ]
+        .join("\n");
+        let hold = load(&format!("{POLICY}new_callers:\n  mode: hold\n"))?;
+        let run = dry_run(
+            log.as_bytes(),
+            "2026-11-14T00:00:00.000Z",
+            &hold,
+            &live.policy,
+        );
+        assert_eq!(run.now_refused.len(), 1, "{run:?}");
+        assert_eq!(run.now_refused[0].now, "awaiting_approval");
+        let allowed = load(&format!(
+            "{POLICY}new_callers:\n  mode: hold\n  allowed: [dana.levi, billing-bot]\n"
+        ))?;
+        let run = dry_run(
+            log.as_bytes(),
+            "2026-11-14T00:00:00.000Z",
+            &allowed,
+            &live.policy,
+        );
+        assert!(run.now_refused.is_empty(), "{run:?}");
+        assert_eq!(run.now_allowed.len(), 1, "{run:?}");
+        assert_eq!(run.now_allowed[0].id, "r2");
         Ok(())
     }
 

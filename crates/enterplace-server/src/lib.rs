@@ -2011,6 +2011,8 @@ struct Seen<'a> {
     routing: Option<serde_json::Value>,
     /// Set when the key was replaced by a rotation and is in its grace period.
     rotated: Option<serde_json::Value>,
+    /// The caller is new: no admin has reviewed it, and `new_callers: { mode: allow }` let it through.
+    new_caller: bool,
     /// What observe mode or a shadow period let through: one entry per decision that would have refused it.
     would_refuse: Vec<serde_json::Value>,
     /// The body fields a session is read from, when the body was read as JSON.
@@ -2478,8 +2480,9 @@ fn login_fits(provider: &Upstream, login: Option<&Login>, model: &str) -> Result
             StatusCode::FORBIDDEN,
             "login_needed",
             format!(
-                "Refused: model \"{model}\" is served by provider \"{}\", which sends each caller's own Claude or ChatGPT login and holds no key of Enterplace's, and this request carries only an Enterplace key. In Claude Code, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN, keep your normal Claude login, and send your person token with ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <token>\". In Codex, sign in with ChatGPT and set requires_openai_auth = true and http_headers = {{ \"x-enterplace-user\" = \"<token>\" }} on the Enterplace model provider.",
-                provider.name
+                "Refused: model \"{model}\" is served by provider \"{}\", which sends each caller's own Claude or ChatGPT login and holds no key of Enterplace's, and this request carries only an Enterplace key. In Claude Code, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN, keep your normal Claude login, and send your person token with ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <token>\". In Codex, sign in with ChatGPT and set requires_openai_auth = true and http_headers = {{ \"x-enterplace-user\" = \"<token>\" }} on the Enterplace model provider. An app with a service key has no login to send: an Enterplace admin serves \"{model}\" from a provider with its own key, with Add a provider on the console's New and pending page ({}).",
+                provider.name,
+                enterplace_core::policy::NEW_CALLERS_PAGE
             ),
         )),
         (false, Some(_)) => Err(Refusal::new(
@@ -3396,6 +3399,7 @@ pub(crate) async fn identify<'a>(
         None => id::sha256_hex(key.as_bytes()),
     };
     killed(state, person, &key_sha256, None)?;
+    new_caller(policy, person, seen)?;
     let blocked = |from: &[enterplace_core::policy::Cidr]| {
         !from.is_empty() && !client_ip.is_some_and(|ip| from.iter().any(|c| c.contains(ip)))
     };
@@ -3450,6 +3454,40 @@ pub(crate) async fn identify<'a>(
         seen.rotated = Some(serde_json::json!({ "replaced_by": next, "expires": person.expires }));
     }
     Ok((person, key_sha256))
+}
+
+/// What `new_callers:` decides for the caller: flagged and let through, held until an admin allows it, or refused.
+/// Decided on the name, so a key that `enterplace login` replaces, or a rotation, is not new again. Not softened by
+/// observe mode: it is the organization's decision about who may call at all, as a kill switch is.
+fn new_caller(policy: &Policy, person: &Principal, seen: &mut Seen<'_>) -> Result<(), Refusal> {
+    use enterplace_core::policy::{CallerVerdict, NEW_CALLERS_PAGE};
+    let name = &person.name;
+    let (code, message) = match policy.caller_verdict(person) {
+        CallerVerdict::Known => return Ok(()),
+        CallerVerdict::New => {
+            seen.new_caller = true;
+            return Ok(());
+        }
+        CallerVerdict::Held => (
+            "awaiting_approval",
+            format!(
+                "Refused: \"{name}\" is a new caller, and this organization holds new callers until an admin approves them. An Enterplace admin approves it with Allow on the console's New and pending page ({NEW_CALLERS_PAGE}), and it works within 2 seconds. Nothing was sent to a provider."
+            ),
+        ),
+        CallerVerdict::NewBlocked => (
+            "caller_blocked",
+            format!(
+                "Refused: \"{name}\" is a new caller, and this organization blocks new callers by default. An Enterplace admin can let it in with Allow on the console's New and pending page ({NEW_CALLERS_PAGE}), and it works within 2 seconds. Nothing was sent to a provider."
+            ),
+        ),
+        CallerVerdict::Blocked => (
+            "caller_blocked",
+            format!(
+                "Refused: an Enterplace admin blocked \"{name}\". If that is a mistake, an admin allows it again on the console's New and pending page ({NEW_CALLERS_PAGE}), and it works within 2 seconds. Nothing was sent to a provider."
+            ),
+        ),
+    };
+    Err(Refusal::new(StatusCode::FORBIDDEN, code, message))
 }
 
 /// Refuses a key whose `cert:` binds it to a client certificate the connection did not present.
@@ -4373,7 +4411,8 @@ fn unserved(model: &str) -> Refusal {
         StatusCode::FORBIDDEN,
         "unknown_model",
         format!(
-            "Refused: no provider of this Enterplace serves model \"{model}\". Check the model name, or ask an Enterplace admin to add it to a provider."
+            "Refused: no provider of this Enterplace serves model \"{model}\". Check the model name, or ask an Enterplace admin to add it to a provider: the console's New and pending page ({}) lists it with Add a provider.",
+            enterplace_core::policy::NEW_CALLERS_PAGE
         ),
     )
 }
@@ -4403,9 +4442,10 @@ fn fits(provider: &Upstream, path: &str, model: &str) -> Result<Shape, Refusal> 
             StatusCode::BAD_REQUEST,
             "wrong_route",
             format!(
-                "Refused: model \"{model}\" is served by provider \"{}\" of kind {}, {what}",
+                "Refused: model \"{model}\" is served by provider \"{}\" of kind {}, {what} To serve it on this route too, an Enterplace admin adds a provider that takes it, with Add a provider on the console's New and pending page ({}).",
                 provider.name,
-                kind.word()
+                kind.word(),
+                enterplace_core::policy::NEW_CALLERS_PAGE
             ),
         ))
     };
@@ -5582,6 +5622,9 @@ async fn decide(
         }
         if let Some(rotated) = &seen.rotated {
             record.insert("key_rotated".into(), rotated.clone());
+        }
+        if seen.new_caller {
+            record.insert("new_caller".into(), true.into());
         }
         match seen.person.and_then(|p| p.jwt.as_ref()) {
             Some(named) if named.issuer == IDENTITY_HEADERS => {

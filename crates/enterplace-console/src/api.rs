@@ -300,7 +300,7 @@ fn str_list(value: Option<&Value>) -> Vec<String> {
 
 /// Makes one change to the policy: checked for the role, recorded with who made it, checked as `enterplace check`
 /// checks a file, then saved. `edit` changes the policy's tree; its `Err` is what to tell the person.
-async fn commit(
+pub(crate) async fn commit(
     console: &Console,
     admin: &Admin,
     action: &'static str,
