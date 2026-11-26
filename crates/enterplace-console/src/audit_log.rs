@@ -294,6 +294,16 @@ async fn stop(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) 
             let (scope, reason) = (text(&body, "scope").to_string(), text(&body, "reason").trim().to_string());
             let value = enterplace_core::kill::checked(&scope, text(&body, "value"), &reason)
                 .map_err(|err| bad(format!("{} Fix it and press Stop traffic again.", crate::api::sentence(&err))))?;
+            if !known(&console, &admin, &scope, &value) {
+                return Err(bad(format!(
+                    "No {} {value} has a key or has sent a request, so stopping it would stop nobody. Check the spelling and pick one from the list.",
+                    match scope.as_str() {
+                        "key_prefix" => "key with hash",
+                        "person" => "person or app",
+                        other => other,
+                    }
+                )));
+            }
             let act = Act {
                 action: "set_kill",
                 by: Some((&admin.name, &admin.team)),
@@ -318,6 +328,41 @@ async fn stop(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) 
         }
         .await,
     )
+}
+
+/// Whether a kill switch for `value` would stop anyone: a person, app or team is in the keys file or in a request
+/// record, a key prefix starts a key's hash. A model or everyone is always taken: a model may be stopped before its
+/// first request.
+fn known(console: &Console, admin: &crate::Admin, scope: &str, value: &str) -> bool {
+    if !matches!(scope, "person" | "team" | "key_prefix") {
+        return true;
+    }
+    let keys = &console.config().keys;
+    let entries = config::read_keys(keys)
+        .ok()
+        .flatten()
+        .and_then(|t| config::key_entries(keys, &t).ok())
+        .unwrap_or_default();
+    if entries.iter().any(|e| match scope {
+        "person" => e.name == value,
+        "team" => e.team == value,
+        _ => e.sha256.starts_with(value),
+    }) {
+        return true;
+    }
+    if scope == "key_prefix" {
+        return false;
+    }
+    // A name only the log knows: a person whose key is gone, or the unnamed person.
+    let quoted = format!("\"{value}\"");
+    crate::records_for(admin, &console.config().audit)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains(&quoted))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|r| r.get(scope).and_then(Value::as_str) == Some(value))
 }
 
 /// The chain as an auditor takes it: the records as written, one JSON object a line, so `enterplace audit verify`

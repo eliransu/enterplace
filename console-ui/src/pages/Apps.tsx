@@ -39,6 +39,7 @@ export function Apps({ query }: PageProps) {
               entries={services}
               route={ROUTE}
               readOnly={keys.data.read_only}
+              change={keys.change}
               noun="App or agent"
             />
           ) : (

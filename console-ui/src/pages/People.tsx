@@ -37,6 +37,7 @@ import {
   Refusal,
 } from "@/components/page";
 import { Copy } from "@/components/copy";
+import { TeamPicker } from "@/components/team-picker";
 import { api, Refused } from "@/lib/api";
 import { count, goTo, num, useData } from "@/lib/use";
 import { cn } from "@/lib/utils";
@@ -220,6 +221,7 @@ export function People({ query }: PageProps) {
           {entries.length === 0 ? null : (
             <Panel
               title={count(entries.length, "key")}
+              note="A key reaches the models, and what it spends is its holder's. A person token reaches no model: it only names a person, beside their own Claude login. A service key is a key for an app or agent. An admin key also signs in to this console."
               actions={
                 <Input
                   type="search"
@@ -249,6 +251,7 @@ export function People({ query }: PageProps) {
                     entries={shown.slice((at - 1) * PER_PAGE, at * PER_PAGE)}
                     route="/people"
                     readOnly={data.read_only}
+                    change={keys.change}
                   />
                   {shown.length > PER_PAGE ? (
                     <div className="flex items-center justify-between gap-4">
@@ -336,11 +339,13 @@ export function KeyTable({
   entries,
   route,
   readOnly,
+  change,
   noun = "Name",
 }: {
   entries: Entry[];
   route: string;
   readOnly: boolean;
+  change: Change;
   noun?: string;
 }) {
   return (
@@ -379,7 +384,7 @@ export function KeyTable({
             <TableCell className="whitespace-nowrap">{e.last}</TableCell>
             <TableCell>
               <div className="flex flex-wrap justify-end gap-2">
-                <FixAction fix={e.status.fix} route={route} />
+                <FixAction fix={e.status.fix} route={route} change={change} />
                 {e.editable && !readOnly ? (
                   <Button
                     variant="outline"
@@ -426,6 +431,8 @@ export function KeyDialogs({
           token={query.get("token") === "1"}
           service={!!service}
           fullAdmin={data.may.full_admin}
+          entries={entries}
+          route={route}
           onMade={setMade}
           close={close}
         />
@@ -452,6 +459,7 @@ export function KeyDialogs({
       {data?.may.restore && query.get("stop") ? (
         <StopDialog
           agent={data.stop_agent}
+          entries={entries}
           scope={query.get("scope") ?? "person"}
           value={query.get("value") ?? ""}
           change={change}
@@ -518,20 +526,31 @@ function StatusCell({ status }: { status: Status }) {
   );
 }
 
-function FixAction({ fix, route }: { fix: Fix; route: string }) {
+function FixAction({
+  fix,
+  route,
+  change,
+}: {
+  fix: Fix;
+  route: string;
+  change: Change;
+}) {
   if (!fix) return null;
   switch (fix.kind) {
-    // A plain form to the console's own restore route, as the server-rendered pages send it.
-    case "restore":
+    // In place: the answer says it in a toast and the list reads again, with no jump to the Audit log.
+    case "restore": {
+      const { scope, value } = fix;
       return (
-        <form method="post" action="/console/kills/restore">
-          <input type="hidden" name="scope" value={fix.scope} />
-          <input type="hidden" name="value" value={fix.value} />
-          <Button size="sm" type="submit">
-            Restore traffic
-          </Button>
-        </form>
+        <Button
+          size="sm"
+          onClick={() =>
+            change(() => api.post("audit/restore", { scope, value }))
+          }
+        >
+          Restore traffic
+        </Button>
       );
+    }
     case "command":
       return (
         <span className="flex items-center gap-2">
@@ -576,10 +595,14 @@ function IssueDialog(props: {
   token: boolean;
   service: boolean;
   fullAdmin: boolean;
+  entries: Entry[];
+  route: string;
   onMade: (m: Made) => void;
   close: () => void;
 }) {
-  const { service, fullAdmin, onMade, close } = props;
+  const { service, fullAdmin, entries, route, onMade, close } = props;
+  // A second service key under a name that has one is asked about first: rotating is usually what was meant.
+  const [second, setSecond] = useState(false);
   const [name, setName] = useState(props.name);
   const [team, setTeam] = useState(props.team);
   const [expires, setExpires] = useState("");
@@ -588,7 +611,15 @@ function IssueDialog(props: {
   const [admin, setAdmin] = useState(false);
   const [personToken, setPersonToken] = useState(props.token);
   const [refused, setRefused] = useState("");
+  const teams = [...new Set(entries.map((e) => e.team).filter(Boolean))].sort();
+  const existing = service
+    ? entries.find((e) => isService(e) && e.name === name.trim())
+    : undefined;
   const submit = async () => {
+    if (existing && !second) {
+      setSecond(true);
+      return;
+    }
     const made = await makeKey("people/issue", {
       name,
       team,
@@ -633,7 +664,10 @@ function IssueDialog(props: {
               id="issue-name"
               className="t-mono"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value);
+                setSecond(false);
+              }}
               placeholder={service ? "support-bot" : "maya.cohen"}
               pattern="[A-Za-z0-9._\-]+"
               required
@@ -641,16 +675,16 @@ function IssueDialog(props: {
               autoComplete="off"
             />
           </Field>
-          <Field id="issue-team" label={service ? "Team that owns it" : "Team"}>
-            <Input
+          <Field
+            id="issue-team"
+            label={service ? "Team that owns it" : "Team"}
+            hint="Pick a team, or press Create team to start a new one."
+          >
+            <TeamPicker
               id="issue-team"
-              className="t-mono"
               value={team}
-              onChange={(e) => setTeam(e.target.value)}
-              placeholder="payments"
-              pattern="[A-Za-z0-9._\-]+"
-              required
-              autoComplete="off"
+              onChange={setTeam}
+              teams={teams}
             />
           </Field>
           <Field id="issue-expires" label="Expires, optional">
@@ -692,16 +726,41 @@ function IssueDialog(props: {
             </label>
           ) : null}
           <Refusal text={refused} />
+          {existing && second ? (
+            <div
+              role="alert"
+              className="grid gap-2 rounded-box border border-input p-4"
+            >
+              <p className="t-body m-0">
+                {existing.name} already has a service key, key hash{" "}
+                {existing.hash}. Make a second key that works beside it, or
+                rotate the one it has: a new key, with the old one working for a
+                grace period.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => goTo(route, { edit: existing.sha256 })}
+                >
+                  Rotate its key instead
+                </Button>
+              </div>
+            </div>
+          ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={close}>
               Cancel
             </Button>
             <Button type="submit">
-              {service
-                ? "Make service key"
-                : personToken
-                  ? "Make person token"
-                  : "Issue key"}
+              {existing && second
+                ? "Make a second key"
+                : service
+                  ? "Make service key"
+                  : personToken
+                    ? "Make person token"
+                    : "Issue key"}
             </Button>
           </DialogFooter>
         </Form>
@@ -965,7 +1024,14 @@ const STOP_SCOPES: Record<string, string> = {
   all: "Everyone",
 };
 
-type Bring = { on: boolean; state: string; agent: string; docs: string; scim_docs: string; import_agent?: string };
+type Bring = {
+  on: boolean;
+  state: string;
+  agent: string;
+  docs: string;
+  scim_docs: string;
+  import_agent?: string;
+};
 
 type Imported = {
   message: string;
@@ -977,18 +1043,53 @@ type Imported = {
 
 /// Import a list of people: every line is checked first and nothing is issued while one is wrong; then the keys are
 /// shown once, with one Copy all and a CSV download.
+const DRAFT = "enterplace.import-draft";
+const draft = {
+  read: () => {
+    try {
+      return localStorage.getItem(DRAFT) ?? "";
+    } catch {
+      return "";
+    }
+  },
+  write: (text: string) => {
+    try {
+      if (text) localStorage.setItem(DRAFT, text);
+      else localStorage.removeItem(DRAFT);
+    } catch {
+      // Private window or blocked storage: the list just is not kept across a refresh.
+    }
+  },
+};
+
 function ImportDialog({ agent, close }: { agent: string; close: () => void }) {
-  const [text, setText] = useState("");
+  // The pasted list survives a refresh until the import succeeds.
+  const [text, setTextState] = useState(draft.read);
+  const setText = (t: string) => {
+    setTextState(t);
+    draft.write(t);
+  };
+  const [copied, setCopied] = useState(false);
+  const [warned, setWarned] = useState(false);
   const [result, setResult] = useState<Imported | null>(null);
   const [refused, setRefused] = useState("");
   const load = (file: File | undefined) => {
     if (!file) return;
-    file.text().then(setText, () => toast.error("The file could not be read. Pick a CSV file and try again."));
+    file
+      .text()
+      .then(setText, () =>
+        toast.error(
+          "The file could not be read. Pick a CSV file and try again.",
+        ),
+      );
   };
   const submit = async () => {
     try {
-      const done = (await api.post("people/import", { text })) as unknown as Imported;
+      const done = (await api.post("people/import", {
+        text,
+      })) as unknown as Imported;
       setResult(done);
+      if (done.issued) draft.write("");
       setRefused("");
     } catch (e) {
       if (e instanceof Refused) setRefused(e.message);
@@ -997,17 +1098,24 @@ function ImportDialog({ agent, close }: { agent: string; close: () => void }) {
   };
   const download = () => {
     if (!result?.csv) return;
-    const url = URL.createObjectURL(new Blob([result.csv], { type: "text/csv" }));
+    const url = URL.createObjectURL(
+      new Blob([result.csv], { type: "text/csv" }),
+    );
     const a = document.createElement("a");
     a.href = url;
     a.download = "enterplace-keys.csv";
     a.click();
     URL.revokeObjectURL(url);
+    setCopied(true);
   };
   const issued = result?.issued;
+  const done = () => {
+    if (copied || warned) close();
+    else setWarned(true);
+  };
   return (
-    <Dialog open onOpenChange={(open) => !open && close()}>
-      <DialogContent>
+    <Dialog open onOpenChange={(open) => !open && !issued && close()}>
+      <DialogContent {...(issued ? showOnce : {})}>
         <DialogTitle>{issued ? "The new keys" : "Import a list"}</DialogTitle>
         <DialogDescription>
           {issued
@@ -1017,20 +1125,44 @@ function ImportDialog({ agent, close }: { agent: string; close: () => void }) {
         {issued ? (
           <>
             <div className="flex flex-wrap items-center gap-2">
-              <Copy text={result?.lines ?? ""} label="Copy all" />
-              <Button type="button" variant="outline" size="sm" onClick={download}>
+              <Copy
+                text={result?.lines ?? ""}
+                label="Copy all"
+                onCopied={() => setCopied(true)}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={download}
+              >
                 Download CSV
               </Button>
             </div>
-            <pre className="t-mono-sm m-0 max-h-80 overflow-auto rounded-box bg-well px-6 py-3">{result?.lines}</pre>
+            <pre className="t-mono-sm m-0 max-h-80 overflow-auto rounded-box bg-well px-6 py-3">
+              {result?.lines}
+            </pre>
+            <NotCopied shown={warned && !copied} />
             <DialogFooter>
-              <Button onClick={close}>Done</Button>
+              <Button onClick={done}>
+                {warned && !copied ? "Close without copying" : "Done"}
+              </Button>
             </DialogFooter>
           </>
         ) : (
           <Form className="grid gap-6" onSubmit={submit}>
-            <Field id="import-file" label="A CSV file, optional" hint="Its text replaces the list below.">
-              <Input id="import-file" type="file" accept=".csv,text/csv,text/plain" className="py-2" onChange={(e) => load(e.target.files?.[0])} />
+            <Field
+              id="import-file"
+              label="A CSV file, optional"
+              hint="Its text replaces the list below."
+            >
+              <Input
+                id="import-file"
+                type="file"
+                accept=".csv,text/csv,text/plain"
+                className="py-2"
+                onChange={(e) => load(e.target.files?.[0])}
+              />
             </Field>
             <Field id="import-text" label="People">
               <textarea
@@ -1039,7 +1171,9 @@ function ImportDialog({ agent, close }: { agent: string; close: () => void }) {
                 rows={8}
                 spellCheck={false}
                 autoComplete="off"
-                placeholder={"name,team,budget,kind\nmaya.cohen,payments,50,key\ndana.levi,payments,,person"}
+                placeholder={
+                  "name,team,budget,kind\nmaya.cohen,payments,50,key\ndana.levi,payments,,person"
+                }
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 required
@@ -1076,16 +1210,26 @@ function ImportDialog({ agent, close }: { agent: string; close: () => void }) {
 /// How a whole company gets keys without an admin issuing each one: the paths, which is on, and the agent prompt.
 export function Bring({ bring }: { bring: Bring }) {
   return (
-    <Panel title="Bring everyone in" actions={<Copy text={bring.agent} label="Copy for your agent" />}>
+    <Panel
+      title="Bring everyone in"
+      actions={<Copy text={bring.agent} label="Copy for your agent" />}
+    >
       <div className="grid gap-4">
         <p className="t-body m-0">{bring.state}</p>
         <ul className="t-body m-0 grid list-disc gap-2 pl-6">
           <li>
-            Single sign-on and <span className="t-mono">enterplace login</span>, for a whole company: each developer signs in once and gets their own expiring key, named by their email, in the team their groups map to.
+            Single sign-on and <span className="t-mono">enterplace login</span>,
+            for a whole company: each developer signs in once and gets their own
+            expiring key, named by their email, in the team their groups map to.
           </li>
-          <li>SCIM, in Enterplace Enterprise with a store: your identity provider adds people and teams, and removing someone revokes their keys.</li>
           <li>
-            A list of people: Import a list here (pasted or a CSV file), or <span className="t-mono">enterplace key import people.csv</span> on the gateway's machine. A few people or apps: Issue a key.
+            SCIM, in Enterplace Enterprise with a store: your identity provider
+            adds people and teams, and removing someone revokes their keys.
+          </li>
+          <li>
+            A list of people: Import a list here (pasted or a CSV file), or{" "}
+            <span className="t-mono">enterplace key import people.csv</span> on
+            the gateway's machine. A few people or apps: Issue a key.
           </li>
         </ul>
         <div className="flex flex-wrap gap-2">
@@ -1105,6 +1249,7 @@ export function Bring({ bring }: { bring: Bring }) {
 /// until Restore traffic on the Audit log. Recorded with the reason, which the people stopped see in their tool.
 function StopDialog(props: {
   agent: string;
+  entries: Entry[];
   scope: string;
   value: string;
   change: Change;
@@ -1117,6 +1262,20 @@ function StopDialog(props: {
   const [value, setValue] = useState(props.value);
   const [reason, setReason] = useState("");
   const [refused, setRefused] = useState("");
+  // What a stop can name, from the keys: the server refuses any name no key and no request ever had.
+  const choices = [
+    ...new Set(
+      props.entries.map((e) =>
+        scope === "team"
+          ? e.team
+          : scope === "key_prefix"
+            ? e.sha256.slice(0, 8)
+            : e.name,
+      ),
+    ),
+  ]
+    .filter(Boolean)
+    .sort();
   const submit = async () => {
     const answer = await change(() =>
       api.post("audit/stop", {
@@ -1169,10 +1328,20 @@ function StopDialog(props: {
                 id="stop-value"
                 className="t-mono"
                 value={value}
-                onChange={(e) => setValue(e.target.value)}
+                onChange={(e) => {
+                  setValue(e.target.value);
+                  setRefused("");
+                }}
+                list={scope === "model" ? undefined : "stop-choices"}
+                aria-invalid={!!refused || undefined}
                 required
                 autoComplete="off"
               />
+              <datalist id="stop-choices">
+                {choices.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
             </Field>
           )}
           <Field
@@ -1276,19 +1445,26 @@ function MadeDialog({
   service: boolean;
   onClose: () => void;
 }) {
+  const [copied, setCopied] = useState(false);
+  const [warned, setWarned] = useState(false);
+  const token = made.key.startsWith("enterplace_u_");
+  const done = () => {
+    if (copied || warned) onClose();
+    else setWarned(true);
+  };
   // An app gets its address, not the coding agents' lines.
   const lines = service
     ? `# OpenAI SDKs\nexport OPENAI_BASE_URL=${window.location.origin}/v1\nexport OPENAI_API_KEY=${made.key}\n# Anthropic SDKs\nexport ANTHROPIC_BASE_URL=${window.location.origin}\nexport ANTHROPIC_API_KEY=${made.key}`
     : (made.lines ?? []).join("\n");
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
+    <Dialog open>
+      <DialogContent {...showOnce}>
         <DialogTitle>
-          {made.key.startsWith("enterplace_u_")
+          {token
             ? "The new person token"
-            : made.key.startsWith("enterplace_")
-              ? "The new key"
-              : "The new token"}
+            : service
+              ? "The new service key"
+              : "The new key"}
         </DialogTitle>
         <DialogDescription>
           {made.until
@@ -1299,7 +1475,7 @@ function MadeDialog({
           <span id="new-key" className="t-mono min-w-0 flex-1 break-all">
             {made.key}
           </span>
-          <Copy text={made.key} />
+          <Copy text={made.key} onCopied={() => setCopied(true)} />
         </div>
         {lines ? (
           <div className="grid gap-2">
@@ -1307,19 +1483,39 @@ function MadeDialog({
               <span className="t-small text-muted-foreground">
                 {service
                   ? "Set these where the app runs:"
-                  : "The lines for each tool, with this key and this gateway's address:"}
+                  : token
+                    ? "Paste these in the shell where Claude Code runs. Keep your own Claude login: the token only names you."
+                    : "The lines for each tool, with this key and this gateway's address:"}
               </span>
-              <Copy text={lines} />
+              <Copy text={lines} onCopied={() => setCopied(true)} />
             </div>
             <pre className="t-mono-sm m-0 overflow-x-auto rounded-box bg-well px-6 py-3">
               {lines}
             </pre>
           </div>
         ) : null}
+        <NotCopied shown={warned && !copied} />
         <DialogFooter>
-          <Button onClick={onClose}>Done</Button>
+          <Button onClick={done}>
+            {warned && !copied ? "Close without copying" : "Done"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
+}
+
+// A dialog with a secret shown once closes only with its own button: not with Escape or a click outside.
+const showOnce = {
+  onEscapeKeyDown: (e: Event) => e.preventDefault(),
+  onInteractOutside: (e: Event) => e.preventDefault(),
+};
+
+function NotCopied({ shown }: { shown: boolean }) {
+  return shown ? (
+    <p role="alert" className="t-small m-0 text-destructive-text">
+      You have not copied it yet. It is never shown again: once closed, a new
+      one has to be made.
+    </p>
+  ) : null;
 }

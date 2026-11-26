@@ -338,6 +338,16 @@ pub(crate) fn day_words(date: &str, short: bool) -> String {
 
 /// How to point the OpenAI SDKs, Codex, Gemini CLI and Claude Code at the gateway at `base` with `key`, ready to paste.
 pub(crate) fn tool_lines(base: &str, key: &str) -> Vec<String> {
+    // A person token reaches no model (the gateway refuses it as an API key), and ANTHROPIC_API_KEY would replace the
+    // person's own Claude login: Claude Code sends the token beside that login, in x-enterplace-user.
+    if key.starts_with(enterplace_core::id::PERSON_PREFIX) {
+        return vec![
+            "# Claude Code on your Claude subscription. Keep your own Claude login; this only names you.".into(),
+            format!("export ANTHROPIC_BASE_URL={base}"),
+            format!("export ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: {key}\""),
+            "claude   # keep ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN unset".into(),
+        ];
+    }
     vec![
         "# OpenAI SDKs and OpenAI-compatible tools".into(),
         format!("export OPENAI_BASE_URL={base}/v1"),

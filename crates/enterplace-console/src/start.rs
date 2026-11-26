@@ -1800,7 +1800,14 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         ],
     )
     .finished("Someone got their own token through single sign-on.".into())
-    .agent(prompt(
+    // enterplace login fails until single sign-on is set: until then the agent sets that up first.
+    .agent(if !f.self_issue {
+        sign_on_prompt(
+            base,
+            &f.policy_path,
+            enterplace_core::store::policy_store(std::path::Path::new(&f.policy_path)).is_some(),
+        )
+    } else { prompt(
         base,
         "Sign in to Enterplace with company single sign-on and set Claude Code up for my subscription",
         &[],
@@ -1811,7 +1818,7 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         ],
         "The prompt answers and shows under my email in Requests.",
         "/governance/single-sign-on/",
-    ));
+    ) });
     s4.optional = true;
     vec![s1, s2, s3, s4]
 }
@@ -2293,8 +2300,9 @@ fn checklist(steps: &[Step], states: &[&str]) -> Value {
                         "listening" => "Waiting",
                         _ => "Not yet",
                     },
-                    "body": if open { s.now.clone() } else { Vec::new() },
-                    "agent": if open { s.agent.as_str() } else { "" },
+                    // A done step keeps what it showed, so it opens again for a second tool or person.
+                    "body": if open || *state == "done" { s.now.clone() } else { Vec::new() },
+                    "agent": if open || *state == "done" { s.agent.as_str() } else { "" },
                     "listen": if *state == "listening" { s.listen.as_str() } else { "" },
                     "open": s.open.filter(|_| *state == "listening").map(|(label, href)| json!({ "label": label, "href": href })),
                     "done_text": if *state == "done" { s.done_text.as_str() } else { "" },

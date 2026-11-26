@@ -32,8 +32,22 @@ const ROUTE = "/coding";
 
 export function Coding({ query }: PageProps) {
   const keys = useKeys(query);
+  const { data: me } = useData<Me>("me");
   const people = (keys.data?.entries ?? []).filter((e) => !isService(e));
   const may = !!keys.data?.may.issue;
+  // The primary action follows how the team pays: API keys get a key, Claude subscriptions a person token.
+  const pay = query.get("pay");
+  const onKeys = pay === "api" || (!pay && me?.names?.passthrough === false);
+  const issueKey = (
+    <Button variant={onKeys ? "default" : "outline"} onClick={() => goTo(ROUTE, { issue: "1" })}>
+      Issue a key
+    </Button>
+  );
+  const issueToken = (
+    <Button variant={onKeys ? "outline" : "default"} onClick={() => goTo(ROUTE, { issue: "1", token: "1" })}>
+      Hand out a person token
+    </Button>
+  );
   return (
     <>
       <Head
@@ -41,9 +55,7 @@ export function Coding({ query }: PageProps) {
         lead="Claude Code, Codex, Cursor, Copilot and the rest. Every request is recorded under the person who sent it."
         actions={
           may ? (
-            <Button onClick={() => goTo(ROUTE, { issue: "1", token: "1" })}>
-              Hand out a person token
-            </Button>
+            onKeys ? <>{issueToken}{issueKey}</> : <>{issueKey}{issueToken}</>
           ) : null
         }
       />
@@ -67,18 +79,15 @@ export function Coding({ query }: PageProps) {
               entries={people}
               route={ROUTE}
               readOnly={keys.data.read_only}
+              change={keys.change}
               noun="Person"
             />
           ) : (
             <Empty
               title="No people yet"
-              body="Hand each developer a key or a person token, so their coding agent's requests carry their name."
+              body="Hand each developer a key (it reaches the models, paid with your provider keys) or a person token (it only names them, beside their own Claude login)."
             >
-              {may ? (
-                <Button onClick={() => goTo(ROUTE, { issue: "1", token: "1" })}>
-                  Hand out a person token
-                </Button>
-              ) : null}
+              {may ? (onKeys ? issueKey : issueToken) : null}
             </Empty>
           )}
         </Panel>
@@ -112,7 +121,7 @@ function Names() {
           id="names-required"
           checked={n.required}
           disabled={!mayChange}
-          onCheckedChange={(on) => (on && seen > 0 ? setAsking(true) : set(on))}
+          onCheckedChange={(on) => (on ? set(true) : setAsking(true))}
           aria-describedby="names-said"
           className="mt-1"
         />
@@ -161,16 +170,20 @@ function Names() {
       ) : null}
       <AlertDialog open={asking} onOpenChange={setAsking}>
         <AlertDialogContent>
-          <AlertDialogTitle>Refuse requests without a name?</AlertDialogTitle>
+          <AlertDialogTitle>Let unnamed requests through?</AlertDialogTitle>
           <AlertDialogDescription>
-            {count(seen, "request")} in the last 24 hours came without a person
-            token. From now on, a request like them is refused until its sender
-            sets a person token.
+            A Claude Code request without a person token then goes through and
+            is recorded as unnamed: nobody is named on it, so no person's
+            budget or limits hold it.
+            {seen > 0
+              ? ` ${count(seen, "request")} in the last 24 hours came without one.`
+              : ""}{" "}
+            Use this only for a rollout period.
           </AlertDialogDescription>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => set(true)}>
-              Require a name
+            <AlertDialogCancel>Keep requiring a name</AlertDialogCancel>
+            <AlertDialogAction onClick={() => set(false)}>
+              Let them through
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -1425,6 +1425,15 @@ async fn people_edits_a_key_issues_a_person_token_and_refuses_what_a_role_may_no
             .starts_with("enterplace_u_"),
         "{made}"
     );
+    // Its lines name the person beside their own Claude login: never as an API key, never for other tools.
+    let lines = made["lines"].to_string();
+    assert!(
+        lines.contains("ANTHROPIC_CUSTOM_HEADERS=\\\"x-enterplace-user: enterplace_u_")
+            && !lines.contains("ANTHROPIC_API_KEY=")
+            && !lines.contains("OPENAI")
+            && !lines.contains("GEMINI"),
+        "{lines}"
+    );
     assert!(s.audit()?.contains(r#""person_token":true"#));
     // A key that is not in the file is named as gone, with what to do.
     let (status, refused) = call(

@@ -314,11 +314,11 @@ export function Setup({
     body = (
       <Progress
         title="Connected"
-        line="Every required setup step is done."
+        line="Every required setup step is done. Connect another tool or person with the same steps."
         done
         action={
           <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-            Show the steps
+            Connect a tool
           </Button>
         }
       />
@@ -477,16 +477,19 @@ function Checklist({
   query: URLSearchParams;
   act: Act;
 }) {
+  // Done steps the person opened again, for a second tool or person.
+  const [again, setAgain] = useState<number[]>([]);
   return (
     <ol data-checklist className="m-0 grid list-none gap-2 p-0">
       {steps.map((s) => {
-        const open = s.state === "now" || s.state === "listening";
+        const reopened = s.state === "done" && again.includes(s.n);
+        const open = s.state === "now" || s.state === "listening" || reopened;
         return (
           <li
             key={s.n}
             id={`step-${s.n}`}
             data-state={s.state}
-            aria-current={open ? "step" : undefined}
+            aria-current={open && !reopened ? "step" : undefined}
             className={cn(
               "grid grid-cols-[var(--space-8)_1fr] gap-x-4 gap-y-2 rounded-panel p-6",
               open && "bg-card",
@@ -516,7 +519,24 @@ function Checklist({
                 {s.title}
                 {s.optional ? <Badge>Optional</Badge> : null}
               </span>
-              <span className="t-small text-muted-foreground">{s.word}</span>
+              <span className="flex items-center gap-2">
+                <span className="t-small text-muted-foreground">{s.word}</span>
+                {s.state === "done" && s.body.length ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-expanded={reopened}
+                    onClick={() =>
+                      setAgain((a) =>
+                        reopened ? a.filter((n) => n !== s.n) : [...a, s.n],
+                      )
+                    }
+                  >
+                    {reopened ? "Hide" : "Show again"}
+                  </Button>
+                ) : null}
+              </span>
             </div>
             {s.state === "done" && s.done_text ? (
               <p className="t-small col-start-2 m-0 text-muted-foreground">

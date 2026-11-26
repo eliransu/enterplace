@@ -3,7 +3,15 @@ import { Button } from "./ui/button";
 
 // Copies a value shown once (a new key, the lines for a tool). Without the Clipboard API (plain http from another
 // machine) a selected textarea and execCommand copy instead, as the server-rendered pages do.
-export function Copy({ text, label = "Copy" }: { text: string; label?: string }) {
+export function Copy({
+  text,
+  label = "Copy",
+  onCopied,
+}: {
+  text: string;
+  label?: string;
+  onCopied?: () => void;
+}) {
   const [done, setDone] = useState(false);
   const copy = async () => {
     try {
@@ -17,6 +25,7 @@ export function Copy({ text, label = "Copy" }: { text: string; label?: string })
       area.remove();
     }
     setDone(true);
+    onCopied?.();
     window.setTimeout(() => setDone(false), 1500);
   };
   return (

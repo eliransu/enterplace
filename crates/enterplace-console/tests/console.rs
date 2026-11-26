@@ -2116,6 +2116,34 @@ async fn a_security_lead_stops_traffic_sees_what_observe_let_through_and_exports
         refused["error"].as_str().unwrap_or("").contains("reason"),
         "{refused}"
     );
+    // A name no key and no request ever had stops nobody: refused, not reported as stopped.
+    for (scope, value) in [
+        ("person", "nobody.atall"),
+        ("team", "platfrom"),
+        ("key_prefix", "00000000"),
+    ] {
+        let (status, _, refused) = call(
+            &s.app,
+            "POST",
+            "/console/api/audit/stop",
+            &cookie,
+            serde_json::json!({ "scope": scope, "value": value, "reason": "typo" }),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{scope} {refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("would stop nobody"),
+            "{refused}"
+        );
+    }
+    assert_eq!(
+        enterplace_core::kill::read(&enterplace_core::kill::path_beside(&s.keys()))?.len(),
+        1,
+        "a refused stop set no switch"
+    );
 
     // A request observe mode let through says what would have stopped it, in the list, its filter and its sheet.
     let mut record = serde_json::Map::new();
