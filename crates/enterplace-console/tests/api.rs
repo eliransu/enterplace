@@ -90,12 +90,37 @@ async fn call(
     cookie: &str,
     body: Option<Value>,
 ) -> Result<(StatusCode, Value), Box<dyn std::error::Error>> {
+    send(s, method, path, cookie, body, false).await
+}
+
+/// A change as the console's confirm step asks for it first: drafted and checked, nothing saved.
+async fn preview(
+    s: &Setup,
+    method: &str,
+    path: &str,
+    cookie: &str,
+    body: Option<Value>,
+) -> Result<(StatusCode, Value), Box<dyn std::error::Error>> {
+    send(s, method, path, cookie, body, true).await
+}
+
+async fn send(
+    s: &Setup,
+    method: &str,
+    path: &str,
+    cookie: &str,
+    body: Option<Value>,
+    preview: bool,
+) -> Result<(StatusCode, Value), Box<dyn std::error::Error>> {
     let mut request = Request::builder()
         .method(method)
         .uri(path)
         .header(header::HOST, HOST)
         .header(header::ORIGIN, format!("http://{HOST}"))
         .header(header::COOKIE, cookie);
+    if preview {
+        request = request.header("x-enterplace-preview", "1");
+    }
     if body.is_some() {
         request = request.header(header::CONTENT_TYPE, "application/json");
     }
@@ -403,6 +428,84 @@ async fn mcp_servers_are_added_edited_given_tool_access_and_removed() -> TestRes
 }
 
 #[tokio::test]
+async fn a_preview_shows_the_change_and_saves_nothing_then_a_trial_guardrail_is_enforced()
+-> TestResult {
+    let s = setup("preview")?;
+    let cookie = sign_in(&s, ADMIN_KEY).await?;
+    let body = json!({ "name": "no-pii", "type": "pii", "action": "block", "shadow_until": "2099-01-01", "every": true });
+    let (status, seen) = preview(
+        &s,
+        "POST",
+        "/console/api/policy/guardrails",
+        &cookie,
+        Some(body.clone()),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{seen}");
+    let diff = seen["preview"]["diff"].to_string();
+    assert!(diff.contains("no-pii") && diff.contains("add"), "{seen}");
+    assert!(
+        seen["preview"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("shadow_until"),
+        "{seen}"
+    );
+    assert_eq!(s.policy()?, POLICY, "a preview saves nothing");
+    // A draft the check refuses is refused at the preview, naming why.
+    let (status, refused) = preview(
+        &s,
+        "PUT",
+        "/console/api/policy/rules/everyone",
+        &cookie,
+        Some(json!({ "who": { "kind": "any" }, "models": ["*"], "guardrails": ["nope"] })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(s.policy()?, POLICY);
+    let (status, done) = call(
+        &s,
+        "POST",
+        "/console/api/policy/guardrails",
+        &cookie,
+        Some(body),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(s.policy()?.contains("shadow_until"));
+    // Removing it names what goes.
+    let (_, seen) = preview(
+        &s,
+        "DELETE",
+        "/console/api/policy/guardrails/no-pii",
+        &cookie,
+        None,
+    )
+    .await?;
+    assert_eq!(
+        seen["preview"]["removes"],
+        json!(["Guardrail no-pii"]),
+        "{seen}"
+    );
+    // Enforce now ends the trial and keeps the rest.
+    let (status, done) = call(
+        &s,
+        "PUT",
+        "/console/api/policy/guardrails/no-pii/enforce",
+        &cookie,
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let after = s.policy()?;
+    assert!(
+        !after.contains("shadow_until") && after.contains("no-pii"),
+        "{after}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn policy_basics_change_rules_limits_guardrails_aliases_and_mode() -> TestResult {
     let s = setup("basics")?;
     let cookie = sign_in(&s, ADMIN_KEY).await?;
@@ -445,7 +548,7 @@ async fn policy_basics_change_rules_limits_guardrails_aliases_and_mode() -> Test
         "default_guardrails:",
         &format!(
             "enterplace check {}",
-            s.dir.join("enterplace.policy.yaml").display()
+            std::fs::canonicalize(s.dir.join("enterplace.policy.yaml"))?.display()
         ),
         "https://docs.enterplace.dev/governance/guardrails.md",
     ] {
@@ -835,7 +938,10 @@ async fn a_role_without_edit_policy_and_a_foreign_form_change_nothing() -> TestR
         let body = (!body.is_null()).then_some(body);
         let (status, refused) = call(&s, method, path, &viewer, body).await?;
         assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
-        assert!(error(&refused).contains("edit_policy"), "{path}: {refused}");
+        assert!(
+            error(&refused).contains("may edit the policy"),
+            "{path}: {refused}"
+        );
     }
     assert_eq!(s.policy()?, POLICY);
     assert!(s.audit()?.contains(r#""code":"read_only""#));
@@ -1236,7 +1342,10 @@ async fn prices_add_a_model_and_change_a_price_as_new_versions() -> TestResult {
     );
     assert!(list["file"].is_null(), "{list}");
     assert!(
-        list["note"].as_str().unwrap_or("").contains("A form edit"),
+        list["note"]
+            .as_str()
+            .unwrap_or("")
+            .contains("A save from this page"),
         "{list}"
     );
     let row = &list["models"][0];
@@ -1644,7 +1753,7 @@ async fn named_requests_are_switched_for_every_passthrough_provider_and_audited(
     let (status, refused) =
         call(&s, "PUT", path, &viewer, Some(json!({ "required": true }))).await?;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
-    assert!(error(&refused).contains("edit_policy"), "{refused}");
+    assert!(error(&refused).contains("may edit the policy"), "{refused}");
     assert_eq!(s.policy()?, policy);
     assert!(s.audit()?.contains(r#""code":"read_only""#));
     Ok(())
@@ -1845,7 +1954,7 @@ async fn people_says_how_everyone_gets_a_key_and_hands_single_sign_on_to_an_agen
     assert!(
         page["bring"]["state"]
             .as_str()
-            .is_some_and(|t| t.contains("no console.sso")),
+            .is_some_and(|t| t.contains("no single sign-on")),
         "{page}"
     );
     let agent = page["bring"]["agent"].as_str().unwrap_or("");

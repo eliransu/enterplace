@@ -470,7 +470,7 @@ async fn analytics(State(console): State<Console>, headers: HeaderMap, uri: Uri)
 pub(crate) fn uncounted_note(uncounted: f64) -> String {
     if uncounted > 0.0 {
         format!(
-            " Beside it, {} of subscription use (an estimate at API prices) is not counted against the budget: its rule does not set budget_basis: api_equivalent.",
+            " Beside it, {} of subscription use (an estimate at API prices) is not counted against the budget: its rule does not count subscription use at API prices.",
             money_est(uncounted)
         )
     } else {

@@ -6,13 +6,13 @@ import { Field } from "@/components/ui/field";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Form, Head, Loading, Panel, Problem, Refusal } from "@/components/page";
 import { Confirm } from "@/components/confirm";
+import { Busy, Code, Report, dryRun, useCheckedChange, type Change, type Line, type Run, type Tag } from "@/components/policy-change";
 import { api, Refused } from "@/lib/api";
 import { useData } from "@/lib/use";
 import { cn } from "@/lib/utils";
 import { VerdictTag } from "./Audit";
 import type { PageProps } from "@/pages";
 
-type Tag = { kind: string; word: string; detail: string };
 type Item = { name: string; meta: string; line?: number };
 type Raw = {
   file: string;
@@ -32,40 +32,11 @@ type Raw = {
   replicas?: { host: string; meta: string; healthy: boolean }[];
   next?: { title: string; body: string; action: { label: string; href: string }; docs: string; act: boolean } | null;
 };
-type Line = { n: number; text: string; kind: string };
 type Force = { force?: string | null; refusals?: string[] };
 type Version = Force & { id: number; tag: Tag; by: string; at: string; note: string; decided: string };
 type Detail = Force & { id: number; tag: Tag; facts: [string, string][]; from: string; diff: Line[]; own: string | null; actions: string[]; text: string };
 type Versions = { lead: string; file?: { title: string; body: string }; file_mode?: boolean; edit?: boolean; versions?: Version[]; detail?: Detail | null };
 type Draft = { lead: string; text: string; note: string; base: number; hours: number; save: string };
-type Run = { tag: Tag; summary: string; note: string; tables: { title: string; count: number; rows: Record<string, string>[] }[] };
-
-// The policy's lines, numbered: + added, - removed, the asked-for line marked, and each problem under its line.
-function Code({ lines, hit }: { lines: Line[]; hit?: number }) {
-  return (
-    <div className="t-mono-sm grid overflow-x-auto rounded-box bg-well py-3">
-      {lines.map((l, i) => (
-        <div
-          key={i}
-          id={l.kind === "note" ? undefined : `line-${l.n}`}
-          data-kind={l.kind || undefined}
-          className={cn(
-            "flex gap-4 px-6 whitespace-pre",
-            (l.n === hit || l.kind === "add") && l.kind !== "note" && "bg-card font-semibold",
-            l.kind === "del" && "text-muted-foreground line-through",
-            l.kind === "error" && "text-destructive-text",
-            l.kind === "note" && "whitespace-pre-wrap text-destructive-text",
-          )}
-        >
-          <span aria-hidden="true" className="w-8 flex-none text-right text-muted-foreground">
-            {l.kind === "add" ? "+" : l.kind === "del" ? "-" : l.kind === "note" ? "" : l.n}
-          </span>
-          <span>{l.text}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 function List({ items }: { items: { key: string; title: string; meta: string; side?: React.ReactNode }[] }) {
   return (
@@ -204,92 +175,10 @@ function InForce({ v }: { v: Force }) {
   );
 }
 
-function Report({ run }: { run: Run }) {
-  return (
-    <Panel title="Dry run" actions={<VerdictTag tag={run.tag} />} note={run.note}>
-      <p className="t-body m-0">{run.summary}</p>
-      {run.tables.map((t) =>
-        t.count === 0 ? (
-          <p key={t.title} className="t-small m-0 text-muted-foreground">
-            {t.title}: none.
-          </p>
-        ) : (
-          <div key={t.title} className="grid gap-2">
-            <h3 className="t-tag m-0 uppercase">
-              {t.title}: {t.count}
-            </h3>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Time</TableHead>
-                  <TableHead>Who</TableHead>
-                  <TableHead>Model</TableHead>
-                  <TableHead>Decision</TableHead>
-                  <TableHead>Rule</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {t.rows.map((r, i) => (
-                  <TableRow key={i}>
-                    <TableCell>{r.time}</TableCell>
-                    <TableCell>
-                      {r.person}
-                      <span className="block text-muted-foreground">{r.team}</span>
-                    </TableCell>
-                    <TableCell>{r.model}</TableCell>
-                    <TableCell>{r.decision}</TableCell>
-                    <TableCell className="whitespace-normal">{r.rule}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        ),
-      )}
-    </Panel>
-  );
-}
-
-/// A button that waits for what it started: disabled until the gateway answers, so it is never sent twice.
-function Busy({ run, children, ...props }: Omit<React.ComponentProps<typeof Button>, "onClick"> & { run: () => Promise<unknown> }) {
-  const [busy, setBusy] = useState(false);
-  return (
-    <Button
-      {...props}
-      disabled={busy || props.disabled}
-      aria-busy={busy || undefined}
-      onClick={async () => {
-        setBusy(true);
-        try {
-          await run();
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      {children}
-    </Button>
-  );
-}
-
-/// A dry run of `text` over the last `hours`: the report, or the refusal as a toast.
-async function dryRun(text: string, hours: number | string): Promise<Run | null> {
-  try {
-    const done = (await api.post("policy/dry-run", { text, hours })) as unknown as { message: string; run: Run };
-    toast(done.message);
-    return done.run;
-  } catch (e) {
-    if (e instanceof Refused) {
-      toast.error(e.message, { duration: 10000 });
-      return null;
-    }
-    throw e;
-  }
-}
-
 export function PolicyVersions({ query }: PageProps) {
   const version = query.get("version") ?? "";
-  const { data, error, change, reload } = useData<Versions>(`policy/versions${version ? `?version=${encodeURIComponent(version)}` : ""}`, 5000);
+  const { data, error, change: apply, reload } = useData<Versions>(`policy/versions${version ? `?version=${encodeURIComponent(version)}` : ""}`, 5000);
+  const [change, checking] = useCheckedChange(apply);
   const [run, setRun] = useState<Run | null>(null);
   useEffect(() => setRun(null), [version]);
   const detail = data?.detail;
@@ -352,18 +241,12 @@ export function PolicyVersions({ query }: PageProps) {
                   <Busy key={a} variant="outline" run={async () => setRun(await dryRun(detail.text, 24))}>
                     Dry run, last 24 hours
                   </Busy>
-                ) : a === "rollback" || a === "reject" ? (
+                ) : a === "reject" ? (
                   <Confirm
                     key={a}
                     label={labels[a][0]}
-                    title={a === "rollback" ? (data?.file_mode ? `Put version ${detail.id} back?` : `Roll back to version ${detail.id}?`) : `Reject version ${detail.id}?`}
-                    detail={
-                      a === "rollback"
-                        ? data?.file_mode
-                          ? `Its text is written over the policy file, checked as enterplace check checks a file, and the gateway loads it within 2 seconds. The versions after it stay in the history.`
-                          : `Every gateway serves version ${detail.id} within 2 seconds. The versions after it stay in the history.`
-                        : "It never goes live. Its text stays in the history, and the decision is recorded with your name."
-                    }
+                    title={`Reject version ${detail.id}?`}
+                    detail="It never goes live. Its text stays in the history, and the decision is recorded with your name."
                     onConfirm={() => act(a)}
                   />
                 ) : (
@@ -377,6 +260,7 @@ export function PolicyVersions({ query }: PageProps) {
         </Panel>
       ) : null}
       {run ? <Report run={run} /> : null}
+      {checking}
       {data?.versions ? (
         <Panel title="Versions">
           <Table>
@@ -454,22 +338,30 @@ function EditorForm({ draft }: { draft: Draft }) {
     if (!file) return;
     file.text().then(setText, () => toast.error("The file could not be read. Pick a YAML file and try again."));
   };
-  const save = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const apply: Change = async (run) => {
     try {
-      const done = (await api.post("policy/save", { text, base: draft.base, note })) as { message: string; version?: number };
+      const done = (await run()) as { message: string; version?: number };
       toast(done.message);
       window.location.hash = `#/policy/versions?version=${done.version ?? ""}`;
+      return "";
     } catch (err) {
       if (err instanceof Refused) {
         toast.error(err.message, { duration: 10000 });
         setRefused(err.message);
-      } else throw err;
+        return err.message;
+      }
+      throw err;
     }
+  };
+  const [checked, checking] = useCheckedChange(apply);
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRefused(await checked(() => api.post("policy/save", { text, base: draft.base, note })));
   };
   return (
     <>
       {run ? <Report run={run} /> : null}
+      {checking}
       <Form className="grid gap-6 rounded-panel bg-card p-6" onSubmit={save}>
         <Field id="policy-file" label="Import a YAML file, optional" hint="Its text replaces the editor's. Nothing is saved until you save.">
           <Input id="policy-file" type="file" accept=".yaml,.yml,text/yaml" className="py-2" onChange={(e) => load(e.target.files?.[0])} />

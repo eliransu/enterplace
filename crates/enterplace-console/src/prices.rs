@@ -99,7 +99,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
             }
             let mut note = "A price set in the policy is used over the built-in one.".to_string();
             if editable {
-                note.push_str(" A form edit saves the policy without its comments: the editor keeps them.");
+                note.push_str(" A save from this page rewrites the whole policy: comments are kept where they still fit and dropped where they do not.");
             }
             Ok(ok(json!({
                 "lead": "Each model, its provider and its price.",

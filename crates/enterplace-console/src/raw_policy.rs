@@ -157,7 +157,7 @@ async fn raw(State(console): State<Console>, headers: HeaderMap) -> Response {
                     );
                     map.insert("lead".into(), json!(match version {
                         Some(v) => format!("Version {v} in the store decides every request: {rules} and {providers}, read in order, the first that names the caller decides. Edit it here: each save is a new version, checked as enterplace check checks a file."),
-                        None => format!("One file decides every request: {rules} and {providers}, read in order, the first that names the caller decides. Read only here: change the file and run enterplace check."),
+                        None => format!("One file decides every request: {rules} and {providers}, read in order, the first that names the caller decides. This page shows the file read only. A save from a form on the other policy pages rewrites the whole file: comments are kept where they still fit and dropped where they do not. To change the text yourself, edit the file and run enterplace check."),
                     }));
                     map.insert("rules".into(), rules_of(loaded));
                     map.insert(
@@ -408,6 +408,14 @@ async fn decide(
                 && versions::store_for(&console.config().policy).is_err()
             {
                 return put_back(&console, &admin, id).await;
+            }
+            // A rollback or an approval previews against the version in force, not the one it was drafted on.
+            if edit::previewing() && act_name != "reject_policy" {
+                let store =
+                    versions::store_for(&console.config().policy).map_err(|e| refused(&e))?;
+                let v = versions::find(&store, id).map_err(|e| refused(&e))?;
+                let (before, _) = crate::api::current(&console)?;
+                return edit::preview(&console, before, v.text).await;
             }
             let act = Act {
                 action: act_name,
@@ -735,6 +743,10 @@ async fn save_draft(console: &Console, headers: &HeaderMap, bytes: &Bytes) -> An
     }
     // The version the editor read: a version saved since is refused rather than overwritten.
     let base = number(&body, "base");
+    if edit::previewing() {
+        let (before, _) = crate::api::current(console)?;
+        return edit::preview(console, before, draft(&body)).await;
+    }
     let note = text(&body, "note").to_string();
     let v = edit::save_version(console, &admin, "propose_policy", draft(&body), base, note)
         .await

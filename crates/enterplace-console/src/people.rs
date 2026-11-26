@@ -278,8 +278,8 @@ fn bring(policy: &std::path::Path, keys: &std::path::Path) -> Value {
         (true, true) => format!(
             "On: developers run enterplace login {base} and get their own key, named by their email, in the team their groups map to."
         ),
-        (true, false) => "Single sign-on is on for the console, and enterplace login is off: add self_issue under it so developers get their own keys.".to_string(),
-        _ => "Not set up: the policy has no console.sso, so each key is issued by an admin.".to_string(),
+        (true, false) => "Single sign-on is on for the console, and enterplace login is off: let people get their own keys with it so developers do not wait for an admin.".to_string(),
+        _ => "Not set up: the policy has no single sign-on, so each key is issued by an admin.".to_string(),
     };
     json!({
         "on": sso && login,
