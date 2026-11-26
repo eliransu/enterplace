@@ -60,6 +60,7 @@ mod stages;
 pub mod store;
 mod teams_api;
 mod traces;
+mod update;
 pub use manage::{AdminApi, AdminCall, AdminRoute};
 pub use mcp::{McpRoute, McpSetup};
 pub use traces::{TraceExport, TraceProtocol};

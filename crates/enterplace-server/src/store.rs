@@ -161,7 +161,7 @@ CREATE TABLE enterplace_sign_in_failures (
 /// waits two minor versions, so a binary one minor version behind the writer still finds everything it uses. A
 /// rolling upgrade therefore runs N and N+1 side by side; N beside N+2 is refused. A writer that is not strictly
 /// newer is refused too: the same version cannot have written a schema this binary does not know.
-fn newer_allowed(own: &str, writer: &str) -> bool {
+pub(crate) fn newer_allowed(own: &str, writer: &str) -> bool {
     let (Some(own), Some(writer)) = (semver(own), semver(writer)) else {
         return false;
     };
@@ -171,7 +171,7 @@ fn newer_allowed(own: &str, writer: &str) -> bool {
 }
 
 /// Major, minor and patch of a version such as `0.2.1` or `0.2.1-rc.1`.
-fn semver(version: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn semver(version: &str) -> Option<(u64, u64, u64)> {
     let core = version.split(['-', '+']).next()?;
     let mut parts = core.split('.').map(|n| n.parse::<u64>().ok());
     Some((parts.next()??, parts.next()??, parts.next()??))
