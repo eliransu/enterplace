@@ -126,6 +126,9 @@ fn policy(chosen: &[Chosen], store: bool, env: &dyn Fn(&str) -> Option<String>) 
     text.push_str(
         "rules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\n",
     );
+    // A new caller is let through and listed under Apps and agents, New and pending, so nothing is refused that a
+    // first request should reach, and the admin still hears of every new key, person or app. Hold or block there.
+    text.push_str("new_callers:\n  mode: allow\n");
     if store {
         // The policy lives in the store too, so the console edits it and a wiped disk does not undo the edits.
         text.push_str(&format!(

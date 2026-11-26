@@ -8,6 +8,7 @@ import { EnforceDialog } from "@/pages/PolicyBasics";
 import { LiveContext, useLiveFeed, useLiveStream } from "@/lib/live";
 import { useData } from "@/lib/use";
 import { find, GROUPS, HOME, moved as movedTo, SECTIONS, type Section } from "@/pages";
+import { type Callers, waitingFor } from "@/pages/NewCallers";
 import { LogOut, Wrench } from "lucide-react";
 import {
   Sidebar,
@@ -72,6 +73,10 @@ function Shell() {
   const { data: me, change } = useData<Me>("me");
   const [enforcing, setEnforcing] = useState(false);
   const live = useLiveFeed();
+  // ponytail: read again on every live change, as each page's own data is; a count in /api/me if it ever weighs.
+  const { data: callers } = useData<Callers>("callers");
+  const badge = (s: Section) =>
+    s.badge ? waitingFor(callers, s.badge === "coding") : 0;
   // The MCP extension still names its old server-rendered pages; they are tabs of MCP tools now.
   const tools =
     me?.tools.filter(
@@ -126,7 +131,7 @@ function Shell() {
               <SidebarGroupLabel>{g}</SidebarGroupLabel>
               <SidebarMenu>
                 {SECTIONS.filter((s) => s.group === g).map((s) => (
-                  <NavItem key={s.label} section={s} active={s === section} />
+                  <NavItem key={s.label} section={s} active={s === section} count={badge(s)} />
                 ))}
               </SidebarMenu>
             </SidebarGroup>
@@ -274,7 +279,15 @@ function Shell() {
   );
 }
 
-function NavItem({ section, active }: { section: Section; active: boolean }) {
+function NavItem({
+  section,
+  active,
+  count = 0,
+}: {
+  section: Section;
+  active: boolean;
+  count?: number;
+}) {
   const { setMobileOpen } = useSidebar();
   const Icon = section.icon;
   const to = section.tabs[0].route;
@@ -288,6 +301,14 @@ function NavItem({ section, active }: { section: Section; active: boolean }) {
         >
           <Icon aria-hidden="true" />
           <span>{section.label}</span>
+          {count ? (
+            <span
+              aria-label={`${count} waiting`}
+              className="t-small ml-auto rounded-pill bg-accent px-2 font-semibold tabular-nums text-foreground group-data-collapsed/sidebar:md:hidden"
+            >
+              {count}
+            </span>
+          ) : null}
         </a>
       </SidebarMenuButton>
     </SidebarMenuItem>

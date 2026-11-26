@@ -43,6 +43,8 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 | [`unknown_key`](#unknown_key) | 401 | `authentication_error` |
 | [`key_expired`](#key_expired) | 401 | `authentication_error` |
 | [`killed`](#killed) | 403 | `permission_error` |
+| [`awaiting_approval`](#awaiting_approval) | 403 | `permission_error` |
+| [`caller_blocked`](#caller_blocked) | 403 | `permission_error` |
 | [`person_needed`](#person_needed) | 403 | `invalid_request_error` |
 | [`person_token_only`](#person_token_only) | 403 | `invalid_request_error` |
 | [`login_needed`](#login_needed) | 403 | `invalid_request_error` |
@@ -185,6 +187,18 @@ A subscription request is never answered 401: Claude Code reads a 401 as its own
 **403.** A kill switch stops this person, team, key, model or everyone. The message names the switch, the reason, the admin who set it and when.
 
 **Fix:** ask that admin. The switch stays until `enterplace unkill`. See [Kill switches](/governance/kill-switches/).
+
+### awaiting_approval
+
+**403.** The caller (a key, a person token or a single sign-on name) is new: no admin has reviewed it, and the policy's `new_callers: { mode: hold }` holds new callers until an admin allows them. The message names the caller and the console page. Nothing was sent to a provider.
+
+**Fix:** an admin presses **Allow** on the console's **New and pending** page (`/console/app/#/apps/new`), or adds the name under `new_callers.allowed` in the policy. It works within 2 seconds. See [New callers](/governance/new-callers/).
+
+### caller_blocked
+
+**403.** The caller is on the policy's `new_callers.blocked` list, or it is new and `new_callers: { mode: block }` refuses new callers. Refused in every mode, observe included. Nothing was sent to a provider.
+
+**Fix:** if it should get through, an admin presses **Allow** on the console's **New and pending** page, and it works within 2 seconds. See [New callers](/governance/new-callers/).
 
 ### kills_unreadable
 

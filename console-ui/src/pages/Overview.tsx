@@ -10,6 +10,7 @@ import { count, num, useData } from "@/lib/use";
 import { cn } from "@/lib/utils";
 import { Setup, type SetupState } from "./Setup";
 import { isService, type Keys } from "./People";
+import { type Callers, waitingFor } from "./NewCallers";
 import type { PageProps } from "@/pages";
 
 // The analytics answer, as far as Overview reads it: a breakdown's rows, or `empty` when nothing was ever sent.
@@ -141,6 +142,10 @@ export function Overview({ me, query }: PageProps) {
   const listed = useData<{ tools?: { name: string }[] }>("mcp-tools");
   const month = useData<Ranking>("analytics?by=team&window=month");
   const approvals = useData<{ calls?: unknown[] }>("mcp-approvals");
+  const callers = useData<Callers>("callers");
+  // What waits on New and pending: people on the coding agents card, the rest and the models on the apps card.
+  const peopleNew = waitingFor(callers.data, true);
+  const appsNew = waitingFor(callers.data, false) - peopleNew;
 
   // An empty install: nothing sent, nothing chosen. Each card's button then starts that use case's checklist.
   const choosing = start.data?.view === "welcome";
@@ -197,9 +202,13 @@ export function Overview({ me, query }: PageProps) {
           : tools.length
             ? "No requests today"
             : "Not connected yet",
-      attention: names ? [names.title] : [],
-      next:
-        codingToday === 0
+      attention: [
+        ...(names ? [names.title] : []),
+        ...(peopleNew ? [`${count(peopleNew, "new person", "new people")} to allow or block`] : []),
+      ],
+      next: peopleNew
+        ? { label: "Review new and pending", href: "#/coding/new" }
+        : codingToday === 0
           ? { label: "Connect a coding agent", href: "#/coding" }
           : names
             ? {
@@ -231,9 +240,12 @@ export function Overview({ me, query }: PageProps) {
           : services.length
             ? "No requests today"
             : "Not connected yet",
-      attention: [],
-      next:
-        services.length === 0
+      attention: appsNew
+        ? [`${count(appsNew, "new caller or model", "new callers and models")} to review`]
+        : [],
+      next: appsNew
+        ? { label: "Review new and pending", href: "#/apps/new" }
+        : services.length === 0
           ? { label: "Make a service key", href: "#/apps?issue=1" }
           : appsToday === 0
             ? { label: "Connect an app", href: "#/apps" }

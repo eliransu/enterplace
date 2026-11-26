@@ -294,6 +294,9 @@ const KNOWN: &[&str] = &[
     "identity",
     "session_requests",
     "answer_cache",
+    "new_callers",
+    "allowed",
+    "blocked",
     // Last, so a misspelled "models" (one letter off both) is still offered "models", the word far more often meant.
     "mode",
 ];
@@ -381,6 +384,9 @@ struct PolicyFile {
     /// What people may do in their coding agents, unless their rule says otherwise.
     #[serde(default)]
     coding_agents: Option<CodingAgentsFile>,
+    /// What happens to a caller no admin has reviewed, and the callers reviewed.
+    #[serde(default)]
+    new_callers: Option<NewCallersFile>,
 }
 
 /// `coding_agents:` at the top of the policy or on a rule.
@@ -412,6 +418,69 @@ fn coding_agents_of(
     crate::coding_agents::CodingAgents::from_json(&set.into()).unwrap_or_else(|problem| {
         errors.push(format!("{at}: {problem}."));
         Default::default()
+    })
+}
+
+/// `new_callers:`: `mode` for a caller on neither list, and the names an admin allowed or blocked.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewCallersFile {
+    mode: String,
+    #[serde(default)]
+    allowed: Vec<String>,
+    #[serde(default)]
+    blocked: Vec<String>,
+}
+
+/// `new_callers:` as the policy reads it, or each problem with its line.
+fn new_callers(
+    policy_path: &Path,
+    policy_text: &str,
+    parsed: &PolicyFile,
+    errors: &mut Vec<String>,
+) -> Option<crate::policy::NewCallers> {
+    let file = parsed.new_callers.as_ref()?;
+    let at = |key: &str| {
+        let from = line_of_key(policy_text, "new_callers", 1, usize::MAX);
+        format!(
+            "{}:{}",
+            policy_path.display(),
+            line_of_key(policy_text, key, from, usize::MAX)
+        )
+    };
+    let Some(mode) = crate::policy::NewMode::parse(&file.mode) else {
+        errors.push(format!(
+            "{}: new_callers mode is \"{}\". Write mode: allow (let a new caller through and list it as discovered), mode: hold (refuse it until an admin allows it) or mode: block (refuse it; an admin can still allow it).",
+            at("mode"),
+            file.mode
+        ));
+        return None;
+    };
+    let mut ok = true;
+    for (list, names) in [("allowed", &file.allowed), ("blocked", &file.blocked)] {
+        if let Some(bad) = names
+            .iter()
+            .find(|n| n.trim().is_empty() || n.len() > 200 || n.chars().any(char::is_control))
+        {
+            errors.push(format!(
+                "{}: new_callers {list} names \"{bad}\", which no caller can have. List names as keys, person tokens and JWTs name callers, such as billing-bot or maya@acme.co.",
+                at(list)
+            ));
+            ok = false;
+        }
+    }
+    if let Some(both) = file.allowed.iter().find(|n| file.blocked.contains(n)) {
+        errors.push(format!(
+            "{}: new_callers names \"{both}\" under both allowed and blocked. Keep it on one list: allowed lets it through, blocked refuses it.",
+            at("blocked")
+        ));
+        ok = false;
+    }
+    ok.then(|| crate::policy::NewCallers {
+        mode,
+        allowed: file.allowed.iter().cloned().collect(),
+        blocked: file.blocked.iter().cloned().collect(),
+        admins: std::collections::BTreeSet::new(),
     })
 }
 
@@ -6066,6 +6135,7 @@ pub fn load_texts(
             Mode::Enforce
         }
     };
+    let new_callers = new_callers(policy_path, policy_text, &parsed, &mut errors);
     check_orgs(policy_path, policy_text, &parsed, &mut errors);
     check_profiles(policy_path, policy_text, &parsed, &mut errors);
     let scope_limits = scope_limits(policy_path, policy_text, &parsed, &mut errors);
@@ -6184,6 +6254,7 @@ pub fn load_texts(
                 .with_model_groups(parsed.model_groups.clone().into_iter().collect())
                 .with_key_bounds(key_bounds)
                 .with_coding_agents(coding_agents)
+                .with_new_callers(new_callers)
                 .with_mode(mode),
             providers,
             audit_path,

@@ -1317,6 +1317,88 @@ pub struct Policy {
     key_bounds: Vec<(String, KeyBounds)>,
     /// `coding_agents:` at the top of the policy: what a caller no rule names, or a device with no person, gets.
     coding_agents: crate::coding_agents::CodingAgents,
+    /// `new_callers:`: what happens to a caller no admin has reviewed. `None` keeps the behavior of before it.
+    new_callers: Option<NewCallers>,
+}
+
+/// `new_callers:` in the policy: what the organization does the first time a caller nobody has reviewed sends a
+/// request, and the callers an admin has reviewed, by name (a key's, a person token's or a JWT's).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NewCallers {
+    pub mode: NewMode,
+    pub allowed: std::collections::BTreeSet<String>,
+    pub blocked: std::collections::BTreeSet<String>,
+    /// Names that hold an admin key, filled in from the keys: their person token is an admin's too.
+    pub admins: std::collections::BTreeSet<String>,
+}
+
+/// What happens to a caller on neither list.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NewMode {
+    /// Let it through, as far as a provider serves it, and flag its records as `new_caller`.
+    #[default]
+    Allow,
+    /// Refuse it as `awaiting_approval` until an admin allows it.
+    Hold,
+    /// Refuse it as `caller_blocked`; an admin can still allow it.
+    Block,
+}
+
+impl NewMode {
+    pub const WORDS: [&'static str; 3] = ["allow", "hold", "block"];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Hold => "hold",
+            Self::Block => "block",
+        }
+    }
+
+    pub fn parse(word: &str) -> Option<Self> {
+        match word {
+            "allow" => Some(Self::Allow),
+            "hold" => Some(Self::Hold),
+            "block" => Some(Self::Block),
+            _ => None,
+        }
+    }
+}
+
+/// The console page that lists new callers and unknown models, with Allow and Block: every refusal about them names it.
+pub const NEW_CALLERS_PAGE: &str = "/console/app/#/apps/new";
+
+/// What `new_callers:` decides for one caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallerVerdict {
+    /// Reviewed and allowed, an admin, or no `new_callers:` at all.
+    Known,
+    /// Not reviewed, let through under `mode: allow`.
+    New,
+    /// Not reviewed, refused under `mode: hold`.
+    Held,
+    /// Not reviewed, refused under `mode: block`.
+    NewBlocked,
+    /// On `blocked:`.
+    Blocked,
+}
+
+impl NewCallers {
+    /// What happens to `person`. An admin key is never held: someone has to be able to approve the rest.
+    pub fn verdict(&self, person: &Principal) -> CallerVerdict {
+        if self.blocked.contains(&person.name) {
+            return CallerVerdict::Blocked;
+        }
+        if person.admin || self.allowed.contains(&person.name) || self.admins.contains(&person.name)
+        {
+            return CallerVerdict::Known;
+        }
+        match self.mode {
+            NewMode::Allow => CallerVerdict::New,
+            NewMode::Hold => CallerVerdict::Held,
+            NewMode::Block => CallerVerdict::NewBlocked,
+        }
+    }
 }
 
 /// `identity_headers:` in the policy: the request headers (lower case) in which a proxy that authenticates people
@@ -1415,6 +1497,30 @@ impl Policy {
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    pub fn with_new_callers(mut self, new_callers: Option<NewCallers>) -> Self {
+        self.new_callers = new_callers.map(|mut n| {
+            n.admins = self
+                .keys
+                .values()
+                .filter(|p| p.admin)
+                .map(|p| p.name.clone())
+                .collect();
+            n
+        });
+        self
+    }
+
+    pub fn new_callers(&self) -> Option<&NewCallers> {
+        self.new_callers.as_ref()
+    }
+
+    /// What `new_callers:` decides for `person`: [`CallerVerdict::Known`] without the setting.
+    pub fn caller_verdict(&self, person: &Principal) -> CallerVerdict {
+        self.new_callers
+            .as_ref()
+            .map_or(CallerVerdict::Known, |n| n.verdict(person))
     }
 
     /// Why a decision against a request is recorded as `would_refuse` and forwarded rather than refused: `observe`
@@ -2293,6 +2399,41 @@ pub fn applied_json(a: &Applied) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_callers_hold_or_block_the_unreviewed_and_never_an_admin() {
+        let who = |name: &str, admin: bool| Principal {
+            name: name.into(),
+            admin,
+            ..Principal::default()
+        };
+        assert_eq!(
+            Policy::new().caller_verdict(&who("bot", false)),
+            CallerVerdict::Known,
+            "without the setting nothing changes"
+        );
+        let mut n = NewCallers {
+            mode: NewMode::Hold,
+            allowed: ["maya".to_string()].into(),
+            blocked: ["scraper".to_string(), "root".to_string()].into(),
+            admins: ["noa".to_string()].into(),
+        };
+        // The person token of someone who holds an admin key is an admin's too.
+        assert_eq!(n.verdict(&who("noa", false)), CallerVerdict::Known);
+        assert_eq!(n.verdict(&who("bot", false)), CallerVerdict::Held);
+        assert_eq!(n.verdict(&who("maya", false)), CallerVerdict::Known);
+        assert_eq!(n.verdict(&who("ops", true)), CallerVerdict::Known);
+        assert_eq!(n.verdict(&who("scraper", false)), CallerVerdict::Blocked);
+        // An admin key named on blocked: is blocked: the list is an admin decision.
+        assert_eq!(n.verdict(&who("root", true)), CallerVerdict::Blocked);
+        n.mode = NewMode::Allow;
+        assert_eq!(n.verdict(&who("bot", false)), CallerVerdict::New);
+        n.mode = NewMode::Block;
+        assert_eq!(n.verdict(&who("bot", false)), CallerVerdict::NewBlocked);
+        for word in NewMode::WORDS {
+            assert_eq!(NewMode::parse(word).map(NewMode::word), Some(word));
+        }
+    }
 
     fn policy() -> Policy {
         Policy::new()
