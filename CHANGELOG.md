@@ -7,12 +7,28 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-26
+
 ### Added
 
 - Coding agent controls: `coding_agents:` in the policy (organization wide, overridden per rule) allows or blocks
   `--dangerously-skip-permissions`, auto mode and browser use (Claude in Chrome and browser MCP servers). The device
   agent writes them into Claude Code's managed settings; the gateway refuses a request offering browser tools with
   `browser_not_allowed`, or strips them with `tool_action: strip`. Set on the console's Coding agents page.
+- Console: every create flow has "Copy for your agent": a new key, person token or service key (a prompt with the key
+  and the steps for the person's coding tools, Claude Code on their own login, or the app's code), and Rules,
+  Aliases and MCP servers.
+- Console: Guardrails has its own page, under Security.
+
+### Changed
+
+- Console: the sidebar is grouped by use case. Coding agents: Getting started, Users, Groups, Policies. Apps and
+  agents: Getting started, Policies, Logs, MCP tools. Security: Guardrails, Kill switches and audit. The policy file
+  and its versions are under Settings. Old links still open.
+- Console: teams, people, apps and tags are picked from a searchable list in the rule, limit and kill switch forms.
+  "Create" adds a new one; a new person or app opens Issue a key in place and comes back with it picked.
+- Console: Add a provider takes models as chips (Enter or a pasted list), one key field (an environment variable
+  only when asked for), and keeps its buttons in view.
 
 ## [0.2.0] - 2026-11-26
 

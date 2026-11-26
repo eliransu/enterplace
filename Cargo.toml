@@ -3,16 +3,16 @@ resolver = "3"
 members = ["crates/enterplace-core", "crates/enterplace-server", "crates/enterplace-cli", "crates/enterplace-bench", "crates/enterplace-console", "enterprise"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 
 [workspace.dependencies]
-enterplace-core = { path = "crates/enterplace-core", version = "0.2.0" }
-enterplace-server = { path = "crates/enterplace-server", version = "0.2.0" }
-enterplace-console = { path = "crates/enterplace-console", version = "0.2.0" }
-enterplace-cli = { path = "crates/enterplace-cli", version = "0.2.0" }
+enterplace-core = { path = "crates/enterplace-core", version = "0.3.0" }
+enterplace-server = { path = "crates/enterplace-server", version = "0.3.0" }
+enterplace-console = { path = "crates/enterplace-console", version = "0.3.0" }
+enterplace-cli = { path = "crates/enterplace-cli", version = "0.3.0" }
 # `ws`: realtime sessions (OpenAI Realtime, Gemini Live) are WebSocket connections callers open to Enterplace.
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "tokio", "ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
