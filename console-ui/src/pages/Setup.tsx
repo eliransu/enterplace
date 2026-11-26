@@ -540,7 +540,7 @@ function Checklist({
                   >
                     <span
                       aria-hidden="true"
-                      className="size-2 animate-pulse rounded-pill bg-lime"
+                      className="size-2 animate-pulse rounded-pill bg-live"
                     />
                     <span>{s.listen}</span>
                     {s.open ? <a href={s.open.href}>{s.open.label}</a> : null}
@@ -875,9 +875,10 @@ function FiveSteps({ stages }: { stages: Stages }) {
             key={s.name}
             data-state={s.state}
             aria-current={s.state === "current" ? "step" : undefined}
+            // A progress bar's segments, not cards: the steps are not links, so nothing here should look clickable.
             className={cn(
-              "grid gap-1 rounded-box border border-border p-4",
-              s.state === "done" && "bg-card",
+              "grid gap-1 border-t-2 border-border pt-2",
+              s.state === "done" && "border-muted-foreground",
               s.state === "current" && "border-foreground",
             )}
           >

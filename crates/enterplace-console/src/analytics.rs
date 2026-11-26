@@ -423,6 +423,14 @@ async fn analytics(State(console): State<Console>, headers: HeaderMap, uri: Uri)
                 }
                 [one, ..] => (*one).to_string(),
             };
+            // Unnamed traffic is never "team unknown": it is the one row the ranking pins as a problem.
+            let trend_label = trend.as_ref().map(|(d, v)| {
+                if ["person", "team", "key"].contains(&d.name) && (v.is_empty() || v == "unknown") {
+                    "Unnamed traffic".to_string()
+                } else {
+                    format!("{} {v}", d.label)
+                }
+            });
             let cost_label = if all.estimated_usd > 0.0 {
                 format!("cost, {} of it estimated", money_est(all.estimated_usd))
             } else {
@@ -444,10 +452,10 @@ async fn analytics(State(console): State<Console>, headers: HeaderMap, uri: Uri)
                     "{}, per {}{}",
                     metric.1,
                     if window.2 { "hour" } else { "day" },
-                    trend.as_ref().map_or(String::new(), |(d, v)| format!(", {} {v}", d.label.to_lowercase()))
+                    trend_label.as_ref().map_or(String::new(), |l| format!(", {}", l.to_lowercase()))
                 ),
                 "chart": chart,
-                "trend": trend.as_ref().map(|(d, v)| json!({ "name": d.name, "value": v, "label": format!("{} {v}", d.label) })),
+                "trend": trend.as_ref().zip(trend_label.as_ref()).map(|((d, v), label)| json!({ "name": d.name, "value": v, "label": label })),
                 "by": dimension.name,
                 "ranking_title": format!("By {}, most costly first", dimension.label.to_lowercase()),
                 "by_label": dimension.label,

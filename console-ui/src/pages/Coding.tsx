@@ -116,7 +116,7 @@ function Names() {
           aria-describedby="names-said"
           className="mt-1"
         />
-        <div className="grid min-w-0 flex-1 gap-1">
+        <div className="grid min-w-0 flex-1 basis-60 gap-1">
           <label htmlFor="names-required" className="t-body-strong">
             Every request needs a name
           </label>
@@ -138,7 +138,7 @@ function Names() {
           className="flex flex-wrap items-center gap-4 rounded-box border border-input p-4"
         >
           <TriangleAlert aria-hidden="true" className="size-4 flex-none" />
-          <div className="grid min-w-0 flex-1 gap-1">
+          <div className="grid min-w-0 flex-1 basis-60 gap-1">
             <span className="t-body-strong">{warning.title}</span>
             <span className="t-small text-muted-foreground">
               {warning.body}

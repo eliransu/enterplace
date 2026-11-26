@@ -426,7 +426,13 @@ async fn a_wrong_key_or_a_key_that_is_not_an_admin_is_refused_with_the_error_sta
         post("/console/sign-in", "", &format!("key={MAYA_KEY}"))?,
     )
     .await?;
-    assert_eq!(unknown, member);
+    // Each page keeps what was pasted, so a key cut short can be fixed; past that, they are the same page.
+    assert!(unknown.contains(r#"value="enterplace_nobody""#));
+    assert!(!unknown.contains("enterplace.keys.yaml"), "no file names on the page");
+    assert_eq!(
+        unknown.replace("enterplace_nobody", "KEY"),
+        member.replace(MAYA_KEY, "KEY")
+    );
     Ok(())
 }
 

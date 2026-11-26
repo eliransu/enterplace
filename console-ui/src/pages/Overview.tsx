@@ -74,6 +74,7 @@ export function Overview({ me, query }: PageProps) {
   const keys = useData<Keys>("people");
   const agents = useData<Ranking>("analytics?by=agent&window=24h");
   const persons = useData<Ranking>("analytics?by=person&window=24h");
+  const month = useData<Ranking>("analytics?by=team&window=month");
   const mcp = useData<{ servers: unknown[] }>("mcp");
   const approvals = useData<{ calls?: unknown[] }>("mcp-approvals");
 
@@ -242,7 +243,7 @@ export function Overview({ me, query }: PageProps) {
               className="flex flex-wrap items-center gap-4 rounded-panel border border-input p-4"
             >
               <TriangleAlert aria-hidden="true" className="size-4 flex-none" />
-              <div className="grid min-w-0 flex-1 gap-1">
+              <div className="grid min-w-0 flex-1 basis-60 gap-1">
                 <span className="t-body-strong">{a.title}</span>
                 <span className="t-small text-muted-foreground">{a.body}</span>
               </div>
@@ -252,6 +253,22 @@ export function Overview({ me, query }: PageProps) {
             </div>
           ))}
         </section>
+      ) : null}
+      {/* The figure a manager asks first, one click from where it is broken down. */}
+      {month.data?.stats?.[1] ? (
+        <a
+          href="#/usage?window=month"
+          className="flex flex-wrap items-baseline justify-between gap-2 rounded-panel bg-card p-6 no-underline text-foreground hover:bg-accent"
+        >
+          <span className="grid gap-1">
+            <span className="t-small text-muted-foreground">Spend this month</span>
+            <span className="t-lg tabular-nums">{month.data.stats[1].figure}</span>
+            {month.data.stats[1].label !== "cost" ? (
+              <span className="t-small text-muted-foreground">{month.data.stats[1].label.replace(/^cost, /, "")}</span>
+            ) : null}
+          </span>
+          <span className="t-small">See it by team in Usage</span>
+        </a>
       ) : null}
       <section aria-label="Use cases" className="grid gap-4 lg:grid-cols-3">
         {cards.map((c) => (
@@ -273,7 +290,7 @@ export function Overview({ me, query }: PageProps) {
                     aria-hidden="true"
                     className={cn(
                       "size-2 rounded-pill border border-foreground",
-                      c.live && "border-lime bg-lime",
+                      c.live && "border-live bg-live",
                     )}
                   />
                   {c.status}

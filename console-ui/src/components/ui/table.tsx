@@ -2,10 +2,11 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 // Dense rows separated by hairlines, inside a panel: the console's Table. `long`: a list of up to a page of rows
-// scrolls inside its panel under a header that stays put.
+// scrolls inside its panel under a header that stays put. Relative, so a cell's absolutely placed screen reader label is
+// clipped by the scroll box too, instead of widening the whole page on a phone.
 function Table({ className, long, ...props }: React.ComponentProps<"table"> & { long?: boolean }) {
   return (
-    <div className={long ? "max-h-[75vh] overflow-auto" : "overflow-x-auto"}>
+    <div className={cn("relative", long ? "max-h-[75vh] overflow-auto" : "overflow-x-auto")}>
       <table
         data-slot="table"
         className={cn("w-full border-separate border-spacing-0", long && "[&_th]:sticky [&_th]:top-0 [&_th]:z-[1] [&_th]:bg-card", className)}

@@ -1,8 +1,9 @@
 import * as React from "react";
 import { Checkbox as CheckboxPrimitive } from "radix-ui";
+import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-// A checked choice holds a disc, as the console's Choice does.
+// A square box with a tick, so it never reads as a radio button.
 function Checkbox({ className, ...props }: React.ComponentProps<typeof CheckboxPrimitive.Root>) {
   return (
     <CheckboxPrimitive.Root
@@ -12,7 +13,9 @@ function Checkbox({ className, ...props }: React.ComponentProps<typeof CheckboxP
       )}
       {...props}
     >
-      <CheckboxPrimitive.Indicator className="block size-2 rounded-pill bg-primary-foreground" />
+      <CheckboxPrimitive.Indicator className="text-primary-foreground">
+        <Check aria-hidden="true" className="size-4" strokeWidth={2.5} />
+      </CheckboxPrimitive.Indicator>
     </CheckboxPrimitive.Root>
   );
 }

@@ -82,6 +82,17 @@ impl Track {
         }
     }
 
+    /// The track as the toast after picking it names it: lower case, so it reads inside a sentence.
+    fn steps_for(self) -> &'static str {
+        match self {
+            Track::Coding => "coding agents",
+            Track::Apps => "your own apps and agents",
+            Track::Mcp => "MCP tools",
+            Track::Limit => "a team spend limit",
+            Track::Watch => "watching Claude Team seats",
+        }
+    }
+
     fn button(self) -> &'static str {
         match self {
             Track::Coding => "coding agents",
@@ -2851,7 +2862,7 @@ async fn pick(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) 
                 kept.choice = Some(track);
                 (
                     json!({ "choice": track.id() }),
-                    format!("Started with {}.", track.name()),
+                    format!("Showing the steps for {}.", track.steps_for()),
                 )
             };
             let act = Act {

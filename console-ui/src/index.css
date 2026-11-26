@@ -47,6 +47,8 @@
   --color-overlay: var(--overlay);
   --color-lime: var(--lime);
   --color-on-lime: var(--on-lime);
+  /* A status dot with no dark edge: lime on white is under 3:1, so light mode draws it darker. */
+  --color-live: var(--live);
 
   --radius-small: var(--radius-sm);
   --radius-box: var(--radius-md);

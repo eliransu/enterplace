@@ -894,13 +894,24 @@ pub fn usage_csv(group: &str, then: &[&str], ranked: &[Split]) -> String {
         .collect::<Vec<_>>()
         .join(",");
     out.push('\n');
+    // A request that named nobody reads as one plain word in a spreadsheet, never "unknown" in one row and blank in
+    // the next; money is cents, not float noise.
+    let columns: Vec<&str> = std::iter::once(group).chain(then.iter().copied()).collect();
     let mut line = |names: Vec<&str>, stats: &Stats| {
         let row = usage_json(stats);
         let cells = names
             .into_iter()
-            .map(csv_field)
+            .zip(&columns)
+            .map(|(name, column)| {
+                let unnamed = ["person", "team", "key"].contains(column)
+                    && (name.is_empty() || name == "unknown");
+                csv_field(if unnamed { "UNNAMED" } else { name })
+            })
             .chain(USAGE_COLUMNS.iter().map(|c| match &row[*c] {
                 Value::Null => String::new(),
+                Value::Number(n) if c.ends_with("_usd") => {
+                    format!("{:.2}", n.as_f64().unwrap_or_default())
+                }
                 v => v.to_string(),
             }))
             .collect::<Vec<_>>();
@@ -1396,6 +1407,32 @@ mod tests {
     use super::*;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn usage_csv_rounds_money_and_names_unnamed_once() {
+        let spent = Stats {
+            requests: 2,
+            cost_usd: 8.087090700000001,
+            ..Stats::default()
+        };
+        let ranked: Vec<Split> = vec![
+            ("unknown".into(), spent.clone(), Vec::new()),
+            (String::new(), spent.clone(), Vec::new()),
+            ("ana".into(), spent, Vec::new()),
+        ];
+        let csv = usage_csv("person", &[], &ranked);
+        let lines: Vec<&str> = csv.lines().skip(1).collect();
+        assert!(lines[0].starts_with("\"UNNAMED\",2,"), "{csv}");
+        assert!(lines[1].starts_with("\"UNNAMED\",2,"), "{csv}");
+        assert!(lines[2].contains(",8.09,"), "{csv}");
+        assert!(!csv.contains("8.0870"), "{csv}");
+        // A model is never "unnamed": an empty one stays empty.
+        let csv = usage_csv("model", &[], &ranked[1..2]);
+        assert!(
+            csv.lines().nth(1).is_some_and(|l| l.starts_with("\"\",")),
+            "{csv}"
+        );
+    }
 
     fn chain() -> Result<(PathBuf, crate::audit::AuditLog), Box<dyn std::error::Error>> {
         let dir =
