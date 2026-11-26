@@ -768,7 +768,7 @@ async fn a_tool_using_turn_is_the_same_events_on_four_apis() -> TestResult {
             .collect();
         // The records carry the session and the turn, and never a word of the conversation.
         let log = std::fs::read_to_string(&s.audit)?;
-        assert!(!log.contains("Paris") && !log.contains("18C"), "{log}");
+        assert!(!log.contains("Paris") && !standalone(&log, "18C"), "{log}");
         let all = records(&s)?;
         let decisions: Vec<&Value> = all.iter().filter(|r| r.get("method").is_some()).collect();
         let usage: Vec<&Value> = all.iter().filter(|r| r["event"] == "usage").collect();
@@ -2486,4 +2486,14 @@ async fn each_line_of_a_batch_and_each_line_of_its_results_is_an_event_of_the_li
     assert_eq!(blocked["verdict"], "block");
     assert_eq!(blocked["events"][0]["action"], "block");
     Ok(())
+}
+
+/// Whether `word` stands alone in `text`, as conversation text does ("18C" in `"18C"` or `is 18C in`), and not inside
+/// a longer run of letters and digits, as it can by chance inside a record's ULID or hash (`...V18CZB...`).
+fn standalone(text: &str, word: &str) -> bool {
+    text.match_indices(word).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + word.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    })
 }
