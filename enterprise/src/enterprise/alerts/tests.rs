@@ -1211,6 +1211,78 @@ async fn provider_errors_count_failures_that_were_not_retried() -> Result<(), Er
     assert!(summary.contains("upstream_timeout"), "{summary}");
     Ok(())
 }
+#[tokio::test]
+async fn a_new_caller_alerts_once_and_a_reviewed_one_never() -> Result<(), Error> {
+    let Some(url) = database("alerts_new_caller").await? else {
+        return Ok(());
+    };
+    let sink = Sink::start().await?;
+    let (gw, ex) = quiet("alerts_new_caller", &url, &["alerts"])?;
+    let mut owner = Browser::admin(&gw.app).await?;
+    webhook(&mut owner, &gw, &sink).await?;
+    let added = add_rule(
+        &mut owner,
+        &gw,
+        &[("kind", "new_caller"), ("name_rule", "New caller")],
+    )
+    .await?;
+    assert!(added.contains("Added rule"), "{added}");
+    // A known caller, and a caller an admin blocked: the gateway flags neither as new.
+    request(&gw, "k1", "maya.cohen", "aaaa1111", "10.0.0.1", None)?;
+    request(
+        &gw,
+        "k2",
+        "scraper",
+        "bbbb2222",
+        "10.0.0.1",
+        Some("caller_blocked"),
+    )?;
+    run(&ex).await?;
+    assert!(
+        sink.deliveries().is_empty(),
+        "{:?}",
+        sink.deliveries().len()
+    );
+    // A new caller let through, then held: one alert each, not one per request.
+    for (id, person, code) in [
+        ("n1", "billing-bot", None),
+        ("n2", "billing-bot", None),
+        ("n3", "support-bot", Some("awaiting_approval")),
+        ("n4", "support-bot", Some("awaiting_approval")),
+    ] {
+        let mut record = json!({ "id": id, "person": person, "team": "payments", "key": "cccc3333", "method": "POST", "path": "/v1/chat/completions", "model": "m", "new_caller": true });
+        match code {
+            Some(code) => {
+                record["verdict"] = "refuse".into();
+                record["code"] = code.into();
+            }
+            None => record["verdict"] = "allow".into(),
+        }
+        write(&gw, record)?;
+    }
+    run(&ex).await?;
+    let hits: Vec<Value> = sink.deliveries().iter().map(|h| h.json()).collect();
+    let mut subjects: Vec<&str> = hits.iter().filter_map(|h| h["subject"].as_str()).collect();
+    subjects.sort_unstable();
+    assert_eq!(
+        subjects,
+        ["caller:billing-bot", "caller:support-bot"],
+        "{hits:?}"
+    );
+    let held = hits
+        .iter()
+        .find(|h| h["subject"] == "caller:support-bot")
+        .ok_or("no alert for support-bot")?;
+    let summary = held["summary"].as_str().unwrap_or_default();
+    assert!(
+        summary.contains("support-bot")
+            && summary.contains("awaiting_approval")
+            && summary.contains(enterplace_core::policy::NEW_CALLERS_PAGE),
+        "{summary}"
+    );
+    Ok(())
+}
+
 async fn admin_call(
     gw: &Gateway,
     method: &str,

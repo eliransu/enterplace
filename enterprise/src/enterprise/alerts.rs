@@ -174,9 +174,10 @@ pub enum RuleKind {
     ConfigRejected,
     KillCleared,
     CircuitOpen,
+    NewCaller,
 }
 
-pub const RULE_KINDS: [RuleKind; 24] = [
+pub const RULE_KINDS: [RuleKind; 25] = [
     RuleKind::Budget,
     RuleKind::RateLimit,
     RuleKind::Refusals,
@@ -201,6 +202,7 @@ pub const RULE_KINDS: [RuleKind; 24] = [
     RuleKind::ConfigRejected,
     RuleKind::KillCleared,
     RuleKind::CircuitOpen,
+    RuleKind::NewCaller,
 ];
 
 impl RuleKind {
@@ -230,6 +232,7 @@ impl RuleKind {
             Self::ConfigRejected => "config_rejected",
             Self::KillCleared => "kill_cleared",
             Self::CircuitOpen => "circuit_open",
+            Self::NewCaller => "new_caller",
         }
     }
 
@@ -261,6 +264,7 @@ impl RuleKind {
             Self::ConfigRejected => "A policy change is refused",
             Self::KillCleared => "Kill switch cleared",
             Self::CircuitOpen => "A deployment is put to cool down",
+            Self::NewCaller => "A caller no admin has reviewed sends its first request",
         }
     }
 
@@ -298,6 +302,7 @@ impl RuleKind {
                 | Self::DailyDigest
                 | Self::ConfigRejected
                 | Self::KillCleared
+                | Self::NewCaller
         )
     }
 
@@ -621,6 +626,9 @@ impl Rule {
                 "a reload refuses a policy or keys change, or a policy version is refused as invalid".into()
             }
             RuleKind::KillCleared => "an admin clears a kill switch".into(),
+            RuleKind::NewCaller => {
+                "a key, person token or sign-in no admin has reviewed sends its first request, let through, held or blocked".into()
+            }
             RuleKind::CircuitOpen => {
                 "an alias deployment fails and is passed over for its cooldown, by deployment".into()
             }
@@ -1588,6 +1596,28 @@ impl Engine {
                         known_keys.insert(key.to_string());
                         known_pairs.insert(pair.clone());
                         addresses.push(pair);
+                    }
+                    // The gateway flags a caller no admin has reviewed; one alert per caller, ever, as the subject says.
+                    (RuleKind::NewCaller, "request") if record["new_caller"] == true => {
+                        let Some(person) = record["person"].as_str().filter(|p| !p.is_empty())
+                        else {
+                            continue;
+                        };
+                        let what = match record["code"].as_str() {
+                            Some(code) if record["verdict"] != "allow" => {
+                                format!("was refused as {code}")
+                            }
+                            _ => "was let through".to_string(),
+                        };
+                        hit(
+                            rule,
+                            format!("caller:{person}"),
+                            format!(
+                                "{person}, a caller no admin has reviewed, sent its first request and {what}. Allow or block it on the console's New and pending page ({}).",
+                                enterplace_core::policy::NEW_CALLERS_PAGE
+                            ),
+                            0,
+                        );
                     }
                     (RuleKind::AfterHours, "request") if record["verdict"] == "allow" => {
                         let (Some(key), Some(hours), Some(at)) = (

@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import { createElement, type ComponentType } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeftRight,
@@ -12,6 +12,7 @@ import {
   ScrollText,
   Server,
   ShieldCheck,
+  UserPlus,
   SquareTerminal,
   User,
   Users,
@@ -21,6 +22,7 @@ import { Overview } from "./Overview";
 import { USE_CASE_PAGES } from "./Setup";
 import { Coding } from "./Coding";
 import { Apps } from "./Apps";
+import { NewCallers } from "./NewCallers";
 import { Providers } from "./Providers";
 import { McpServers } from "./McpServers";
 import { McpApprovals, McpSessions, McpTools } from "./Mcp";
@@ -57,7 +59,11 @@ export type Section = {
   icon: LucideIcon;
   group?: (typeof GROUPS)[number];
   tabs: Tab[];
+  /// Shows how many new callers wait for an admin: every one on Apps and agents, people on Coding agents.
+  badge?: "apps" | "coding";
 };
+
+const NewPeople = (props: PageProps) => createElement(NewCallers, { ...props, people: true });
 
 export const GROUPS = ["Coding agents", "Apps and agents", "Security", "Activity", "Settings"] as const;
 
@@ -80,6 +86,13 @@ export const SECTIONS: Section[] = [
     icon: User,
     group: "Coding agents",
     tabs: [{ route: "/people", label: "Users", page: People }],
+  },
+  {
+    label: "New and pending",
+    icon: UserPlus,
+    group: "Coding agents",
+    badge: "coding",
+    tabs: [{ route: "/coding/new", label: "New and pending", page: NewPeople, policy: true }],
   },
   {
     label: "Groups",
@@ -105,6 +118,13 @@ export const SECTIONS: Section[] = [
     icon: Blocks,
     group: "Apps and agents",
     tabs: [{ route: "/apps", label: "Apps and agents", page: Apps }],
+  },
+  {
+    label: "New and pending",
+    icon: UserPlus,
+    group: "Apps and agents",
+    badge: "apps",
+    tabs: [{ route: "/apps/new", label: "New and pending", page: NewCallers, policy: true }],
   },
   {
     label: "Policies",

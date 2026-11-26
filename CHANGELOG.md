@@ -7,6 +7,17 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Added
+
+- New callers: `new_callers:` in the policy decides what happens the first time a key, person token or sign-in no
+  admin has reviewed sends a request: `allow` lets it through and lists it, `hold` refuses it with
+  `awaiting_approval` until an admin allows it, `block` refuses it with `caller_blocked`. The console's New and
+  pending page lists new callers and the models no provider serves, with Allow, Block and Add a provider; a decision
+  works on every gateway within 2 seconds. The sidebar and Overview show what waits, and the `new_caller` alert says
+  when one arrives. `enterplace start` writes `mode: allow`.
+- Refusals for a model no provider serves (`unknown_model`, `wrong_route`, `login_needed`) name the console page that
+  fixes them.
+
 ## [0.3.0] - 2026-11-26
 
 ### Added

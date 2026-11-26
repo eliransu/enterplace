@@ -1,0 +1,64 @@
+---
+title: New callers
+description: Decide what happens the first time a key, person token or sign-in nobody has reviewed sends a request, and allow or block it from the console in 2 seconds.
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A new service key, a person who just signed in with single sign-on, an agent someone set up last night: each is a caller no admin has looked at yet. `new_callers:` in the policy decides what happens to them, and the console's **New and pending** page lists them with **Allow** and **Block**. A decision works on every gateway within 2 seconds, with no YAML to edit.
+
+## Choose what happens
+
+```yaml
+new_callers:
+  mode: hold
+```
+
+| Mode | A caller no admin has reviewed | Listed as |
+|---|---|---|
+| `allow` | Goes through, as far as its rule and a provider let it. Its records carry `"new_caller": true` | new |
+| `hold` | Refused with [`awaiting_approval`](/reference/refusal-codes/#awaiting_approval) until an admin allows it | pending |
+| `block` | Refused with [`caller_blocked`](/reference/refusal-codes/#caller_blocked); an admin can still allow it | blocked by default |
+
+Without `new_callers:` nothing changes: every caller with a valid key goes through as before.
+
+A caller is known by its name: the name of its key, its person token or its single sign-on identity. A rotated key, or a key `enterplace login` replaces, keeps its name and is not new again. A caller that holds an admin key is never held or blocked by the mode, so someone can always approve the rest.
+
+<Aside type="caution">
+`new_callers:` is not softened by observe mode. Like a kill switch, it is the organization's decision about who may call at all.
+</Aside>
+
+## Allow and block
+
+In the console, **Apps and agents**, **New and pending** (or **Coding agents**, **New and pending** for people) lists every caller of the last 30 days no admin has reviewed, newest first, with its team, kind (service key, person key, person token or sign-in), when it was first and last seen, and its last refusal. **Allow** and **Block** put the name on a list in the policy:
+
+```yaml
+new_callers:
+  mode: hold
+  allowed: [billing-bot, maya@acme.co]
+  blocked: [scraper]
+```
+
+A name on `allowed:` goes through in every mode. A name on `blocked:` is refused with `caller_blocked` in every mode, an admin's included. A name on both lists is refused by `enterplace check`. Each decision is a policy change like any other: checked, recorded in the audit log with the admin who made it, and kept as a policy version, in a file or in the [store](/operations/store/) (Postgres or the Cloudflare store) alike.
+
+When you switch to `hold` or `block` in the console, it offers to allow the callers already working, so turning it on stops nothing that runs today.
+
+The sidebar shows how many callers and models wait, and **Overview** lists them on the use case they belong to.
+
+## Models no provider serves
+
+The same page lists models callers asked for that no provider serves: refusals with [`unknown_model`](/reference/refusal-codes/#unknown_model), [`wrong_route`](/reference/refusal-codes/#wrong_route) or [`login_needed`](/reference/refusal-codes/#login_needed). **Add a provider** opens with the model filled in. A model leaves the list once a request for it goes through. Each of those refusals names the page.
+
+## Be told
+
+The [`new_caller` alert](/operations/alerting/) fires once for each new caller, the first time it sends a request, through the channels you already alert on. It names the caller, what happened to its request and the page to allow or block it. A caller an admin blocked by name is not new and does not set it off.
+
+## In the audit log
+
+| Field | On | Meaning |
+|---|---|---|
+| `new_caller` | request records | `true`: no admin had reviewed the caller when it sent this request, whether it went through, was held or was blocked by the mode |
+| `code` | request records | `awaiting_approval` or `caller_blocked` when it was refused |
+| `action` | admin records | `decide_new_caller` for Allow and Block, `set_new_callers` for a change of mode |

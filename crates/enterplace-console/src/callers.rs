@@ -202,7 +202,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
             listed.sort_by(|a, b| b["first_at"].as_str().cmp(&a["first_at"].as_str()));
             let models: Vec<Value> = models
                 .into_iter()
-                .filter(|(model, m)| !m.fixed && !(m.code == "unknown_model" && served(model)))
+                .filter(|(model, m)| !(m.fixed || (m.code == "unknown_model" && served(model))))
                 .map(|(model, m)| {
                     json!({
                         "model": model,

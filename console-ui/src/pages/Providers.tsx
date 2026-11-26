@@ -38,7 +38,8 @@ import {
 import { Remove } from "@/components/confirm";
 import { Copy } from "@/components/copy";
 import { ChipsInput } from "@/components/chips-input";
-import { api, part, type Me } from "@/lib/api";
+import { api, part } from "@/lib/api";
+import type { PageProps } from "@/pages";
 import { useData } from "@/lib/use";
 import { useProviderStatus } from "@/lib/status";
 import { cn } from "@/lib/utils";
@@ -70,12 +71,14 @@ type Data = {
   docs: string;
 };
 
-export function Providers({ me }: { me: Me | null }) {
+export function Providers({ me, query }: PageProps) {
   const { data, error, change: apply, reload } = useData<Data>("providers");
   // Each save shows its diff and a dry run of the last 24 hours first, and applies only on Apply.
   const [change, checking] = useCheckedChange(apply);
   const { status, reload: retest } = useProviderStatus();
-  const [adding, setAdding] = useState(false);
+  // `?model=openai/gpt-4o` (from New and pending) opens Add a provider with that model filled in.
+  const wanted = query.get("model") ?? "";
+  const [adding, setAdding] = useState(!!wanted);
   const [editing, setEditing] = useState<Provider | null>(null);
   const [testing, setTesting] = useState("");
   const may = !!me?.edit_policy;
@@ -219,7 +222,11 @@ export function Providers({ me }: { me: Me | null }) {
         <AddProvider
           data={data}
           me={me}
-          onClose={() => setAdding(false)}
+          model={wanted}
+          onClose={() => {
+            setAdding(false);
+            if (wanted) window.history.replaceState(null, "", "#/providers");
+          }}
           change={change}
         />
       ) : null}
@@ -241,11 +248,14 @@ type Change = (run: () => Promise<{ message: string }>) => Promise<string>;
 function AddProvider({
   data,
   me,
+  model,
   onClose,
   change,
 }: {
   data: Data;
-  me: Me | null;
+  me: PageProps["me"];
+  /// A model a caller asked for and no provider serves: kept in the list whichever provider is picked.
+  model: string;
   onClose: () => void;
   change: Change;
 }) {
@@ -253,7 +263,13 @@ function AddProvider({
   const catalog = [...data.catalog].sort(
     (a, b) => Number(b.id === "demo") - Number(a.id === "demo"),
   );
-  const start = data.sealing ? "openai" : "demo";
+  // A name with a vendor prefix (openai/gpt-4o) is OpenRouter's way of naming models.
+  const start =
+    model.includes("/") && catalog.some((p) => p.id === "openrouter")
+      ? "openrouter"
+      : data.sealing
+        ? "openai"
+        : "demo";
   const [typed, setTyped] = useState(
     catalog.find((p) => p.id === start)?.name ?? "",
   );
@@ -263,7 +279,9 @@ function AddProvider({
   const [key, setKey] = useState("");
   const [keyEnv, setKeyEnv] = useState("");
   const [url, setUrl] = useState("");
-  const [models, setModels] = useState<string[]>(chosen?.models ?? []);
+  const [models, setModels] = useState<string[]>(
+    model ? [model] : (chosen?.models ?? []),
+  );
   const seal = data.sealing && !!me?.credentials;
   // A pasted key by default; a variable only when asked for, or when no key can be kept here.
   const [useEnv, setUseEnv] = useState(!seal);
@@ -274,7 +292,7 @@ function AddProvider({
   const pick = (value: string) => {
     setTyped(value);
     const next = catalog.find((p) => p.name === value || p.id === value);
-    if (next) setModels(next.models);
+    if (next) setModels(model ? [model] : next.models);
   };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

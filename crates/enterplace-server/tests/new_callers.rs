@@ -242,6 +242,8 @@ async fn hold_refuses_a_new_caller_until_it_is_allowed_within_two_seconds() -> T
         .find(|r| r["person"] == "billing-bot")
         .ok_or("no record of billing-bot")?;
     assert_eq!(last_bot["code"], "awaiting_approval", "{last_bot}");
+    // Held is new too: the New and pending page and the new_caller alert find it by the flag.
+    assert_eq!(last_bot["new_caller"], true, "{last_bot}");
 
     s.write("new_callers:\n  mode: hold\n  allowed: [billing-bot]\n")?;
     until(&gw.router, Duration::from_secs(2), StatusCode::OK, || {
@@ -274,6 +276,21 @@ async fn block_refuses_new_callers_and_a_blocked_name_is_refused_in_every_mode()
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"]["code"], "caller_blocked");
     assert!(message(&body).contains("blocked"), "{body}");
+    // A name an admin blocked was reviewed: its refusals are not flagged new, a new caller blocked by the mode's are.
+    let records = s.records()?;
+    let bot: Vec<&Value> = records
+        .iter()
+        .filter(|r| r["person"] == "billing-bot")
+        .collect();
+    assert_eq!(
+        bot.first().map(|r| &r["new_caller"]),
+        Some(&Value::Bool(true)),
+        "{bot:?}"
+    );
+    assert!(
+        bot.last().is_some_and(|r| r.get("new_caller").is_none()),
+        "{bot:?}"
+    );
 
     s.write("new_callers:\n  mode: block\n  allowed: [billing-bot]\n")?;
     until(&gw.router, Duration::from_secs(2), StatusCode::OK, || {

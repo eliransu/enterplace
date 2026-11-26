@@ -1626,9 +1626,13 @@ fn gemini_error(
 fn anthropic_type(code: &str, status: StatusCode) -> &'static str {
     match code {
         "no_key" | "unknown_key" | "key_expired" => "authentication_error",
-        "no_rule" | "model_not_allowed" | "unknown_model" | "killed" | guard::BLOCKED_CODE => {
-            "permission_error"
-        }
+        "no_rule"
+        | "model_not_allowed"
+        | "unknown_model"
+        | "killed"
+        | "awaiting_approval"
+        | "caller_blocked"
+        | guard::BLOCKED_CODE => "permission_error",
         "unknown_route" => "not_found_error",
         "body_too_large" => "request_too_large",
         "busy" if status == StatusCode::TOO_MANY_REQUESTS => "rate_limit_error",
@@ -2011,7 +2015,7 @@ struct Seen<'a> {
     routing: Option<serde_json::Value>,
     /// Set when the key was replaced by a rotation and is in its grace period.
     rotated: Option<serde_json::Value>,
-    /// The caller is new: no admin has reviewed it, and `new_callers: { mode: allow }` let it through.
+    /// The caller is new: no admin has reviewed it, whether `new_callers:` let it through, held it or blocked it.
     new_caller: bool,
     /// What observe mode or a shadow period let through: one entry per decision that would have refused it.
     would_refuse: Vec<serde_json::Value>,
@@ -3462,12 +3466,15 @@ pub(crate) async fn identify<'a>(
 fn new_caller(policy: &Policy, person: &Principal, seen: &mut Seen<'_>) -> Result<(), Refusal> {
     use enterplace_core::policy::{CallerVerdict, NEW_CALLERS_PAGE};
     let name = &person.name;
-    let (code, message) = match policy.caller_verdict(person) {
+    let verdict = policy.caller_verdict(person);
+    // Held and blocked-by-mode callers are new as well: their refusals are what New and pending lists.
+    seen.new_caller = matches!(
+        verdict,
+        CallerVerdict::New | CallerVerdict::Held | CallerVerdict::NewBlocked
+    );
+    let (code, message) = match verdict {
         CallerVerdict::Known => return Ok(()),
-        CallerVerdict::New => {
-            seen.new_caller = true;
-            return Ok(());
-        }
+        CallerVerdict::New => return Ok(()),
         CallerVerdict::Held => (
             "awaiting_approval",
             format!(
