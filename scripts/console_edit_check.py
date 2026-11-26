@@ -119,6 +119,8 @@ audit: {{ path: enterplace-audit.jsonl }}
             el.dispatchEvent(new Event('input', { bubbles: true })); };
             set('model-name', 'local-fast'); set('model-input', '0.15'); set('model-output', '0.6'); set('model-aliases', 'fast');
             [...document.querySelectorAll('[role="dialog"] button')].find(b => b.textContent === 'Save version').click(); })()""")
+        chrome.wait("[...document.querySelectorAll('[role=\"dialog\"] button')].some(b => b.textContent === 'Apply')", "the check before the save")
+        chrome.js("[...document.querySelectorAll('[role=\"dialog\"] button')].find(b => b.textContent === 'Apply').click()")
         chrome.wait("document.body.textContent.includes('waits for a second admin')", "the new version waits for approval")
         status, body = api(base, second, "POST", "/admin/policy/versions/2/approve")
         check(status == 200, f"the second admin approves version 2 ({status} {body[:200]})")
