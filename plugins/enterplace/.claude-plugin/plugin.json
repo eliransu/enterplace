@@ -1,7 +1,7 @@
 {
   "name": "enterplace",
   "displayName": "Enterplace",
-  "description": "Set up Claude Code to send its traffic through a local Enterplace gateway",
+  "description": "Connect Claude Code to your organization's AI gateway: a name on every call, budgets and guardrails",
   "author": {
     "name": "Enterplace",
     "url": "https://enterplace.dev"
@@ -15,7 +15,7 @@
     "governance",
     "self-hosted"
   ],
-  "version": "0.1.0",
+  "version": "0.1.1",
   "documentationUrl": "https://docs.enterplace.dev/integrations/claude-code/",
   "supportUrl": "https://github.com/eliransu/enterplace/issues"
 }

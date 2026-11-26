@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Point Claude Code at a local Enterplace gateway. Use when the user asks to route Claude Code through Enterplace, set up Enterplace, or check that the gateway is in use.
+description: Point Claude Code at your organization's Enterplace AI gateway. Use when the user asks to route Claude Code through Enterplace, set up Enterplace, or check that the gateway is in use.
 ---
 
 1. Check the gateway: `curl -fsS http://127.0.0.1:8080/healthz`. If it fails, tell the user to install and start it by

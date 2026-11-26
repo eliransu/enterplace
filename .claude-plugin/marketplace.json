@@ -1,12 +1,12 @@
 {
   "name": "enterplace",
-  "description": "Enterplace: route Claude Code through your own self-hosted AI gateway",
+  "description": "Enterplace: route Claude Code through your organization's AI gateway",
   "owner": { "name": "Enterplace", "url": "https://enterplace.dev" },
   "plugins": [
     {
       "name": "enterplace",
       "source": "./plugins/enterplace",
-      "description": "Set up Claude Code to send its traffic through a local Enterplace gateway",
+      "description": "Connect Claude Code to your organization's AI gateway: a name on every call, budgets and guardrails",
       "category": "gateway",
       "tags": ["gateway", "proxy", "governance", "self-hosted"]
     }
