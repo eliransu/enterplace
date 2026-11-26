@@ -73,6 +73,7 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 | [`max_tokens_needed`](#max_tokens_needed) | 400 | `invalid_request_error` |
 | [`no_rule`](#no_rule) | 403 | `permission_error` |
 | [`tool_not_allowed`](#tool_not_allowed) | 200 (MCP) | |
+| [`browser_not_allowed`](#browser_not_allowed) | 403 | `permission_error` |
 | [`unknown_tool`](#unknown_tool) | 200 (MCP) | |
 | [`mcp_client_not_allowed`](#mcp_client_not_allowed) | 200 (MCP) | |
 | [`session_revoked`](#session_revoked) | 200 (MCP) | |
@@ -295,6 +296,12 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 **JSON-RPC error on `/mcp`.** The first rule that names the caller does not list the MCP tool. The message names the rule and the tools it allows.
 
 **Fix:** call an allowed tool, or ask an admin to add it to the rule's `tools:`. See [MCP gateway](/governance/mcp-gateway/).
+
+### browser_not_allowed
+
+**403.** The caller's rule (or the policy) sets `coding_agents: { browser: block }` and the request offers the model a browser tool, such as Claude in Chrome's `mcp__claude-in-chrome__navigate`. The message names the tools and the rule. With the rule's `tool_action: strip` the tools are taken out instead.
+
+**Fix:** in Claude Code turn Chrome off (`/chrome`, or start without `--chrome`) or remove the browser MCP server, or ask an admin to allow the browser. See [Coding agent controls](/governance/coding-agent-controls/).
 
 ### unknown_tool
 

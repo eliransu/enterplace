@@ -917,10 +917,22 @@ async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls) -> Response
     let holder = d.person(&headers).ok();
     let person = holder.as_ref().map(|h| h.name.clone()).unwrap_or_default();
     let team = if token.team.is_empty() {
-        holder.map(|h| h.team).unwrap_or_default()
+        holder.as_ref().map(|h| h.team.clone()).unwrap_or_default()
     } else {
         token.team.clone()
     };
+    // What the person may do in their coding agents, from the rule that names them, as the gateway decides it.
+    let caller = enterplace_core::policy::Principal {
+        name: person.clone(),
+        team: team.clone(),
+        org: holder.as_ref().map_or(token.org.clone(), |h| h.org.clone()),
+        tags: holder.map(|h| h.tags).unwrap_or_default(),
+        ..Default::default()
+    };
+    let coding_agents = d
+        .policy
+        .with(|p| p.coding_agents(Some(&caller)).to_json())
+        .unwrap_or_else(|| json!({}));
     let row = match d.db.client().await {
         Ok(client) => client
             .query_opt(
@@ -966,7 +978,7 @@ async fn profile(Ext(d): Ext<Devices>, headers: HeaderMap, tls: Tls) -> Response
     mcp["enforcement"] = enforcement.into();
     Json(json!({
         "gateway_url": gateway, "tools": tools, "team": team, "person": person, "mcp": mcp,
-        "apps": { "allowed": allowed, "denied": denied },
+        "apps": { "allowed": allowed, "denied": denied }, "coding_agents": coding_agents,
     }))
     .into_response()
 }

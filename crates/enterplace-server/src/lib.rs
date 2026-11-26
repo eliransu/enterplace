@@ -5149,12 +5149,13 @@ async fn decide(
             (None, false) => {}
         }
     }
-    // The function tools a request declares are checked against the rule's tools: before the guardrails read it.
+    // The function tools a request declares are checked against the rule's tools:, and its browser tools against
+    // its coding_agents: browser, before the guardrails read it.
     let mut tool_entries = Vec::new();
-    if let Some(rule) = seen
-        .rule
-        .filter(|r| enterplace_core::fntools::checked(&r.tools))
-    {
+    if let Some(rule) = seen.rule.filter(|r| {
+        enterplace_core::fntools::checked(&r.tools)
+            || r.coding_agents.browser == enterplace_core::coding_agents::Control::Block
+    }) {
         let mut refused = None;
         if let Ok(Next::Forward(parts, bytes, _)) = &mut outcome
             && let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(bytes)
@@ -5162,6 +5163,7 @@ async fn decide(
             let verdict =
                 enterplace_core::fntools::request(&mut body, &rule.tools, rule.tool_strip);
             tool_entries = verdict.audit;
+            let mut changed = verdict.changed;
             if !verdict.refused.is_empty() {
                 refused = Some(Refusal::new(
                     StatusCode::FORBIDDEN,
@@ -5173,7 +5175,25 @@ async fn decide(
                         false,
                     ),
                 ));
-            } else if verdict.changed {
+            } else if rule.coding_agents.browser == enterplace_core::coding_agents::Control::Block {
+                use enterplace_core::coding_agents as agents;
+                let verdict = enterplace_core::fntools::request_by(
+                    &mut body,
+                    &agents::is_browser_tool,
+                    agents::BROWSER_LABELS,
+                    rule.tool_strip,
+                );
+                tool_entries.extend(verdict.audit);
+                changed |= verdict.changed;
+                if !verdict.refused.is_empty() {
+                    refused = Some(Refusal::new(
+                        StatusCode::FORBIDDEN,
+                        agents::BROWSER_NOT_ALLOWED,
+                        agents::browser_refusal(&rule.name, &verdict.refused),
+                    ));
+                }
+            }
+            if refused.is_none() && changed {
                 match serde_json::to_vec(&body) {
                     Ok(stripped) => {
                         parts

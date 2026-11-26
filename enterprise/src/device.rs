@@ -4,6 +4,7 @@
 //! `remove`), and reports each tool's state, the MCP servers and the AI apps it finds for the coverage report. It
 //! writes only files each tool documents, and stops no process.
 
+use enterplace_core::coding_agents::CodingAgents;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -697,7 +698,12 @@ fn classify(found: Vec<String>, gateway: &str) -> (&'static str, Vec<String>) {
 /// Claude Code settings with env.ANTHROPIC_BASE_URL set to the gateway, other keys kept. With the person's Enterplace key
 /// from `enterplace login`, ANTHROPIC_CUSTOM_HEADERS names them in x-enterplace-user, so a Claude subscription login sent
 /// through the gateway's passthrough provider is recorded under them. Claude Code's own login stays as it is.
-fn claude_settings(current: &str, gateway: &str, person: Option<&str>) -> Result<String, String> {
+fn claude_settings(
+    current: &str,
+    gateway: &str,
+    person: Option<&str>,
+    controls: CodingAgents,
+) -> Result<String, String> {
     let mut v: Value = if current.trim().is_empty() {
         json!({})
     } else {
@@ -717,10 +723,78 @@ fn claude_settings(current: &str, gateway: &str, person: Option<&str>) -> Result
             );
         }
     }
+    claude_controls(obj, controls);
     Ok(format!(
         "{}\n",
         serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?
     ))
+}
+
+/// The policy's coding agent controls as the keys Claude Code documents for them (code.claude.com/docs/en/settings-reference):
+/// `permissions.disableBypassPermissionsMode` rejects `--dangerously-skip-permissions`, `disableAutoMode` takes auto
+/// mode out, and `deniedMcpServers` refuses the browser servers, Claude in Chrome included. Blocked writes the key,
+/// allowed takes out what blocked writes (and only that), unset leaves the file as it is.
+fn claude_controls(obj: &mut serde_json::Map<String, Value>, controls: CodingAgents) {
+    use enterplace_core::coding_agents::{BROWSER_SERVERS, Control};
+    match controls.bypass_permissions {
+        Control::Block => {
+            let permissions = obj.entry("permissions").or_insert_with(|| json!({}));
+            if !permissions.is_object() {
+                *permissions = json!({});
+            }
+            permissions["disableBypassPermissionsMode"] = json!("disable");
+        }
+        Control::Allow => {
+            if let Some(permissions) = obj.get_mut("permissions").and_then(Value::as_object_mut) {
+                permissions.remove("disableBypassPermissionsMode");
+                if permissions.is_empty() {
+                    obj.remove("permissions");
+                }
+            }
+        }
+        Control::Unset => {}
+    }
+    match controls.auto_mode {
+        Control::Block => {
+            obj.insert("disableAutoMode".into(), json!("disable"));
+        }
+        Control::Allow => {
+            obj.remove("disableAutoMode");
+        }
+        Control::Unset => {}
+    }
+    let ours = |s: &Value| {
+        s["serverName"]
+            .as_str()
+            .is_some_and(|n| BROWSER_SERVERS.contains(&n))
+    };
+    match controls.browser {
+        Control::Block => {
+            let denied = obj.entry("deniedMcpServers").or_insert_with(|| json!([]));
+            if !denied.is_array() {
+                *denied = json!([]);
+            }
+            if let Some(list) = denied.as_array_mut() {
+                for server in BROWSER_SERVERS {
+                    if !list.iter().any(|s| s["serverName"] == *server) {
+                        list.push(json!({ "serverName": server }));
+                    }
+                }
+            }
+        }
+        Control::Allow => {
+            if let Some(list) = obj
+                .get_mut("deniedMcpServers")
+                .and_then(Value::as_array_mut)
+            {
+                list.retain(|s| !ours(s));
+                if list.is_empty() {
+                    obj.remove("deniedMcpServers");
+                }
+            }
+        }
+        Control::Unset => {}
+    }
 }
 
 /// Codex config.toml with `model_provider = "enterplace"` and a `[model_providers.enterplace]` table at the gateway.
@@ -1056,7 +1130,8 @@ fn backup(path: &Path, owner: Option<(u32, u32)>) -> Result<Option<PathBuf>, Str
 
 /// The files that point `tool` at the gateway, each as it is and as it should be. Every path and key is one the
 /// tool's own documentation names; the key or sign-in stays the person's.
-fn changes(p: &Paths, tool: &str, gateway: &str) -> Result<Vec<Change>, String> {
+fn changes(p: &Paths, tool: &str, profile: &Profile) -> Result<Vec<Change>, String> {
+    let gateway = profile.gateway.as_str();
     let h = &p.home;
     let v1 = format!("{gateway}/v1");
     Ok(match tool {
@@ -1064,7 +1139,7 @@ fn changes(p: &Paths, tool: &str, gateway: &str) -> Result<Vec<Change>, String> 
             // Only into the person's own settings: a managed file outside the home may be readable by others.
             let person = saved(h, "key=").filter(|_| p.claude_settings.starts_with(h));
             vec![plan(p.claude_settings.clone(), |c| {
-                claude_settings(c, gateway, person.as_deref())
+                claude_settings(c, gateway, person.as_deref(), profile.coding_agents)
             })?]
         }
         "codex" => vec![plan(h.join(".codex/config.toml"), |c| {
@@ -1434,6 +1509,8 @@ struct Profile {
     mcp: Value,
     apps_allowed: Vec<String>,
     apps_denied: Vec<String>,
+    /// What people may do in their coding agents, as Claude Code settings.
+    coding_agents: CodingAgents,
 }
 
 impl Profile {
@@ -1455,6 +1532,9 @@ impl Profile {
             mcp: profile["mcp"].clone(),
             apps_allowed: list(&profile["apps"]["allowed"]),
             apps_denied: list(&profile["apps"]["denied"]),
+            coding_agents: CodingAgents::from_json(&profile["coding_agents"]).map_err(|e| {
+                format!("the profile says {e}. Update this agent to the gateway's version")
+            })?,
         })
     }
 }
@@ -1480,7 +1560,7 @@ fn cycle(p: &Paths, profile: &Profile, dry_run: bool) -> Result<Value, String> {
         let managed = inst && manage.iter().any(|m| m == tool);
         let managed = managed && MANAGEABLE.contains(&tool);
         let wanted = if managed {
-            changes(p, tool, gateway)?
+            changes(p, tool, profile)?
         } else {
             Vec::new()
         };
@@ -1697,6 +1777,7 @@ mod tests {
             mcp: Value::Null,
             apps_allowed: Vec::new(),
             apps_denied: Vec::new(),
+            coding_agents: CodingAgents::default(),
         }
     }
 
@@ -1717,14 +1798,23 @@ mod tests {
 
     #[test]
     fn claude_settings_keep_other_keys() -> Result<(), String> {
-        let out = claude_settings(r#"{"model":"opus","env":{"FOO":"1"}}"#, GW, None)?;
+        let out = claude_settings(
+            r#"{"model":"opus","env":{"FOO":"1"}}"#,
+            GW,
+            None,
+            CodingAgents::default(),
+        )?;
         let v: Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
         assert_eq!(v["model"], "opus");
         assert_eq!(v["env"]["FOO"], "1");
         assert_eq!(v["env"]["ANTHROPIC_BASE_URL"], GW);
-        assert_eq!(claude_settings(&out, GW, None)?, out, "idempotent");
-        assert!(claude_settings("not json", GW, None).is_err());
-        let named = claude_settings(&out, GW, Some("enterplace_maya"))?;
+        assert_eq!(
+            claude_settings(&out, GW, None, CodingAgents::default())?,
+            out,
+            "idempotent"
+        );
+        assert!(claude_settings("not json", GW, None, CodingAgents::default()).is_err());
+        let named = claude_settings(&out, GW, Some("enterplace_maya"), CodingAgents::default())?;
         let v: Value = serde_json::from_str(&named).map_err(|e| e.to_string())?;
         assert_eq!(
             v["env"]["ANTHROPIC_CUSTOM_HEADERS"],
@@ -1805,6 +1895,89 @@ mod tests {
         assert_eq!(tool(&r, "claude-code")["drift"], false);
         let _ = std::fs::remove_dir_all(&home);
         Ok(())
+    }
+
+    /// The profile's coding agent controls become Claude Code's own settings: blocked is written, allowed is taken
+    /// out, and a control the policy does not set leaves the file as it is.
+    #[test]
+    fn coding_agent_controls_become_claude_code_settings() -> Result<(), String> {
+        use enterplace_core::coding_agents::CodingAgents;
+        let parse = |v: Value| CodingAgents::from_json(&v);
+        let mine = r#"{"permissions":{"deny":["Bash(rm *)"]},"deniedMcpServers":[{"serverName":"filesystem"}]}"#;
+        let block =
+            parse(json!({"bypass_permissions":"block","auto_mode":"block","browser":"block"}))?;
+        let out = claude_settings(mine, GW, None, block)?;
+        let v: Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
+        assert_eq!(v["permissions"]["disableBypassPermissionsMode"], "disable");
+        assert_eq!(v["permissions"]["deny"], json!(["Bash(rm *)"]));
+        assert_eq!(v["disableAutoMode"], "disable");
+        let denied: Vec<&str> = v["deniedMcpServers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["serverName"].as_str())
+            .collect();
+        assert!(denied.contains(&"filesystem") && denied.contains(&"claude-in-chrome"));
+        assert_eq!(claude_settings(&out, GW, None, block)?, out, "idempotent");
+
+        // Unset leaves what is there; allow takes out what block wrote and nothing else.
+        assert_eq!(
+            claude_settings(&out, GW, None, CodingAgents::default())?,
+            out
+        );
+        let allow =
+            parse(json!({"bypass_permissions":"allow","auto_mode":"allow","browser":"allow"}))?;
+        let v: Value = serde_json::from_str(&claude_settings(&out, GW, None, allow)?)
+            .map_err(|e| e.to_string())?;
+        assert!(
+            v["permissions"]
+                .get("disableBypassPermissionsMode")
+                .is_none()
+        );
+        assert!(v.get("disableAutoMode").is_none());
+        assert_eq!(v["deniedMcpServers"], json!([{"serverName": "filesystem"}]));
+        assert_eq!(v["permissions"]["deny"], json!(["Bash(rm *)"]));
+        Ok(())
+    }
+
+    #[test]
+    fn cycle_writes_the_controls_and_puts_them_back() -> Result<(), String> {
+        let p = home_of("controls", Os::Linux);
+        std::fs::create_dir_all(p.home.join(".claude")).map_err(|e| e.to_string())?;
+        let mut manage = profile(&["claude-code"]);
+        manage.coding_agents = enterplace_core::coding_agents::CodingAgents::from_json(
+            &json!({"bypass_permissions": "block"}),
+        )?;
+        cycle(&p, &manage, false)?;
+        let read = || -> Result<Value, String> {
+            let text = std::fs::read_to_string(&p.claude_settings).map_err(|e| e.to_string())?;
+            serde_json::from_str(&text).map_err(|e| e.to_string())
+        };
+        assert_eq!(
+            read()?["permissions"]["disableBypassPermissionsMode"],
+            "disable"
+        );
+        // Someone takes it out: the next run puts it back and reports the drift.
+        std::fs::write(
+            &p.claude_settings,
+            format!(r#"{{"env":{{"ANTHROPIC_BASE_URL":"{GW}"}}}}"#),
+        )
+        .map_err(|e| e.to_string())?;
+        let r = cycle(&p, &manage, false)?;
+        assert_eq!(tool_of(&r, "claude-code")["drift"], true);
+        assert_eq!(
+            read()?["permissions"]["disableBypassPermissionsMode"],
+            "disable"
+        );
+        let _ = std::fs::remove_dir_all(&p.home);
+        Ok(())
+    }
+
+    #[test]
+    fn a_profile_with_controls_the_agent_does_not_know_is_refused() {
+        let bad =
+            Profile::parse(&json!({"gateway_url": GW, "coding_agents": {"browser": "maybe"}}));
+        assert!(bad.err().is_some_and(|e| e.contains("allow or block")));
     }
 
     fn put(home: &Path, file: &str, text: &str) -> Result<(), String> {

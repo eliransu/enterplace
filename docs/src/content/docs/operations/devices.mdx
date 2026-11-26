@@ -102,7 +102,7 @@ For each tool the profile names under **Tools to manage**, the agent writes the 
 
 | Tool | File | What is set |
 |---|---|---|
-| Claude Code | The managed settings as root (`/Library/Application Support/ClaudeCode/managed-settings.json`, `/etc/claude-code/managed-settings.json`), else `~/.claude/settings.json` | `env.ANTHROPIC_BASE_URL` |
+| Claude Code | The managed settings as root (`/Library/Application Support/ClaudeCode/managed-settings.json`, `/etc/claude-code/managed-settings.json`), else `~/.claude/settings.json` | `env.ANTHROPIC_BASE_URL`, and the policy's [coding agent controls](/governance/coding-agent-controls/) for the person (bypass permissions, auto mode, browser servers) |
 | Codex | `~/.codex/config.toml` | `model_provider = "enterplace"` and a `[model_providers.enterplace]` table that reads the key from `ENTERPLACE_KEY` |
 | OpenCode | `~/.config/opencode/opencode.json` | `provider.openai.options.baseURL` and `provider.anthropic.options.baseURL` (the gateway with `/v1`), and `apiKey: "{env:ENTERPLACE_KEY}"` where none is set |
 | Kilo Code | `~/.config/kilo/kilo.json`, the Kilo CLI's file | The same as OpenCode |

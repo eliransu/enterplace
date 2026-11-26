@@ -203,20 +203,23 @@ fn forced(body: &Value) -> Vec<&str> {
     out
 }
 
+/// How a check's record names it: its guardrail and its detector.
+pub type Labels = (&'static str, &'static str);
+/// The labels of a rule's `tools:` check.
+const RULE_TOOLS: Labels = ("tools", DETECTOR);
+
 fn check(
     body: &mut Value,
     found: Found,
-    patterns: &[String],
+    refuses: &dyn Fn(&str) -> bool,
+    (guardrail, detector): Labels,
     strip: bool,
     request: bool,
 ) -> Verdict {
     let mut verdict = Verdict::default();
-    if !checked(patterns) {
-        return verdict;
-    }
     let bad: Vec<(String, usize, String)> = found
         .into_iter()
-        .filter(|(_, _, name)| !allowed(patterns, name))
+        .filter(|(_, _, name)| refuses(name))
         .collect();
     if bad.is_empty() {
         return verdict;
@@ -237,8 +240,8 @@ fn check(
     verdict.audit = counts
         .into_iter()
         .map(|(kind, count)| AuditEntry {
-            guardrail: "tools".into(),
-            detector: DETECTOR.into(),
+            guardrail: guardrail.into(),
+            detector: detector.into(),
             kind,
             action,
             count,
@@ -325,14 +328,46 @@ fn tidy(body: &mut Value, request: bool) {
 
 /// Checks the function tools a request declares against a rule's `tools:` list.
 pub fn request(body: &mut Value, patterns: &[String], strip: bool) -> Verdict {
+    if !checked(patterns) {
+        return Verdict::default();
+    }
     let found = declared(body);
-    check(body, found, patterns, strip, true)
+    check(
+        body,
+        found,
+        &|name| !allowed(patterns, name),
+        RULE_TOOLS,
+        strip,
+        true,
+    )
+}
+
+/// Checks the tools a request declares against `refuses`, recorded under `labels`: the same refusal or strip as a
+/// rule's `tools:`, for a check of its own (the coding agent controls' browser tools).
+pub fn request_by(
+    body: &mut Value,
+    refuses: &dyn Fn(&str) -> bool,
+    labels: Labels,
+    strip: bool,
+) -> Verdict {
+    let found = declared(body);
+    check(body, found, refuses, labels, strip, true)
 }
 
 /// Checks the tool calls in a whole answer against a rule's `tools:` list.
 pub fn answer(body: &mut Value, patterns: &[String], strip: bool) -> Verdict {
+    if !checked(patterns) {
+        return Verdict::default();
+    }
     let found = calls(body);
-    check(body, found, patterns, strip, false)
+    check(
+        body,
+        found,
+        &|name| !allowed(patterns, name),
+        RULE_TOOLS,
+        strip,
+        false,
+    )
 }
 
 /// The refusal message for a request (or an answer) holding tools the rule does not allow.

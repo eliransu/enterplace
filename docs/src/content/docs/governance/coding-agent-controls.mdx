@@ -1,0 +1,91 @@
+---
+title: Coding agent controls
+description: Allow or block permission skipping, auto mode and browser use in Claude Code, for the organization, a team or one person.
+sidebar:
+  order: 5
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+`coding_agents:` decides three things people may do in their coding agents: skip permission checks, run in auto mode, and drive a web browser. Set it once for the organization and override it on a rule for a team or a person. The device agent turns it into Claude Code's managed settings, and the gateway refuses requests that offer browser tools.
+
+## Example
+
+```yaml title="enterplace.policy.yaml"
+version: 1
+providers:
+  - name: anthropic
+    kind: anthropic
+    url: https://api.anthropic.com
+    key_env: ANTHROPIC_API_KEY
+    models: ["claude-*"]
+coding_agents:
+  bypass_permissions: block
+  auto_mode: block
+  browser: block
+rules:
+  - name: qa
+    principals: { team: qa }
+    models: ["claude-*"]
+    coding_agents: { browser: allow }
+  - name: everyone
+    principals: { any: true }
+    models: ["claude-*"]
+```
+
+Nobody may start Claude Code with `--dangerously-skip-permissions` or switch to auto mode. Team `qa` may use Claude in Chrome; everyone else is refused with `browser_not_allowed` when Chrome is on.
+
+## Settings
+
+| Key | What `block` does | Where it is enforced |
+|---|---|---|
+| `bypass_permissions` | Claude Code rejects `--dangerously-skip-permissions` and `bypassPermissions` mode | Device |
+| `auto_mode` | Claude Code takes auto mode out of the mode cycle; a session that would start in it starts in `default` | Device |
+| `browser` | Claude Code refuses to load the browser MCP servers, and the gateway refuses (or strips) their tools | Device and gateway |
+
+Each key is `allow` or `block`. A key left out leaves things as they are.
+
+- **At the top of the policy** it is the organization's setting.
+- **On a rule** it overrides the organization's for that rule's callers: a team, a person or a tag. A key the rule leaves out takes the organization's.
+
+The first rule that names a caller decides for them, as it does for models. In the console, the Coding agents page sets both in one table: Organization, then each rule.
+
+## On the device
+
+The [device agent](/operations/devices/) reads the controls of the person signed in at the machine with its profile, every 5 minutes, and writes them into Claude Code's settings file with the gateway URL: the managed settings file when it runs as root on macOS or Linux, otherwise the person's `~/.claude/settings.json` (on Windows always that file). Only the managed file is out of the person's reach; in their own file a change holds until the next run. A device where nobody has run `enterplace login` gets the rule for its enrolment token's team, or the rule for everyone.
+
+| Setting | `block` writes | `allow` takes out |
+|---|---|---|
+| `bypass_permissions` | `permissions.disableBypassPermissionsMode: "disable"` | that key |
+| `auto_mode` | `disableAutoMode: "disable"` | that key |
+| `browser` | `deniedMcpServers` entries for `claude-in-chrome`, `playwright`, `puppeteer`, `chrome-devtools`, `browserbase` and `browsermcp` | those entries only |
+
+Every other key in the file stays. If someone edits the file, the next run puts the controls back and the device reports the drift. The keys are the ones Claude Code documents in its [settings reference](https://code.claude.com/docs/en/settings-reference).
+
+<Aside type="note">
+The device agent writes the controls only where it manages Claude Code: Claude Code must be in the device profile's tools. A request carries no reliable sign of the permission mode, so bypass and auto mode are enforced on the device alone. On a machine without the device agent, deliver the same keys in your own managed settings.
+</Aside>
+
+## At the gateway
+
+On every model request the gateway reads the tools the request declares. With `browser: block`, a tool named `mcp__<server>__<tool>` whose server is one of the browser servers above is refused with `browser_not_allowed` (403). The message names the tool, the rule and the fix: turn Chrome off in Claude Code (`/chrome`, or start without `--chrome`), or remove the browser server.
+
+With the rule's `tool_action: strip`, the browser tools are taken out and the rest of the request is sent, as for [tool permissions](/governance/tool-permissions/). The model then never sees them.
+
+Each refused or stripped tool is on the record under `guardrails`, with `"guardrail": "coding_agents"`, `"detector": "browser"`, the tool's name as `kind`, and `block` or `strip`. In observe mode or during the rule's `shadow_until`, it is recorded as `would_refuse` and the request goes on.
+
+A browser server installed under another name is not recognized at the gateway. The device setting covers Claude in Chrome by its own name.
+
+## Refusal codes
+
+| Code | Status | Cause |
+|---|---|---|
+| `browser_not_allowed` | 403 | The request offers a browser tool and the caller's rule (or the organization) blocks the browser |
+
+## Related
+
+<CardGrid>
+	<LinkCard title="Devices" href="/operations/devices/" description="The device agent that writes Claude Code's settings." />
+	<LinkCard title="Tool permissions" href="/governance/tool-permissions/" description="Allow or deny any function tool by name." />
+	<LinkCard title="Claude Code" href="/integrations/claude-code/" description="Point Claude Code at the gateway." />
+</CardGrid>

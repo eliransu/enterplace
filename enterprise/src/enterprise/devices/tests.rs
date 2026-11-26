@@ -1471,3 +1471,40 @@ async fn an_mcp_decision_of_an_admin_kept_to_an_organization_holds_for_that_orga
     assert_eq!(decisions, [&json!("approved"), &json!("approved")]);
     Ok(())
 }
+
+/// The profile carries what the device's person may do in their coding agents: the rule that names them, over the
+/// policy's `coding_agents:`, as the gateway decides it for their requests. The agent turns it into Claude Code's
+/// managed settings.
+#[tokio::test]
+async fn the_profile_carries_the_coding_agent_controls_of_the_persons_rule() -> Result<(), Error> {
+    let Some(url) = database("devices_controls").await? else {
+        return Ok(());
+    };
+    let policy = POLICY.replace(
+        "rules:\n",
+        "coding_agents: { bypass_permissions: block, browser: block }\nrules:\n  - name: platform\n    principals: { team: platform }\n    models: [m]\n    coding_agents: { browser: allow }\n",
+    );
+    let gw = gateway_policy(
+        "devices_controls",
+        &url,
+        &licensed(&["devices"]),
+        &[],
+        &policy,
+    )?;
+    let token = profile_token(&gw).await?;
+    let nobody = call(&gw.app, "GET", "/device/profile", &token, None).await?;
+    assert_eq!(nobody.status, StatusCode::OK, "{}", nobody.text);
+    assert_eq!(
+        nobody.body["coding_agents"],
+        json!({"bypass_permissions": "block", "browser": "block"})
+    );
+    // noa is of the platform team, whose rule allows the browser.
+    let noa = agent(&gw.app, "GET", "/device/profile", &token, ADMIN_KEY, None).await?;
+    assert_eq!(
+        noa.body["coding_agents"],
+        json!({"bypass_permissions": "block", "browser": "allow"}),
+        "{}",
+        noa.text
+    );
+    Ok(())
+}

@@ -45,6 +45,7 @@ pub(crate) fn routes() -> Router<Console> {
         .route("/api/policy", get(policy_get))
         .route("/api/policy/mode", put(mode_set))
         .route("/api/policy/identity", put(identity_set))
+        .route("/api/policy/coding-agents", put(coding_agents_set))
         .route("/api/policy/rules", post(rule_add))
         .route(
             "/api/policy/rules/{name}",
@@ -1144,6 +1145,7 @@ async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Respo
                     "who": who,
                     "models": str_list(r.get("models")),
                     "guardrails": str_list(r.get("guardrails")),
+                    "coding_agents": r.get("coding_agents").cloned().unwrap_or_else(|| json!({})),
                 })
             })
             .collect();
@@ -1210,6 +1212,7 @@ async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Respo
             "limits": limits,
             "guardrails": guardrails,
             "aliases": aliases,
+            "coding_agents": tree.get("coding_agents").cloned().unwrap_or_else(|| json!({})),
         })))
     }.await)
 }
@@ -1270,6 +1273,55 @@ async fn identity_set(
         })
         .await
     }.await)
+}
+
+/// What people may do in their coding agents: the policy's `coding_agents:`, or one rule's with `"rule"`. The body
+/// is the whole block: a control it leaves out is taken out (the organization's then holds for a rule, and the
+/// device's file is left as it is for the organization), and a block left empty goes.
+async fn coding_agents_set(
+    State(console): State<Console>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let mut body = body_of(&bytes)?;
+            let rule = body
+                .remove("rule")
+                .and_then(|r| r.as_str().map(str::to_string));
+            body.retain(|_, v| !v.is_null());
+            let controls =
+                enterplace_core::coding_agents::CodingAgents::from_json(&Value::Object(body))
+                    .map_err(|e| bad(format!("{e}.")))?;
+            let block = controls.to_json();
+            let note = match &rule {
+                Some(name) => format!("Set coding agent controls of rule {name}"),
+                None => "Set coding agent controls".to_string(),
+            };
+            commit(
+                &console,
+                &admin,
+                "set_coding_agents",
+                note,
+                json!({ "rule": rule, "coding_agents": block }),
+                |tree| {
+                    let at = match &rule {
+                        Some(name) => entry(tree, "rules", name, "rule")?,
+                        None => tree,
+                    };
+                    if block.as_object().is_some_and(|b| b.is_empty()) {
+                        at.remove("coding_agents");
+                    } else {
+                        at.insert("coding_agents".into(), block);
+                    }
+                    Ok(())
+                },
+            )
+            .await
+        }
+        .await,
+    )
 }
 
 /// Sets what the rule form changes of a rule: who it is for, its models and its guardrails.
