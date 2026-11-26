@@ -52,7 +52,8 @@ function DialogDescription({
 function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
-      className={cn("flex flex-wrap justify-end gap-2", className)}
+      // Pinned to the bottom of a dialog that scrolls, so its buttons are never cut off.
+      className={cn("sticky -bottom-10 z-10 -mx-10 -mb-10 flex flex-wrap justify-end gap-2 bg-background px-10 pt-4 pb-10", className)}
       {...props}
     />
   );

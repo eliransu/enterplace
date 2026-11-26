@@ -37,8 +37,9 @@ import {
 } from "@/components/page";
 import { Remove } from "@/components/confirm";
 import { Copy } from "@/components/copy";
+import { ChipsInput } from "@/components/chips-input";
 import { api, part, type Me } from "@/lib/api";
-import { useData, words } from "@/lib/use";
+import { useData } from "@/lib/use";
 import { useProviderStatus } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
@@ -262,8 +263,10 @@ function AddProvider({
   const [key, setKey] = useState("");
   const [keyEnv, setKeyEnv] = useState("");
   const [url, setUrl] = useState("");
-  const [models, setModels] = useState(chosen?.models.join(", ") ?? "");
+  const [models, setModels] = useState<string[]>(chosen?.models ?? []);
   const seal = data.sealing && !!me?.credentials;
+  // A pasted key by default; a variable only when asked for, or when no key can be kept here.
+  const [useEnv, setUseEnv] = useState(!seal);
   const need = chosen?.key ?? "required";
   // With no master key a pasted key cannot be kept: such a provider is added only with its key in a variable.
   const blocked = need === "required" && !data.sealing && !keyEnv.trim();
@@ -271,7 +274,7 @@ function AddProvider({
   const pick = (value: string) => {
     setTyped(value);
     const next = catalog.find((p) => p.name === value || p.id === value);
-    if (next) setModels(next.models.join(", "));
+    if (next) setModels(next.models);
   };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -279,8 +282,10 @@ function AddProvider({
       api.post(
         "providers",
         need === "none"
-          ? { preset, name, url, models: words(models) }
-          : { preset, name, key, key_env: keyEnv, url, models: words(models) },
+          ? { preset, name, url, models }
+          : useEnv
+            ? { preset, name, key_env: keyEnv, url, models }
+            : { preset, name, key, url, models },
       ),
     );
     if (answer) setRefused(answer);
@@ -319,19 +324,6 @@ function AddProvider({
                 <option key={p.id} value={p.name} />
               ))}
             </datalist>
-          </Field>
-          <Field
-            id="name"
-            label="Name, optional"
-            hint={`Callers never see it. Leave empty for ${preset || "the catalog id"}.`}
-          >
-            <Input
-              id="name"
-              className="t-mono"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoComplete="off"
-            />
           </Field>
           {chosen?.needs_url ? (
             <Field
@@ -378,7 +370,7 @@ function AddProvider({
                   </div>
                 </div>
               )}
-              {seal ? (
+              {seal && !useEnv ? (
                 <Field
                   id="key"
                   label={
@@ -395,43 +387,75 @@ function AddProvider({
                     value={key}
                     onChange={(e) => setKey(e.target.value)}
                     autoComplete="off"
+                    required={need === "required"}
                   />
                 </Field>
-              ) : null}
-              <Field
-                id="key-env"
-                label={
-                  seal
-                    ? "Or the environment variable that holds it"
-                    : need === "optional"
+              ) : (
+                <Field
+                  id="key-env"
+                  label={
+                    need === "optional"
                       ? "Environment variable that holds the key, optional"
                       : "Environment variable that holds the key"
-                }
-                hint="For example OPENAI_API_KEY. It must be set on every gateway."
-              >
-                <Input
-                  id="key-env"
-                  className="t-mono"
-                  value={keyEnv}
-                  onChange={(e) => setKeyEnv(e.target.value)}
-                  autoComplete="off"
-                />
-              </Field>
+                  }
+                  hint="For example OPENROUTER_API_KEY. It must be set on every gateway."
+                >
+                  <Input
+                    id="key-env"
+                    className="t-mono"
+                    value={keyEnv}
+                    onChange={(e) => setKeyEnv(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                    required={need === "required"}
+                  />
+                </Field>
+              )}
+              {seal ? (
+                <button
+                  type="button"
+                  className="t-small -mt-3 cursor-pointer justify-self-start border-0 bg-transparent p-0 pl-6 text-muted-foreground underline"
+                  onClick={() => setUseEnv(!useEnv)}
+                >
+                  {useEnv
+                    ? "Paste the key instead"
+                    : "The key is in an environment variable instead"}
+                </button>
+              ) : null}
             </>
           )}
           <Field
             id="models"
             label="Models"
-            hint="The names callers send, separated by commas."
+            hint="The names callers send. Press Enter after each, or paste a list. * serves every model the provider has."
           >
-            <Input
+            <ChipsInput
               id="models"
-              className="t-mono"
-              value={models}
-              onChange={(e) => setModels(e.target.value)}
-              required
+              values={models}
+              onChange={setModels}
+              suggestions={chosen?.models ?? []}
+              placeholder={models.length ? "Add another model" : "anthropic/claude-sonnet-5-5"}
             />
           </Field>
+          <details className="grid gap-4">
+            <summary className="t-small cursor-pointer text-muted-foreground">
+              More options
+            </summary>
+            <Field
+              id="name"
+              label="Name"
+              hint={`Callers never see it. Leave empty for ${preset || "the catalog id"}. Set one to add the same provider twice, for two accounts.`}
+            >
+              <Input
+                id="name"
+                className="t-mono"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </Field>
+          </details>
           <Refusal text={refused} />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
@@ -458,7 +482,7 @@ function EditProvider({
   onClose: () => void;
   change: Change;
 }) {
-  const [models, setModels] = useState(provider.models.join(", "));
+  const [models, setModels] = useState<string[]>(provider.models);
   const [retries, setRetries] = useState(provider.retries?.toString() ?? "");
   const [fallback, setFallback] = useState(provider.fallback ?? "none");
   const [refused, setRefused] = useState("");
@@ -466,7 +490,7 @@ function EditProvider({
     e.preventDefault();
     const answer = await change(() =>
       api.put(`providers/${part(provider.name)}`, {
-        models: words(models),
+        models,
         retries,
         fallback: fallback === "none" ? "" : fallback,
       }),
@@ -485,15 +509,9 @@ function EditProvider({
           <Field
             id="models"
             label="Models"
-            hint="Separated by commas. * serves every model the provider has."
+            hint="Press Enter after each, or paste a list. * serves every model the provider has."
           >
-            <Input
-              id="models"
-              className="t-mono"
-              value={models}
-              onChange={(e) => setModels(e.target.value)}
-              required
-            />
+            <ChipsInput id="models" values={models} onChange={setModels} />
           </Field>
           <Field
             id="retries"
