@@ -1227,7 +1227,7 @@ async fn a_person_splits_by_coding_agent_and_model_with_estimates_marked_shared_
     );
     assert!(
         csv.lines().any(|l| l
-            == "\"dana.levi\",\"codex\",\"claude-sonnet-4-5\",1,0,0,100,10,110,0.5,900,900,0.5"),
+            == "\"dana.levi\",\"codex\",\"claude-sonnet-4-5\",1,0,0,100,10,110,0.50,900,900,0.50"),
         "{csv}"
     );
 

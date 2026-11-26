@@ -164,7 +164,7 @@ function Shell() {
                 className={cn(
                   "size-2 rounded-pill border border-foreground",
                   live.state === "live"
-                    ? "border-lime bg-lime"
+                    ? "border-live bg-live"
                     : "bg-transparent",
                 )}
               />

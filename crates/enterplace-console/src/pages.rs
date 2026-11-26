@@ -62,20 +62,25 @@ pub(crate) fn alert(text: &str) -> String {
 /// `key_error` belongs to the key field. `notice` is about sign-in as a whole (single sign-on refused, nothing
 /// recorded), so it is a Banner above both ways in and the key field stays at rest.
 pub fn sign_in(key_error: &str, notice: &str, sso: bool) -> String {
-    sign_in_page(key_error, notice, sso, false)
+    sign_in_page(key_error, notice, sso, false, "")
+}
+
+/// The sign-in page after a refused key, with the pasted value kept, so a key cut short can be fixed, not pasted again.
+pub fn sign_in_kept(key_error: &str, pasted: &str, sso: bool) -> String {
+    sign_in_page(key_error, "", sso, false, pasted)
 }
 
 /// The sign-in page just after signing out: it says the sign-out worked.
 pub fn signed_out(sso: bool) -> String {
-    sign_in_page("", "", sso, true)
+    sign_in_page("", "", sso, true, "")
 }
 
-fn sign_in_page(key_error: &str, notice: &str, sso: bool, out: bool) -> String {
+fn sign_in_page(key_error: &str, notice: &str, sso: bool, out: bool, pasted: &str) -> String {
     let key = field(&Field {
         id: "key",
         name: "key",
         label: "Enterplace key",
-        value: "",
+        value: pasted,
         mono: true,
         extra: r#" type="password" autocomplete="off" required aria-required="true" autofocus"#,
         hint: "",

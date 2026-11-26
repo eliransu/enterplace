@@ -7,6 +7,9 @@ import { useLiveFeed } from "./live";
 // the refusal, which names the cause and the fix. The refusal is also returned, for a dialog to show beside its form.
 // It reloads on each change from the live feed while `paused` is false (a dialog is open), so the page shows a request
 // the moment it is recorded. `every`: the polling fallback (milliseconds), used only while the feed is down.
+/// Forms being sent that show their own refusal beside their fields (see Refusal), so a change does not toast it too.
+export const inline = { forms: 0 };
+
 export function useData<T>(path: string, every = 0, paused = false) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState("");
@@ -41,7 +44,7 @@ export function useData<T>(path: string, every = 0, paused = false) {
         return "";
       } catch (e) {
         if (e instanceof Refused) {
-          toast.error(e.message, { duration: 10000 });
+          if (!inline.forms) toast.error(e.message, { duration: 10000 });
           return e.message;
         }
         throw e;

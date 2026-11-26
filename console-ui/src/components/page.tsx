@@ -1,8 +1,10 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { CircleAlert } from "lucide-react";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 import { cn } from "@/lib/utils";
+import { inline } from "@/lib/use";
 
 // The console's page head: title, one line that says what the page is for, and the page's actions on the right.
 export function Head({
@@ -108,13 +110,32 @@ export function Problem({ text, retry }: { text: string; retry?: () => void }) {
   );
 }
 
-// A refused change, under the form that sent it, as a field error reads.
+// A refused change, as a field error reads: under the field whose value the refusal names ("platfrom" is not a
+// team), else at the end of the form. The anchor tells the form's submit that the refusal shows here, not as a toast.
 export function Refusal({ text }: { text: string }) {
-  return text ? (
+  const anchor = React.useRef<HTMLSpanElement>(null);
+  const [field, setField] = React.useState<Element | null>(null);
+  React.useLayoutEffect(() => {
+    const form = anchor.current?.closest("form");
+    const named = text
+      ? [...(form?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input:not([type=hidden]), textarea") ?? [])].filter((c) => {
+          const v = c.value.trim();
+          return v.length > 1 && text.includes(v);
+        })
+      : [];
+    setField(named.length === 1 ? (named[0].closest("[data-field]") ?? null) : null);
+  }, [text]);
+  const error = text ? (
     <p role="alert" className="t-small m-0 pl-6 text-destructive-text">
       {text}
     </p>
   ) : null;
+  return (
+    <>
+      <span ref={anchor} data-refusal hidden />
+      {field && error ? createPortal(error, field) : error}
+    </>
+  );
 }
 
 // A page that is still loading: the panel and rows it will fill, so nothing jumps when the data arrives.
@@ -143,8 +164,10 @@ export function Form({
   onSubmit: (e: React.FormEvent<HTMLFormElement>) => Promise<unknown> | void;
 }) {
   const [busy, setBusy] = React.useState(false);
+  const ref = React.useRef<HTMLFormElement>(null);
   return (
     <form
+      ref={ref}
       {...props}
       aria-busy={busy || undefined}
       className={className}
@@ -152,9 +175,13 @@ export function Form({
         e.preventDefault();
         if (busy) return;
         setBusy(true);
+        // A form that shows its own refusal does not also toast it.
+        const shown = !!ref.current?.querySelector("[data-refusal]");
+        if (shown) inline.forms++;
         try {
           await onSubmit(e);
         } finally {
+          if (shown) inline.forms--;
           setBusy(false);
         }
       }}

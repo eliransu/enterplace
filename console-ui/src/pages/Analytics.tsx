@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import { X } from "lucide-react";
+import { TriangleAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Head, Loading, Panel, Problem } from "@/components/page";
@@ -76,6 +76,9 @@ function pick(query: URLSearchParams, name: string, value: string) {
   if (value) next.set(name, value);
   else next.delete(name);
   window.location.hash = `#/usage?${next}`;
+  // A Trend button sits in the ranking, below the chart it changes: bring the chart into view, or the click looks
+  // like it did nothing.
+  if (name === "trend") document.getElementById("usage-chart")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 /// `edged`: on the page's own background, where the accent fill alone does not show which one is picked.
@@ -145,6 +148,8 @@ export function Analytics({ query }: PageProps) {
   // More stays open while one of its own breakdowns is picked, as the old page's details did.
   const moreOpen = !UP_FRONT.includes(data.by);
   const splits = SPLITS.filter((t) => !t.name.split(",").includes(data.by));
+  // Unnamed traffic is a problem to fix, not a team or person in the race: pinned above the ranking, not numbered.
+  const ranking = [...data.ranking.filter((r) => r.unnamed), ...data.ranking.filter((r) => !r.unnamed)];
   const csv = new URLSearchParams(query);
   csv.set("format", "csv");
   return (
@@ -173,13 +178,14 @@ export function Analytics({ query }: PageProps) {
           </div>
         ))}
       </section>
+      <div id="usage-chart" className="scroll-mt-16">
       <Panel title={data.chart_title}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <Tabs label="Metric" tabs={data.metrics} current={data.metric} onPick={(v) => pick(query, "metric", v)} />
           {data.trend ? (
             <div className="flex items-center gap-2">
               <span className="t-small text-muted-foreground">Chart shows</span>
-              <Button variant="outline" size="sm" aria-label={`Remove the chart filter ${data.trend.label}`} onClick={() => pick(query, "trend", "")}>
+              <Button size="sm" aria-label={`Remove the chart filter ${data.trend.label}`} onClick={() => pick(query, "trend", "")}>
                 {data.trend.label}
                 <X aria-hidden />
               </Button>
@@ -188,6 +194,7 @@ export function Analytics({ query }: PageProps) {
         </div>
         {data.chart ? <Chart chart={data.chart} /> : <p className="t-small m-0 text-muted-foreground">No requests in this window.</p>}
       </Panel>
+      </div>
       <Panel title={data.ranking_title}>
         <div className="flex flex-wrap items-start gap-1">
           <Tabs label="Group by" tabs={data.bys} current={data.by} onPick={(v) => pick(query, "by", v)} />
@@ -219,14 +226,17 @@ export function Analytics({ query }: PageProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {data.ranking.map((r, i) => (
+            {ranking.map((r) => (
               <Fragment key={r.value}>
-                <TableRow>
+                <TableRow className={cn(r.unnamed && "bg-accent")}>
                   <TableCell>
-                    <span className="text-muted-foreground tabular-nums">{i + 1}.</span>{" "}
+                    {r.unnamed ? null : <span className="text-muted-foreground tabular-nums">{ranking.filter((x) => !x.unnamed).indexOf(r) + 1}. </span>}
                     {r.unnamed ? (
                       <>
-                        <Person name="" />{" "}
+                        <span className="t-body-strong inline-flex items-center gap-2 whitespace-nowrap">
+                          <TriangleAlert aria-hidden="true" className="size-4 flex-none text-destructive-text" />
+                          Unnamed traffic
+                        </span>{" "}
                         <a href={r.href} className="t-small">
                           See them
                         </a>
@@ -317,7 +327,8 @@ function Usd({ usd, estimated, tip }: { usd: string; estimated: string | null; t
 }
 
 /// Bars for each hour or day with their scale. Muted, so the eye lands on the last bar: now, in lime, edged in text
-/// so it holds on a light panel. Capped in width so one day is not one wide block.
+/// so it holds on a light panel. Capped in width so one day is not one wide block, and spread over the width so a week
+/// does not huddle at the left.
 function Chart({ chart }: { chart: NonNullable<Data["chart"]> }) {
   return (
     <div role="img" aria-label={chart.label} className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2">
@@ -326,7 +337,7 @@ function Chart({ chart }: { chart: NonNullable<Data["chart"]> }) {
         <span>{chart.half}</span>
         <span>0</span>
       </div>
-      <div className="relative flex h-[calc(var(--space-24)*2.5)] items-end gap-1 border-b border-input md:gap-2">
+      <div className="relative flex h-[calc(var(--space-24)*2.5)] items-end justify-around gap-1 border-b border-input md:gap-2">
         <span className="absolute inset-x-0 bottom-1/2 border-t border-border" />
         <span className="absolute inset-x-0 bottom-full border-t border-border" />
         {chart.points.map((p) => (
@@ -338,7 +349,7 @@ function Chart({ chart }: { chart: NonNullable<Data["chart"]> }) {
           />
         ))}
       </div>
-      <div className="t-mono-sm col-start-2 flex gap-1 text-muted-foreground md:gap-2">
+      <div className="t-mono-sm col-start-2 flex justify-around gap-1 text-muted-foreground md:gap-2">
         {chart.points.map((p) => (
           <span key={p.at} className="flex min-w-0 max-w-[var(--space-6)] flex-1 justify-center whitespace-nowrap">
             {p.mark ?? ""}

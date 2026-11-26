@@ -103,11 +103,9 @@ export function Spend() {
                 ))}
                 {/* Refused requests never reached a provider, so they cost nothing; their count is the point. */}
                 <TableRow>
-                  <TableCell>Stopped before sending</TableCell>
-                  <TableCell className="text-right tabular-nums">0.00</TableCell>
-                  <TableCell />
-                  <TableCell className="text-right tabular-nums">{data.stopped}</TableCell>
-                  <TableCell className="text-right tabular-nums">0</TableCell>
+                  <TableCell colSpan={5} className="text-muted-foreground">
+                    Refused before sending: {data.stopped} {data.stopped === "1" ? "request" : "requests"}, $0.00
+                  </TableCell>
                 </TableRow>
               </TableBody>
             </Table>

@@ -32,6 +32,8 @@ import { Requests } from "./Requests";
 import { Audit } from "./Audit";
 import { Prices } from "./Prices";
 import { Deployments } from "./Deployments";
+import { NotFound } from "./NotFound";
+import { CircleHelp } from "lucide-react";
 
 export type PageProps = { me: Me | null; query: URLSearchParams };
 
@@ -179,5 +181,13 @@ export function find(route: string): { section: Section; tab: Tab } {
     const tab = section.tabs.find((t) => t.route === route);
     if (tab) return { section, tab };
   }
-  return { section: SECTIONS[0], tab: SECTIONS[0].tabs[0] };
+  if (route === "/" || route === "") return { section: SECTIONS[0], tab: SECTIONS[0].tabs[0] };
+  return { section: NOT_FOUND, tab: NOT_FOUND.tabs[0] };
 }
+
+// Not in the sidebar: a wrong link lands here, so it is seen, rather than on the Overview.
+const NOT_FOUND: Section = {
+  label: "Page not found",
+  icon: CircleHelp,
+  tabs: [{ route: "/not-found", label: "Page not found", page: NotFound }],
+};

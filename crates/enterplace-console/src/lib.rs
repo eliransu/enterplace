@@ -1489,14 +1489,11 @@ async fn sign_in(
         } else if !key.starts_with("enterplace_") {
             "That is not an Enterplace key: Enterplace keys start with enterplace_. Paste the admin key enterplace start printed, or open the sign-in link it printed.".to_string()
         } else {
-            format!(
-                "This key does not sign in here: it is not an admin key in {}. Check that you pasted the whole admin key enterplace start printed, or ask an admin to make your key an admin key.",
-                html::esc(&keys.display().to_string())
-            )
+            "This key is not an admin key, so it does not sign in here. Check that you pasted the whole admin key enterplace start printed, or ask an admin to make you one: enterplace key new your-name --team your-team --admin.".to_string()
         };
         return page(
             StatusCode::UNAUTHORIZED,
-            pages::sign_in(&error, "", console.sso_on()),
+            pages::sign_in_kept(&error, form.get("key"), console.sso_on()),
         );
     };
     let act = Act {
