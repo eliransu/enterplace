@@ -7,6 +7,8 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-26
+
 ### Added
 
 - New callers: `new_callers:` in the policy decides what happens the first time a key, person token or sign-in no
@@ -24,6 +26,11 @@ one repository. How a release is made: RELEASING.md.
   one minor version ahead is held back, since that version could not share the store with the running one or come
   back from it. The release list is read only while Health is open; `ENTERPLACE_UPDATE_CHECK=off` turns it off.
 - The Helm chart sets `ENTERPLACE_HELM_RELEASE` and `ENTERPLACE_HELM_NAMESPACE`, for the exact `helm upgrade` on Health.
+
+### Changed
+
+- Upgrading: from 0.2.x, update to 0.3.x first; two versions share one store only one minor version apart. 0.3.x
+  refuses a policy with `new_callers:`, so take it out of the policy before rolling back to 0.3.x.
 
 ## [0.3.0] - 2026-11-26
 
