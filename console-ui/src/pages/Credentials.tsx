@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } f
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, Head, Problem, Refusal, Form, Loading } from "@/components/page";
 import { api } from "@/lib/api";
+import { Copy } from "@/components/copy";
 import { useData } from "@/lib/use";
 import type { PageProps } from "@/pages";
 
@@ -15,7 +16,7 @@ type Data = {
   lead: string;
   read_only: boolean;
   may_change: boolean;
-  off?: { title: string; body: string };
+  off?: { title: string; body: string; agent?: string; docs?: string };
   credentials?: Credential[];
   empty?: { title: string; body: string };
 };
@@ -56,7 +57,19 @@ export function Credentials({ query }: PageProps) {
       <Head title="Provider keys" lead={data?.lead ?? "Provider keys, stored encrypted. Never shown after saving."} actions={list ? add : null} />
       {error ? <Problem text={error} retry={reload} /> : null}
       {!data && !error ? <Loading rows={3} /> : null}
-      {data?.off ? <Empty title={data.off.title} body={data.off.body} /> : null}
+      {data?.off ? (
+        <section className="grid justify-items-start gap-4 rounded-panel bg-card p-6">
+          <Empty title={data.off.title} body={data.off.body} />
+          <div className="flex flex-wrap gap-2">
+            {data.off.agent ? <Copy text={data.off.agent} label="Copy for your agent" /> : null}
+            {data.off.docs ? (
+              <Button variant="outline" asChild>
+                <a href={data.off.docs}>How the master key works</a>
+              </Button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
       {list && list.length === 0 && data?.empty ? (
         <section className="grid justify-items-start gap-4 rounded-panel bg-card p-6">
           <Empty title={data.empty.title} body={data.empty.body} />
@@ -142,11 +155,11 @@ function AddDialog({ change }: { change: Change }) {
           The key Enterplace sends to a provider, kept in the store sealed with AES-256-GCM under the master key. After it is saved only its name and last 4 characters are shown.
         </DialogDescription>
         <Form className="grid gap-6" onSubmit={submit}>
-          <Field id="credential-name" label="Name" hint="A provider in the policy names it with credential: and this name.">
-            <Input id="credential-name" className="t-mono" value={name} onChange={(e) => setName(e.target.value)} placeholder="openai-prod" required autoFocus autoComplete="off" />
+          <Field id="credential-name" label="Name" hint="The name a provider uses to find this key. For example openai-prod.">
+            <Input id="credential-name" className="t-mono" value={name} onChange={(e) => setName(e.target.value)} required autoFocus autoComplete="off" />
           </Field>
-          <Field id="credential-provider" label="Provider" hint="The vendor the key is for, so the list says which is which.">
-            <Input id="credential-provider" className="t-mono" value={provider} onChange={(e) => setProvider(e.target.value)} placeholder="openai" required autoComplete="off" />
+          <Field id="credential-provider" label="Provider" hint="The vendor the key is for, so the list says which is which. For example openai.">
+            <Input id="credential-provider" className="t-mono" value={provider} onChange={(e) => setProvider(e.target.value)} required autoComplete="off" />
           </Field>
           <Secret id="credential-value" value={value} setValue={setValue} />
           <Refusal text={refused} />

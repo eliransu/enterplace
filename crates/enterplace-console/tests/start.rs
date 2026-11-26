@@ -54,6 +54,8 @@ fn setup(name: &str) -> Result<Setup, Box<dyn std::error::Error>> {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("enterplace.policy.yaml"), POLICY)?;
+    // The gateway tested openai and it answered: Connect a model counts a provider once its test passed.
+    enterplace_console::tested::remember("openai", true, "Connected".into(), String::new());
     std::fs::write(
         dir.join("enterplace.keys.yaml"),
         format!(
@@ -1005,6 +1007,28 @@ async fn connect_a_model_seals_the_key_and_adds_the_provider_or_the_demo_model_i
         !answer.to_string().contains("sk-ant-test-1234"),
         "nor in the answer"
     );
+    // Added is not connected: the step waits for the gateway's connection test, and says what it failed on.
+    let state = start(&s.app, &cookie, "").await?;
+    assert!(
+        state
+            .to_string()
+            .contains("anthropic is added. Testing its connection now"),
+        "{state}"
+    );
+    enterplace_console::tested::remember(
+        "anthropic",
+        false,
+        "Failed: Could not reach https://api.anthropic.com.".into(),
+        String::new(),
+    );
+    let state = start(&s.app, &cookie, "").await?;
+    assert!(
+        state
+            .to_string()
+            .contains("anthropic: Failed: Could not reach"),
+        "{state}"
+    );
+    enterplace_console::tested::remember("anthropic", true, "Connected".into(), String::new());
     let state = start(&s.app, &cookie, "").await?;
     assert!(
         step(&state, "Connect a model")["done_text"]

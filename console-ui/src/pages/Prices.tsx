@@ -11,7 +11,7 @@ import { Copy } from "@/components/copy";
 import { useData } from "@/lib/use";
 import type { PageProps } from "@/pages";
 
-type Model = { model: string; provider: string; price: string; source: string; aliases: string; input: string; output: string };
+type Model = { model: string; provider: string; price: string; source: string; aliases: string; input: string; output: string; max_output: string };
 type Data = {
   error?: string;
   lead: string;
@@ -105,7 +105,7 @@ export function Prices({ query }: PageProps) {
       {data && editable && adding ? (
         <AddDialog providers={data.providers} provider={query.get("provider") ?? ""} model={query.get("model") ?? ""} base={data.base} change={change} />
       ) : null}
-      {data && editable && pricing ? <PriceDialog model={pricing} input={priced?.input ?? ""} output={priced?.output ?? ""} base={data.base} change={change} /> : null}
+      {data && editable && pricing ? <PriceDialog model={pricing} input={priced?.input ?? ""} output={priced?.output ?? ""} max={priced?.max_output ?? ""} base={data.base} change={change} /> : null}
     </>
   );
 }
@@ -142,7 +142,7 @@ function AddDialog(props: { providers: string[]; provider: string; model: string
       <DialogContent>
         <DialogTitle>Add a model</DialogTitle>
         <DialogDescription>
-          Checked as enterplace check checks a file, then saved: a new policy version in the store (live, or after a second admin approves it), or the policy file rewritten. The answer says where it is in force.
+          Add a model callers can request, and its price for budgets.
         </DialogDescription>
         <Form className="grid gap-6" onSubmit={submit}>
           <Field id="model-provider" label="Provider">
@@ -159,12 +159,12 @@ function AddDialog(props: { providers: string[]; provider: string; model: string
               </SelectContent>
             </Select>
           </Field>
-          <Field id="model-name" label="Model" hint="The name callers send, as the provider knows it.">
-            <Input id="model-name" className="t-mono" value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-4o-mini" required autoFocus autoComplete="off" />
+          <Field id="model-name" label="Model" hint="The name callers send, as the provider knows it. For example gpt-4o-mini.">
+            <Input id="model-name" className="t-mono" value={model} onChange={(e) => setModel(e.target.value)} required autoFocus autoComplete="off" />
           </Field>
           <PriceFields id="model" input={input} output={output} setInput={setInput} setOutput={setOutput} />
-          <Field id="model-aliases" label="Aliases, optional" hint="Other names callers may send for this model, separated by commas.">
-            <Input id="model-aliases" className="t-mono" value={aliases} onChange={(e) => setAliases(e.target.value)} placeholder="fast, default" autoComplete="off" />
+          <Field id="model-aliases" label="Aliases, optional" hint="Other names callers may send for this model, separated by commas. For example fast, default.">
+            <Input id="model-aliases" className="t-mono" value={aliases} onChange={(e) => setAliases(e.target.value)} autoComplete="off" />
           </Field>
           <Refusal text={refused} />
           <DialogFooter>
@@ -179,13 +179,14 @@ function AddDialog(props: { providers: string[]; provider: string; model: string
   );
 }
 
-function PriceDialog(props: { model: string; input: string; output: string; base: number | null; change: Change }) {
+function PriceDialog(props: { model: string; input: string; output: string; max: string; base: number | null; change: Change }) {
   const [input, setInput] = useState(props.input);
   const [output, setOutput] = useState(props.output);
+  const [max, setMax] = useState(props.max);
   const [refused, setRefused] = useState("");
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const answer = await props.change(() => api.post("prices/price", { model: props.model, input, output, base: props.base }));
+    const answer = await props.change(() => api.post("prices/price", { model: props.model, input, output, max_output: max, base: props.base }));
     if (answer) setRefused(answer);
     else setQuery({});
   };
@@ -198,6 +199,9 @@ function PriceDialog(props: { model: string; input: string; output: string; base
         </DialogDescription>
         <Form className="grid gap-6" onSubmit={submit}>
           <PriceFields id="price" input={input} output={output} setInput={setInput} setOutput={setOutput} />
+          <Field id="price-max" label="Most output tokens per request, optional" hint="The model's output limit, for example 16384. With it, a budget can count what a request that sets no output limit could cost; without it, such a request is refused while a budget applies.">
+            <Input id="price-max" type="number" min={1} step={1} inputMode="numeric" className="t-mono" value={max} onChange={(e) => setMax(e.target.value)} />
+          </Field>
           <Refusal text={refused} />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setQuery({})}>

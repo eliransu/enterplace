@@ -152,10 +152,10 @@ export const SECTIONS: Section[] = [
     ],
   },
   {
-    label: "Deployments",
+    label: "Health",
     icon: Rocket,
     group: "Settings",
-    tabs: [{ route: "/deployments", label: "Deployments", page: Deployments }],
+    tabs: [{ route: "/deployments", label: "Health", page: Deployments }],
   },
 ];
 

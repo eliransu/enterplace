@@ -94,6 +94,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
                         // What the price dialog starts from.
                         "input": set.as_ref().map(|p| p.input.to_string()).unwrap_or_default(),
                         "output": set.as_ref().map(|p| p.output.to_string()).unwrap_or_default(),
+                        "max_output": set.as_ref().and_then(|p| p.max_output).map(|n| n.to_string()).unwrap_or_default(),
                     }));
                 }
             }
@@ -175,6 +176,20 @@ async fn change(
             versions::set_price(&before, &model, p).map_err(|e| sentence(&e))
         }
     });
+    // Empty takes the cap out; a form without the field leaves it as it is.
+    let edited = match body.get("max_output") {
+        None => edited,
+        Some(given) => edited.and_then(|policy| {
+            let given = given.as_u64().map_or_else(|| text(&body, "max_output").to_string(), |n| n.to_string());
+            let cap = match given.as_str() {
+                "" => None,
+                n => Some(n.parse::<u64>().ok().filter(|n| *n > 0).ok_or(
+                    "Most output tokens per request is a whole number above 0, for example 16384, or empty for no cap.",
+                )?),
+            };
+            versions::set_max_output(&policy, &model, cap).map_err(|e| sentence(&e))
+        }),
+    };
     let policy = match edited {
         Ok(policy) => policy,
         Err(error) => {

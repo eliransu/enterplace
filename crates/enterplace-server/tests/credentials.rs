@@ -511,12 +511,21 @@ async fn without_a_store_the_console_app_points_to_key_env() -> TestResult {
         console(&gw.router, "GET", "/console/api/credentials", &cookie, "").await?;
     assert_eq!(status, StatusCode::OK, "{body}");
     let page: Value = serde_json::from_str(&body)?;
-    assert_eq!(page["off"]["title"], "Credentials need the store", "{body}");
+    assert_eq!(
+        page["off"]["title"], "Provider keys need a master key",
+        "{body}"
+    );
     assert!(
         page["off"]["body"]
             .as_str()
             .unwrap_or("")
-            .contains("key_env"),
+            .contains("environment variable"),
+        "{body}"
+    );
+    assert!(
+        page["off"]["agent"]
+            .as_str()
+            .is_some_and(|a| a.contains("ENTERPLACE_MASTER_KEY")),
         "{body}"
     );
     assert!(page.get("credentials").is_none(), "{body}");

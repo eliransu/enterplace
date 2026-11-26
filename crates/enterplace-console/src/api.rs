@@ -521,6 +521,8 @@ async fn providers(State(console): State<Console>, headers: HeaderMap) -> Respon
                     format!("sealed credential {c}")
                 } else if let Some(e) = p.get("key_env").and_then(Value::as_str) {
                     format!("environment variable {e}")
+                } else if p.get("preset").or_else(|| p.get("kind")).and_then(Value::as_str).and_then(catalog::find).is_some_and(|c| c.key_need() == "none") {
+                    "no key needed".to_string()
                 } else {
                     "none".to_string()
                 };
@@ -539,7 +541,7 @@ async fn providers(State(console): State<Console>, headers: HeaderMap) -> Respon
             .iter()
             .map(|p| {
                 let models = catalog::default_models(p.id);
-                json!({ "id": p.id, "name": p.name, "local": p.local, "needs_url": p.needs_url(), "models": models })
+                json!({ "id": p.id, "name": p.name, "local": p.local, "needs_url": p.needs_url(), "key": p.key_need(), "models": models })
             })
             .collect();
         let policy = &console.config().policy;
@@ -547,6 +549,8 @@ async fn providers(State(console): State<Console>, headers: HeaderMap) -> Respon
             "providers": list,
             "catalog": presets,
             "sealing": store::credentials_for(&console.config().keys).is_some(),
+            "master_key_agent": crate::start::master_key_prompt(&crate::base()),
+            "docs": format!("{}/governance/provider-credentials/", crate::start::DOCS),
             "agent": crate::start::provider_prompt(&crate::base(), &policy.display().to_string(), store::policy_store(policy).is_some()),
         })))
     }.await)
@@ -701,8 +705,13 @@ async fn provider_add(
                 preset.name, preset.url
             )));
         }
-        let (key, key_env) = (text(&body, "key").to_string(), text(&body, "key_env").to_string());
-        if key.is_empty() && key_env.is_empty() && !preset.local {
+        // A provider that takes no key keeps none, whatever the form sent: the demo model is answered inside the
+        // gateway, and AWS signs with its own credentials.
+        let (key, key_env) = match preset.key_need() {
+            "none" => (String::new(), String::new()),
+            _ => (text(&body, "key").to_string(), text(&body, "key_env").to_string()),
+        };
+        if key.is_empty() && key_env.is_empty() && preset.key_need() == "required" {
             return Err(bad(format!(
                 "{} needs a key: paste it to keep it sealed, or name the environment variable that holds it.",
                 preset.name
@@ -865,7 +874,8 @@ async fn mcp_list(State(console): State<Console>, headers: HeaderMap) -> Respons
                 })
             })
             .collect();
-        Ok(ok(json!({ "servers": servers })))
+        // Agents reach every server's tools at the gateway's one /mcp address, never at the server itself.
+        Ok(ok(json!({ "servers": servers, "gateway": format!("{}/mcp", crate::base()) })))
     }.await)
 }
 

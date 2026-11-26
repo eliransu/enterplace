@@ -490,6 +490,27 @@ pub fn set_price(text: &str, model: &str, price: (f64, f64)) -> Result<String, S
     Ok(with_comments(text, &to_yaml(&Value::Object(map))))
 }
 
+/// Sets the most output tokens one request to `model` may ask for (`max_output` in its price), or takes it out when
+/// `max_output` is None. A budget can then count the most a request without max_tokens could cost. Returns the new
+/// text. `Err` when the model has no price to hold it.
+pub fn set_max_output(text: &str, model: &str, max_output: Option<u64>) -> Result<String, String> {
+    let mut map = tree(text)?;
+    let Some(Value::Object(entry)) = map
+        .get_mut("prices")
+        .and_then(Value::as_object_mut)
+        .and_then(|p| p.get_mut(model))
+    else {
+        return Err(format!(
+            "\"{model}\" has no price in the policy. Set its input and output price first."
+        ));
+    };
+    match max_output {
+        Some(n) => entry.insert("max_output".into(), n.into()),
+        None => entry.remove("max_output"),
+    };
+    Ok(with_comments(text, &to_yaml(&Value::Object(map))))
+}
+
 fn set_price_in(map: &mut Map<String, Value>, model: &str, (input, output): (f64, f64)) {
     let prices = map
         .entry("prices")
@@ -1295,6 +1316,17 @@ prices:
                 .map(|p| (p.input, p.output)),
             Some((3.0, 12.0))
         );
+        let capped = set_max_output(&priced, "gpt-4o", Some(16384))?;
+        let max = |text: &str| -> Result<Option<u64>, String> {
+            Ok(load(text)?
+                .policy
+                .prices()
+                .get("gpt-4o")
+                .and_then(|p| p.max_output))
+        };
+        assert_eq!(max(&capped)?, Some(16384));
+        assert_eq!(max(&set_max_output(&capped, "gpt-4o", None)?)?, None);
+        assert!(set_max_output(POLICY, "nope", Some(1)).is_err());
 
         let twice = add_model(POLICY, "openai", "gpt-4o", None, &[])
             .err()

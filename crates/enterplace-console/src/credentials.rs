@@ -59,8 +59,10 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
             let list = match store::credentials_for(&config.keys).map(|s| s.credentials()) {
                 None => {
                     out["off"] = json!({
-                        "title": "Credentials need the store",
-                        "body": "Provider credentials are kept in the store, sealed with a master key, and this gateway's policy has no store. Keep each provider key in an environment variable (or a file), or add a store to the policy and set ENTERPLACE_MASTER_KEY.",
+                        "title": "Provider keys need a master key",
+                        "body": "Enterplace keeps pasted provider keys encrypted under a master key, and this gateway has none. Set one on every gateway and restart them: Copy for your agent has the steps. Until then each provider reads its key from an environment variable on the gateway.",
+                        "agent": crate::start::master_key_prompt(&crate::base()),
+                        "docs": format!("{}/governance/provider-credentials/", crate::start::DOCS),
                     });
                     return Ok(ok(out));
                 }
