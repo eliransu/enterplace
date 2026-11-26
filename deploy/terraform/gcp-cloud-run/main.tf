@@ -24,7 +24,7 @@ locals {
   ))
   secrets = merge(
     {
-      DATABASE_URL      = google_secret_manager_secret.database_url.secret_id
+      DATABASE_URL          = google_secret_manager_secret.database_url.secret_id
       ENTERPLACE_MASTER_KEY = var.master_key_secret == null ? google_secret_manager_secret.generated["master-key"].secret_id : var.master_key_secret
       ENTERPLACE_EXPORT_KEY = var.export_key_secret == null ? google_secret_manager_secret.generated["export-key"].secret_id : var.export_key_secret
     },
