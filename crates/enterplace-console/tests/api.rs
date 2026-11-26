@@ -2036,3 +2036,78 @@ async fn people_says_how_everyone_gets_a_key_and_hands_single_sign_on_to_an_agen
     }
     Ok(())
 }
+
+/// Coding agent controls: set for the organization (the policy's `coding_agents:`) and for one rule, read back from
+/// the policy API, refused with the fix for a word or a rule the policy does not have, and recorded.
+#[tokio::test]
+async fn coding_agent_controls_are_set_for_the_organization_and_per_rule() -> TestResult {
+    let s = setup("coding-agents")?;
+    let cookie = sign_in(&s, ADMIN_KEY).await?;
+    let path = "/console/api/policy/coding-agents";
+
+    let body = json!({ "bypass_permissions": "block", "auto_mode": "block", "browser": "block" });
+    let (status, done) = call(&s, "PUT", path, &cookie, Some(body)).await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let rule = json!({ "rule": "everyone", "browser": "allow" });
+    let (status, done) = call(&s, "PUT", path, &cookie, Some(rule)).await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let (_, policy) = call(&s, "GET", "/console/api/policy", &cookie, None).await?;
+    assert_eq!(
+        policy["coding_agents"],
+        json!({ "bypass_permissions": "block", "auto_mode": "block", "browser": "block" }),
+        "{policy}"
+    );
+    assert_eq!(
+        policy["rules"][0]["coding_agents"],
+        json!({ "browser": "allow" }),
+        "{policy}"
+    );
+    let record = s
+        .audit()?
+        .lines()
+        .rev()
+        .find(|l| l.contains(r#""action":"set_coding_agents""#))
+        .map(str::to_string)
+        .ok_or("no set_coding_agents record")?;
+    assert!(record.contains(r#""person":"noa.bar""#), "{record}");
+
+    // Nothing set on a rule takes its block out: the organization's then holds.
+    let (status, _) = call(
+        &s,
+        "PUT",
+        path,
+        &cookie,
+        Some(json!({ "rule": "everyone" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let text = s.policy()?;
+    assert_eq!(text.matches("coding_agents").count(), 1, "{text}");
+
+    let before = s.policy()?;
+    for (body, says) in [
+        (json!({ "browser": "deny" }), "allow or block"),
+        (
+            json!({ "rule": "nobody", "browser": "block" }),
+            "no rule named \"nobody\"",
+        ),
+    ] {
+        let (status, refused) = call(&s, "PUT", path, &cookie, Some(body)).await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert!(error(&refused).contains(says), "{refused}");
+    }
+    assert_eq!(s.policy()?, before);
+
+    let viewer = sign_in(&s, VIEWER_KEY).await?;
+    let (status, _) = call(
+        &s,
+        "PUT",
+        path,
+        &viewer,
+        Some(json!({ "browser": "allow" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(s.policy()?, before);
+    Ok(())
+}

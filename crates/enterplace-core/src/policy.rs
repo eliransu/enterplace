@@ -858,6 +858,8 @@ pub struct Rule {
     pub tools: Vec<String>,
     /// `tool_action: strip`: a function tool `tools:` does not allow is taken out of the request or answer, not refused.
     pub tool_strip: bool,
+    /// What its callers may do in their coding agents, the policy's `coding_agents:` under the rule's own.
+    pub coding_agents: crate::coding_agents::CodingAgents,
     /// MCP prompts, resources and tools that need an admin's approval.
     pub mcp: crate::mcp::McpRule,
     /// The organization whose callers the rule applies to. `None` applies to callers of every organization.
@@ -1313,6 +1315,8 @@ pub struct Policy {
     model_groups: Vec<(String, Vec<String>)>,
     /// `key_bounds:` by role name; the empty name is the one for every role without its own, and for `enterplace login`.
     key_bounds: Vec<(String, KeyBounds)>,
+    /// `coding_agents:` at the top of the policy: what a caller no rule names, or a device with no person, gets.
+    coding_agents: crate::coding_agents::CodingAgents,
 }
 
 /// `identity_headers:` in the policy: the request headers (lower case) in which a proxy that authenticates people
@@ -1388,6 +1392,7 @@ pub static OBSERVED: std::sync::LazyLock<Rule> = std::sync::LazyLock::new(|| Rul
     passthrough: Vec::new(),
     tools: Vec::new(),
     tool_strip: false,
+    coding_agents: Default::default(),
     mcp: crate::mcp::McpRule::default(),
     org: None,
     profiles: Vec::new(),
@@ -1471,6 +1476,21 @@ impl Policy {
     pub fn with_key_bounds(mut self, bounds: Vec<(String, KeyBounds)>) -> Self {
         self.key_bounds = bounds;
         self
+    }
+
+    pub fn with_coding_agents(mut self, controls: crate::coding_agents::CodingAgents) -> Self {
+        self.coding_agents = controls;
+        self
+    }
+
+    /// The coding agent controls of `principal`: their rule's, or the policy's when no rule names them.
+    pub fn coding_agents(
+        &self,
+        principal: Option<&Principal>,
+    ) -> crate::coding_agents::CodingAgents {
+        principal
+            .and_then(|p| self.rule_for(p))
+            .map_or(self.coding_agents, |r| r.coding_agents)
     }
 
     /// What a holder of `role` may grant: the role's own bounds, else the policy's. `None` bounds nothing.
@@ -1679,6 +1699,7 @@ impl Policy {
             passthrough: Vec::new(),
             tools: Vec::new(),
             tool_strip: false,
+            coding_agents: Default::default(),
             mcp: crate::mcp::McpRule::default(),
             org: None,
             profiles: Vec::new(),

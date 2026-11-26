@@ -7,6 +7,13 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Added
+
+- Coding agent controls: `coding_agents:` in the policy (organization wide, overridden per rule) allows or blocks
+  `--dangerously-skip-permissions`, auto mode and browser use (Claude in Chrome and browser MCP servers). The device
+  agent writes them into Claude Code's managed settings; the gateway refuses a request offering browser tools with
+  `browser_not_allowed`, or strips them with `tool_action: strip`. Set on the console's Coding agents page.
+
 ## [0.2.0] - 2026-11-26
 
 ### Changed

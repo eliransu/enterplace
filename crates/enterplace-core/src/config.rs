@@ -179,6 +179,10 @@ const KNOWN: &[&str] = &[
     "resources",
     "approve_tools",
     "tool_action",
+    "coding_agents",
+    "bypass_permissions",
+    "auto_mode",
+    "browser",
     "approval_timeout_seconds",
     "mcp_clients",
     "transport",
@@ -374,6 +378,41 @@ struct PolicyFile {
     /// What every role may grant when it issues a key, unless the role has its own.
     #[serde(default)]
     key_bounds: Option<KeyBoundsFile>,
+    /// What people may do in their coding agents, unless their rule says otherwise.
+    #[serde(default)]
+    coding_agents: Option<CodingAgentsFile>,
+}
+
+/// `coding_agents:` at the top of the policy or on a rule.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CodingAgentsFile {
+    #[serde(default)]
+    bypass_permissions: Option<String>,
+    #[serde(default)]
+    auto_mode: Option<String>,
+    #[serde(default)]
+    browser: Option<String>,
+}
+
+/// `coding_agents:` checked; `at` is where it is, for the error.
+fn coding_agents_of(
+    file: Option<&CodingAgentsFile>,
+    at: &str,
+    errors: &mut Vec<String>,
+) -> crate::coding_agents::CodingAgents {
+    let Some(file) = file else {
+        return Default::default();
+    };
+    let set: serde_json::Map<String, serde_json::Value> = crate::coding_agents::KEYS
+        .into_iter()
+        .zip([&file.bypass_permissions, &file.auto_mode, &file.browser])
+        .filter_map(|(k, v)| v.as_ref().map(|v| (k.to_string(), v.clone().into())))
+        .collect();
+    crate::coding_agents::CodingAgents::from_json(&set.into()).unwrap_or_else(|problem| {
+        errors.push(format!("{at}: {problem}."));
+        Default::default()
+    })
 }
 
 #[derive(Deserialize)]
@@ -1213,6 +1252,8 @@ struct RuleFile {
     shadow_until: Option<String>,
     #[serde(default)]
     require: Option<RequireFile>,
+    #[serde(default)]
+    coding_agents: Option<CodingAgentsFile>,
 }
 
 #[derive(Deserialize)]
@@ -3354,6 +3395,11 @@ fn policy_rules(
                 .collect(),
             tools,
             tool_strip,
+            coding_agents: coding_agents_of(
+                rule.coding_agents.as_ref(),
+                &at("coding_agents"),
+                errors,
+            ),
             mcp,
             org: rule.org.clone(),
             profiles: rule.profiles.clone(),
@@ -5934,6 +5980,18 @@ pub fn load_texts(
     presets(policy_path, policy_text, &mut parsed.providers, &mut errors);
     let providers = providers(policy_path, policy_text, &parsed, &mut errors);
     let mut rules = policy_rules(policy_path, policy_text, &parsed, &mut errors);
+    let coding_agents = coding_agents_of(
+        parsed.coding_agents.as_ref(),
+        &format!(
+            "{}:{}",
+            policy_path.display(),
+            line_of_key(policy_text, "coding_agents", 1, usize::MAX)
+        ),
+        &mut errors,
+    );
+    for rule in &mut rules {
+        rule.coding_agents = rule.coding_agents.over(coding_agents);
+    }
     let guardrail_defs =
         rule_guardrails(policy_path, policy_text, &parsed, &mut rules, &mut errors);
     for (name, members) in &parsed.model_groups {
@@ -6125,6 +6183,7 @@ pub fn load_texts(
                 .with_guardrail_defs(guardrail_defs)
                 .with_model_groups(parsed.model_groups.clone().into_iter().collect())
                 .with_key_bounds(key_bounds)
+                .with_coding_agents(coding_agents)
                 .with_mode(mode),
             providers,
             audit_path,

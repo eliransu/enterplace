@@ -3,6 +3,7 @@
 pub mod audit;
 pub mod catalog;
 pub mod chat;
+pub mod coding_agents;
 pub mod cohere;
 pub mod config;
 pub mod converse;

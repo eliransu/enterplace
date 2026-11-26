@@ -2,6 +2,7 @@ import { useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,6 +22,7 @@ import {
 } from "@/components/ui/table";
 import { Empty, Head, Loading, Panel, Problem } from "@/components/page";
 import { Person } from "@/components/person";
+import { useCheckedChange } from "@/components/policy-change";
 import { api, type Me } from "@/lib/api";
 import { count, goTo, useData } from "@/lib/use";
 import { Setup } from "./Setup";
@@ -65,6 +67,7 @@ export function Coding({ query }: PageProps) {
         <Setup query={query} base={ROUTE} track="coding" />
       </section>
       <Tools />
+      <AgentControls me={me} />
       {keys.data?.bring ? <Bring bring={keys.data.bring} /> : null}
       <ReadOnly data={keys.data} />
       {keys.error ? <Problem text={keys.error} retry={keys.reload} /> : null}
@@ -272,6 +275,147 @@ function Tools() {
           </TableBody>
         </Table>
       )}
+    </Panel>
+  );
+}
+
+const CONTROLS = [
+  { key: "bypass_permissions", label: "Skip permissions" },
+  { key: "auto_mode", label: "Auto mode" },
+  { key: "browser", label: "Browser" },
+] as const;
+
+type Control = "allow" | "block";
+type Controls = Partial<Record<(typeof CONTROLS)[number]["key"], Control>>;
+type ControlsPolicy = {
+  coding_agents?: Controls;
+  rules: {
+    name: string;
+    who: { kind: string; value: string };
+    coding_agents?: Controls;
+  }[];
+};
+
+const WORD: Record<Control, string> = { allow: "Allow", block: "Block" };
+
+/// What people may do in their coding agents: for the organization (the policy's `coding_agents:`) and per rule. A
+/// rule that does not say takes the organization's; the organization's not said leaves Claude Code as it is.
+function AgentControls({ me }: { me: Me | null }) {
+  const {
+    data,
+    error,
+    change: apply,
+    reload,
+  } = useData<ControlsPolicy>("policy");
+  // Every policy save shows its diff and a dry run first, as on Rules and limits.
+  const [change, checking] = useCheckedChange(apply);
+  if (error) return <Problem text={error} retry={reload} />;
+  if (!data) return <Loading rows={2} />;
+  const may = !!me?.edit_policy;
+  const org = data.coding_agents ?? {};
+  const save = (
+    rule: string | null,
+    current: Controls,
+    key: keyof Controls,
+    value: string,
+  ) => {
+    const next: Controls = { ...current };
+    if (value === "unset") delete next[key];
+    else next[key] = value as Control;
+    change(() =>
+      api.put("policy/coding-agents", rule ? { ...next, rule } : next),
+    );
+  };
+  const row = (
+    rule: string | null,
+    label: React.ReactNode,
+    current: Controls,
+  ) => (
+    <TableRow key={rule ?? ""}>
+      <TableCell>{label}</TableCell>
+      {CONTROLS.map((c) => {
+        const inherited = org[c.key];
+        const unset = rule
+          ? `Organization's (${inherited ? WORD[inherited] : "not managed"})`
+          : "Not managed";
+        return (
+          <TableCell key={c.key}>
+            <Select
+              value={current[c.key] ?? "unset"}
+              disabled={!may}
+              onValueChange={(v) => save(rule, current, c.key, v)}
+            >
+              <SelectTrigger
+                aria-label={`${c.label}, ${rule ?? "organization"}`}
+                className="w-auto"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unset">{unset}</SelectItem>
+                <SelectItem value="allow">Allow</SelectItem>
+                <SelectItem value="block">Block</SelectItem>
+              </SelectContent>
+            </Select>
+          </TableCell>
+        );
+      })}
+    </TableRow>
+  );
+  return (
+    <Panel
+      title="What coding agents may do"
+      note={
+        <>
+          Skip permissions is --dangerously-skip-permissions (bypassPermissions
+          mode); Browser is Claude in Chrome and browser MCP servers. Blocked,
+          the device agent writes it into Claude Code&apos;s managed settings,
+          and the gateway refuses a request that offers browser tools. A
+          rule&apos;s choice overrides the organization&apos;s for the people it
+          names.
+          {may ? "" : " Your role may not change the policy."}
+        </>
+      }
+      actions={
+        <Button variant="outline" size="sm" asChild>
+          <a
+            href="https://docs.enterplace.dev/governance/coding-agent-controls/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            How it is enforced
+          </a>
+        </Button>
+      }
+    >
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-1/4">Who</TableHead>
+            {CONTROLS.map((c) => (
+              <TableHead key={c.key}>{c.label}</TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {row(null, <span className="t-body-strong">Organization</span>, org)}
+          {data.rules.map((r) =>
+            row(
+              r.name,
+              <span className="grid">
+                <span>{r.name}</span>
+                <span className="t-small text-muted-foreground">
+                  {r.who.kind === "any"
+                    ? "everyone"
+                    : `${r.who.kind === "name" ? "person" : r.who.kind} ${r.who.value}`}
+                </span>
+              </span>,
+              r.coding_agents ?? {},
+            ),
+          )}
+        </TableBody>
+      </Table>
+      {checking}
     </Panel>
   );
 }

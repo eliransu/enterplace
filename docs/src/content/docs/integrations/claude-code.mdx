@@ -324,6 +324,10 @@ Claude Code labels any 403 "Failed to authenticate". The message after that labe
 
 See [Refusal codes](/reference/refusal-codes/) for every code.
 
+## Permission modes and the browser
+
+An admin can block `--dangerously-skip-permissions`, auto mode and Claude in Chrome for the organization, a team or a person with the policy's `coding_agents:`. The device agent writes them into Claude Code's managed settings; with the browser blocked, a request sent while Chrome is on is refused with `browser_not_allowed`. See [Coding agent controls](/governance/coding-agent-controls/).
+
 ## Budgets
 
 On Claude subscriptions, dollar budgets do not count by default: see [Subscriptions](/governance/subscriptions/), and limit tokens and requests instead. On API keys, a budget reserves the most a request could cost before it is sent: its body at the input price plus its `max_tokens` at the output price. Claude Code asks for a large `max_tokens` on every request (32,000 or more, depending on the model), so each request reserves far more than it usually spends. One measurement put the reserve at $1.34 per Claude Code request.
