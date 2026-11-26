@@ -37,7 +37,7 @@ import {
   Refusal,
 } from "@/components/page";
 import { Copy } from "@/components/copy";
-import { TeamPicker } from "@/components/team-picker";
+import { EntityPicker, TeamPicker } from "@/components/team-picker";
 import { api, Refused } from "@/lib/api";
 import { count, goTo, num, useData } from "@/lib/use";
 import { cn } from "@/lib/utils";
@@ -103,7 +103,7 @@ export type Keys = {
   lead?: string;
   entries?: Entry[];
 };
-type Made = {
+export type Made = {
   key: string;
   name: string;
   team: string;
@@ -591,7 +591,7 @@ async function makeKey(path: string, body: unknown): Promise<Made | string> {
   }
 }
 
-function IssueDialog(props: {
+export function IssueDialog(props: {
   name: string;
   team: string;
   token: boolean;
@@ -1339,6 +1339,20 @@ function StopDialog(props: {
                       : "Person or app"
               }
             >
+              {scope === "person" || scope === "team" ? (
+                <EntityPicker
+                  key={scope}
+                  id="stop-value"
+                  kind={scope}
+                  options={choices}
+                  creatable={false}
+                  value={value}
+                  onChange={(v) => {
+                    setValue(v);
+                    setRefused("");
+                  }}
+                />
+              ) : (
               <Input
                 id="stop-value"
                 className="t-mono"
@@ -1352,6 +1366,7 @@ function StopDialog(props: {
                 required
                 autoComplete="off"
               />
+              )}
               <datalist id="stop-choices">
                 {choices.map((c) => (
                   <option key={c} value={c} />
@@ -1451,7 +1466,7 @@ function RevokeDialog({
   );
 }
 
-function MadeDialog({
+export function MadeDialog({
   made,
   service,
   onClose,

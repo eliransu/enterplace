@@ -47,7 +47,7 @@ import {
 import { Confirm, Remove } from "@/components/confirm";
 import { useCheckedChange } from "@/components/policy-change";
 import { Copy } from "@/components/copy";
-import { TeamPicker } from "@/components/team-picker";
+import { EntityPicker, type Kind } from "@/components/team-picker";
 import { api, part } from "@/lib/api";
 import { useData, words } from "@/lib/use";
 import type { PageProps } from "@/pages";
@@ -128,7 +128,13 @@ export function EnforceDialog({
   );
 }
 
-export function PolicyBasics({ me, query }: PageProps) {
+/// The Guardrails page: the guardrails panel of Rules and limits on its own, so the security controls have a place
+/// in the sidebar.
+export function Guardrails(props: PageProps) {
+  return <PolicyBasics {...props} only="guardrails" />;
+}
+
+export function PolicyBasics({ me, query, only }: PageProps & { only?: "guardrails" }) {
   const { data, error, change: apply, reload } = useData<Data>("policy");
   // Every save here shows its diff and a dry run of the last 24 hours first, and applies only on Apply.
   const [change, checking] = useCheckedChange(apply);
@@ -164,13 +170,18 @@ export function PolicyBasics({ me, query }: PageProps) {
   return (
     <>
       <Head
-        title="Rules and limits"
-        lead="Who may use which models, what they may spend, which guardrails run, and where requests go."
+        title={only ? "Guardrails" : "Rules and limits"}
+        lead={
+          only
+            ? "What every request is checked for before it reaches a model: secrets, personal data, prompt injection, word lists and your own services. Attach one to a rule, or turn it on for every request."
+            : "Who may use which models, what they may spend, which guardrails run, and where requests go."
+        }
       />
       {error ? <Problem text={error} retry={reload} /> : null}
       {!data && !error ? <Loading rows={6} /> : null}
       {data ? (
         <>
+          {only ? null : (<>
           <Panel title="Mode">
             <label className="t-body flex items-center gap-3">
               <Switch
@@ -351,6 +362,7 @@ export function PolicyBasics({ me, query }: PageProps) {
           </Panel>
           </div>
 
+          </>)}
           <Panel
             title="Guardrails"
             note="On: runs on every request, before the rule's own guardrails. Off: runs only for rules that name it. To try one before it refuses anything, set Try first until on it: until that day what it would block shows as Would block in the Audit log."
@@ -463,6 +475,7 @@ export function PolicyBasics({ me, query }: PageProps) {
             )}
           </Panel>
 
+          {only ? null : (
           <Panel
             title="Aliases and fallbacks"
             note="An alias is a model name callers send that Enterplace spreads over providers, trying the fallbacks in turn when they fail."
@@ -525,10 +538,11 @@ export function PolicyBasics({ me, query }: PageProps) {
               </Table>
             )}
           </Panel>
+          )}
         </>
       ) : null}
-      {data && rule ? <RuleForm rule={rule === "new" ? null : rule} guardrails={data.guardrails} onClose={() => setRule(null)} change={change} /> : null}
-      {limit ? <LimitForm limit={limit === "new" ? null : limit} team={prefill} onClose={closeLimit} change={change} /> : null}
+      {data && rule ? <RuleForm rule={rule === "new" ? null : rule} guardrails={data.guardrails} tags={tagsOf(data)} onClose={() => setRule(null)} change={change} /> : null}
+      {limit ? <LimitForm limit={limit === "new" ? null : limit} team={prefill} tags={data ? tagsOf(data) : []} onClose={closeLimit} change={change} /> : null}
       {guard ? <GuardForm guard={guard === "new" ? null : guard} onClose={() => setGuard(null)} change={change} /> : null}
       {testing ? <GuardTest guard={testing} onClose={() => setTesting(null)} /> : null}
       {alias ? <AliasForm alias={alias === "new" ? null : alias} onClose={() => setAlias(null)} change={change} /> : null}
@@ -557,13 +571,23 @@ function Actions({ onClose, label }: { onClose: () => void; label: string }) {
   );
 }
 
+/// The tags the policy names already, offered by the tag pickers.
+function tagsOf(data: Data): string[] {
+  return [
+    ...data.rules.filter((r) => r.who.kind === "tag").map((r) => r.who.value),
+    ...data.limits.map((l) => l.entry.tag).filter((t) => t !== undefined).map(String),
+  ];
+}
+
 function RuleForm({
   rule,
   guardrails,
+  tags,
   onClose,
   change,
 }: {
   rule: Rule | null;
+  tags: string[];
   guardrails: Guardrail[];
   onClose: () => void;
   change: Change;
@@ -634,12 +658,13 @@ function RuleForm({
                 kind === "name" ? "Person" : kind === "tag" ? "Tag" : "Team"
               }
             >
-              <Input
+              <EntityPicker
+                key={kind}
                 id="who-value"
-                className="t-mono"
+                kind={kind === "name" ? "person" : kind === "tag" ? "tag" : "team"}
+                options={kind === "tag" ? tags : undefined}
                 value={value}
-                onChange={(e) => setValue(e.target.value)}
-                required
+                onChange={(v) => setValue(v)}
               />
             </Field>
           )}
@@ -698,6 +723,12 @@ const SCOPES: Record<string, string> = {
   model: "A model",
   model_group: "A model group",
 };
+/// The limit scopes whose name is picked from what exists, or created.
+const PICKED: Record<string, Kind | undefined> = {
+  team: "team",
+  person: "person",
+  tag: "tag",
+};
 const RATES = [
   ["rpm", "Requests per minute"],
   ["rph", "Requests per hour"],
@@ -743,7 +774,7 @@ function limitRate(e: Entry) {
   return parts.join(", ") || "none";
 }
 
-function LimitForm({ limit, team, onClose, change }: { limit: Limit | null; team: string; onClose: () => void; change: Change }) {
+function LimitForm({ limit, team, tags, onClose, change }: { limit: Limit | null; team: string; tags: string[]; onClose: () => void; change: Change }) {
   const e = limit?.entry ?? {};
   const [scope0, value0] = scopeOf(e);
   const b = budgetOf(e);
@@ -797,13 +828,16 @@ function LimitForm({ limit, team, onClose, change }: { limit: Limit | null; team
           </Field>
           {scope === "global" ? null : (
             <Field id="scope-value" label="Name" hint={'"*" sets the same limit for each one.'}>
-              {scope === "team" ? (
-                <TeamPicker
+              {PICKED[scope] ? (
+                <EntityPicker
+                  key={scope}
                   id="scope-value"
+                  kind={PICKED[scope]}
+                  options={scope === "tag" ? tags : undefined}
                   value={value}
                   onChange={(v, made) => {
                     setValue(v);
-                    setCreate(made);
+                    setCreate(scope === "team" && made);
                   }}
                 />
               ) : (

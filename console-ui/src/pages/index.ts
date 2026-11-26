@@ -10,7 +10,9 @@ import {
   Scale,
   ScrollText,
   Server,
+  ShieldCheck,
   SquareTerminal,
+  User,
   Users,
 } from "lucide-react";
 import type { Me } from "@/lib/api";
@@ -21,7 +23,7 @@ import { Apps } from "./Apps";
 import { Providers } from "./Providers";
 import { McpServers } from "./McpServers";
 import { McpApprovals, McpSessions, McpTools } from "./Mcp";
-import { PolicyBasics } from "./PolicyBasics";
+import { Guardrails, PolicyBasics } from "./PolicyBasics";
 import { PolicyEditor, PolicyVersions, RawPolicy } from "./RawPolicy";
 import { People } from "./People";
 import { Teams } from "./Teams";
@@ -56,8 +58,10 @@ export type Section = {
   tabs: Tab[];
 };
 
-export const GROUPS = ["Use cases", "Activity", "Settings"] as const;
+export const GROUPS = ["Coding agents", "Apps and agents", "Security", "Activity", "Settings"] as const;
 
+// The two use cases each get their own group with what an admin does for them, so a coding agent admin and an app
+// admin each find their pages in one place. Rules and limits serve both: Apps and agents has its own route to them.
 export const SECTIONS: Section[] = [
   {
     label: "Overview",
@@ -65,27 +69,98 @@ export const SECTIONS: Section[] = [
     tabs: [{ route: "/overview", label: "Overview", page: Overview }],
   },
   {
-    label: "Coding agents",
+    label: "Getting started",
     icon: SquareTerminal,
-    group: "Use cases",
+    group: "Coding agents",
     tabs: [{ route: "/coding", label: "Coding agents", page: Coding }],
   },
   {
-    label: "Apps and agents",
+    label: "Users",
+    icon: User,
+    group: "Coding agents",
+    tabs: [{ route: "/people", label: "Users", page: People }],
+  },
+  {
+    label: "Groups",
+    icon: Users,
+    group: "Coding agents",
+    tabs: [{ route: "/teams", label: "Groups", page: Teams }],
+  },
+  {
+    label: "Policies",
+    icon: Scale,
+    group: "Coding agents",
+    tabs: [
+      {
+        route: "/policy",
+        label: "Rules and limits",
+        page: PolicyBasics,
+        policy: true,
+      },
+      { route: "/policy/raw", label: "Policy file", page: RawPolicy },
+      { route: "/policy/versions", label: "Versions", page: PolicyVersions },
+      {
+        route: "/policy/edit",
+        label: "Edit the file",
+        page: PolicyEditor,
+        hidden: true,
+      },
+    ],
+  },
+  {
+    label: "Getting started",
     icon: Blocks,
-    group: "Use cases",
+    group: "Apps and agents",
     tabs: [{ route: "/apps", label: "Apps and agents", page: Apps }],
+  },
+  {
+    label: "Policies",
+    icon: Scale,
+    group: "Apps and agents",
+    tabs: [
+      {
+        route: "/apps/policy",
+        label: "Rules and limits",
+        page: PolicyBasics,
+        policy: true,
+      },
+    ],
+  },
+  {
+    label: "Logs",
+    icon: ArrowLeftRight,
+    group: "Apps and agents",
+    tabs: [{ route: "/apps/logs", label: "Logs", page: Requests }],
   },
   {
     label: "MCP tools",
     icon: Server,
-    group: "Use cases",
+    group: "Apps and agents",
     tabs: [
       { route: "/mcp", label: "Servers", page: McpServers, policy: true },
       { route: "/mcp/tools", label: "Tools", page: McpTools },
       { route: "/mcp/approvals", label: "Approvals", page: McpApprovals },
       { route: "/mcp/sessions", label: "Sessions", page: McpSessions },
     ],
+  },
+  {
+    label: "Guardrails",
+    icon: ShieldCheck,
+    group: "Security",
+    tabs: [
+      {
+        route: "/guardrails",
+        label: "Guardrails",
+        page: Guardrails,
+        policy: true,
+      },
+    ],
+  },
+  {
+    label: "Kill switches and audit",
+    icon: ScrollText,
+    group: "Security",
+    tabs: [{ route: "/audit", label: "Audit log", page: Audit }],
   },
   {
     label: "Requests",
@@ -103,21 +178,6 @@ export const SECTIONS: Section[] = [
     ],
   },
   {
-    label: "Audit log",
-    icon: ScrollText,
-    group: "Activity",
-    tabs: [{ route: "/audit", label: "Audit log", page: Audit }],
-  },
-  {
-    label: "People and teams",
-    icon: Users,
-    group: "Settings",
-    tabs: [
-      { route: "/people", label: "People", page: People },
-      { route: "/teams", label: "Teams", page: Teams },
-    ],
-  },
-  {
     label: "Models and providers",
     icon: Boxes,
     group: "Settings",
@@ -130,27 +190,6 @@ export const SECTIONS: Section[] = [
       },
       { route: "/prices", label: "Models and prices", page: Prices },
       { route: "/credentials", label: "Provider keys", page: Credentials },
-    ],
-  },
-  {
-    label: "Policy",
-    icon: Scale,
-    group: "Settings",
-    tabs: [
-      {
-        route: "/policy",
-        label: "Rules and limits",
-        page: PolicyBasics,
-        policy: true,
-      },
-      { route: "/policy/raw", label: "Policy file", page: RawPolicy },
-      { route: "/policy/versions", label: "Versions", page: PolicyVersions },
-      {
-        route: "/policy/edit",
-        label: "Edit the file",
-        page: PolicyEditor,
-        hidden: true,
-      },
     ],
   },
   {
