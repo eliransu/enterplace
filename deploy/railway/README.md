@@ -1,5 +1,7 @@
 # Enterplace on Railway
 
+The template: https://railway.com/deploy/ImwBt6 (made in the eliransu workspace).
+
 Railway templates are made in the Railway dashboard, not from a file in the repository (`railway.json` sets build
 and deploy options for a service built from source; it cannot name a prebuilt image or add a database). This is
 the template to make once, then publish. The docs page links its button:
