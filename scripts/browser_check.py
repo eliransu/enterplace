@@ -211,13 +211,19 @@ def run(chrome: Chrome, base: str, key: str, enterplace: str, folder: pathlib.Pa
     chrome.wait("!document.querySelector('[role=\"dialog\"]') && document.readyState === 'complete'", "the sheet to close on Escape")
     check(chrome.js("document.activeElement.getAttribute('href')") == opener, "focus is back on the link that opened the sheet")
 
-    # Issue a key: name, Tab, team, Enter. The old address opens the console app's dialog.
+    # Issue a key: name, Tab, team, Enter to create the team in the picker, Enter to submit. The team picker takes a
+    # team only when it is picked or created, so the first Enter must land on "Create team qa", not submit the form.
+    # The old address opens the console app's dialog.
     chrome.go(f"{base}/console/people?issue=1", f"{base}/console/app/#/people?issue=1")
     chrome.wait("document.getElementById('issue-name') && document.activeElement && document.activeElement.id === 'issue-name'", "the issue dialog")
     check(chrome.js("document.activeElement.id") == "issue-name", "the issue dialog puts focus in its first field")
     chrome.type("browser.check")
     chrome.key("Tab")
     chrome.type("qa")
+    chrome.wait("[...document.querySelectorAll('#issue-team-list [role=\"option\"]')].some(o => o.textContent.includes('Create team qa'))", "the Create team qa row")
+    chrome.key("Enter")
+    chrome.wait("document.getElementById('issue-team').checkValidity() && !document.getElementById('issue-team-list')", "the team picked")
+    check(chrome.js("document.getElementById('issue-team').value") == "qa", "the team picker creates a new team from the keyboard")
     chrome.key("Enter")
     chrome.wait("document.getElementById('new-key')", "the new key")
     new_key = chrome.js("document.getElementById('new-key').textContent")
