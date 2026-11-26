@@ -12,8 +12,12 @@ function SheetContent({
 }: React.ComponentProps<typeof DialogPrimitive.Content>) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-overlay" />
+      <DialogPrimitive.Overlay
+        data-slot="overlay"
+        className="fixed inset-0 z-50 bg-overlay"
+      />
       <DialogPrimitive.Content
+        data-slot="sheet"
         className={cn(
           "fixed inset-y-0 right-0 z-50 grid w-full max-w-wide content-start grid-cols-[minmax(0,1fr)] gap-6 overflow-y-auto border-l border-input bg-background p-10 text-foreground",
           className,

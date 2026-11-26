@@ -5,8 +5,19 @@
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
-@font-face { font-family: "Familjen Grotesk"; src: url("/console/assets/fonts/FamiljenGrotesk-Variable.woff2") format("woff2"); font-weight: 400 700; font-display: swap; }
-@font-face { font-family: "Fragment Mono"; src: url("/console/assets/fonts/FragmentMono-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face {
+  font-family: "Familjen Grotesk";
+  src: url("/console/assets/fonts/FamiljenGrotesk-Variable.woff2")
+    format("woff2");
+  font-weight: 400 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Fragment Mono";
+  src: url("/console/assets/fonts/FragmentMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
 
 @theme {
   --color-*: initial;
@@ -14,6 +25,26 @@
   --shadow-*: initial;
   --text-*: initial;
   --font-*: initial;
+  /* Every state change (hover, press, focus) eases in 0.2s, as Ant Design's controls do. */
+  --default-transition-duration: 200ms;
+  --default-transition-timing-function: cubic-bezier(0.645, 0.045, 0.355, 1);
+}
+
+/* Motion and fills derived from the tokens (tokens.css is generated, so they live here). Durations follow Ant
+   Design's motion scale: 0.1s for a press, 0.2s for a hover or a small panel, 0.3s for a dialog or a sheet. Ease out
+   circ for what enters, ease in for what leaves. The fills tint whatever surface they sit on, in both themes. */
+:root {
+  --motion-fast: 100ms;
+  --motion-mid: 200ms;
+  --motion-slow: 300ms;
+  --ease-out-circ: cubic-bezier(0.08, 0.82, 0.17, 1);
+  --ease-in-circ: cubic-bezier(0.6, 0.04, 0.98, 0.34);
+  --ease-in-out: cubic-bezier(0.645, 0.045, 0.355, 1);
+  --fill-hover: color-mix(in srgb, var(--text) 6%, transparent);
+  --fill-active: color-mix(in srgb, var(--text) 12%, transparent);
+  --fill-selected: color-mix(in srgb, var(--text) 8%, transparent);
+  --ring-soft: 0 0 0 3px color-mix(in srgb, var(--focus) 25%, transparent);
+  --ring-danger: 0 0 0 3px color-mix(in srgb, var(--flame) 22%, transparent);
 }
 
 /* Reference only: the names point at the tokens and nothing new is written to :root, so a token is never redefined. */
@@ -68,25 +99,251 @@
 }
 
 @layer base {
-  * { border-color: var(--line); outline-color: var(--focus); }
-  html { color-scheme: light; }
-  html[data-theme="dark"] { color-scheme: dark; }
-  body { margin: 0; background: var(--ground); color: var(--text); font-family: var(--font-sans); }
-  button { cursor: pointer; }
-  :focus-visible { outline: var(--focus-ring) solid var(--focus); outline-offset: var(--focus-ring); }
+  * {
+    border-color: var(--line);
+    outline-color: var(--focus);
+  }
+  html {
+    color-scheme: light;
+  }
+  html[data-theme="dark"] {
+    color-scheme: dark;
+  }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--text);
+    font-family: var(--font-sans);
+  }
+  button {
+    cursor: pointer;
+  }
+  :focus-visible {
+    outline: var(--focus-ring) solid var(--focus);
+    outline-offset: var(--focus-ring);
+  }
 }
 
 /* Overview's live strip: the lime gate between where requests come from and where they go. A disc rests where its
    request ended (lime past the gate, flame at it); only the newest one moves, once, when it arrives. */
 @layer components {
-  .flow-lanes { position: relative; min-width: var(--col-sm); background: repeating-linear-gradient(to bottom, transparent 0, transparent calc(var(--space-8) - var(--hairline)), var(--line) calc(var(--space-8) - var(--hairline)), var(--line) var(--space-8)); }
-  .flow-gate { position: absolute; left: calc(50% - var(--space-1)); top: 0; bottom: 0; width: var(--space-2); border-radius: var(--radius-pill); background: var(--lime); }
-  .flow-disc { position: absolute; top: calc(var(--space-8) * var(--lane) + var(--space-4) - var(--space-2)); width: var(--space-3); height: var(--space-3); border-radius: var(--radius-pill); border: var(--hairline) solid var(--text); }
-  .flow-disc[data-outcome="pass"] { left: calc(100% - var(--space-3)); background: var(--lime); }
-  .flow-disc[data-outcome="stop"] { left: calc(50% - var(--space-6)); background: var(--flame); }
-  .flow-disc--new[data-outcome="pass"] { animation: flow-pass calc(var(--dur-slow) * 2) var(--ease-standard); }
-  .flow-disc--new[data-outcome="stop"] { animation: flow-stop calc(var(--dur-slow) * 2) var(--ease-standard); }
-  @media (prefers-reduced-motion: reduce) { .flow-disc--new { animation: none; } }
+  .flow-lanes {
+    position: relative;
+    min-width: var(--col-sm);
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent calc(var(--space-8) - var(--hairline)),
+      var(--line) calc(var(--space-8) - var(--hairline)),
+      var(--line) var(--space-8)
+    );
+  }
+  .flow-gate {
+    position: absolute;
+    left: calc(50% - var(--space-1));
+    top: 0;
+    bottom: 0;
+    width: var(--space-2);
+    border-radius: var(--radius-pill);
+    background: var(--lime);
+  }
+  .flow-disc {
+    position: absolute;
+    top: calc(var(--space-8) * var(--lane) + var(--space-4) - var(--space-2));
+    width: var(--space-3);
+    height: var(--space-3);
+    border-radius: var(--radius-pill);
+    border: var(--hairline) solid var(--text);
+  }
+  .flow-disc[data-outcome="pass"] {
+    left: calc(100% - var(--space-3));
+    background: var(--lime);
+  }
+  .flow-disc[data-outcome="stop"] {
+    left: calc(50% - var(--space-6));
+    background: var(--flame);
+  }
+  .flow-disc--new[data-outcome="pass"] {
+    animation: flow-pass calc(var(--dur-slow) * 2) var(--ease-standard);
+  }
+  .flow-disc--new[data-outcome="stop"] {
+    animation: flow-stop calc(var(--dur-slow) * 2) var(--ease-standard);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .flow-disc--new {
+      animation: none;
+    }
+  }
 }
-@keyframes flow-pass { 0% { left: 0; background: var(--surface); } 50% { background: var(--surface); } 55% { background: var(--lime); } 100% { left: calc(100% - var(--space-3)); } }
-@keyframes flow-stop { 0% { left: 0; background: var(--surface); } 70% { background: var(--surface); } 100% { left: calc(50% - var(--space-6)); background: var(--flame); } }
+@keyframes flow-pass {
+  0% {
+    left: 0;
+    background: var(--surface);
+  }
+  50% {
+    background: var(--surface);
+  }
+  55% {
+    background: var(--lime);
+  }
+  100% {
+    left: calc(100% - var(--space-3));
+  }
+}
+@keyframes flow-stop {
+  0% {
+    left: 0;
+    background: var(--surface);
+  }
+  70% {
+    background: var(--surface);
+  }
+  100% {
+    left: calc(50% - var(--space-6));
+    background: var(--flame);
+  }
+}
+
+/* Motion. Radix keeps a closing dialog, sheet or menu mounted until its exit animation ends, so each one gets an
+   enter and an exit. */
+@layer components {
+  /* A route change: the page fades up into place. Only the page's own blocks animate, the bar above them stays. */
+  [data-slot="sidebar-inset"] > :not(header) {
+    animation: page-in var(--motion-slow) var(--ease-out-circ) backwards;
+  }
+
+  [data-slot="overlay"][data-state="open"] {
+    animation: fade-in var(--motion-slow) var(--ease-out-circ);
+  }
+  [data-slot="overlay"][data-state="closed"] {
+    animation: fade-out var(--motion-mid) var(--ease-in-out) forwards;
+  }
+  [data-slot="dialog"][data-state="open"] {
+    animation: zoom-in var(--motion-slow) var(--ease-out-circ);
+  }
+  [data-slot="dialog"][data-state="closed"] {
+    animation: zoom-out var(--motion-mid) var(--ease-in-out) forwards;
+  }
+  [data-slot="sheet"][data-state="open"] {
+    animation: sheet-in var(--motion-slow) var(--ease-out-circ);
+  }
+  [data-slot="sheet"][data-state="closed"] {
+    animation: sheet-out var(--motion-mid) var(--ease-in-out) forwards;
+  }
+  [data-slot="sheet-left"][data-state="open"] {
+    animation: sheet-left-in var(--motion-slow) var(--ease-out-circ);
+  }
+  [data-slot="sheet-left"][data-state="closed"] {
+    animation: sheet-left-out var(--motion-mid) var(--ease-in-out) forwards;
+  }
+  [data-slot="select-content"][data-state="open"] {
+    animation: drop-in var(--motion-mid) var(--ease-out-circ);
+  }
+  [data-slot="select-content"][data-state="closed"] {
+    animation: drop-out var(--motion-fast) var(--ease-in-out) forwards;
+  }
+  [data-slot="select-content"][data-side="top"] {
+    --drop: 4px;
+  }
+
+  /* Skeleton: a soft light sweeps across the block, as Ant's active skeleton does. */
+  [data-slot="skeleton"] {
+    background: linear-gradient(
+      90deg,
+      var(--line) 25%,
+      color-mix(in srgb, var(--line) 40%, var(--ground)) 37%,
+      var(--line) 63%
+    );
+    background-size: 400% 100%;
+    animation: shimmer 1.4s ease infinite;
+  }
+
+  /* A selected table row: filled, with a bar on its leading edge, so it reads apart from a hovered one. */
+  [data-slot="table"] tr[aria-selected="true"] > td {
+    background: var(--well);
+  }
+  [data-slot="table"] tr[aria-selected="true"] > td:first-child {
+    box-shadow: inset var(--bar) 0 0 var(--text);
+  }
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes zoom-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+@keyframes zoom-out {
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+@keyframes sheet-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+@keyframes sheet-out {
+  to {
+    transform: translateX(100%);
+  }
+}
+@keyframes sheet-left-in {
+  from {
+    transform: translateX(-100%);
+  }
+}
+@keyframes sheet-left-out {
+  to {
+    transform: translateX(-100%);
+  }
+}
+@keyframes drop-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--drop, -4px)) scaleY(0.96);
+  }
+}
+@keyframes drop-out {
+  to {
+    opacity: 0;
+    transform: translateY(var(--drop, -4px)) scaleY(0.96);
+  }
+}
+@keyframes shimmer {
+  from {
+    background-position: 100% 50%;
+  }
+  to {
+    background-position: 0 50%;
+  }
+}
+
+/* Reduced motion: every animation and transition ends at once. Not zero, so Radix still sees an exit end. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
