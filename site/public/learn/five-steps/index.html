@@ -127,7 +127,7 @@ enterplace start</pre></figure>
     <div class="stack">
       <div><h3>What you get</h3><p>A list of the AI tools and models in use and what each one costs, from the first day. Nothing is blocked.</p></div>
       <div><h3>The one change</h3><p>On the machine that will run Enterplace, run enterplace start. No provider key is needed: it writes a policy in observe mode with one rule that allows everyone, a free demo model and Claude subscription passthrough, and opens the dashboard. Its Start here checklist sends a first request and shows the settings for each coding tool. Then have the first people point their tool at the gateway.</p></div>
-      <div><h3>Check it worked</h3><p>enterplace start opens the console through a one-time sign-in link. The banner says <strong>Observe mode: nothing is blocked</strong>. The Analytics page ranks requests, tokens and cost by coding agent, model or key.</p></div>
+      <div><h3>Check it worked</h3><p>enterplace start opens the console through a one-time sign-in link. The banner says <strong>Observe mode</strong>: rules, limits and guardrails only record what they would refuse. The Usage page ranks requests, tokens and cost by coding agent, model or key.</p></div>
       <div><h3>Who does it</h3><p>A platform engineer. For everyone else it is one settings change in each tool.</p></div>
       <a class="more" href="https://docs.enterplace.dev/start/step-1-see/">Step 1 in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
@@ -164,7 +164,7 @@ rules:
     <div class="stack">
       <div><h3>What you get</h3><p>Every request has a name and a team on it. Usage and cost show up per person and per team.</p></div>
       <div><h3>The one change</h3><p>Give each person a key of their own, in place of the shared one from step 1. The command prints the key once, with the lines their tool reads. With more than a handful of people, let them sign in with the company account and issue their own.</p></div>
-      <div><h3>Check it worked</h3><p>Analytics ranks by person or team. The People and workloads page lists every key by name and team, with what it spent this month and today. <code>enterplace audit coverage</code> names the people who hold a key and have sent nothing.</p></div>
+      <div><h3>Check it worked</h3><p>Usage ranks by person or team. The Users page lists every key by name and team, with its requests and its last request. <code>enterplace audit coverage</code> names the people who hold a key and have sent nothing.</p></div>
       <div><h3>Who does it</h3><p>The same engineer, or your identity team. People swap a shared key for their own. Nothing is blocked in this step either.</p></div>
       <a class="more" href="https://docs.enterplace.dev/start/step-2-know/">Step 2 in the docs <svg class="arrow" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
 </a>
@@ -273,7 +273,7 @@ Last hash: 1ae338b73793e850d4a1a345e1648c1addde...</pre></figure>
     <p>The questions from the start, and where each answer now comes from.</p>
   </div>
   <ul class="answers">
-    <li><span><strong>Which tools and models do we use, and what do they cost?</strong> The Analytics page, by tool, model and key.</span></li>
+    <li><span><strong>Which tools and models do we use, and what do they cost?</strong> The Usage page, by tool, model and key.</span></li>
     <li><span><strong>Who uses what?</strong> The same page by person and team, and the coverage report.</span></li>
     <li><span><strong>What is the most we can spend, and can we stop it?</strong> The budgets in the policy, and the kill switch.</span></li>
     <li><span><strong>What stops a password from being sent?</strong> The secrets guardrail, with its findings in the request log.</span></li>

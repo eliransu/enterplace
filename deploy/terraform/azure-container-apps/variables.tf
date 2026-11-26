@@ -19,7 +19,7 @@ variable "resource_group_name" {
 }
 
 variable "image" {
-  description = "The enterplace image, such as ghcr.io/eliransu/enterplace:0.1.0."
+  description = "The enterplace image, such as ghcr.io/eliransu/enterplace:0.3.0."
   type        = string
 }
 

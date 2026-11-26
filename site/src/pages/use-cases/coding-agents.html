@@ -116,6 +116,22 @@ rules:
     models: ["*"]
     guardrails: [no-secrets]</pre></figure>
     </li>
+    <li>
+      <div class="guide-text">
+        <h3>Decide what the agents may do on their own</h3>
+        <p>Block skipping permission checks, auto mode and browser use for everyone, and allow one where a team needs it. The gateway refuses a request that offers browser tools with <code>browser_not_allowed</code>. On each machine the device agent writes the same choices into Claude Code's managed settings, or you deliver them in your own. <span class="ent">Enterprise</span> for the device agent.</p>
+        <a class="more" href="docs:/governance/coding-agent-controls/">Coding agent controls in the docs {{> arrow}}</a>
+      </div>
+      <figure class="code"><figcaption>enterplace.policy.yaml (added)</figcaption><pre>coding_agents:
+  bypass_permissions: block
+  auto_mode: block
+  browser: block
+rules:
+  - name: qa
+    principals: { team: qa }
+    models: ["*"]
+    coding_agents: { browser: allow }</pre></figure>
+    </li>
   </ol>
 </section>
 
@@ -124,7 +140,7 @@ rules:
     <div class="stack">
       <h2>What you see afterwards</h2>
       <ul class="ticks">
-        <li>The console's Analytics page ranks requests, tokens and cost <strong>by coding agent, person, team or model</strong>.</li>
+        <li>The console's Usage page ranks requests, tokens and cost <strong>by coding agent, person, team or model</strong>.</li>
         <li><code>enterplace audit coverage</code> lists each person and the tool they used, and names the people who hold a key and have sent nothing.</li>
         <li>A refused developer reads the reason in the terminal they already use, with a decision ID an admin can look up.</li>
         <li>A coding session stays on one deployment while it answers, so the provider's prompt cache keeps working.</li>

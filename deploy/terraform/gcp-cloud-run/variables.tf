@@ -20,7 +20,7 @@ variable "name" {
 }
 
 variable "image" {
-  description = "The enterplace image. Cloud Run pulls from Artifact Registry (or a remote repository in front of ghcr.io), such as europe-docker.pkg.dev/my-project/enterplace/enterplace:0.1.0."
+  description = "The enterplace image. Cloud Run pulls from Artifact Registry (or a remote repository in front of ghcr.io), such as europe-docker.pkg.dev/my-project/enterplace/enterplace:0.3.0."
   type        = string
 }
 

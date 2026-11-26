@@ -12,7 +12,7 @@ module "enterplace" {
   name                = "enterplace"
   location            = "westeurope"
   resource_group_name = "enterplace"
-  image               = "ghcr.io/eliransu/enterplace:0.1.0"
+  image               = "ghcr.io/eliransu/enterplace:0.3.0"
   policy              = file("${path.module}/../../../enterplace.policy.yaml")
 
   key_vault_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/security/providers/Microsoft.KeyVault/vaults/acme-secrets"

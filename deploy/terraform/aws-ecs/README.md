@@ -33,7 +33,7 @@ module "enterplace" {
   #   && docker cp enterplace-files:/deploy ./enterplace-deploy && docker rm enterplace-files
   source = "./enterplace-deploy/terraform/aws-ecs"
 
-  image              = "ghcr.io/eliransu/enterplace:0.1.0"
+  image              = "ghcr.io/eliransu/enterplace:0.3.0"
   policy             = file("enterplace.policy.yaml")
   vpc_id             = "vpc-..."
   private_subnet_ids = ["subnet-...", "subnet-..."]

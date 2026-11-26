@@ -45,7 +45,7 @@ module "enterplace" {
   project = "my-project"
   region  = "europe-west1"
   zone    = "europe-west1-b"
-  image   = "europe-docker.pkg.dev/my-project/enterplace/enterplace:0.1.0"
+  image   = "europe-docker.pkg.dev/my-project/enterplace/enterplace:0.3.0"
   policy  = file("enterplace.policy.yaml")
 
   license_secret       = "enterplace-license"

@@ -14,7 +14,7 @@ provider "aws" {
 module "enterplace" {
   source = "../.."
 
-  image  = "ghcr.io/eliransu/enterplace:0.1.0"
+  image  = "ghcr.io/eliransu/enterplace:0.3.0"
   policy = file("${path.module}/../../../enterplace.policy.yaml")
 
   vpc_id             = "vpc-0123456789abcdef0"

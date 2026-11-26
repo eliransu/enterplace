@@ -5,7 +5,7 @@ variable "name" {
 }
 
 variable "image" {
-  description = "The enterplace image, such as ghcr.io/eliransu/enterplace:0.1.0. Pin a version: a moving tag makes rollbacks guesswork."
+  description = "The enterplace image, such as ghcr.io/eliransu/enterplace:0.3.0. Pin a version: a moving tag makes rollbacks guesswork."
   type        = string
 }
 

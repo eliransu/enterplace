@@ -11,7 +11,7 @@
       "class_name": "EnterplaceGateway",
       // Built from ./Dockerfile (the Enterplace image with your policy in it) and pushed to your account's registry.
       "image": "./Dockerfile",
-      "image_vars": { "ENTERPLACE_IMAGE": "ghcr.io/eliransu/enterplace:0.1.0" }, // EDIT: the version you run
+      "image_vars": { "ENTERPLACE_IMAGE": "ghcr.io/eliransu/enterplace:0.3.0" }, // EDIT: the version you run
       // At least GATEWAYS, plus one for each instance that may still be draining during a rollout.
       "max_instances": 4,
       "instance_type": "basic"
