@@ -17,6 +17,7 @@ import { Person } from "@/components/person";
 import { api } from "@/lib/api";
 import { useData } from "@/lib/use";
 import { cn } from "@/lib/utils";
+import { failureWords, type Failure } from "@/lib/failures";
 
 type Tabs = {
   param: string;
@@ -95,6 +96,8 @@ type Live = {
     model: string;
     refused: boolean;
     code: string;
+    /// Let through, and the provider failed it: worded by lib/failures.
+    failed?: Failure | null;
   }[];
 };
 type Stages = {
@@ -850,6 +853,10 @@ function LiveStrip({ live }: { live: Live }) {
             {r.refused ? (
               <Badge className="border-destructive text-destructive-text">
                 Refused: {r.code}
+              </Badge>
+            ) : r.failed ? (
+              <Badge className="border-destructive text-destructive-text">
+                Failed: {failureWords(r.failed).toLowerCase()}
               </Badge>
             ) : (
               <span className="t-small">Allowed</span>

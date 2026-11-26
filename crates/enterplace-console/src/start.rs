@@ -2318,6 +2318,10 @@ fn live_strip(f: &Facts) -> Value {
         .take_while(|r| r.time.as_str() >= since.as_str())
         .collect();
     let refused = recent.iter().filter(|r| r.verdict == "refused").count();
+    let failed = recent
+        .iter()
+        .filter(|r| r.outcome() == enterplace_core::insights::Outcome::Error)
+        .count();
     let distinct = |of: &dyn Fn(&Row) -> String| {
         let mut seen: Vec<String> = Vec::new();
         for r in &f.tries {
@@ -2348,14 +2352,21 @@ fn live_strip(f: &Facts) -> Value {
                 "model": r.label("model"),
                 "refused": r.verdict == "refused",
                 "code": if r.verdict == "refused" { pages::code_words(&r.code) } else { String::new() },
+                // Let through, and the provider failed it: the app words it (lib/failures.ts), never as Allowed.
+                "failed": (r.outcome() == enterplace_core::insights::Outcome::Error).then(|| json!({
+                    "code": r.code,
+                    "status": r.status,
+                    "provider": r.label("provider"),
+                })),
             })
         })
         .collect();
     json!({
         "count": format!(
-            "{} in the last 10 minutes{}",
+            "{} in the last 10 minutes{}{}",
             enterplace_core::count(recent.len(), "request"),
-            if refused == 0 { String::new() } else { format!(", {refused} refused") }
+            if refused == 0 { String::new() } else { format!(", {refused} refused") },
+            if failed == 0 { String::new() } else { format!(", {failed} failed") }
         ),
         "tools": tools,
         "providers": providers,

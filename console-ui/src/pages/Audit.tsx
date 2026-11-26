@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Sheet as Side, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, Head, Loading, Problem, Stat } from "@/components/page";
@@ -230,7 +230,13 @@ function Rows({ data, query }: { data: Data; query: URLSearchParams }) {
       </TableHeader>
       <TableBody>
         {data.rows?.map((r) => (
-          <TableRow key={r.id} aria-selected={r.selected || undefined} className={cn(r.selected && "[&>td]:bg-well")}>
+          // The whole row opens its sheet; the time stays the link a keyboard reaches. A link inside opens itself.
+          <TableRow
+            key={r.id}
+            aria-selected={r.selected || undefined}
+            className={cn("cursor-pointer", r.selected && "[&>td]:bg-well")}
+            onClick={(e) => (e.target as HTMLElement).closest("a") || (window.location.hash = `#/audit?${withRecord(query, r.id)}`)}
+          >
             <TableCell className="break-words whitespace-normal">
               {changes ? r.who : <Person name={r.who} />}
               {r.sub ? <span className="block text-muted-foreground">{r.sub}</span> : null}
@@ -370,9 +376,8 @@ function Kills({ kills, mayRestore, change }: { kills: Kill[]; mayRestore: boole
 
 function RecordSheet({ sheet, onClose }: { sheet: Sheet; onClose: () => void }) {
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent
-        className="max-w-wide"
+    <Side open onOpenChange={(o) => !o && onClose()}>
+      <SheetContent
         // The sheet opens from a link, not a dialog trigger: focus goes back to that row's link when it closes.
         onCloseAutoFocus={(e) => {
           const row = document.querySelector<HTMLElement>(`a[data-record="${sheet.id}"]`);
@@ -382,14 +387,14 @@ function RecordSheet({ sheet, onClose }: { sheet: Sheet; onClose: () => void }) 
           }
         }}
       >
-        {sheet.verdict ? (
-          <div>
-            <VerdictTag tag={sheet.verdict} />
-          </div>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {sheet.verdict ? <VerdictTag tag={sheet.verdict} /> : null}
+          {/* The whole record as text, for a ticket or a chat: the decision ID, the rule, every fact. */}
+          {sheet.missing ? null : <Copy text={recordText(sheet)} label="Copy the record" />}
+        </div>
         {sheet.broken ? <Problem text={sheet.broken} /> : null}
-        <DialogTitle>{sheet.title}</DialogTitle>
-        <DialogDescription>{sheet.lead}</DialogDescription>
+        <SheetTitle>{sheet.title}</SheetTitle>
+        <SheetDescription>{sheet.lead}</SheetDescription>
         {sheet.request ? (
           <div aria-label="The request" className="t-mono grid gap-1 rounded-box bg-well px-6 py-3">
             <span>
@@ -421,9 +426,16 @@ function RecordSheet({ sheet, onClose }: { sheet: Sheet; onClose: () => void }) 
             ))}
           </div>
         ) : null}
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Side>
   );
+}
+
+function recordText(sheet: Sheet) {
+  const verdict = sheet.verdict ? [`Verdict: ${sheet.verdict.word} ${sheet.verdict.detail}`.trim()] : [];
+  const request = sheet.request ? [`Request: ${sheet.request.method} ${sheet.request.path}`, `Decision: ${sheet.request.id}`] : sheet.id ? [`Record: ${sheet.id}`] : [];
+  const facts = (sheet.facts ?? []).map((f) => `${f.label}: ${[f.tag ? `${f.tag.word} ${f.tag.detail}`.trim() : "", f.text].filter(Boolean).join(" ")}`);
+  return [sheet.title, sheet.lead, ...verdict, ...request, ...facts].join("\n");
 }
 
 // The rule's lines as the policy reads them, or what a change did to it: + added, - removed, the deciding line marked.

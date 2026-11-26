@@ -578,16 +578,29 @@ fn page(view: &View<'_>) -> Value {
         return out;
     }
 
+    // Every record in the chain, usage ones too, as the CLI counts them. The list holds decisions and changes; the
+    // chain also holds usage and system records beside them, so the count says what the rest are.
+    let all = view
+        .log
+        .unwrap_or("")
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count();
+    let decisions = records.iter().filter(|r| r.get("event").is_none()).count();
+    let changes = records.iter().filter(|r| is_change(r)).count();
+    let unverified = format!(
+        "The chain has not been verified since Enterplace started. Verify chain now walks all {} records, as enterplace audit verify does: {} decisions, {} admin and policy changes, and {} usage and other system records.",
+        thousands(all),
+        thousands(decisions),
+        thousands(changes),
+        thousands(all.saturating_sub(decisions + changes)),
+    );
     // The chain's line, or the banner of a broken chain. `recent`: just verified, so the app moves focus to it.
     let (verified, broken) = match &view.verified {
         None => (
             json!({
                 "state": "none",
-                // Every record in the chain, usage ones too, as the CLI counts them.
-                "text": format!(
-                    "The chain has not been verified since Enterplace started. Verify chain now walks all {} records, as enterplace audit verify does.",
-                    thousands(records.len() + usage.len())
-                ),
+                "text": unverified,
             }),
             None,
         ),
@@ -1250,9 +1263,11 @@ impl Filter<'_> {
     fn keeps(&self, record: &Value) -> bool {
         let shown = match self.show {
             "blocked" => blocked(record),
+            // Requests only: a rejected admin action or policy change is listed under Changes.
             "refused" => {
-                (s(record, "verdict") == "refused" && s(record, "code") != "guardrail_blocked")
-                    || s(record, "event") == "config_rejected"
+                record.get("event").is_none()
+                    && s(record, "verdict") == "refused"
+                    && s(record, "code") != "guardrail_blocked"
             }
             "masked" => found(record, "mask").is_some() || answer_verdict(record) == "mask",
             "warned" => found(record, "warn").is_some() || found(record, "shadow").is_some(),
@@ -1330,11 +1345,12 @@ fn verdict(record: &Value) -> Value {
             return if s(record, "verdict") == "allow" {
                 tag("", "Admin:", &done)
             } else {
-                tag("refused", "Refused:", &tried)
+                // An admin action the console turned down is a change that did not happen, not a request refused.
+                tag("refused", "Rejected:", &tried)
             };
         }
         "config_loaded" => return tag("", "Change", "policy loaded"),
-        "config_rejected" => return tag("refused", "Refused", "policy change"),
+        "config_rejected" => return tag("refused", "Rejected:", "policy change"),
         "audit_repaired" => return tag("", "Change", "log repaired"),
         _ => {}
     }

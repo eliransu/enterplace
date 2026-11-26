@@ -25,7 +25,7 @@ import { api, type Me } from "@/lib/api";
 import { count, goTo, useData } from "@/lib/use";
 import { Setup } from "./Setup";
 import { Bring, isService, KeyDialogs, KeyTable, ReadOnly, useKeys } from "./People";
-import { CODING_TOOLS, nameWarning, unnamedIn, type Ranking } from "./Overview";
+import { CODING_TOOLS, NameCounts, nameWarning, unnamedIn, unnamedRefusedIn, type Ranking } from "./Overview";
 import type { PageProps } from "@/pages";
 
 const ROUTE = "/coding";
@@ -97,7 +97,7 @@ function Names() {
   const n = me?.names;
   if (!me || !n) return null;
   const seen = unnamedIn(persons);
-  const warning = nameWarning(me, seen);
+  const warning = nameWarning(me, seen, unnamedRefusedIn(persons));
   const set = (required: boolean) =>
     change(() => api.put("policy/identity", { required }));
   const mayChange = me.edit_policy;
@@ -140,16 +140,12 @@ function Names() {
           <TriangleAlert aria-hidden="true" className="size-4 flex-none" />
           <div className="grid min-w-0 flex-1 gap-1">
             <span className="t-body-strong">{warning.title}</span>
+            <NameCounts links={warning.links} />
             <span className="t-small text-muted-foreground">
               {warning.body}
             </span>
           </div>
           <div className="flex flex-wrap gap-2">
-            {seen > 0 ? (
-              <Button variant="outline" size="sm" asChild>
-                <a href="#/requests?person=unknown">See them</a>
-              </Button>
-            ) : null}
             <Button
               size="sm"
               onClick={() => goTo(ROUTE, { issue: "1", token: "1" })}

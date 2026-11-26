@@ -86,6 +86,10 @@ fn outcome(row: &Row) -> Value {
             None => match acted(&row.line) {
                 Some((action, kind)) if action == "mask" => ("warn", format!("Masked: {kind}")),
                 Some((_, kind)) => ("warn", format!("Found: {kind}")),
+                // Let through with no person named: not a success to read past.
+                None if matches!(row.label("person"), "" | "unknown") => {
+                    ("warn", "Allowed, unnamed".to_string())
+                }
                 None => ("allow", "Allowed".to_string()),
             },
         },
@@ -104,8 +108,9 @@ fn outcome(row: &Row) -> Value {
                 }
             ),
         ),
+        // The app words the code (lib/failures.ts); the text is the fallback for a code it does not know.
         Outcome::Error => (
-            "warn",
+            "error",
             match (row.code.as_str(), row.status) {
                 ("", Some(status)) => format!("Error {status}"),
                 ("", None) => "Error".to_string(),
@@ -113,6 +118,15 @@ fn outcome(row: &Row) -> Value {
             },
         ),
     };
+    if kind == "error" {
+        return json!({
+            "kind": kind,
+            "text": text,
+            "code": row.code,
+            "status": row.status,
+            "provider": row.label("provider"),
+        });
+    }
     json!({ "kind": kind, "text": text })
 }
 
@@ -226,6 +240,44 @@ fn filters(query: &Query) -> Value {
     Value::Array(out)
 }
 
+/// The values the newest requests hold for each filter field, so the fields offer what is in the log instead of
+/// taking a typo. ponytail: read from the newest 2,000 requests the role may see; an older value is still typed in.
+async fn seen(console: &Console, admin: &Admin) -> Value {
+    let mut query = Query {
+        limit: 2_000,
+        ..Query::default()
+    };
+    scoped(admin, &mut query);
+    let rows = crate::insights::rows(console, &query)
+        .await
+        .unwrap_or_default();
+    let mut out = serde_json::Map::new();
+    let mut keep = |name: &str, values: &mut dyn Iterator<Item = &String>| {
+        let mut list: Vec<&str> = values
+            .map(String::as_str)
+            .filter(|v| !v.is_empty())
+            .collect();
+        list.sort_unstable();
+        list.dedup();
+        list.truncate(200);
+        out.insert(name.to_string(), json!(list));
+    };
+    for d in DIMENSIONS
+        .iter()
+        .chain(LINKS.iter().filter(|d| d.name == "session"))
+    {
+        keep(
+            d.name,
+            &mut rows
+                .iter()
+                .flat_map(|r| r.labels.get(d.name).into_iter().flatten()),
+        );
+    }
+    keep("code", &mut rows.iter().map(|r| &r.code));
+    keep("finding", &mut rows.iter().flat_map(|r| &r.findings));
+    Value::Object(out)
+}
+
 async fn list(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
     answer(
         async {
@@ -242,6 +294,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> R
             let more_open = asked.iter().any(|(k, _)| !up_front.contains(&k.as_str()));
             let fields = filters(&query);
             scoped(&admin, &mut query);
+            let values = seen(&console, &admin).await;
             let page_no: usize = form.get("page").parse().unwrap_or(1).max(1);
             query.offset = (page_no - 1) * PER_PAGE;
             // One more than a page says whether there is an older page.
@@ -307,12 +360,13 @@ async fn list(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> R
                 "lead": "Every request, newest first. New ones appear as they arrive.",
                 "filters": fields,
                 "more_open": more_open,
+                "values": values,
                 "rows": rows,
                 "est_header": format!("USD ({EST_HEADER})"),
                 "est_tip": EST_TIP,
                 "empty": empty,
                 "pager": {
-                    "text": format!("Page {page_no}, {} requests", shown.len()),
+                    "text": format!("Page {page_no}, {}", enterplace_core::count(shown.len(), "request")),
                     "page": page_no,
                     "newer": page_no > 1,
                     "older": more,
@@ -416,11 +470,7 @@ fn sheet(row: &Row) -> Value {
         .filter(|d| d.name != "person" && d.name != "model")
         .filter_map(|d| row.labels.get(d.name).map(|v| (d.label, v.join(", "))))
         .collect();
-    let said = outcome(row);
-    details.push((
-        "Outcome",
-        said["text"].as_str().unwrap_or_default().to_string(),
-    ));
+    // The outcome is the sheet's own tag (`outcome`), worded by the app: not repeated here as a raw code.
     details.push(("Latency", ms(row.latency_ms)));
     details.push(("Route", row.path.clone()));
     if !row.findings.is_empty() {
@@ -464,6 +514,7 @@ fn sheet(row: &Row) -> Value {
         "title": row_title(row),
         // A proof that fails is the one thing worth seeing before opening anything.
         "failed": proof(row),
+        "outcome": outcome(row),
         "facts": facts,
         "details": details,
         "proof": {
