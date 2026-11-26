@@ -36,7 +36,7 @@ const AUTH: Record<string, string> = {
 };
 
 export function McpServers({ me, query }: PageProps) {
-  const { data, error, change: apply, reload } = useData<{ servers: Server[]; gateway: string }>("mcp");
+  const { data, error, change: apply, reload } = useData<{ servers: Server[]; gateway: string; agent: string }>("mcp");
   // Each save shows its diff and a dry run of the last 24 hours first, and applies only on Apply.
   const [change, checking] = useCheckedChange(apply);
   const [picked, setForm] = useState<Server | "new" | null>(null);
@@ -54,10 +54,15 @@ export function McpServers({ me, query }: PageProps) {
         title="MCP servers"
         lead="The MCP servers agents reach through Enterplace, and which tools each rule may call."
         actions={
-          data?.servers.length ? (
-            <Button disabled={!may} onClick={() => setForm("new")}>
-              Add a server
-            </Button>
+          data ? (
+            <>
+              <Copy text={data.agent} label="Copy for your agent" />
+              {data.servers.length ? (
+                <Button disabled={!may} onClick={() => setForm("new")}>
+                  Add a server
+                </Button>
+              ) : null}
+            </>
           ) : null
         }
       />

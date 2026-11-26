@@ -38,6 +38,7 @@ import {
 } from "@/components/page";
 import { Copy } from "@/components/copy";
 import { EntityPicker, TeamPicker } from "@/components/team-picker";
+import { madePrompt } from "@/lib/agent";
 import { api, Refused } from "@/lib/api";
 import { count, goTo, num, useData } from "@/lib/use";
 import { cn } from "@/lib/utils";
@@ -1506,6 +1507,18 @@ export function MadeDialog({
             {made.key}
           </span>
           <Copy text={made.key} onCopied={() => setCopied(true)} />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <span className="t-small text-muted-foreground">
+            {service
+              ? "Or let your coding agent wire it into the app's code, with this key:"
+              : "Or let your coding agent set it up, with this key:"}
+          </span>
+          <Copy
+            text={madePrompt(made, service)}
+            label="Copy for your agent"
+            onCopied={() => setCopied(true)}
+          />
         </div>
         {lines ? (
           <div className="grid gap-2">

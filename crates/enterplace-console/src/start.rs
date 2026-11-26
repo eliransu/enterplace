@@ -854,6 +854,65 @@ pub(crate) fn limit_prompt(base: &str, policy: &str, in_store: bool) -> String {
     )
 }
 
+/// "Copy for your agent" on Rules: who may use which models, one rule per team or person, before the one for everyone.
+pub(crate) fn rule_prompt(base: &str, policy: &str, in_store: bool) -> String {
+    task_prompt(
+        base,
+        "Add rules for who may use which models in Enterplace",
+        &[("Policy file", policy.to_string())],
+        &[
+            "1. Ask me, if I have not said them: which teams or people, and the models each may use (`*` for every model).".into(),
+            "2. Under `rules:` in the policy, add one rule per team or person, before the rule for everyone: the first rule that matches a caller decides. Like these:".into(),
+            "```yaml\nrules:\n  - name: payments-team\n    principals: { team: payments }\n    models: [claude-sonnet-5-5, claude-haiku-5-5]\n  - name: maya-only\n    principals: { name: maya.cohen }\n    models: [\"*\"]\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\n```".into(),
+            format!("3. Run `enterplace check {policy}` and fix every problem it names. {}", save_line(base, in_store)),
+        ],
+        &format!(
+            "The rules show under Rules at {base}/console/app/#/policy. A request from a team or person for a model its rule does not allow is refused, and Requests names the rule."
+        ),
+        "/governance/policy/",
+    )
+}
+
+/// "Copy for your agent" on Aliases: one model name callers send, spread over providers, with fallbacks.
+pub(crate) fn alias_prompt(base: &str, policy: &str, in_store: bool) -> String {
+    task_prompt(
+        base,
+        "Add a model alias with fallbacks in Enterplace",
+        &[("Policy file", policy.to_string())],
+        &[
+            "1. Ask me, if I have not said them: the name callers will send, the provider and model behind it, and what to fall back to.".into(),
+            "2. Under `aliases:` in the policy, add the alias, and name it in the `models:` of each rule that may use it. Like this:".into(),
+            "```yaml\naliases:\n  - name: smart\n    deployments:\n      - { provider: anthropic, model: claude-sonnet-5-5 }\n    fallbacks: [claude-haiku-5-5]\n```".into(),
+            format!("3. Run `enterplace check {policy}` and fix every problem it names. {}", save_line(base, in_store)),
+        ],
+        &format!(
+            "The alias shows under Aliases and fallbacks at {base}/console/app/#/policy. Send one request with the alias as the model and check Requests at {base}/console/app/#/requests names the model it went to."
+        ),
+        "/routing/aliases/",
+    )
+}
+
+/// "Copy for your agent" on MCP servers: a server's lines, its header kept in an environment variable the human sets,
+/// and the check. Never the token itself.
+pub(crate) fn mcp_prompt(base: &str, policy: &str, in_store: bool) -> String {
+    task_prompt(
+        base,
+        "Add an MCP server behind the Enterplace MCP gateway",
+        &[("Policy file", policy.to_string()), ("MCP gateway", format!("{base}/mcp"))],
+        &[
+            "1. Ask me, if I have not said them: the server's name and URL, and the header it needs, if any. Do not ask me for the token: I set it myself.".into(),
+            "2. Under `mcp:` in the policy, add the server, with its header read from an environment variable, and give the rules that may use it `tools:`. Like this:".into(),
+            "```yaml\nmcp:\n  - name: github\n    url: https://api.githubcopilot.com/mcp\n    headers_env: { Authorization: GITHUB_MCP_AUTHORIZATION }\nrules:\n  - name: everyone\n    principals: { any: true }\n    models: [\"*\"]\n    tools: [github.*]\n```".into(),
+            "3. Tell me the environment variable to set where the gateway runs (GITHUB_MCP_AUTHORIZATION above), and wait until I say it is set.".into(),
+            format!("4. Run `enterplace check {policy}` and fix every problem it names. {}", save_line(base, in_store)),
+        ],
+        &format!(
+            "The server shows at {base}/console/app/#/mcp with its tools under Tools. Point your MCP client at {base}/mcp with your Enterplace key and list the tools."
+        ),
+        "/governance/mcp-gateway/",
+    )
+}
+
 /// How a policy change is saved, for an agent prompt: the editor when the policy is kept in the store, else the file.
 fn save_line(base: &str, in_store: bool) -> String {
     if in_store {

@@ -80,6 +80,8 @@ type Data = {
   aliases: Alias[];
   guard_agent: string;
   limit_agent: string;
+  rule_agent: string;
+  alias_agent: string;
 };
 type Change = (run: () => Promise<{ message: string }>) => Promise<string>;
 
@@ -229,9 +231,12 @@ export function PolicyBasics({ me, query, only }: PageProps & { only?: "guardrai
             title="Rules"
             note="The first rule that matches a caller decides. A new rule for a team or a person goes before the rule for everyone."
             actions={
-              <Button size="sm" disabled={!may} onClick={() => setRule("new")}>
-                Add a rule
-              </Button>
+              <>
+                <Copy text={data.rule_agent} label="Copy for your agent" />
+                <Button size="sm" disabled={!may} onClick={() => setRule("new")}>
+                  Add a rule
+                </Button>
+              </>
             }
           >
             {data.rules.length === 0 ? (
@@ -480,9 +485,12 @@ export function PolicyBasics({ me, query, only }: PageProps & { only?: "guardrai
             title="Aliases and fallbacks"
             note="An alias is a model name callers send that Enterplace spreads over providers, trying the fallbacks in turn when they fail."
             actions={
-              <Button size="sm" disabled={!may} onClick={() => setAlias("new")}>
-                Add an alias
-              </Button>
+              <>
+                <Copy text={data.alias_agent} label="Copy for your agent" />
+                <Button size="sm" disabled={!may} onClick={() => setAlias("new")}>
+                  Add an alias
+                </Button>
+              </>
             }
           >
             {data.aliases.length === 0 ? (

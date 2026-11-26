@@ -875,7 +875,14 @@ async fn mcp_list(State(console): State<Console>, headers: HeaderMap) -> Respons
             })
             .collect();
         // Agents reach every server's tools at the gateway's one /mcp address, never at the server itself.
-        Ok(ok(json!({ "servers": servers, "gateway": format!("{}/mcp", crate::base()) })))
+        let policy = &console.config().policy;
+        let full = std::fs::canonicalize(policy).unwrap_or_else(|_| policy.clone());
+        let agent = crate::start::mcp_prompt(
+            &crate::base(),
+            &full.display().to_string(),
+            enterplace_core::store::policy_store(policy).is_some(),
+        );
+        Ok(ok(json!({ "servers": servers, "gateway": format!("{}/mcp", crate::base()), "agent": agent })))
     }.await)
 }
 
@@ -1188,9 +1195,16 @@ async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Respo
             &full.display().to_string(),
             enterplace_core::store::policy_store(policy).is_some(),
         );
+        let in_store = enterplace_core::store::policy_store(policy).is_some();
+        let rule_agent =
+            crate::start::rule_prompt(&crate::base(), &full.display().to_string(), in_store);
+        let alias_agent =
+            crate::start::alias_prompt(&crate::base(), &full.display().to_string(), in_store);
         Ok(ok(json!({
             "guard_agent": agent,
             "limit_agent": limit_agent,
+            "rule_agent": rule_agent,
+            "alias_agent": alias_agent,
             "mode": tree.get("mode").and_then(Value::as_str).unwrap_or("enforce"),
             "rules": rules,
             "limits": limits,

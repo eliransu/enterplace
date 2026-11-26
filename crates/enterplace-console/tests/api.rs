@@ -366,6 +366,16 @@ async fn mcp_servers_are_added_edited_given_tool_access_and_removed() -> TestRes
     let s = setup("mcp")?;
     let cookie = sign_in(&s, ADMIN_KEY).await?;
     let (status, list) = call(&s, "GET", "/console/api/mcp", &cookie, None).await?;
+    // Copy for your agent on Servers: the lines, the header kept in an environment variable, the check, the docs.
+    let agent = list["agent"].as_str().unwrap_or("");
+    for part in [
+        "mcp:",
+        "headers_env:",
+        "enterplace check",
+        "https://docs.enterplace.dev/governance/mcp-gateway.md",
+    ] {
+        assert!(agent.contains(part), "{part}: {agent}");
+    }
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list["servers"], json!([]));
 
@@ -562,6 +572,26 @@ async fn policy_basics_change_rules_limits_guardrails_aliases_and_mode() -> Test
         "budgets-and-rate-limits.md",
     ] {
         assert!(limits.contains(part), "{part}: {limits}");
+    }
+    // Copy for your agent on Rules and on Aliases: the lines, the check, and the docs page.
+    let rules = policy["rule_agent"].as_str().unwrap_or("");
+    for part in [
+        "rules:",
+        "principals: { team: payments }",
+        "principals: { any: true }",
+        "enterplace check",
+        "https://docs.enterplace.dev/governance/policy.md",
+    ] {
+        assert!(rules.contains(part), "{part}: {rules}");
+    }
+    let aliases = policy["alias_agent"].as_str().unwrap_or("");
+    for part in [
+        "aliases:",
+        "deployments:",
+        "enterplace check",
+        "https://docs.enterplace.dev/routing/aliases.md",
+    ] {
+        assert!(aliases.contains(part), "{part}: {aliases}");
     }
     // Copy for your agent on Guardrails: the lines, the file they go in, the check, and the docs page.
     let agent = policy["guard_agent"].as_str().unwrap_or("");
