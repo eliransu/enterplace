@@ -566,7 +566,10 @@ async fn enterplace_login_over_saml_refuses_who_self_issue_or_the_teams_do_not_p
     );
     let (status, _, body) = send(&s.app, "GET", &login, "", "").await?;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert!(body.contains("console.saml.self_issue"), "{body}");
+    assert!(
+        body.contains("SAML sign-in does not let people get their own keys"),
+        "{body}"
+    );
     Ok(())
 }
 

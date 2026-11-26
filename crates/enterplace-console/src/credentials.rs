@@ -60,7 +60,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
                 None => {
                     out["off"] = json!({
                         "title": "Credentials need the store",
-                        "body": "Provider credentials are kept in the store, sealed with a master key, and this gateway's policy has no store: section. Keep each provider key in an environment variable with key_env (or a file with key_file), or add store: to the policy and set ENTERPLACE_MASTER_KEY.",
+                        "body": "Provider credentials are kept in the store, sealed with a master key, and this gateway's policy has no store. Keep each provider key in an environment variable (or a file), or add a store to the policy and set ENTERPLACE_MASTER_KEY.",
                     });
                     return Ok(ok(out));
                 }
@@ -95,7 +95,7 @@ async fn list(State(console): State<Console>, headers: HeaderMap) -> Response {
             out["credentials"] = Value::Array(rows);
             out["empty"] = json!({
                 "title": "No credentials yet",
-                "body": "Add a provider key here, then name it in the policy with credential: in place of key_env.",
+                "body": "Add a provider key here, then pick it as the provider's key on Providers, in place of an environment variable.",
             });
             Ok(ok(out))
         }
@@ -138,7 +138,7 @@ async fn change(
             let Some(vault) = store::credentials_for(&console.config().keys) else {
                 return Err(Fail(
                     StatusCode::CONFLICT,
-                    "Credentials need a master key: set ENTERPLACE_MASTER_KEY (or ENTERPLACE_MASTER_KEY_FILE) and restart Enterplace. enterplace start makes one. Until then keep provider keys in key_env.".into(),
+                    "Credentials need a master key: set ENTERPLACE_MASTER_KEY (or ENTERPLACE_MASTER_KEY_FILE) and restart Enterplace. enterplace start makes one. Until then keep provider keys in environment variables.".into(),
                 ));
             };
             let mut act = Act {
@@ -162,7 +162,7 @@ async fn change(
                     .into_iter()
                     .find(|(_, c)| *c == name)
                     .map(|(p, _)| format!(
-                        "Provider {p} in the policy takes its key from this credential. Point it at another credential or key_env first, or rotate this one."
+                        "Provider {p} in the policy takes its key from this credential. Point it at another credential or an environment variable first, or rotate this one."
                     )),
                 _ => store::credential_value_problem(&value).map(sentence),
             };

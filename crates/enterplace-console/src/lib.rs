@@ -661,6 +661,7 @@ pub fn router_with(config: ConsoleConfig, setup: Option<String>, extension: Exte
             with_client,
         ))
         .layer(axum::middleware::from_fn(return_after_sign_in))
+        .layer(axum::middleware::from_fn(edit::preview_scope))
         .with_state(state)
 }
 
@@ -1488,7 +1489,7 @@ async fn sign_in(
             "That is not an Enterplace key: Enterplace keys start with enterplace_. Paste the admin key enterplace start printed, or open the sign-in link it printed.".to_string()
         } else {
             format!(
-                "This key does not sign in here: it is not an admin key in {}. Check that you pasted the whole admin key enterplace start printed, or ask an admin to add admin: true under your entry.",
+                "This key does not sign in here: it is not an admin key in {}. Check that you pasted the whole admin key enterplace start printed, or ask an admin to make your key an admin key.",
                 html::esc(&keys.display().to_string())
             )
         };
@@ -1858,7 +1859,7 @@ async fn sso_start(
             });
         }
         Ok((None, _)) => {
-            let message = "Single sign-on is not set up. Sign in with an admin key, or add a console.sso section to the policy file.".to_string();
+            let message = "Single sign-on is not set up. Sign in with an admin key, or ask an admin to set up single sign-on in the policy file.".to_string();
             return console
                 .sso_refused(None, &refused("sso_config", message))
                 .await;
@@ -1873,7 +1874,7 @@ async fn sso_start(
         }
     };
     if cli.is_some() && sso.self_issue.is_none() {
-        let message = "enterplace login is off: the policy file has no console.sso.self_issue section. Ask an admin to add one, or for a key.".to_string();
+        let message = "enterplace login is off: single sign-on does not let people get their own keys yet. Ask an admin to turn that on, or for a key.".to_string();
         return console
             .sso_refused(None, &refused("sso_self_issue", message))
             .await;
@@ -1947,7 +1948,7 @@ fn saml_config(console: &Console) -> Result<config::Saml, sso::Refusal> {
         Ok((_, Some(saml))) => Ok(saml),
         Ok((_, None)) => Err(sso::Refusal {
             code: "sso_config",
-            message: "SAML sign-in is not set up. Sign in with an admin key, or add a console.saml section to the policy file.".into(),
+            message: "SAML sign-in is not set up. Sign in with an admin key, or ask an admin to set up SAML sign-in in the policy file.".into(),
         }),
         Err(errors) => Err(sso::Refusal {
             code: "sso_config",
@@ -2010,7 +2011,7 @@ async fn saml_start(
     if cli.is_some() && saml.self_issue.is_none() {
         let refusal = sso::Refusal {
             code: "sso_self_issue",
-            message: "enterplace login is off: the policy file has no console.saml.self_issue section. Ask an admin to add one, or for a key.".into(),
+            message: "enterplace login is off: SAML sign-in does not let people get their own keys yet. Ask an admin to turn that on, or for a key.".into(),
         };
         return console.sign_in_refused("saml", None, &refusal).await;
     }
@@ -3041,7 +3042,7 @@ async fn revoked(console: &Console, admin: &Admin, entry: &config::KeyEntry) -> 
         .map_or(0, |entries| entries.iter().filter(|e| e.admin).count());
     if entry.admin && admins <= 1 {
         let _ = record(console, &act, Some("last_admin"), None).await;
-        return Err("This is the only admin key. Mark another key with admin: true in the keys file first, so someone can still sign in.".into());
+        return Err("This is the only admin key. Make another key an admin key first, so someone can still sign in.".into());
     }
     record(console, &act, None, None)
         .await

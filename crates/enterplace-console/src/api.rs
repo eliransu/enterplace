@@ -61,6 +61,10 @@ pub(crate) fn routes() -> Router<Console> {
             put(guard_edit).delete(guard_remove),
         )
         .route("/api/policy/guardrails/{name}/on", put(guardrail_set))
+        .route(
+            "/api/policy/guardrails/{name}/enforce",
+            put(guardrail_enforce),
+        )
         .route("/api/policy/guardrails/{name}/test", post(guardrail_test))
         .route("/api/policy/aliases", post(alias_add))
         .route(
@@ -307,7 +311,7 @@ async fn commit(
         read_only(console, admin, action).await;
         return Err(Fail(
             StatusCode::FORBIDDEN,
-            "Your role may not change the policy. Ask an admin whose role has edit_policy to make this change.".into(),
+            "Your role may not change the policy. Ask an admin whose role may edit the policy to make this change.".into(),
         ));
     }
     let (before, base) = current(console)?;
@@ -346,6 +350,9 @@ pub(crate) async fn save_text(
     after: String,
     base: Option<i64>,
 ) -> Answer {
+    if edit::previewing() {
+        return edit::preview(console, before, after).await;
+    }
     if base.is_some() {
         return match edit::save_version(console, admin, action, after, base, note).await {
             Ok(v) if v.state == store::PENDING => Ok(ok(json!({
@@ -455,7 +462,7 @@ fn write_file(
     write().map_err(|err| {
         let _ = std::fs::remove_file(&temp);
         Refused::Store(format!(
-            "{} cannot be written ({err}), so nothing was changed. Give Enterplace write access to the policy's folder, or keep the policy in the store (store.policy_from: store).",
+            "{} cannot be written ({err}), so nothing was changed. Give Enterplace write access to the policy's folder, or keep the policy in the store.",
             path.display()
         ))
     })
@@ -714,7 +721,7 @@ async fn provider_add(
             read_only(&console, &admin, "connect_provider").await;
             return Err(Fail(
                 StatusCode::FORBIDDEN,
-                "Your role may not change the policy. Ask an admin whose role has edit_policy to add a provider.".into(),
+                "Your role may not change the policy. Ask an admin whose role may edit the policy to add a provider.".into(),
             ));
         }
         // A gateway refuses a policy whose provider key variable is unset and keeps the one it has: saved, it would
@@ -1159,14 +1166,16 @@ async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Respo
             })
             .collect();
         let policy = &console.config().policy;
+        // The agent may run in another folder: it gets the file's full path.
+        let full = std::fs::canonicalize(policy).unwrap_or_else(|_| policy.clone());
         let agent = crate::start::guardrail_prompt(
             &crate::base(),
-            &policy.display().to_string(),
+            &full.display().to_string(),
             enterplace_core::store::policy_store(policy).is_some(),
         );
         let limit_agent = crate::start::limit_prompt(
             &crate::base(),
-            &policy.display().to_string(),
+            &full.display().to_string(),
             enterplace_core::store::policy_store(policy).is_some(),
         );
         Ok(ok(json!({
@@ -1788,6 +1797,33 @@ async fn guard_remove(
                             }
                         }
                     }
+                    Ok(())
+                },
+            )
+            .await
+        }
+        .await,
+    )
+}
+
+/// Ends a guardrail's trial: it blocks, masks or warns from now on, instead of only recording what it would do.
+async fn guardrail_enforce(
+    State(console): State<Console>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let note = format!("Enforce guardrail {name} now");
+            commit(
+                &console,
+                &admin,
+                "change_guardrail",
+                note,
+                json!({ "guardrail": name }),
+                |tree| {
+                    entry(tree, "guardrails", &name, "guardrail")?.remove("shadow_until");
                     Ok(())
                 },
             )

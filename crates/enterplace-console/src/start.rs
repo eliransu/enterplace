@@ -737,12 +737,26 @@ pub(crate) fn task_prompt(
 
 /// "Copy for your agent" on Guardrails: the policy lines of a guardrail and the check, so an agent adds one alone.
 pub(crate) fn guardrail_prompt(base: &str, policy: &str, in_store: bool) -> String {
-    let edit = if in_store {
-        format!(
-            "This policy is kept in the store, so the file is not read. Paste the lines into the policy editor at {base}/console/app/#/policy/raw as a new version, after the check below passes on a copy of the file with them."
+    let (file, save) = if in_store {
+        (
+            format!(
+                "a copy of {policy} (this policy is kept in the store, so the file itself is not read)"
+            ),
+            format!(
+                "Paste the new lines into the policy editor at {base}/console/app/#/policy/edit, check the change and its dry run, and apply it."
+            ),
         )
     } else {
-        "Add the lines to the policy file. The gateway reads it within 2 seconds of a save that passes the check.".into()
+        (
+            policy.to_string(),
+            "Save the file. The gateway reads it within 2 seconds of a save that passes the check."
+                .into(),
+        )
+    };
+    let checked = if in_store {
+        "<path of the copy>"
+    } else {
+        policy
     };
     task_prompt(
         base,
@@ -750,10 +764,10 @@ pub(crate) fn guardrail_prompt(base: &str, policy: &str, in_store: bool) -> Stri
         &[("Policy file", policy.to_string())],
         &[
             "1. Ask me, if I have not said them: what to catch (secrets, pii, regex with its patterns, or keywords with their words), whether to block, mask or warn, and whether to try it first until a date.".into(),
-            "2. Under `guardrails:` in the policy file, add an entry like this one (a name of your choosing, the type and action I picked; leave out shadow_until to act now):".into(),
+            format!("2. Edit {file}: under `guardrails:` add an entry like this one (a name of your choosing, the type and action I picked; leave out shadow_until to act now):"),
             "```yaml\nguardrails:\n  - name: no-secrets\n    type: secrets\n    action: block\n    on: [request, answer]\n    shadow_until: 2026-12-31   # until this UTC day it records what it would do and blocks nothing\ndefault_guardrails: [no-secrets]   # runs on every request; or name it under a rule's guardrails:\n```".into(),
-            format!("3. Run `enterplace check {policy}` and fix every problem it names, by its line."),
-            format!("4. {edit}"),
+            format!("3. Run `enterplace check {checked}` and fix every problem it names, by its line, until it passes."),
+            format!("4. {save}"),
         ],
         &format!(
             "`enterplace check` passes, and the guardrail is listed at {base}/console/app/#/policy. Its Test button there runs it on a sample; hits show in the Audit log as Blocked, Masked, Warned or Would block."
@@ -1461,7 +1475,7 @@ fn coding(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         f.people.iter().any(|k| k.name.contains('@')),
         vec![
             p(format!(
-                "Connect single sign-on with `self_issue`, and each developer runs one command to get a key under their company email.{}",
+                "Connect single sign-on and let people get their own keys, and each developer runs one command to get a key under their company email.{}",
                 if f.self_issue { " Single sign-on is set." } else { "" }
             )),
             command_block(&format!("enterplace login {}", f.base)),
@@ -1792,7 +1806,7 @@ fn subscriptions(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         f.people.iter().any(|k| k.name.contains('@')),
         vec![
             p(format!(
-                "Connect single sign-on with `self_issue`, and each developer runs one command: it signs them in and sets Claude Code's lines for them.{}",
+                "Connect single sign-on and let people get their own keys, and each developer runs one command: it signs them in and sets Claude Code's lines for them.{}",
                 if f.self_issue { " Single sign-on is set." } else { "" }
             )),
             command_block(&format!("enterplace login {base}")),

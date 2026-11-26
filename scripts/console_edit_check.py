@@ -161,6 +161,10 @@ audit: {{ path: enterplace-audit.jsonl }}
               "the dry run replays every gateway's requests from the store")
         chrome.shot(out / "policy-edit-dry-run.png")
         chrome.js("[...document.querySelectorAll('main button')].find(b => b.textContent === 'Save for approval').click()")
+        # Every save is checked first: its diff and a dry run of the last 24 hours, then Apply.
+        chrome.wait("document.querySelector('[role=\"dialog\"]')?.textContent.includes('Dry run')", "the check before the save")
+        chrome.shot(out / "policy-edit-check.png", full=False)
+        chrome.js("[...document.querySelectorAll('[role=\"dialog\"] button')].find(b => b.textContent === 'Apply').click()")
         chrome.wait("location.hash.startsWith('#/policy/versions?version=') && document.body.textContent.includes('Waiting for approval')", "the saved draft")
         chrome.shot(out / "policy-version-pending.png")
 

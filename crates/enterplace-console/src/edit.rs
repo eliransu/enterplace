@@ -20,7 +20,7 @@ use enterplace_core::{
     store::{self, PolicyVersion},
     versions::{self, Refused},
 };
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 use crate::{Act, Admin, Console, NOT_RECORDED, html::esc, page, pages, record, redirect};
 
@@ -217,6 +217,98 @@ pub(crate) fn entry_of(console: &Console, sha256: &str) -> Option<config::KeyEnt
         .find(|e| e.sha256 == sha256)
 }
 
+// ---------------------------------------------------------------- preview before a save
+
+tokio::task_local! {
+    /// Whether the request asks for a preview (`X-Enterplace-Preview`): the change is drafted and checked, and
+    /// nothing is recorded or saved.
+    static PREVIEW: bool;
+}
+
+/// Runs each console request with whether it asks for a preview, so every save path sees it without a parameter.
+pub(crate) async fn preview_scope(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let asked = request.headers().contains_key("x-enterplace-preview");
+    PREVIEW.scope(asked, next.run(request)).await
+}
+
+pub(crate) fn previewing() -> bool {
+    PREVIEW.try_with(|p| *p).unwrap_or(false)
+}
+
+/// The answer to a preview: `after` checked as `enterplace check` checks a file, its diff against `before` (the
+/// policy in force), and what it removes. Nothing is recorded or saved.
+pub(crate) async fn preview(
+    console: &Console,
+    before: String,
+    after: String,
+) -> crate::api::Answer {
+    let c = console.config();
+    let (policy, keys, draft) = (c.policy.clone(), c.keys.clone(), after.clone());
+    tokio::task::spawn_blocking(move || {
+        let loaded = config::load(&policy, Some(&keys)).map_err(Refused::Invalid)?;
+        versions::check(&policy, &keys, &draft, &loaded)
+            .map(|_| ())
+            .map_err(Refused::Invalid)
+    })
+    .await
+    .unwrap_or_else(|err| {
+        Err(Refused::Store(format!(
+            "the check stopped: {err}. Try again."
+        )))
+    })
+    .map_err(|err| crate::api::refused(&err))?;
+    let diff: Vec<Value> = versions::diff(&before, &after)
+        .into_iter()
+        .map(|(n, text, kind)| json!({ "n": n, "text": text, "kind": kind }))
+        .collect();
+    Ok(crate::api::ok(json!({
+        "message": "Check the change, then apply it.",
+        "preview": { "diff": diff, "text": after, "removes": removed(&before, &after) },
+    })))
+}
+
+/// What `after` drops that `before` has, in words: each named rule, guardrail, alias, provider and MCP server, and
+/// the number of limits.
+pub(crate) fn removed(before: &str, after: &str) -> Vec<String> {
+    let (Ok(old), Ok(new)) = (versions::tree(before), versions::tree(after)) else {
+        return Vec::new();
+    };
+    let items = |tree: &Map<String, Value>, list: &str| -> Vec<Value> {
+        tree.get(list)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let name = |v: &Value| v.get("name").and_then(Value::as_str).map(str::to_string);
+    let mut out = Vec::new();
+    for (list, what) in [
+        ("rules", "Rule"),
+        ("guardrails", "Guardrail"),
+        ("aliases", "Alias"),
+        ("providers", "Provider"),
+        ("mcp", "MCP server"),
+    ] {
+        let kept: Vec<String> = items(&new, list).iter().filter_map(name).collect();
+        for gone in items(&old, list).iter().filter_map(name) {
+            if !kept.contains(&gone) {
+                out.push(format!("{what} {gone}"));
+            }
+        }
+    }
+    let kept = items(&new, "limits");
+    let gone = items(&old, "limits")
+        .iter()
+        .filter(|l| !kept.contains(l))
+        .count();
+    if gone > 0 {
+        out.push(enterplace_core::count(gone, "limit"));
+    }
+    out
+}
+
 async fn export(State(console): State<Console>, headers: HeaderMap) -> Response {
     if console.admin(&headers).await.is_none() {
         return redirect("/console/sign-in");
@@ -244,5 +336,21 @@ async fn export(State(console): State<Console>, headers: HeaderMap) -> Response 
                 "Open the policy",
             ),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::removed;
+
+    #[test]
+    fn names_what_a_change_removes() {
+        let before = "guardrails:\n  - name: no-secrets\n    type: secrets\n  - name: no-pii\n    type: pii\nlimits:\n  - team: payments\n    rate: { rpm: 10 }\n  - global: true\n    rate: { rpm: 100 }\n";
+        let after = "guardrails:\n  - name: no-pii\n    type: pii\nlimits:\n  - global: true\n    rate: { rpm: 100 }\n";
+        assert_eq!(
+            removed(before, after),
+            vec!["Guardrail no-secrets".to_string(), "1 limit".to_string()]
+        );
+        assert!(removed(after, before).is_empty());
     }
 }

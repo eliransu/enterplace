@@ -2,11 +2,27 @@
 // the cause and the fix: it is shown as it comes.
 export class Refused extends Error {}
 
+// ponytail: a flag read while `send` builds its request, before its first await, so only the call `preview` starts
+// carries it. A per-call option if a change ever sends two requests.
+let previewing = false;
+
+/// Runs a change as a preview: the console drafts and checks it, answers with its diff, and saves nothing.
+export function preview<T>(run: () => Promise<T>): Promise<T> {
+  previewing = true;
+  try {
+    return run();
+  } finally {
+    previewing = false;
+  }
+}
+
 async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = body === undefined ? {} : { "content-type": "application/json" };
+  if (previewing) headers["x-enterplace-preview"] = "1";
   const response = await fetch(`/console/api/${path}`, {
     method,
     credentials: "same-origin",
-    headers: body === undefined ? {} : { "content-type": "application/json" },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (response.status === 401) {
