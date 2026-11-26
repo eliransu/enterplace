@@ -5,6 +5,7 @@ import {
   Blocks,
   Boxes,
   ChartLine,
+  FileCode,
   LayoutDashboard,
   Rocket,
   Scale,
@@ -97,14 +98,6 @@ export const SECTIONS: Section[] = [
         page: PolicyBasics,
         policy: true,
       },
-      { route: "/policy/raw", label: "Policy file", page: RawPolicy },
-      { route: "/policy/versions", label: "Versions", page: PolicyVersions },
-      {
-        route: "/policy/edit",
-        label: "Edit the file",
-        page: PolicyEditor,
-        hidden: true,
-      },
     ],
   },
   {
@@ -190,6 +183,22 @@ export const SECTIONS: Section[] = [
       },
       { route: "/prices", label: "Models and prices", page: Prices },
       { route: "/credentials", label: "Provider keys", page: Credentials },
+    ],
+  },
+  // The file and its versions hold everything both use cases share: providers, rules, limits and guardrails.
+  {
+    label: "Policy file",
+    icon: FileCode,
+    group: "Settings",
+    tabs: [
+      { route: "/policy/raw", label: "Policy file", page: RawPolicy },
+      { route: "/policy/versions", label: "Versions", page: PolicyVersions },
+      {
+        route: "/policy/edit",
+        label: "Edit the file",
+        page: PolicyEditor,
+        hidden: true,
+      },
     ],
   },
   {
