@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Blocks, Server, SquareTerminal, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,36 +26,97 @@ export type Ranking = {
 };
 // The coding agents the gateway tells apart by their user agent (enterplace_core::audit::tool_of). An SDK's user agent
 // (OpenAI/Python) is an app, not a coding agent.
-export const CODING_TOOLS = ["claude-code", "codex", "gemini-cli", "qwen-code", "github-copilot", "cursor", "kilo-code", "roo-code", "cline", "opencode"];
+export const CODING_TOOLS = [
+  "claude-code",
+  "codex",
+  "gemini-cli",
+  "qwen-code",
+  "github-copilot",
+  "cursor",
+  "kilo-code",
+  "roo-code",
+  "cline",
+  "opencode",
+];
 
 export const figure = (s: string) => Number(s.replace(/[^\d.]/g, "")) || 0;
 
 /// Requests recorded under no name in a ranking by person.
-export const unnamedIn = (r: Ranking | null) => figure(r?.ranking?.find((x) => unnamed(x.value))?.requests ?? "0");
+export const unnamedIn = (r: Ranking | null) =>
+  figure(r?.ranking?.find((x) => unnamed(x.value))?.requests ?? "0");
+/// Of those, the ones refused.
+export const unnamedRefusedIn = (r: Ranking | null) =>
+  figure(r?.ranking?.find((x) => unnamed(x.value))?.refused ?? "0");
 
-/// What needs the admin about names: requests may go unnamed, or `seen` did in the last day.
+export type NameWarning = {
+  title: string;
+  body: string;
+  links: { label: string; href: string }[];
+};
+
+/// What needs the admin about names: requests may go unnamed, or `seen` did in the last day, `refused` of them
+/// refused and the rest let through. Each count is a link to its own list.
 export function nameWarning(
   me: Me | null,
   seen: number,
-): { title: string; body: string } | null {
+  refused: number,
+): NameWarning | null {
   const n = me?.names;
   if (!n) return null;
+  const through = Math.max(0, seen - refused);
+  const links = [
+    ...(refused
+      ? [
+          {
+            label: `${num(refused)} refused`,
+            href: "#/requests?person=unknown&outcome=refused",
+          },
+        ]
+      : []),
+    ...(through
+      ? [
+          {
+            label: `${num(through)} let through`,
+            href: "#/requests?person=unknown&outcome=allowed",
+          },
+        ]
+      : []),
+  ];
+  const title = `${count(seen, "request")} without a name in the last 24 hours`;
   if (!n.required && n.passthrough) {
     return {
-      title:
-        seen > 0
-          ? `${count(seen, "request")} without a name in the last 24 hours`
-          : "Requests without a name are allowed",
+      title: seen > 0 ? title : "Requests without a name are allowed",
       body: "A coding agent with no person token is recorded as unnamed. Hand out person tokens, then turn on Every request needs a name.",
+      links,
     };
   }
   if (seen > 0) {
     return {
-      title: `${count(seen, "request")} without a name in the last 24 hours`,
-      body: "They came with no valid key or person token, so they were refused. Hand out a key or a person token to whoever sent them.",
+      title,
+      body: !refused
+        ? "They went through unnamed, sent while names were not required. Hand out a key or a person token to whoever sent them."
+        : through
+          ? "Those with no valid key or person token were refused; the ones let through came while names were not required. Hand out a key or a person token to whoever sent them."
+          : "They came with no valid key or person token, so they were refused. Hand out a key or a person token to whoever sent them.",
+      links,
     };
   }
   return null;
+}
+
+/// The counts of a name warning, each a link: "19 refused, 3 let through".
+export function NameCounts({ links }: { links: NameWarning["links"] }) {
+  if (!links.length) return null;
+  return (
+    <span className="t-small">
+      {links.map((l, i) => (
+        <Fragment key={l.href}>
+          {i ? ", " : ""}
+          <a href={l.href}>{l.label}</a>
+        </Fragment>
+      ))}
+    </span>
+  );
 }
 
 type Card = {
@@ -83,8 +145,8 @@ export function Overview({ me, query }: PageProps) {
   const entries = keys.data?.entries ?? [];
   const services = entries.filter(isService);
   const people = entries.filter((e) => !isService(e));
-  const tools = (agents.data?.ranking ?? []).filter(
-    (r) => CODING_TOOLS.includes(r.value),
+  const tools = (agents.data?.ranking ?? []).filter((r) =>
+    CODING_TOOLS.includes(r.value),
   );
   const codingToday = tools.reduce((n, r) => n + figure(r.requests), 0);
   const byName = new Map(
@@ -98,7 +160,11 @@ export function Overview({ me, query }: PageProps) {
   const servers = mcp.data?.servers.length ?? 0;
   const waiting = approvals.data?.calls?.length ?? 0;
   // ponytail: read from the 24 hour ranking, which lists the 25 costliest names; a busy install may cut unnamed off.
-  const names = nameWarning(me, unnamedIn(persons.data));
+  const names = nameWarning(
+    me,
+    unnamedIn(persons.data),
+    unnamedRefusedIn(persons.data),
+  );
   const loaded = !!(keys.data && agents.data && persons.data);
 
   const cards: Card[] = [
@@ -244,6 +310,7 @@ export function Overview({ me, query }: PageProps) {
               <TriangleAlert aria-hidden="true" className="size-4 flex-none" />
               <div className="grid min-w-0 flex-1 gap-1">
                 <span className="t-body-strong">{a.title}</span>
+                {"links" in a ? <NameCounts links={a.links} /> : null}
                 <span className="t-small text-muted-foreground">{a.body}</span>
               </div>
               <Button size="sm" variant="outline" asChild>

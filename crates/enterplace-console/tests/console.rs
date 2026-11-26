@@ -1552,10 +1552,21 @@ async fn admin_records_are_tagged_in_words_and_a_refused_one_says_it_was_tried()
     let cookie = sign_in(&s.app).await?;
     let list = audit(&s.app, &cookie, "").await?;
     assert!(
-        has_tag(&list, "refused", "Refused:", "sign-in")
+        has_tag(&list, "refused", "Rejected:", "sign-in")
             && has_tag(&list, "", "Admin:", "signed in")
             && !list["rows"].to_string().contains("console_sign_in"),
         "{list}"
+    );
+    // A rejected admin action is a change, not a refused request.
+    let refused = audit(&s.app, &cookie, "verdict=refused").await?;
+    assert!(
+        !has_tag(&refused, "refused", "Rejected:", "sign-in"),
+        "{refused}"
+    );
+    let changes = audit(&s.app, &cookie, "verdict=changes").await?;
+    assert!(
+        has_tag(&changes, "refused", "Rejected:", "sign-in"),
+        "{changes}"
     );
     // A row opens on its time.
     assert!(

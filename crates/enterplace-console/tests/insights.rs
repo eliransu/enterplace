@@ -306,6 +306,14 @@ async fn the_request_log_filters_and_proves_each_row() -> TestResult {
     assert_eq!(list["pager"]["older"], false);
     assert!(list["empty"].is_null());
 
+    // The filter fields offer the values in the log.
+    assert!(
+        list["values"]["team"]
+            .as_array()
+            .is_some_and(|v| v.iter().any(|t| t == "payments")),
+        "{list}"
+    );
+
     let (_, list) = api(&s.app, "/console/api/requests?team=payments", &cookie).await?;
     assert!(has(&list, "01PAY") && !has(&list, "01SRC"));
     let (_, list) = api(

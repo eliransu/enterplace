@@ -3,17 +3,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Sheet as Side, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Head, Loading, Panel, Problem, Refusal } from "@/components/page";
 import { Person, unnamed } from "@/components/person";
 import { Copy } from "@/components/copy";
-import { api, part, Refused } from "@/lib/api";
+import { api, part, Refused, UNNAMED } from "@/lib/api";
+import { failureText } from "@/lib/failures";
 import { useData } from "@/lib/use";
 import { cn } from "@/lib/utils";
 import type { PageProps } from "@/pages";
 
-type Tag = { kind: string; text: string };
+// `error`: let through, and the provider failed it; its code and status are worded by lib/failures.
+type Tag = { kind: string; text: string; code?: string; status?: number | null; provider?: string };
 type Filter = { name: string; label: string; value: string; kind: string; more: boolean };
 type Row = {
   id: string;
@@ -41,6 +43,8 @@ type Data = {
   lead: string;
   filters: Filter[];
   more_open: boolean;
+  /// The values the newest requests hold for each filter field, offered as the field is typed in.
+  values?: Record<string, string[]>;
   rows: Row[];
   est_header: string;
   est_tip: string;
@@ -52,6 +56,7 @@ type Sheet = {
   id: string;
   title: string;
   failed: Tag | null;
+  outcome?: Tag;
   facts: Pair[];
   details: Pair[];
   proof: { facts: Pair[]; text: string; audit: string };
@@ -59,9 +64,11 @@ type Sheet = {
 };
 type Kept = { id: string; lead: string; facts: Pair[]; request: string; answer: string };
 
+// `unnamed` is no outcome of its own: allowed, with no person named, as the chip reads it.
 const OUTCOMES: Pair[] = [
   ["", "All"],
   ["allowed", "Allowed"],
+  ["unnamed", "Allowed, unnamed"],
   ["refused", "Refused"],
   ["error", "Errors"],
 ];
@@ -84,9 +91,10 @@ function with_(query: URLSearchParams, name: string, value: string) {
 // Lime marks a request that passed, flame one that was stopped: the only two colors in the console.
 function TagOf({ tag }: { tag: Tag }) {
   return (
-    <Badge className={cn((tag.kind === "refused" || tag.kind === "block") && "border-destructive text-destructive-text", tag.kind === "allow" && "border-transparent pl-0 text-muted-foreground")}>
+    <Badge className={cn((tag.kind === "refused" || tag.kind === "block" || tag.kind === "error") && "border-destructive text-destructive-text", tag.kind === "allow" && "border-transparent pl-0 text-muted-foreground")}>
       {tag.kind === "allow" ? <span aria-hidden="true" className="size-2 rounded-pill border border-foreground bg-lime" /> : null}
-      {tag.text}
+      {tag.kind === "warn" ? <span aria-hidden="true" className="size-2 rounded-pill border-2 border-current" /> : null}
+      {tag.kind === "error" ? failureText(tag) : tag.text}
     </Badge>
   );
 }
@@ -124,8 +132,15 @@ export function Requests({ query }: PageProps) {
 
 function Filters({ data, query }: { data: Data; query: URLSearchParams }) {
   const [id, setId] = useState(query.get("id") ?? "");
-  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(data.filters.map((f) => [f.name, f.value])));
+  // From the link, not from the answer: a new link refills the fields before the list for it has loaded.
+  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(data.filters.map((f) => [f.name, query.get(f.name) ?? ""])));
   const outcome = query.get("outcome") ?? "";
+  const unnamedOn = outcome === "allowed" && query.get("person") === UNNAMED;
+  const pressed = (value: string) => (value === "unnamed" ? unnamedOn : outcome === value && !unnamedOn);
+  const pick = (value: string) => {
+    if (value === "unnamed") return setQuery(with_(with_(query, "outcome", "allowed"), "person", UNNAMED));
+    setQuery(with_(unnamedOn ? with_(query, "person", "") : query, "outcome", value));
+  };
   const apply = (e: React.FormEvent) => {
     e.preventDefault();
     const next = new URLSearchParams(Object.entries(values));
@@ -144,8 +159,16 @@ function Filters({ data, query }: { data: Data; query: URLSearchParams }) {
           value={values[f.name] ?? ""}
           onChange={(e) => setValues({ ...values, [f.name]: e.target.value })}
           autoComplete="off"
+          list={data.values?.[f.name]?.length ? `v-${f.name}` : undefined}
         />
       </Field>
+      {data.values?.[f.name]?.length ? (
+        <datalist id={`v-${f.name}`}>
+          {data.values[f.name].map((v) => (
+            <option key={v} value={v} />
+          ))}
+        </datalist>
+      ) : null}
     </div>
   );
   return (
@@ -162,7 +185,7 @@ function Filters({ data, query }: { data: Data; query: URLSearchParams }) {
         />
         <div role="group" aria-label="Show" className="flex flex-wrap gap-2">
           {OUTCOMES.map(([value, label]) => (
-            <Button key={value} type="button" size="sm" variant={outcome === value ? "default" : "outline"} aria-pressed={outcome === value} onClick={() => setQuery(with_(query, "outcome", value))}>
+            <Button key={value} type="button" size="sm" variant={pressed(value) ? "default" : "outline"} aria-pressed={pressed(value)} onClick={() => pick(value)}>
               {label}
             </Button>
           ))}
@@ -248,7 +271,8 @@ function RowsTable({ data, query }: { data: Data; query: URLSearchParams }) {
         </TableHeader>
         <TableBody>
           {data.rows.map((r) => (
-            <TableRow key={r.id}>
+            // The whole row opens its sheet; the time stays the link a keyboard reaches. A link inside opens itself.
+            <TableRow key={r.id} className="cursor-pointer" onClick={(e) => (e.target as HTMLElement).closest("a") || setQuery(with_(query, "record", r.id))}>
               <TableCell>
                 <a href={`#/requests?${with_(query, "record", r.id)}`} aria-label={`Open request ${r.id}`} className="text-foreground">
                   {r.time}
@@ -321,14 +345,24 @@ function RecordSheet({ id, onClose }: { id: string; onClose: () => void }) {
     }
   };
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-wide">
-        <DialogTitle>{data?.title ?? (error ? "No request has this ID" : "Request")}</DialogTitle>
-        <DialogDescription className="t-mono-sm">{id}</DialogDescription>
+    <Side open onOpenChange={(open) => !open && onClose()}>
+      <SheetContent>
+        <SheetTitle>{data?.title ?? (error ? "No request has this ID" : "Request")}</SheetTitle>
+        <SheetDescription className="t-mono-sm">{id}</SheetDescription>
         {error ? <Problem text={error} /> : null}
         {data ? (
           <>
-            {data.failed ? <TagOf tag={data.failed} /> : null}
+            <div className="flex flex-wrap items-center gap-2">
+              {data.outcome ? <TagOf tag={data.outcome} /> : null}
+              {data.failed ? <TagOf tag={data.failed} /> : null}
+              {/* The whole record as text, for a ticket or a chat: every fact, detail and proof line. */}
+              <Copy text={recordText(data)} label="Copy the record" />
+              {data.outcome?.kind === "error" ? (
+                <Button variant="outline" size="sm" asChild>
+                  <a href="#/deployments">Test connection</a>
+                </Button>
+              ) : null}
+            </div>
             <Facts facts={data.facts} />
             {data.body ? (
               <div className="grid justify-items-start gap-2">
@@ -347,7 +381,7 @@ function RecordSheet({ id, onClose }: { id: string; onClose: () => void }) {
                 <pre className="t-mono-sm m-0 overflow-x-auto rounded-box bg-well px-6 py-3">{kept.answer}</pre>
               </div>
             ) : null}
-            <details className="grid gap-4">
+            <details open className="grid gap-4">
               <summary className="t-small cursor-pointer underline">Details</summary>
               <div className="pt-4">
                 <Facts facts={data.details} />
@@ -365,7 +399,13 @@ function RecordSheet({ id, onClose }: { id: string; onClose: () => void }) {
             </details>
           </>
         ) : null}
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Side>
   );
+}
+
+function recordText(sheet: Sheet) {
+  const lines = (pairs: Pair[]) => pairs.map(([label, value]) => `${label}: ${value}`);
+  const outcome = sheet.outcome ? [`Outcome: ${sheet.outcome.kind === "error" ? failureText(sheet.outcome) : sheet.outcome.text}`] : [];
+  return [sheet.title, `Request: ${sheet.id}`, ...outcome, ...lines(sheet.facts), ...lines(sheet.details), ...lines(sheet.proof.facts)].join("\n");
 }
