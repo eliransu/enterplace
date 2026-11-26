@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "enterplace-bench"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "enterplace-core",
@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "enterplace-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "enterplace-console",
  "enterplace-core",
@@ -595,7 +595,7 @@ dependencies = [
 
 [[package]]
 name = "enterplace-console"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "enterplace-core",
@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "enterplace-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "getrandom 0.3.4",
  "hmac 0.12.1",
@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "enterplace-enterprise"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "enterplace-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "bytes",

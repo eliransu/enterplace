@@ -5,6 +5,45 @@ Every change to Enterplace that a user or operator can see, newest first. The fo
 The open source crates and the enterprise features in `enterprise/` (commercial license) share one version number and
 one repository. How a release is made: RELEASING.md.
 
+## [Unreleased]
+
+## [0.2.0] - 2026-11-26
+
+### Changed
+
+- Person tokens: the console gives only `ANTHROPIC_BASE_URL` and the `x-enterplace-user` header, so the person keeps
+  their own Claude login. The OpenAI, Codex and Gemini lines are no longer given for a person token.
+- Stop traffic refuses a person, team or key it has never seen, instead of reporting a stop that stops nobody.
+- A limit on a team that has no keys, no traffic and is not in the policy is refused unless it is created on purpose
+  ("Create team"). Teams are picked from a list in every key dialog and limit form.
+- Every policy save from the console (rules, limits, guardrails, prices, providers, MCP servers, the editor and
+  "Put this back") shows its diff against the version in force, what it removes and a dry run of the last 24 hours,
+  and is saved only on Apply.
+- A new guardrail tries for 7 days by default; "Block now" and "Enforce now" enforce it at once, with a confirm.
+- Usage CSV rounds money to 2 decimals and names unnamed traffic "UNNAMED".
+
+### Added
+
+- Keyless providers (the demo model, AWS) can be added from the console with no master key. Providers and Health
+  show one status per provider from a real connection test, with Test connection.
+- "Most output tokens per request" per model on Models and prices.
+- Requests and the Audit log open each record in a side panel with Copy. Provider errors read in plain words.
+  Unnamed requests that were let through show as "Allowed, unnamed", with their own filter.
+- Overview: "Spend this month", unnamed requests split into refused and let through, MCP servers marked
+  "Added, not reached yet" until their tools are listed.
+- Teams: "Set budget" on each team. Edit key lists every limit that applies to the key.
+- Page not found for an unknown console address.
+
+### Fixed
+
+- Show-once key dialogs no longer close on Escape or a click outside.
+- Turning names off asks first; turning them on does not.
+- The console no longer scrolls sideways on a phone.
+- Usage and Spend show the same budget list; refusal notes say which requests were refused and how to fix them.
+- Policy file terms are replaced with plain words across the console.
+- Buttons, fields, tables, tabs, dialogs and page changes have consistent hover, pressed, focus, loading and motion
+  states; motion is off when the system asks for reduced motion.
+
 ## [0.1.0] - 2026-11-25
 
 ### Saved is not in force
