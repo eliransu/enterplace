@@ -23,6 +23,7 @@ mod spend;
 mod sso;
 mod start;
 mod teams;
+pub mod tested;
 pub use api::{Answer, Fail, answer, bad, body_of, ok, signed_in, text};
 pub use start::{empty_json, empty_page, origin as gateway_origin};
 pub mod tls;

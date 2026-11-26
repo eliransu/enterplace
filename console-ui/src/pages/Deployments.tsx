@@ -5,14 +5,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Empty, Head, Loading, Panel, Problem } from "@/components/page";
 import { api } from "@/lib/api";
 import { useData } from "@/lib/use";
+import { useProviderStatus } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
-// Each deployment's health as every gateway sees it, and each provider with its key pool and a connection test.
+// Health: each gateway, each alias target's state as every gateway sees it, and each provider with its key pool and
+// its status from the last connection test, the same one Providers shows.
 // Reloads every 5 seconds, so a deployment that starts cooling shows without a reload.
 
 type Deployment = { deployment: string; state: "up" | "cooling" | "down"; note: string; aliases: string; probe: string; limits: string; load: string; latency: string; errors: string };
 type Provider = { name: string; kind: string; keys: string };
-type Tested = { provider: string; ok: boolean; tag: string; note: string; detail: string };
 type Gateway = { host: string; version: string; healthy: boolean; stopped?: boolean; meta: string };
 type View = { lead: string; gateways: Gateway[]; gateways_note: string; may_test: boolean; deployments: Deployment[]; providers: Provider[]; none: { title: string; body: string } };
 
@@ -27,22 +28,21 @@ function State({ state, note }: { state: string; note: string }) {
 export function Deployments() {
   const { data, error, change, reload } = useData<View>("deployments", 5000);
   const [testing, setTesting] = useState("");
-  const [tested, setTested] = useState<Tested | null>(null);
+  const { status, reload: retest } = useProviderStatus();
   const [showStopped, setShowStopped] = useState(false);
   // A gateway silent for over an hour has stopped: folded away so the running ones read at a glance.
   const stopped = data?.gateways.filter((g) => g.stopped).length ?? 0;
   const gateways = (data?.gateways ?? []).filter((g) => showStopped || !g.stopped);
   const test = (provider: string) => {
     setTesting(provider);
-    return change(async () => {
-      const done = (await api.post("deployments", { provider })) as { message: string; tested: Tested };
-      setTested(done.tested);
-      return done;
-    }).finally(() => setTesting(""));
+    return change(() => api.post("deployments", { provider })).finally(() => {
+      setTesting("");
+      retest();
+    });
   };
   return (
     <>
-      <Head title="Deployments" lead={data?.lead ?? "Providers and their health."} />
+      <Head title="Health" lead={data?.lead ?? "Whether each gateway and provider is up."} />
       {error ? <Problem text={error} retry={reload} /> : null}
       {!data && !error ? <Loading rows={4} /> : null}
       {data ? (
@@ -79,7 +79,7 @@ export function Deployments() {
               </div>
             ) : null}
           </Panel>
-          <Panel title={data.deployments.length ? "Deployments" : undefined}>
+          <Panel title={data.deployments.length ? "Alias targets" : undefined}>
             {data.deployments.length === 0 ? (
               <Empty title={data.none.title} body={data.none.body}>
                 <Button variant="outline" asChild>
@@ -90,7 +90,7 @@ export function Deployments() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Deployment</TableHead>
+                    <TableHead>Target</TableHead>
                     <TableHead>State</TableHead>
                     <TableHead>Routing</TableHead>
                     <TableHead>Now</TableHead>
@@ -119,7 +119,7 @@ export function Deployments() {
               </Table>
             )}
           </Panel>
-          <Panel title="Providers" note="Each provider of the policy and the keys of its pool. Test connection lists the provider's models, which bills nothing.">
+          <Panel title="Providers" note="Each provider of the policy, the keys of its pool, and its last connection test, which lists the provider's models and bills nothing.">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -130,7 +130,7 @@ export function Deployments() {
               </TableHeader>
               <TableBody>
                 {data.providers.map((p) => {
-                  const result = tested?.provider === p.name ? tested : null;
+                  const result = status?.[p.name];
                   return (
                     <TableRow key={p.name}>
                       <TableCell>
@@ -144,9 +144,9 @@ export function Deployments() {
                             <Button variant="outline" size="sm" disabled={!!testing} onClick={() => test(p.name)}>
                               {testing === p.name ? "Testing" : "Test connection"}
                             </Button>
-                            {result ? <Badge className={cn(!result.ok && "border-destructive text-destructive-text")}>{result.note ? `${result.tag}, ${result.note}` : result.tag}</Badge> : null}
+                            {result ? <Badge className={cn(!result.ok && "border-destructive text-destructive-text")}>{result.ok ? "connected" : "failed"}</Badge> : null}
                           </div>
-                          {result ? <span className="block">{result.detail}</span> : null}
+                          {result ? <span className="block">{result.text.replace(/^Failed: /, "")}</span> : null}
                         </TableCell>
                       ) : null}
                     </TableRow>

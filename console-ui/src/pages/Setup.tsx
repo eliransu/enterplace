@@ -16,6 +16,7 @@ import { Copy } from "@/components/copy";
 import { Person } from "@/components/person";
 import { api } from "@/lib/api";
 import { useData } from "@/lib/use";
+import { useProviderStatus } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 type Tabs = {
@@ -203,6 +204,8 @@ export function Setup({
   const path = `start${ask.size ? `?${ask}` : ""}`;
   // Live: the page reads the gateway's records every 2 seconds, so a step turns done as the gateway sees it happen.
   const { data, error, change, reload } = useData<State>(path, 2000);
+  // Connect a model turns done on a passed connection test: reading the status runs it, and a new result reloads.
+  useProviderStatus(reload);
   // A view with a key in it, shown once, stays until a step changes; then the polled view takes over.
   const [held, setHeld] = useState<{ path: string; state: State } | null>(null);
   const [open, setOpen] = useState(false);

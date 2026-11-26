@@ -40,6 +40,18 @@ impl Preset {
         }
     }
 
+    /// Whether the provider takes a key: "none" (the demo model, or AWS, which signs with its own credentials),
+    /// "optional" (a server on this machine, or a cloud that signs in without one) or "required". It follows what
+    /// `config` accepts for the kind.
+    pub fn key_need(&self) -> &'static str {
+        match self.kind {
+            Kind::Demo => "none",
+            k if k.aws() => "none",
+            k if self.local || k.google_auth() || k == Kind::Azure => "optional",
+            _ => "required",
+        }
+    }
+
     /// A URL with a placeholder host label in capitals (WORKSPACE, ACCOUNT): the provider must write its own url.
     pub fn needs_url(&self) -> bool {
         self.url
@@ -1034,6 +1046,7 @@ pub const DEFAULT_MODELS: &[(&str, &[&str])] = &[
         ],
     ),
     ("deepseek", &["deepseek-v4-pro", "deepseek-flash"]),
+    ("demo", &["enterplace-demo"]),
     (
         "digitalocean",
         &[

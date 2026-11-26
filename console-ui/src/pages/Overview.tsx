@@ -74,7 +74,9 @@ export function Overview({ me, query }: PageProps) {
   const keys = useData<Keys>("people");
   const agents = useData<Ranking>("analytics?by=agent&window=24h");
   const persons = useData<Ranking>("analytics?by=person&window=24h");
-  const mcp = useData<{ servers: unknown[] }>("mcp");
+  const mcp = useData<{ servers: { name: string }[] }>("mcp");
+  // A server counts as reached once a caller listed its tools through Enterplace: added alone proves nothing.
+  const listed = useData<{ tools?: { name: string }[] }>("mcp-tools");
   const approvals = useData<{ calls?: unknown[] }>("mcp-approvals");
 
   // An empty install: nothing sent, nothing chosen. Each card's button then starts that use case's checklist.
@@ -96,6 +98,9 @@ export function Overview({ me, query }: PageProps) {
     (name) => !unnamed(name) && people.some((p) => p.name === name),
   ).length;
   const servers = mcp.data?.servers.length ?? 0;
+  const reached = (mcp.data?.servers ?? []).filter((s) =>
+    (listed.data?.tools ?? []).some((t) => t.name.startsWith(`${s.name}.`)),
+  ).length;
   const waiting = approvals.data?.calls?.length ?? 0;
   // ponytail: read from the 24 hour ranking, which lists the 25 costliest names; a busy install may cut unnamed off.
   const names = nameWarning(me, unnamedIn(persons.data));
@@ -177,7 +182,13 @@ export function Overview({ me, query }: PageProps) {
         { figure: num(waiting), label: "calls waiting" },
       ],
       live: false,
-      status: servers ? "Connected" : "Not connected yet",
+      status: !servers
+        ? "Not connected yet"
+        : reached === servers
+          ? "Connected"
+          : reached
+            ? `${reached} of ${servers} reached`
+            : "Added, not reached yet",
       attention: waiting
         ? [`${count(waiting, "call")} waiting for approval`]
         : [],

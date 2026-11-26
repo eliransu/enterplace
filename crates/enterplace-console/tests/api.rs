@@ -286,6 +286,29 @@ async fn providers_are_listed_added_edited_and_removed() -> TestResult {
         "{refused}"
     );
 
+    // The demo model takes no key: added with no master key, and a key variable the form still sent is dropped.
+    let (status, done) = call(
+        &s,
+        "POST",
+        "/console/api/providers",
+        &cookie,
+        Some(json!({ "preset": "demo", "key_env": "ENTERPLACE_TEST_UNSET_DEMO_KEY", "models": ["enterplace-demo"] })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let policy = s.policy()?;
+    assert!(
+        policy.contains("preset: demo") && !policy.contains("ENTERPLACE_TEST_UNSET_DEMO_KEY"),
+        "{policy}"
+    );
+    assert!(
+        list["catalog"]
+            .as_array()
+            .is_some_and(|c| c.iter().any(|p| p["id"] == "demo" && p["key"] == "none")),
+        "{list}"
+    );
+    call(&s, "DELETE", "/console/api/providers/demo", &cookie, None).await?;
+
     // Remove: the fallback that named it goes first, or the check refuses it.
     let (status, refused) =
         call(&s, "DELETE", "/console/api/providers/groq", &cookie, None).await?;
@@ -1302,6 +1325,34 @@ async fn prices_add_a_model_and_change_a_price_as_new_versions() -> TestResult {
     .await?;
     assert_eq!(status, StatusCode::OK, "{done}");
     assert!(error(&done).is_empty() && done["version"] == 3, "{done}");
+    // The most output tokens per request goes in the price beside input and output, and empty takes it out.
+    let (status, done) = call(
+        &s,
+        "POST",
+        "/console/api/prices/price",
+        &cookie,
+        Some(json!({ "model": "gpt-4o", "input": "2", "output": "8", "max_output": "16384", "base": 3 })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let (_, listed) = call(&s, "GET", "/console/api/prices", &cookie, None).await?;
+    assert!(
+        listed["models"].as_array().is_some_and(|m| m
+            .iter()
+            .any(|m| m["model"] == "gpt-4o" && m["max_output"] == "16384")),
+        "{listed}"
+    );
+    let (status, done) = call(
+        &s,
+        "POST",
+        "/console/api/prices/price",
+        &cookie,
+        Some(
+            json!({ "model": "gpt-4o", "input": "2", "output": "8", "max_output": "", "base": 4 }),
+        ),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
 
     // A price that is not a number, an alias a name may not hold, a provider the policy lacks.
     for (path, body, words) in [
@@ -1332,7 +1383,7 @@ async fn prices_add_a_model_and_change_a_price_as_new_versions() -> TestResult {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
         assert!(error(&refused).contains(words), "{refused}");
     }
-    assert_eq!(store.policy_versions()?.len(), 3);
+    assert_eq!(store.policy_versions()?.len(), 5);
 
     // A role without edit_policy is refused, and the refusal is recorded.
     let viewer = sign_in(&s, VIEWER_KEY).await?;

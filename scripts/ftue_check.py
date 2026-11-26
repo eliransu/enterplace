@@ -45,6 +45,16 @@ class Mock(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_GET(self):
+        # The connection test: Connect a model turns done once the model list answers.
+        Mock.seen.append(self.headers.get("authorization", ""))
+        body = json.dumps({"object": "list", "data": [{"id": "gpt-5", "object": "model"}]}).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, *a):
         pass
 

@@ -28,7 +28,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{AppState, Hop, MODELS, Snapshot, alias};
 
-const TITLE: &str = "Deployments";
+const TITLE: &str = "Health";
 
 /// Hands this gateway's report to the store every 2 seconds, for the life of the gateway. Nothing to do without a
 /// store that shares routing state.
@@ -232,6 +232,13 @@ pub(crate) async fn test_provider(state: &AppState, version: &Snapshot, index: u
     let Some(provider) = version.providers.get(index) else {
         return json!({ "ok": false, "outcome": "no_such_provider" });
     };
+    if provider.url == crate::demo::URL {
+        return json!({
+            "ok": true,
+            "outcome": "demo",
+            "message": "The demo model is answered inside Enterplace: there is nothing to reach, and it always answers.",
+        });
+    }
     if provider.passthrough {
         // No key of Enterplace's to test: each person's own login is tested by their first request.
         return json!({
@@ -314,8 +321,15 @@ pub(crate) async fn test_provider(state: &AppState, version: &Snapshot, index: u
         }
         Err((code, message)) => {
             result["ok"] = false.into();
+            // The person testing is the admin: the gateway's refusal text tells a caller to ask one, so it is not used.
+            result["detail"] = match code.as_str() {
+                "upstream_unreachable" => format!("Could not reach {}. Check the provider URL, and that this gateway can reach it.", provider.url),
+                "upstream_timeout" => format!("{} did not start answering in time. Check the provider URL, or try again if the provider is slow now.", provider.url),
+                "upstream_failed" => format!("{} closed the connection before answering. Check the provider URL, and that it speaks HTTPS if the URL says so.", provider.url),
+                _ => format!("{message} Check the provider URL, and that this gateway can reach it."),
+            }
+            .into();
             result["outcome"] = code.into();
-            result["detail"] = format!("{message} Check the provider's url in the policy and that this gateway can reach it.").into();
         }
     }
     result
@@ -332,6 +346,7 @@ pub(crate) fn console(state: Arc<AppState>) -> enterplace_console::Extension {
             get(|| async { enterplace_console::redirect("/console/app/#/deployments") }),
         )
         .route("/api/deployments", get(view).post(test))
+        .route("/api/provider-status", get(status))
         .layer(Extension(state));
     enterplace_console::Extension {
         nav: vec![("/console/deployments".into(), TITLE.into())],
@@ -451,6 +466,76 @@ fn provider_row(p: &Value) -> Value {
     })
 }
 
+/// What a provider was when tested: its address and key. Another one is tested again.
+fn fingerprint(provider: &crate::Upstream) -> String {
+    let key = provider.key.as_ref().map_or_else(String::new, |(_, v)| {
+        enterplace_core::id::sha256_hex(v.as_bytes())
+    });
+    format!("{} {key}", provider.url)
+}
+
+/// Keeps a test's outcome as the provider's status, which Providers and Start here read.
+fn remember(provider: &crate::Upstream, tested: &Value) {
+    let ok = tested["ok"] == true;
+    let text = match (ok, tested["note"].as_str().unwrap_or_default()) {
+        _ if tested["outcome"] == "demo" => "Ready: answered inside Enterplace".to_string(),
+        _ if tested["outcome"] == "passthrough" => {
+            "Each person's own login: their first request tests it".to_string()
+        }
+        (true, "") => "Connected".to_string(),
+        (true, note) => format!("Connected, {note}"),
+        (false, _) => format!("Failed: {}", tested["detail"].as_str().unwrap_or_default()),
+    };
+    enterplace_console::tested::remember(&provider.name, ok, text, fingerprint(provider));
+}
+
+/// Each provider's status from its last connection test. A provider never tested, changed since, or tested over
+/// 10 minutes ago is tested now (its model list, which bills nothing), so the status a page shows is a real one.
+async fn status(
+    State(console): State<Console>,
+    Extension(state): Extension<Gateway>,
+    headers: HeaderMap,
+) -> Response {
+    answer(
+        async {
+            signed_in(&console, &headers, false).await?;
+            let state = gateway(&state)?;
+            let version = state.version();
+            let stale: Vec<usize> = version
+                .providers
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| {
+                    enterplace_console::tested::last(&p.name).is_none_or(|t| {
+                        t.fingerprint != fingerprint(p)
+                            || t.at.elapsed() > enterplace_console::tested::FRESH
+                    })
+                })
+                .map(|(i, _)| i)
+                .collect();
+            let mut runs = tokio::task::JoinSet::new();
+            for index in stale {
+                let (state, version) = (state.clone(), version.clone());
+                runs.spawn(async move {
+                    let result = test_provider(&state, &version, index).await;
+                    if let Some(p) = version.providers.get(index) {
+                        remember(p, &tested(&p.name, &result));
+                    }
+                });
+            }
+            while runs.join_next().await.is_some() {}
+            let mut out = Map::new();
+            for p in &version.providers {
+                if let Some(t) = enterplace_console::tested::last(&p.name) {
+                    out.insert(p.name.clone(), json!({ "ok": t.ok, "text": t.text }));
+                }
+            }
+            Ok(ok(json!({ "status": out })))
+        }
+        .await,
+    )
+}
+
 /// A connection test's outcome as the page shows it beside its provider.
 fn tested(provider: &str, result: &Value) -> Value {
     let ok = result["ok"] == true;
@@ -458,11 +543,18 @@ fn tested(provider: &str, result: &Value) -> Value {
         "provider": provider,
         "ok": ok,
         "tag": if ok { "connected" } else { "failed" },
+        "outcome": result["outcome"],
         // A passthrough provider answers without a call, so it has no latency to show.
         "note": if ok {
             result["latency_ms"].as_u64().map(|ms| format!("{ms} ms")).unwrap_or_default()
         } else {
-            result["outcome"].as_str().unwrap_or_default().to_string()
+            match result["outcome"].as_str().unwrap_or_default() {
+                "upstream_unreachable" => "not reached".to_string(),
+                "upstream_timeout" => "no answer in time".to_string(),
+                "upstream_failed" => "connection closed".to_string(),
+                code if code.bytes().all(|b| b.is_ascii_digit()) => format!("answered {code}"),
+                _ => String::new(),
+            }
         },
         // A passthrough provider says why there is nothing to test in `message`.
         "detail": result.get("detail").unwrap_or(&result["message"]),
@@ -484,7 +576,7 @@ async fn view(
                 view[field].as_array().into_iter().flatten().map(row).collect()
             };
             let lead = format!(
-                "Providers and their health, as {} sees them.",
+                "Whether each gateway and provider is up, as {} sees them.",
                 if view["counted_by"] == "store" {
                     format!(
                         "every gateway on the store ({} now)",
@@ -539,8 +631,8 @@ async fn view(
                 "deployments": rows("deployments", deployment_row),
                 "providers": rows("providers", provider_row),
                 "none": {
-                    "title": "No deployments yet",
-                    "body": "A deployment is a provider and model an alias names under aliases: in the policy. Its circuit, probe, limits and latency show here once the policy has one.",
+                    "title": "No alias targets yet",
+                    "body": "When an alias sends a model name to one or more providers, each provider and model it sends to shows here with its state, limits and latency. Add an alias under Policy.",
                 },
             })))
         }
@@ -604,6 +696,9 @@ async fn test(
                     )
                 })?;
             let tested = tested(&name, &result);
+            if let Some(p) = version.providers.get(index) {
+                remember(p, &tested);
+            }
             Ok(ok(json!({ "message": tested["detail"], "tested": tested })))
         }
         .await,

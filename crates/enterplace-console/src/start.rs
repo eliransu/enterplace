@@ -841,6 +841,25 @@ pub(crate) fn price_prompt(base: &str, policy: &str, in_store: bool) -> String {
     )
 }
 
+/// "Copy for your agent" where a pasted provider key needs a master key and the gateway has none: make one and set
+/// it on every gateway. The key is made and kept by the human's own tools; the agent never sees it.
+pub(crate) fn master_key_prompt(base: &str) -> String {
+    task_prompt(
+        base,
+        "Give the Enterplace gateway a master key, so provider keys pasted in the console are kept encrypted",
+        &[],
+        &[
+            "1. Tell me to make the key myself with `openssl rand -hex 32` (64 hex characters) and keep it in our secret manager, or in a file only the gateway's user can read (`chmod 600`). Never ask me to paste it to you, and never write it in the repository.".into(),
+            "2. Set `ENTERPLACE_MASTER_KEY` to it, or `ENTERPLACE_MASTER_KEY_FILE` to the path of that file, in the environment of every gateway: its systemd unit, container env, Helm values or task definition. Every gateway must use the same key.".into(),
+            "3. Restart each gateway: it reads the master key when it starts.".into(),
+        ],
+        &format!(
+            "Add a provider at {base}/console/app/#/providers asks for the provider's key, and {base}/console/app/#/credentials lists provider keys instead of saying the master key is missing."
+        ),
+        "/governance/provider-credentials/",
+    )
+}
+
 /// "Copy for your agent" on Import a list: `enterplace key import` on a CSV, so an agent issues a team's keys alone.
 pub(crate) fn import_prompt(base: &str, keys: &str) -> String {
     task_prompt(
@@ -1268,21 +1287,44 @@ fn first_steps(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     } else {
         Vec::new()
     };
-    let connected: Vec<String> = f.connected.iter().map(|(n, _)| mono(n)).collect();
+    // A provider in the policy counts once its connection test passed: added alone, its key or address may be wrong.
+    let tests: Vec<(String, Option<crate::tested::Tested>)> = f
+        .connected
+        .iter()
+        .map(|(n, _)| (n.clone(), crate::tested::last(n)))
+        .collect();
+    let connected: Vec<String> = tests
+        .iter()
+        .filter(|(_, t)| t.as_ref().is_some_and(|t| t.ok))
+        .map(|(n, _)| mono(n))
+        .collect();
+    let mut body = vec![p(
+        "Paste a key from OpenAI, Anthropic or Gemini, and Enterplace sends your requests to that provider. Or try the free demo model: Enterplace answers it with a sample text, so your first request lands in seconds.",
+    )];
+    for (name, test) in tests
+        .iter()
+        .filter(|(_, t)| !t.as_ref().is_some_and(|t| t.ok))
+    {
+        body.push(note(match test {
+            Some(t) => format!("{name}: {} Fix it on Providers, where Test connection tries again.", t.text),
+            None => format!("{name} is added. Testing its connection now: this step turns done when the test passes."),
+        }));
+    }
+    body.push(connect);
+    body.push(actions(demo));
     let s1 = Step::new(
         "Connect a model",
         // A request that arrived proves a model answered it, so this never reads Now above a done first request.
-        !f.connected.is_empty() || f.demo || !f.tries.is_empty(),
-        vec![
-            p("Paste a key from OpenAI, Anthropic or Gemini, and Enterplace sends your requests to that provider. Or try the free demo model: Enterplace answers it with a sample text, so your first request lands in seconds."),
-            connect,
-            actions(demo),
-        ],
+        !connected.is_empty() || f.demo || !f.tries.is_empty(),
+        body,
     )
-    .finished(if connected.is_empty() {
-        "Using the demo model: answers are sample text, free. Connect a provider any time in [Provider credentials](/console/credentials), or on this step after [changing what to start with](/console/app/#/overview?pick=1).".to_string()
+    .finished(if !connected.is_empty() {
+        format!("Connected: {}. Its connection test passed; requests to its models go to it.", connected.join(", "))
+    } else if !tests.is_empty() {
+        let names: Vec<String> = tests.iter().map(|(n, _)| mono(n)).collect();
+        format!("Added: {}. Its connection test has not passed yet: see its status on [Providers](/console/app/#/providers).", names.join(", "))
     } else {
-        format!("Connected: {}. Its key is sealed; requests to its models go to it.", connected.join(", "))
+        "Using the demo model: answers are sample text, free. Connect a provider any time in [Provider credentials](/console/credentials), or on this step after [changing what to start with](/console/app/#/overview?pick=1).".to_string()
     });
     let lang = match c.tool.as_str() {
         "python" | "node" => c.tool.as_str(),
@@ -1952,7 +1994,7 @@ fn mcp(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
         "Put an MCP server behind Enterplace",
         !f.mcp_servers.is_empty(),
         vec![
-            p("Add the server to the policy and allow its tools in a rule. Set `GITHUB_MCP_AUTHORIZATION` to `Bearer` and your GitHub token where Enterplace runs, then restart it: a new server needs a restart."),
+            p("Add the server to the policy and allow its tools in a rule. Enterplace reads the saved policy within 2 seconds, with no restart. Its token goes in `GITHUB_MCP_AUTHORIZATION` (`Bearer` and your GitHub token) where Enterplace runs: a gateway reads its environment when it starts, so set the variable before starting it."),
             c.lines("lines-mcp", "mcp-server", "Add to a policy draft"),
             actions(vec![docs_link("Read MCP gateway", "/governance/mcp-gateway/")]),
         ],
@@ -3024,7 +3066,7 @@ async fn connect(State(console): State<Console>, headers: HeaderMap, bytes: Byte
             kept.demo = false;
             let _ = write_kept(&console, &kept);
             Ok(ok(json!({
-                "message": format!("Connected: {id}. Its key is sealed; requests to its models go to it within 2 seconds."),
+                "message": format!("Added {id}. Its key is sealed, and Enterplace tests the connection within a few seconds."),
                 "query": "pay=api",
             })))
         }
@@ -3511,6 +3553,13 @@ mod tests {
         );
         let stored = price_prompt(base, "p.yaml", true);
         assert!(stored.contains("#/policy/edit"), "{stored}");
+        let master = master_key_prompt(base);
+        assert!(
+            master.contains("ENTERPLACE_MASTER_KEY")
+                && master.contains("Never ask me to paste it to you")
+                && master.contains("/governance/provider-credentials"),
+            "{master}"
+        );
         let import = import_prompt(base, "/etc/enterplace/enterplace.keys.yaml");
         assert!(
             import.contains(

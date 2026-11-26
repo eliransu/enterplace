@@ -35,7 +35,7 @@ const AUTH: Record<string, string> = {
 };
 
 export function McpServers({ me, query }: PageProps) {
-  const { data, error, change, reload } = useData<{ servers: Server[] }>("mcp");
+  const { data, error, change, reload } = useData<{ servers: Server[]; gateway: string }>("mcp");
   const [picked, setForm] = useState<Server | "new" | null>(null);
   // `?add=1` opens Add a server, so Overview's next step is a link.
   const form = picked ?? (query.get("add") === "1" && me?.edit_policy ? "new" : null);
@@ -71,7 +71,7 @@ export function McpServers({ me, query }: PageProps) {
             <TableHeader>
               <TableRow>
                 <TableHead>Server</TableHead>
-                <TableHead>Reached at</TableHead>
+                <TableHead>Agents connect to</TableHead>
                 <TableHead>Sign-in</TableHead>
                 <TableHead>Tools allowed</TableHead>
                 <TableHead>Change</TableHead>
@@ -86,9 +86,10 @@ export function McpServers({ me, query }: PageProps) {
                   </TableCell>
                   <TableCell>
                     <span className="flex items-center gap-2">
-                      <Cut text={s.url ?? [s.command, ...s.args].join(" ")} className="t-mono-sm" />
-                      <Copy text={s.url ?? [s.command, ...s.args].join(" ")} />
+                      <Cut text={data.gateway} className="t-mono-sm" />
+                      <Copy text={data.gateway} />
                     </span>
+                    <Cut text={`forwards to ${s.url ?? [s.command, ...s.args].join(" ")}`} className="text-muted-foreground" />
                   </TableCell>
                   <TableCell>{s.auth === "header" ? `${s.auth_header} from ${s.auth_env}` : AUTH[s.auth] ?? s.auth}</TableCell>
                   <TableCell className="whitespace-normal">
@@ -178,16 +179,16 @@ function ServerForm({ server, onClose, change }: { server: Server | null; onClos
           </Field>
           {transport === "stdio" ? (
             <>
-              <Field id="command" label="Command" hint="Absolute path. The gateway runs it only if ENTERPLACE_MCP_STDIO_ALLOW lists it.">
-                <Input id="command" className="t-mono" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="/usr/local/bin/mcp-server-git" required />
+              <Field id="command" label="Command" hint="Absolute path, for example /usr/local/bin/mcp-server-git. The gateway runs it only if ENTERPLACE_MCP_STDIO_ALLOW lists it.">
+                <Input id="command" className="t-mono" value={command} onChange={(e) => setCommand(e.target.value)} required />
               </Field>
               <Field id="args" label="Arguments, optional" hint="Separated by commas.">
                 <Input id="args" className="t-mono" value={args} onChange={(e) => setArgs(e.target.value)} />
               </Field>
             </>
           ) : (
-            <Field id="url" label="URL">
-              <Input id="url" className="t-mono" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com/mcp" required />
+            <Field id="url" label="URL" hint="The server's own address, for example https://mcp.example.com/mcp. Agents still connect to Enterplace.">
+              <Input id="url" className="t-mono" value={url} onChange={(e) => setUrl(e.target.value)} required />
             </Field>
           )}
           <Field id="auth" label="Sign-in">
@@ -209,8 +210,8 @@ function ServerForm({ server, onClose, change }: { server: Server | null; onClos
               <Field id="header" label="Header">
                 <Input id="header" className="t-mono" value={header} onChange={(e) => setHeader(e.target.value)} />
               </Field>
-              <Field id="env" label="Environment variable" hint="Holds the header's value on the gateway. The value never goes in the policy.">
-                <Input id="env" className="t-mono" value={env} onChange={(e) => setEnv(e.target.value)} placeholder="GITHUB_MCP_TOKEN" required />
+              <Field id="env" label="Environment variable" hint="Holds the header's value on the gateway, for example GITHUB_MCP_TOKEN. The value never goes in the policy.">
+                <Input id="env" className="t-mono" value={env} onChange={(e) => setEnv(e.target.value)} required />
               </Field>
             </>
           ) : null}
@@ -247,11 +248,11 @@ function ToolAccess({ server, onClose, change }: { server: Server; onClose: () =
           {rows.map((r, i) => (
             <div key={r.rule} className="grid gap-4 md:grid-cols-[1fr_2fr_2fr] md:items-end">
               <span className="t-mono min-h-11 content-center">{r.rule}</span>
-              <Field id={`allow-${i}`} label="Allow">
-                <Input id={`allow-${i}`} className="t-mono" value={r.allow} onChange={(e) => set(i, "allow", e.target.value)} placeholder="*" />
+              <Field id={`allow-${i}`} label="Allow" hint="* for every tool.">
+                <Input id={`allow-${i}`} className="t-mono" value={r.allow} onChange={(e) => set(i, "allow", e.target.value)} />
               </Field>
-              <Field id={`deny-${i}`} label="Deny">
-                <Input id={`deny-${i}`} className="t-mono" value={r.deny} onChange={(e) => set(i, "deny", e.target.value)} placeholder="delete_repo" />
+              <Field id={`deny-${i}`} label="Deny" hint="For example delete_repo.">
+                <Input id={`deny-${i}`} className="t-mono" value={r.deny} onChange={(e) => set(i, "deny", e.target.value)} />
               </Field>
             </div>
           ))}
