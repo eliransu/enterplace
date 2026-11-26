@@ -276,8 +276,9 @@ def run(chrome: Chrome, base: str, key: str, enterplace: str, folder: pathlib.Pa
         time.sleep(0.1)
     check("mode: observe" not in policy.read_text(), "confirming turns on enforcement")
 
-    # A form from another site is refused, with the console's own page.
-    chrome.go(evil)
+    # A form from another site is refused, with the console's own page. The other site's page submits its form as it
+    # loads, so the browser may be past it before a wait could see it: wait for where the post lands instead.
+    chrome.call("Page.navigate", url=evil)
     chrome.wait("location.pathname === '/console/sign-in' && document.readyState === 'complete'", "the cross-site post")
     check(chrome.js("document.querySelector('.g-empty__title')?.textContent") == "This form came from somewhere else",
           "a form posted from another site is refused with the console's error page")
