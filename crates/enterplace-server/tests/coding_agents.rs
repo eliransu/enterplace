@@ -119,10 +119,17 @@ async fn send(gw: &Governed, request: Request<Body>) -> Result<(StatusCode, Valu
     Ok((status, serde_json::from_slice(&body)?))
 }
 
+/// The decision record of the last request. Not simply the last line: an allowed request's usage record can be
+/// written after its answer reached the test.
 fn last_record(s: &Setup) -> Result<Value, Error> {
     let text = std::fs::read_to_string(&s.audit)?;
-    let line = text.lines().last().ok_or("no record")?;
-    Ok(serde_json::from_str(line)?)
+    for line in text.lines().rev() {
+        let record: Value = serde_json::from_str(line)?;
+        if record.get("method").is_some() {
+            return Ok(record);
+        }
+    }
+    Err("no request record".into())
 }
 
 fn code(body: &Value) -> &Value {
