@@ -1,0 +1,6 @@
+# Artifact Hub repository metadata, pushed beside the chart as oci://ghcr.io/eliransu/charts/enterplace:artifacthub.io
+# by .github/workflows/artifacthub.yml. The ID is the one Artifact Hub gave the repository: it earns the Verified
+# Publisher label.
+repositoryID: b3873368-6b09-467a-a207-5dc1bbb09497
+owners:
+  - name: eliransu
