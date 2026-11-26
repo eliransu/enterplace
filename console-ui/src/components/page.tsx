@@ -1,6 +1,6 @@
 import * as React from "react";
 import { CircleAlert } from "lucide-react";
-import { Button } from "./ui/button";
+import { Button, FormBusy } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 import { cn } from "@/lib/utils";
 
@@ -160,7 +160,7 @@ export function Form({
       }}
     >
       <fieldset disabled={busy} className="contents">
-        {children}
+        <FormBusy.Provider value={busy}>{children}</FormBusy.Provider>
       </fieldset>
     </form>
   );
@@ -191,7 +191,8 @@ export function Cut({ text, className }: { text: string; className?: string }) {
   );
 }
 
-// A section's own pages, as tabs. Each tab is a # route, so a tab is a link that can be shared.
+// A section's own pages, as tabs. Each tab is a # route, so a tab is a link that can be shared. One ink bar slides
+// to the current tab, as Ant Design's tabs do; each label reserves its bold width, so the row never shifts.
 export function RouteTabs({
   label,
   tabs,
@@ -201,25 +202,58 @@ export function RouteTabs({
   tabs: { route: string; label: string }[];
   current: string;
 }) {
+  const nav = React.useRef<HTMLElement>(null);
+  const [ink, setInk] = React.useState<{
+    left: number;
+    width: number;
+    moved: boolean;
+  } | null>(null);
+  React.useLayoutEffect(() => {
+    const place = () => {
+      const a = nav.current?.querySelector<HTMLElement>(
+        '[aria-current="page"]',
+      );
+      setInk((was) =>
+        a
+          ? { left: a.offsetLeft, width: a.offsetWidth, moved: was !== null }
+          : null,
+      );
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [current, tabs]);
   return (
     <nav
+      ref={nav}
       aria-label={label}
-      className="-mb-2 flex gap-1 overflow-x-auto border-b border-border"
+      className="relative -mb-2 flex gap-1 overflow-x-auto border-b border-border"
     >
       {tabs.map((t) => (
         <a
           key={t.route}
           href={`#${t.route}`}
+          data-label={t.label}
           aria-current={t.route === current ? "page" : undefined}
           className={cn(
-            "t-small -mb-px inline-flex min-h-10 flex-none items-center border-b-2 border-transparent px-3 whitespace-nowrap no-underline text-muted-foreground hover:text-foreground",
-            t.route === current &&
-              "border-foreground font-semibold text-foreground",
+            "t-small inline-flex min-h-10 flex-none flex-col justify-center rounded-t-small px-3 whitespace-nowrap no-underline text-muted-foreground transition-colors hover:bg-[var(--fill-hover)] hover:text-foreground",
+            "after:invisible after:h-0 after:overflow-hidden after:font-semibold after:content-[attr(data-label)]",
+            t.route === current && "font-semibold text-foreground",
           )}
         >
           {t.label}
         </a>
       ))}
+      {ink ? (
+        <span
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none absolute bottom-0 h-0.5 rounded-pill bg-foreground",
+            ink.moved && "transition-[left,width] duration-300",
+          )}
+          style={{ left: ink.left, width: ink.width }}
+        />
+      ) : null}
     </nav>
   );
 }

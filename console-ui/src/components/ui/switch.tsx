@@ -2,11 +2,14 @@ import * as React from "react";
 import { Switch as SwitchPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 
-function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimitive.Root>) {
+function Switch({
+  className,
+  ...props
+}: React.ComponentProps<typeof SwitchPrimitive.Root>) {
   return (
     <SwitchPrimitive.Root
       className={cn(
-        "inline-flex h-6 w-11 shrink-0 items-center rounded-pill border border-input bg-background p-0.5 transition-colors data-[state=checked]:border-primary data-[state=checked]:bg-primary disabled:opacity-40",
+        "inline-flex h-6 w-11 shrink-0 items-center rounded-pill border border-input bg-background p-0.5 transition-colors hover:border-foreground data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40",
         className,
       )}
       {...props}
