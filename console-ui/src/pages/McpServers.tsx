@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useCheckedChange } from "@/components/policy-change";
 import { Copy } from "@/components/copy";
 import { Setup } from "./Setup";
 import { goTo } from "@/lib/use";
@@ -35,7 +36,9 @@ const AUTH: Record<string, string> = {
 };
 
 export function McpServers({ me, query }: PageProps) {
-  const { data, error, change, reload } = useData<{ servers: Server[]; gateway: string }>("mcp");
+  const { data, error, change: apply, reload } = useData<{ servers: Server[]; gateway: string }>("mcp");
+  // Each save shows its diff and a dry run of the last 24 hours first, and applies only on Apply.
+  const [change, checking] = useCheckedChange(apply);
   const [picked, setForm] = useState<Server | "new" | null>(null);
   // `?add=1` opens Add a server, so Overview's next step is a link.
   const form = picked ?? (query.get("add") === "1" && me?.edit_policy ? "new" : null);
@@ -128,6 +131,7 @@ export function McpServers({ me, query }: PageProps) {
       </section>
       {form ? <ServerForm server={form === "new" ? null : form} onClose={close} change={change} /> : null}
       {tools ? <ToolAccess server={tools} onClose={() => setTools(null)} change={change} /> : null}
+      {checking}
     </>
   );
 }

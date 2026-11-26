@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useCheckedChange } from "@/components/policy-change";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
@@ -37,7 +38,9 @@ export function Prices({ query }: PageProps) {
   const adding = query.get("add") === "1";
   const pricing = query.get("price") ?? "";
   // Live: the page reads the policy again every 5 seconds, unless a dialog is open.
-  const { data, error, change, reload } = useData<Data>("prices", 5000, adding || !!pricing);
+  const { data, error, change: apply, reload } = useData<Data>("prices", 5000, adding || !!pricing);
+  // Each save shows its diff and a dry run of the last 24 hours first, and applies only on Apply.
+  const [change, checking] = useCheckedChange(apply);
   const editable = !!data?.editable;
   const priced = data?.models?.find((m) => m.model === pricing);
   return (
@@ -106,6 +109,7 @@ export function Prices({ query }: PageProps) {
         <AddDialog providers={data.providers} provider={query.get("provider") ?? ""} model={query.get("model") ?? ""} base={data.base} change={change} />
       ) : null}
       {data && editable && pricing ? <PriceDialog model={pricing} input={priced?.input ?? ""} output={priced?.output ?? ""} max={priced?.max_output ?? ""} base={data.base} change={change} /> : null}
+      {checking}
     </>
   );
 }

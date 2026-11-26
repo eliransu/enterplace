@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useCheckedChange } from "@/components/policy-change";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
@@ -69,7 +70,9 @@ type Data = {
 };
 
 export function Providers({ me }: { me: Me | null }) {
-  const { data, error, change, reload } = useData<Data>("providers");
+  const { data, error, change: apply, reload } = useData<Data>("providers");
+  // Each save shows its diff and a dry run of the last 24 hours first, and applies only on Apply.
+  const [change, checking] = useCheckedChange(apply);
   const { status, reload: retest } = useProviderStatus();
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
@@ -77,7 +80,7 @@ export function Providers({ me }: { me: Me | null }) {
   const may = !!me?.edit_policy;
   const test = (provider: string) => {
     setTesting(provider);
-    return change(() => api.post("deployments", { provider })).finally(() => {
+    return apply(() => api.post("deployments", { provider })).finally(() => {
       setTesting("");
       retest();
     });
@@ -227,6 +230,7 @@ export function Providers({ me }: { me: Me | null }) {
           change={change}
         />
       ) : null}
+      {checking}
     </>
   );
 }
