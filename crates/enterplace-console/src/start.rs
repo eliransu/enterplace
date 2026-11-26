@@ -760,7 +760,7 @@ fn prompt(
 }
 
 /// An agent prompt for a task outside Start here: the same parts, with a check of the task's own.
-pub(crate) fn task_prompt(
+pub fn task_prompt(
     base: &str,
     goal: &str,
     values: &[(&str, String)],

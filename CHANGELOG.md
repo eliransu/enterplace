@@ -17,6 +17,13 @@ one repository. How a release is made: RELEASING.md.
   when one arrives. `enterplace start` writes `mode: allow`.
 - Refusals for a model no provider serves (`unknown_model`, `wrong_route`, `login_needed`) name the console page that
   fixes them.
+- Health shows the version each gateway runs, the newest release whose SHA256SUMS the release key signed, and its
+  changes. Update (admins) records an `update` in the audit log and shows the exact steps for this deployment (Helm,
+  Cloudflare, Docker Compose, ECS, Cloud Run, Container Apps, Homebrew or the binary) with Copy and "Copy for your
+  agent", then each gateway's progress from its heartbeat, and Roll back (an audit `rollback`). An update more than
+  one minor version ahead is held back, since that version could not share the store with the running one or come
+  back from it. The release list is read only while Health is open; `ENTERPLACE_UPDATE_CHECK=off` turns it off.
+- The Helm chart sets `ENTERPLACE_HELM_RELEASE` and `ENTERPLACE_HELM_NAMESPACE`, for the exact `helm upgrade` on Health.
 
 ## [0.3.0] - 2026-11-26
 

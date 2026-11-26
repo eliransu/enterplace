@@ -347,6 +347,10 @@ pub(crate) fn console(state: Arc<AppState>) -> enterplace_console::Extension {
         )
         .route("/api/deployments", get(view).post(test))
         .route("/api/provider-status", get(status))
+        .route(
+            "/api/updates",
+            get(crate::update::get).post(crate::update::post),
+        )
         .layer(Extension(state));
     enterplace_console::Extension {
         nav: vec![("/console/deployments".into(), TITLE.into())],
@@ -356,9 +360,9 @@ pub(crate) fn console(state: Arc<AppState>) -> enterplace_console::Extension {
 }
 
 /// The gateway the page reads, gone once the server is dropped.
-type Gateway = std::sync::Weak<AppState>;
+pub(crate) type Gateway = std::sync::Weak<AppState>;
 
-fn gateway(state: &Gateway) -> Result<Arc<AppState>, Fail> {
+pub(crate) fn gateway(state: &Gateway) -> Result<Arc<AppState>, Fail> {
     state.upgrade().ok_or_else(|| {
         Fail(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -706,10 +710,10 @@ async fn test(
 }
 
 /// A gateway silent this long is listed as stopped, folded away on Deployments.
-const STOPPED_AFTER: std::time::Duration = std::time::Duration::from_secs(3600);
+pub(crate) const STOPPED_AFTER: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Whether a heartbeat written at `seen` is older than `before`. Both are UTC timestamps, compared to the second.
-fn stopped(seen: &str, before: &str) -> bool {
+pub(crate) fn stopped(seen: &str, before: &str) -> bool {
     seen.get(..19).unwrap_or(seen) < before.get(..19).unwrap_or(before)
 }
 

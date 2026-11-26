@@ -1,0 +1,52 @@
+---
+title: Updates
+description: See when a newer signed Enterplace release exists, update from the console's Health page with the exact steps for your deployment, follow each gateway's progress and roll back.
+sidebar:
+  order: 13
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The console's **Health** page (Settings, Health) opens with **Version**: the version this gateway runs, the newest Enterplace release with the first lines of its changes, and, for an admin (`edit_policy` and the whole install), **Update**.
+
+## How a release is found and checked
+
+While Health is open, the gateway reads the GitHub releases of eliransu/enterplace at most every 6 hours. A release is offered only when:
+
+- it is a published, stable `vX.Y.Z` (not a draft, a pre-release or `edge`), newer than this gateway;
+- its `SHA256SUMS.sig` verifies against the Enterplace release key, the same check `install.sh` and `scripts/signing.py verify` make (`ssh-keygen -Y verify -I release@enterplace -n enterplace-release`, key in `release/allowed_signers`);
+- its signed `SHA256SUMS` names that version's own tarballs.
+
+A newer release that fails is listed under "Not offered" with the reason. The image digest comes from the release notes; every set of steps starts with `cosign verify` of the image, as in [Verify a release](/operations/verify-release/).
+
+With no way out (an air-gapped network), the read fails quietly: Health says the list could not be read, offers nothing and tries again 30 minutes later. Nothing is read while no one opens Health.
+
+| Variable | Effect |
+|---|---|
+| `ENTERPLACE_UPDATE_CHECK=off` | Never read the release list |
+| `ENTERPLACE_RELEASE_FEED` | Read a mirror of the GitHub releases API (`/repos/<owner>/<repo>/releases`) instead |
+| `ENTERPLACE_ALLOWED_SIGNERS` | An allowed_signers file with the key that signs the mirror's releases, as for `install.sh` |
+| `ENTERPLACE_DEPLOY_TARGET` | `kubernetes`, `cloudflare`, `compose`, `ecs`, `cloud-run`, `container-apps` or `binary`, when the platform is not told apart by itself |
+
+## One minor version at a time
+
+Two versions share one store only one minor version apart (see [Rolling upgrades](https://github.com/eliransu/enterplace/blob/main/RELEASING.md)). So Health offers the newest release every running gateway may run beside and come back from: from 0.2.x that is the newest 0.3.x, never 0.4.0. A newer release beyond that is named, with the version to stop at first. **Roll back** is refused, with the reason, once a version more than one minor ahead of the old one has run on the store: restore the backup taken before the update, or fix forward.
+
+## What Update does on each platform
+
+The gateway never replaces itself: the platform that started it does the rolling, because it is the one that waits for each new gateway's `/readyz` before stopping an old one, and the one that would undo a change made behind its back. Update records an `update` admin record in the audit log (who, from, to, the platform), then shows the exact steps for this deployment with **Copy** and **Copy for your agent**, and each gateway's progress: `waiting`, `updated`, or `failed its health check` (a gateway on the new version whose heartbeat stopped). A rollout not done in 15 minutes is shown as stalled. **Roll back** records a `rollback` and shows the same steps for the previous version.
+
+Every gateway drains on SIGTERM: `/readyz` answers 503 at once and requests in flight get up to 30 seconds.
+
+| Platform | Steps | Downtime | Why the gateway does not do it |
+|---|---|---|---|
+| Kubernetes (Helm) | `helm upgrade <release> oci://ghcr.io/eliransu/charts/enterplace --version X.Y.Z --reset-then-reuse-values --set image.tag=X.Y.Z@sha256:... --atomic` | None with 2 or more replicas: the StatefulSet replaces one pod at a time and waits for each to be ready. `--atomic` puts the previous release back if a pod is not ready in 15 minutes | Patching its own StatefulSet needs a Role that can rewrite the whole pod spec (RBAC cannot limit a patch to the image), and Helm would undo it at the next upgrade |
+| Cloudflare | Refresh `src/` from the new image, set `image_vars.ENTERPLACE_IMAGE` in wrangler.jsonc, `npx wrangler deploy` | None with `GATEWAYS` 2 or more: instances roll, each writes its audit segments to R2 before it stops | The Worker and its store object change with each release (the store object adds its tables), Cloudflare cannot pull from ghcr.io so wrangler builds and pushes the image, and a token that may edit container applications reaches every one on the account |
+| Docker Compose | `ENTERPLACE_IMAGE=...` in `.env`, then `docker compose pull enterplace && docker compose up -d enterplace` | One gateway: a few seconds. With two gateways behind a load balancer, update one at a time | Replacing its own container needs the Docker socket, which is root on the host |
+| AWS ECS (Terraform) | `image = "..."`, `terraform apply` | A short outage: the module stops each replica's task before starting the new one, and one apply replaces every replica. The circuit breaker rolls back a task that fails its health check | The task role has no rights on its own service |
+| Cloud Run, Container Apps (Terraform) | `image = "..."`, `terraform apply` | None: the new revision takes traffic once its probe passes | The identity has no rights on its own service or app |
+| Homebrew, binary | `brew upgrade eliransu/tap/enterplace`, or `install.sh` with `ENTERPLACE_VERSION=vX.Y.Z`, then restart | One gateway: a few seconds | The service manager that runs it starts the new one |
+
+<Aside>
+The Version panel is built from the console's existing components and has no design of its own yet.
+</Aside>
