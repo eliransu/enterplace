@@ -540,7 +540,7 @@ async fn without_a_store_the_console_app_points_to_key_env() -> TestResult {
     .await?;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert!(
-        body.contains("ENTERPLACE_MASTER_KEY") && body.contains("key_env"),
+        body.contains("ENTERPLACE_MASTER_KEY") && body.contains("environment variables"),
         "{body}"
     );
     no_secret(&body, "a refused add");
