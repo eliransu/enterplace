@@ -470,12 +470,21 @@ async fn analytics(State(console): State<Console>, headers: HeaderMap, uri: Uri)
 pub(crate) fn uncounted_note(uncounted: f64) -> String {
     if uncounted > 0.0 {
         format!(
-            " Beside it, {} of subscription use (an estimate at API prices) is not counted against the budget: its rule does not count subscription use at API prices.",
+            " Beside it, {} of subscription use (an estimate at API prices) is not counted against the budget: its rule counts only what the organization is billed per request.",
             money_est(uncounted)
         )
     } else {
         String::new()
     }
+}
+
+/// "1 request was", "22 requests were".
+fn were(n: usize) -> String {
+    format!(
+        "{} {}",
+        enterplace_core::count(n, "request"),
+        if n == 1 { "was" } else { "were" }
+    )
 }
 
 /// One budget a forecast is made for: whose it is, which requests it counts, and where it is set.
@@ -616,7 +625,7 @@ fn gauges(policy: &Policy) -> Vec<Gauge> {
 /// Each budget in the policy, what it spent this period, and when it runs out at the pace it has spent at: every
 /// scope, the closest to its limit first. An empty list means the policy sets no budget; no policy that loads gives
 /// no forecasts at all.
-async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
+pub(crate) async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
     let Ok(loaded) = config::load(&console.config().policy, Some(&console.config().keys)) else {
         return Value::Null;
     };
@@ -760,11 +769,15 @@ async fn forecasts(console: &Console, admin: &Admin, now: u64) -> Value {
             .count();
         // A budget that lasts can still refuse: a request reserves its most output tokens' cost before it is sent,
         // and is refused when that would pass what is left. That is a budget spent for its callers.
-        let refused_note = match refused {
-            0 => String::new(),
-            n => format!(
-                " Refused {} this period: each request reserves what its most output tokens could cost before it is sent. Lower max output tokens (max_tokens) on the callers, or raise the budget.",
-                enterplace_core::count(n, "request")
+        let refused_note = match (refused, pace) {
+            (0, _) => String::new(),
+            (n, Pace::Spent) => format!(
+                " {} refused this period because the budget is spent.",
+                were(n)
+            ),
+            (n, _) => format!(
+                " {} refused this period because they set no max_tokens, or a large one: before it is sent, a request holds what its longest possible answer could cost, and that passed what the budget had left. Set max_tokens on the callers, lower Most output tokens per request for the model under Models and prices, or raise the budget.",
+                were(n)
             ),
         };
         let over = matches!(pace, Pace::Spent | Pace::RunsOut(_)) || refused > 0;

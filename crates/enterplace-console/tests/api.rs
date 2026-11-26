@@ -584,9 +584,24 @@ async fn policy_basics_change_rules_limits_guardrails_aliases_and_mode() -> Test
     .await?;
     assert_eq!(status, StatusCode::OK, "{done}");
 
+    // A team no key names and no request came from is a typo until the form says it is new.
+    let (status, refused) = call(
+        &s,
+        "POST",
+        "/console/api/policy/limits",
+        &cookie,
+        Some(json!({ "scope": "team", "value": "payments", "usd": 500, "per": "month" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        error(&refused).contains("There is no team payments")
+            && error(&refused).contains("Create team payments"),
+        "{refused}"
+    );
     // Limits: budgets per team and per person, tokens per key, a cap on one model.
     for body in [
-        json!({ "scope": "team", "value": "payments", "usd": 500, "per": "month" }),
+        json!({ "scope": "team", "value": "payments", "usd": 500, "per": "month", "create": true }),
         json!({ "scope": "person", "value": "maya.cohen", "usd": "20", "per": "day" }),
         json!({ "scope": "key", "value": "1a2b3c4d", "tpm": "100000", "parallel": 4 }),
         json!({ "scope": "model", "value": "gpt-4o", "usd": 1000, "per": "month", "parallel": 20 }),
@@ -1250,7 +1265,7 @@ async fn in_store_mode_each_change_is_a_new_live_version_and_the_file_is_untouch
         "POST",
         "/console/api/policy/limits",
         &cookie,
-        Some(json!({ "scope": "team", "value": "payments", "usd": 500, "per": "month" })),
+        Some(json!({ "scope": "team", "value": "payments", "usd": 500, "per": "month", "create": true })),
     )
     .await?;
     assert_eq!(status, StatusCode::OK, "{done}");

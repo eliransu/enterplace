@@ -15,7 +15,7 @@ export function TeamPicker({
   id,
 }: {
   value: string;
-  onChange: (team: string) => void;
+  onChange: (team: string, create: boolean) => void;
   teams?: string[];
   id?: string;
 }) {
@@ -36,19 +36,22 @@ export function TeamPicker({
     if (value !== sent.current) setText(value);
     sent.current = value;
   }, [value]);
-  const send = (team: string) => {
+  const send = (team: string, create = false) => {
     sent.current = team;
-    onChange(team);
+    onChange(team, create);
   };
 
   const typed = text.trim();
   const needle = typed.toLowerCase();
   const matches = known.filter((t) => t.toLowerCase().includes(needle));
-  const exact = known.includes(typed);
+  // "*" means each team, for a limit.
+  const exact = known.includes(typed) || typed === "*";
   const canCreate = !!typed && !exact && NAME.test(typed);
   const options = [
-    ...matches.map((t) => ({ team: t, label: t })),
-    ...(canCreate ? [{ team: typed, label: `Create team ${typed}` }] : []),
+    ...matches.map((t) => ({ team: t, label: t, create: false })),
+    ...(canCreate
+      ? [{ team: typed, label: `Create team ${typed}`, create: true }]
+      : []),
   ];
   const picked = !!typed && typed === value;
 
@@ -63,9 +66,9 @@ export function TeamPicker({
     );
   }, [typed, picked, exact]);
 
-  const pick = (team: string) => {
+  const pick = (team: string, create = false) => {
     setText(team);
-    send(team);
+    send(team, create);
     setOpen(false);
   };
 
@@ -91,7 +94,7 @@ export function TeamPicker({
           setActive(0);
           setOpen(true);
           // An existing team typed in full counts as picked; anything else waits for a pick.
-          send(known.includes(next.trim()) ? next.trim() : "");
+          send(known.includes(next.trim()) || next.trim() === "*" ? next.trim() : "");
         }}
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
@@ -105,7 +108,7 @@ export function TeamPicker({
             setActive((a) => Math.max(a - 1, 0));
           } else if (e.key === "Enter" && open && options[active]) {
             e.preventDefault();
-            pick(options[active].team);
+            pick(options[active].team, options[active].create);
           } else if (e.key === "Escape" && open) {
             e.preventDefault();
             e.stopPropagation();
@@ -128,7 +131,7 @@ export function TeamPicker({
               // mousedown, not click: the input's blur would close the list first.
               onMouseDown={(e) => {
                 e.preventDefault();
-                pick(o.team);
+                pick(o.team, o.create);
               }}
               onMouseEnter={() => setActive(i)}
               className={cn(

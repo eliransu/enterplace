@@ -326,7 +326,7 @@ tokio::task_local! {
 /// One line at the top of every page in observe mode, so nobody reads a page as if rules were stopping requests.
 fn observe_line() -> &'static str {
     if OBSERVE.try_with(|o| *o).unwrap_or(false) {
-        r#"<p class="t-small g-muted" style="margin: 0">Observe mode: rules only record. <a href="/console/start?track=limit">Turn on enforcement</a></p>
+        r#"<p class="t-small g-muted" style="margin: 0">Observe mode: rules only record. <a href="/console/app/#/policy">Turn on enforcement</a></p>
 "#
     } else {
         ""

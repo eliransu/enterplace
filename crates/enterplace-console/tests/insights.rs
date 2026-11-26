@@ -600,7 +600,7 @@ async fn a_forecast_that_lasts_says_what_it_refused_and_the_fix() -> TestResult 
     );
     assert!(
         note.contains(
-            "Refused 2 requests this period: each request reserves what its most output tokens could cost before it is sent. Lower max output tokens (max_tokens) on the callers, or raise the budget."
+            "2 requests were refused this period because they set no max_tokens, or a large one"
         ),
         "{payments}"
     );
@@ -610,9 +610,9 @@ async fn a_forecast_that_lasts_says_what_it_refused_and_the_fix() -> TestResult 
     );
     let search = forecast("team search");
     assert!(
-        search["note"]
-            .as_str()
-            .is_some_and(|n| n.contains("Refused 1 request this period")),
+        search["note"].as_str().is_some_and(
+            |n| n.contains("1 request was refused this period because they set no max_tokens")
+        ),
         "{search}"
     );
     Ok(())
@@ -674,8 +674,8 @@ async fn subscription_traffic_is_beside_the_budget_meter_never_in_it() -> TestRe
     );
     let (_, spend) = api(&s.app, "/console/api/spend", &cookie).await?;
     let meter = &spend["budgets"]["meters"][0];
-    // The Spend page reads usage records by their time: the setup's own carry none, so this is the month's only one.
-    assert_eq!(meter["text"], "$0.00 of $10.00", "{spend}");
+    // Spend lists the budgets Usage forecasts: one answer on both pages.
+    assert_eq!(meter, forecast, "{spend}");
     assert!(
         meter["note"].as_str().is_some_and(|n| n.contains(
             "~$3.00 of subscription use (an estimate at API prices) is not counted against the budget"

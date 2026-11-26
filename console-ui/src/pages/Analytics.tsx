@@ -357,7 +357,7 @@ function Forecasts({ forecasts }: { forecasts: Forecast[] }) {
           <p className="t-body-strong m-0">No budgets yet</p>
           <p className="t-body m-0 text-muted-foreground">The policy sets no budget, so nothing runs out.</p>
           <Button asChild>
-            <a href="#/policy">Add a budget</a>
+            <a href="#/policy?add=limit">Add a budget</a>
           </Button>
         </div>
       ) : (

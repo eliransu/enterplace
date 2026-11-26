@@ -323,6 +323,38 @@ impl Facts {
             .iter()
             .any(|(k, n)| k == "global" || (k == "team" && (n == team || n == "*")))
     }
+
+    /// The teams with traffic in the last 7 days, and those of them no budget caps yet.
+    fn teams_capped(&self) -> (Vec<&str>, Vec<&str>) {
+        let week = enterplace_core::insights::now_secs().saturating_sub(7 * 86_400);
+        let mut teams: Vec<&str> = self
+            .requests
+            .iter()
+            .filter(|r| enterplace_core::insights::unix_secs(&r.time).is_some_and(|t| t >= week))
+            .map(|r| r.label("team"))
+            .filter(|t| !t.is_empty())
+            .collect();
+        teams.sort_unstable();
+        teams.dedup();
+        let open = teams
+            .iter()
+            .copied()
+            .filter(|t| !self.budget_for(t))
+            .collect();
+        (teams, open)
+    }
+
+    /// Add a limit on Rules and limits, for the first team with traffic and no budget.
+    fn add_budget_href(&self) -> String {
+        let (_, open) = self.teams_capped();
+        match open.first() {
+            Some(team) => format!(
+                "/console/app/#/policy?add=limit&team={}",
+                crate::html::enc(team)
+            ),
+            None => "/console/app/#/policy?add=limit".into(),
+        }
+    }
 }
 
 pub fn origin(headers: &HeaderMap, uri: &Uri, tls: &Tls) -> String {
@@ -389,6 +421,14 @@ pub(crate) async fn facts(console: &Console, admin: &Admin, base: String) -> Fac
             .rule_list()
             .iter()
             .any(|r| !r.limits.budgets.is_empty());
+        // A team's own rule with a budget caps that team as a limits: entry does.
+        for r in loaded.policy.rule_list() {
+            if let enterplace_core::policy::Who::Team(team) = &r.who
+                && !r.limits.budgets.is_empty()
+            {
+                f.budgets.push(("team".into(), team.clone()));
+            }
+        }
         f.guarded = loaded
             .policy
             .rule_list()
@@ -2099,7 +2139,8 @@ fn limit(c: &Ctx<'_>, f: &Facts) -> Vec<Step> {
     }));
     let s3 = Step::new(
         "Set a monthly budget for each team",
-        !f.budgets.is_empty() || f.rule_budgets,
+        // Done when every team with traffic is capped, as the rollout's Limit stage counts it.
+        (!f.budgets.is_empty() || f.rule_budgets) && f.teams_capped().1.is_empty(),
         vec![
             p(format!(
                 "Pick the amount from what you expect each team to spend.{}",
@@ -2422,16 +2463,8 @@ fn stages(f: &Facts, track: Track) -> Vec<Stage> {
         .collect();
     people.sort_unstable();
     people.dedup();
-    let mut teams: Vec<&str> = f
-        .requests
-        .iter()
-        .filter(recent)
-        .map(|r| r.label("team"))
-        .filter(|t| !t.is_empty())
-        .collect();
-    teams.sort_unstable();
-    teams.dedup();
-    let capped = teams.iter().filter(|t| f.budget_for(t)).count();
+    let (teams, open) = f.teams_capped();
+    let capped = teams.len() - open.len();
     let watch = track == Track::Watch;
     let needs = "Needs API traffic through Enterplace. Watched seats are not routed.";
     let yes = |b: bool| {
@@ -2496,7 +2529,7 @@ fn stages(f: &Facts, track: Track) -> Vec<Stage> {
                 )
             },
             why: "A budget refuses a team's requests once it is spent, so no bill is a surprise.",
-            action: ("Add a budget", "/console/app/#/overview?track=limit".into()),
+            action: ("Add a budget", f.add_budget_href()),
             guide: ("Read the Limit guide", "/start/step-3-limit/"),
             when: vec![(
                 "Every team with traffic has a budget".into(),
@@ -3410,7 +3443,7 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
         "Spend" => Empty {
             title: "No spend and no budgets yet",
             body: "Spend counts from the first request. A budget added now counts from then.".into(),
-            action: ("Add a budget", "/console/start?track=limit#step-5"),
+            action: ("Add a budget", "/console/app/#/policy?add=limit"),
             docs: "/governance/budgets-and-rate-limits/",
             extra: code(&[
                 (1, crate::html::yaml_line(BUDGET_LINES[0]), "add"),
@@ -3434,7 +3467,7 @@ pub(crate) fn empty_for(page: &str, base: &str) -> Option<Empty> {
         "Policy" => Empty {
             title: "One rule lets everyone in",
             body: "Every key may use every model, and observe mode blocks nothing.".into(),
-            action: ("Edit the policy", "/console/start?track=limit#step-5"),
+            action: ("Edit the policy", "/console/app/#/policy?add=limit"),
             docs: "/governance/policy/",
             extra: String::new(),
         },
