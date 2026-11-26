@@ -143,7 +143,7 @@ The Helm chart ships inside the `enterplace` image, so it always matches the ver
 
    ```text
    License lic_8f2 for Acme: scim, siem, 50 seats, until 2027-11-13.
-   enterplace enterprise 0.1.0 listening on http://0.0.0.0:8080
+   enterplace enterprise 0.4.0 listening on http://0.0.0.0:8080
    First run: no admin key yet. Open http://127.0.0.1:8080/console/setup/efe8afe6... to make the first one. The link works once.
    Audit log: /var/lib/enterplace/enterplace-audit.jsonl is new. The chain starts at record 1.
    Keys, kill switches and budgets are shared through the store named by DATABASE_URL with every Enterplace on that database.
@@ -281,6 +281,8 @@ autoscaling:
 The chart refuses `autoscaling.enabled` without `store:`. With more than one replica, or with autoscaling, it also renders a PodDisruptionBudget (`podDisruptionBudget.maxUnavailable`, default 1), so a node drain takes down one pod at a time.
 
 ## Upgrade and roll back
+
+The console's **Health** page shows when a newer signed release exists and, under **Update**, the exact `helm upgrade` for this release and namespace (the chart sets `ENTERPLACE_HELM_RELEASE` and `ENTERPLACE_HELM_NAMESPACE`), then each pod's progress. See [Updates](/operations/updates/). By hand:
 
 <Steps>
 

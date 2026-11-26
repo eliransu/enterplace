@@ -107,7 +107,7 @@ A `/v1/responses` request that names `previous_response_id`, `conversation` or a
 
 ## Console and sign-in
 
-- Console sign-in takes an admin key or OpenID Connect single sign-on. The browser holds a random session ID, never a key or token.
+- Console sign-in takes an admin key, or OpenID Connect or [SAML 2.0](/governance/saml/) single sign-on (and an email and password with [Members](/operations/members/)). The browser holds a random session ID, never a key or token.
 - Single sign-on uses the authorization code flow with PKCE (S256), a `state` bound to the browser and usable once within 10 minutes, and a `nonce`. ID tokens must be signed RS256 or ES256 and pass `iss`, `aud`, `azp`, `exp` (60 seconds of clock skew) and `nonce` checks. There is no default role.
 - Five failed key or password sign-ins within 15 minutes lock out their source address, and for password sign-in the account, for 30 minutes, on every replica of a store. Each failure and the lockout are recorded. See [Lockout after failed sign-ins](/operations/console/#lockout-after-failed-sign-ins).
 - Starting a sign-in stores nothing on the server, so a flood of starts locks nobody out. Floods are summed into one audit record a minute.

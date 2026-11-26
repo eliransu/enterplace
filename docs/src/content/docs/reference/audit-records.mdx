@@ -83,6 +83,7 @@ Fields present only in some cases:
 | `client_cert` | string | The connection presented a client certificate Enterplace verified ([Mutual TLS](/governance/mutual-tls/)): its subject common name, or its first subject alternative name |
 | `key_rotated` | object | The key was rotated and is in its grace: `{"replaced_by": "8a41c2d0", "expires": "2026-11-16T09:14:02Z"}` |
 | `auth`, `jwt_issuer`, `jwt_subject` | string | The caller sent a [JWT](/governance/access-control/#jwts-from-your-identity-provider): `auth` is `jwt`, with the token's issuer and subject. Never the token |
+| `new_caller` | `true` | No admin had reviewed the caller when it sent the request, whether it went through, was held (`awaiting_approval`) or was blocked by the mode (`caller_blocked`). See [New callers](/governance/new-callers/) |
 | `ip_not_allowed` | string | An `ip_not_allowed` refusal: `key` or `rule`, whichever `from` list refused it |
 | `outcome` | string | `would_refuse`: the request was forwarded, and observe mode or a `shadow_until` let through at least one decision against it. See [`would_refuse`](#would_refuse) |
 | `would_refuse` | array | What would have refused it: one entry per decision. See [`would_refuse`](#would_refuse) |
@@ -307,7 +308,14 @@ One per admin API call and console action, allowed or refused, written before th
 |---|---|
 | `list_keys`, `issue_key`, `revoke_key`, `revoke_own_key` | `/admin/keys` |
 | `list_kills`, `set_kill`, `clear_kill` | `/admin/kills` |
-| `issue_key`, `revoke_key` | The console's People page |
+| `issue_key`, `revoke_key`, `edit_key`, `rotate_key`, `import_keys` | The console's **Users** page: **Issue a key**, **Edit**, **Revoke key** and **Import a list** (one `import_keys` record with the count) |
+| `get_policy`, `propose_policy`, `list_policy_versions`, `show_policy_version`, `approve_policy`, `reject_policy`, `rollback_policy`, `dry_run_policy` | `/admin/policy`, and the console's **Policy file** and **Versions** (`rollback_policy` for **Put this back**) |
+| `add_rule`, `change_rule`, `remove_rule`, `add_limit`, `change_limit`, `remove_limit`, `add_guardrail`, `change_guardrail`, `remove_guardrail`, `set_guardrail`, `add_alias`, `change_alias`, `remove_alias`, `connect_provider`, `change_provider`, `remove_provider`, `add_mcp_server`, `change_mcp_server`, `remove_mcp_server`, `change_mcp_tools`, `set_mode`, `set_identity`, `set_coding_agents` | A policy change from a console form: **Rules and limits**, **Guardrails**, **Providers**, the **Servers** tab of **MCP tools**, and the switches on **Coding agents** |
+| `decide_new_caller`, `set_new_callers` | **New and pending**: **Allow** and **Block**, and a change of `new_callers` mode |
+| `add_credential`, `rotate_credential`, `remove_credential` | `/admin/credentials` and the console's **Provider keys** |
+| `end_mcp_session` | `/admin/mcp/sessions` and the **Sessions** tab of **MCP tools** |
+| `export_audit`, `export_audit_csv` | The two downloads on the console's **Audit log** |
+| `update`, `rollback` | **Update** and **Roll back** on the console's **Health** page. See [Updates](/operations/updates/) |
 | `self_issue_key` | `enterplace login` |
 | `console_sign_in`, `console_sign_out` | The console sign-in and sign-out |
 | `view_body` | Reading a kept body on the console's Requests page. `target` holds `id` and `rule`. Refused with `not_a_viewer` for someone the rule does not name, or `no_body` when none is kept |

@@ -87,7 +87,7 @@ Developers signed in to Codex with ChatGPT (Plus, Pro, Business, Enterprise or E
         rate: { tpd: 5000000, rpd: 2000 }
     ```
 
-    `gpt-*` covers the models Codex picks for ChatGPT logins. A request with no person token is refused (`identity: required`, the default). To allow unnamed requests while tokens are rolled out, use the console's **Coding agents** page (it sets every passthrough provider, Claude and ChatGPT, at once) or add `identity: optional` to the provider: such a request is recorded as the person `unknown`, told apart by Codex's `session-id`.
+    `gpt-*` covers the models Codex picks for ChatGPT logins. A request with no person token is refused (`identity: required`, the default). To allow unnamed requests while tokens are rolled out, turn off **Every request needs a name** on the console's **Coding agents**, **Getting started** page (it sets every passthrough provider, Claude and ChatGPT, at once) or add `identity: optional` to the provider: such a request is recorded as the person `unknown`, told apart by Codex's `session-id`.
 
 2. **Point Codex at Enterplace with your ChatGPT login.** In `~/.codex/config.toml`:
 
@@ -103,7 +103,7 @@ Developers signed in to Codex with ChatGPT (Plus, Pro, Business, Enterprise or E
     stream_max_retries = 0
     ```
 
-    `requires_openai_auth = true` makes Codex send its own ChatGPT login (`Authorization` and `chatgpt-account-id`) to this provider. The person token in `http_headers` comes from the console (Coding agents), `enterplace key new --identity-only`, or `enterplace login`. Leave `env_key` out.
+    `requires_openai_auth = true` makes Codex send its own ChatGPT login (`Authorization` and `chatgpt-account-id`) to this provider. The person token in `http_headers` comes from the console (**Hand out a person token** on **Coding agents**, **Getting started**), `enterplace key new --identity-only`, or `enterplace login`. The console's dialog shows the Claude Code lines only, so put the token in `http_headers` yourself. Leave `env_key` out.
 
 3. **Sign in with ChatGPT and run Codex.** `codex login` (choose ChatGPT) if you are not signed in, then `codex`. **Requests** in the console shows the person, the model and an API-equivalent cost estimate. The login itself is never written to the audit log.
 

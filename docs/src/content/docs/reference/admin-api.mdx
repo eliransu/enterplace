@@ -80,6 +80,8 @@ The admin API exists only when Enterplace serves from a keys file. Under `enterp
 | `GET` | `/admin/budget/raises` | `budget_raises` | [Budget raises](/governance/budgets-and-rate-limits/#budget-raises), the ones waiting first. Needs `see_spend` |
 | `POST` | `/admin/budget/raises` | `add_budget_raise` | Raises a scope's budgets at once: `{"scope": "team:payments", "usd": 500, "until": "2026-12-31", "reason": "..."}`. Needs `issue_keys` |
 | `POST` | `/admin/budget/raises/<id>/approve`, `/reject` | `approve_budget_raise`, `reject_budget_raise` | Decides a raise a person asked for. `approve` takes an optional `{"usd", "until"}` over what was asked. Needs `issue_keys` |
+| `GET` | `/admin/mcp/sessions` | `list_mcp_sessions` | The MCP clients connected to this gateway, and each person's own account at an MCP server. Needs `see_keys`. See [MCP gateway](/governance/mcp-gateway/#sessions) |
+| `DELETE` | `/admin/mcp/sessions/<id>` | `end_mcp_session` | Ends an MCP client's session, or a person's connection to a server (`<server>:<person>`). Needs `revoke_keys` |
 | `GET` | `/admin/providers`, `/rules`, `/guardrails`, `/mcp`, `/aliases` | `list_providers`, ... | A part of the policy ([below](#the-policy-by-part)) |
 | `GET`, `PUT`, `DELETE` | `/admin/providers/<name>`, and the same for each part | `show_provider`, `put_provider`, `remove_provider`, ... | One entry: read, add or replace, remove |
 | `GET` | `/admin/alerts`, `/admin/alerts/channels`, `/admin/alerts/rules` | `list_alerts`, `list_alert_channels`, `list_alert_rules` | Enterprise: what fired, the channels (no secrets), the rules |
@@ -360,7 +362,7 @@ curl "http://127.0.0.1:8080/admin/usage?group_by=person&then=agent,model&from=20
           {"agent":"cursor","model":"gpt-4.1","requests":4,"spend_usd":0.27,"estimated_usd":0.0}]}
 ```
 
-The console's Usage page writes the same CSV (Download CSV) for the breakdown in view, and its Copy for your agent button gives a coding agent this call for the view, with the admin key left for you to set. A role kept to an organization, teams or customers sees usage within them only (within each, when it is kept to more than one kind): `org=`, `team=` or `customer=` outside them is 403 `not_permitted`, never an empty answer.
+The **Analytics** tab of the console's **Usage** page writes the same CSV (**Download CSV**) for the breakdown in view, and its **Copy for your agent** button gives a coding agent this call for the view, with the admin key left for you to set. A role kept to an organization, teams or customers sees usage within them only (within each, when it is kept to more than one kind): `org=`, `team=` or `customer=` outside them is 403 `not_permitted`, never an empty answer.
 
 ## The policy by part
 
@@ -381,7 +383,7 @@ curl -X PUT http://127.0.0.1:8080/admin/models/gpt-4o-mini/price -H "Authorizati
 - A version `enterplace check` refuses is 400 `invalid_policy` with each problem; a missing entry is 404 `no_such_entry`.
 - Changes need `edit_policy` in a role not kept to an organization, teams or customers, and the policy kept in the store (`store.policy_from: store`). A policy kept in its file is read through these routes, and a change is 409 `policy_in_file`.
 - The record's `target` names the part, the entry and what was sent. The policy holds no secrets: provider keys are named by `key_env` or `credential:`, and credentials are added write-only with `POST /admin/credentials`.
-- Comments of the policy file are not kept by a change through these routes, as in the console's forms; `PUT /admin/policy` keeps them.
+- A change through these routes keeps the policy's comments where they were, as the console's forms do; a comment on an entry the change removes goes with it. `PUT /admin/policy` keeps the text as sent.
 
 `GET /admin/models` answers each model with its provider and price, and the aliases.
 

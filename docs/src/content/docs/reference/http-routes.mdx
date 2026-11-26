@@ -26,6 +26,12 @@ Enterplace serves the OpenAI and Anthropic routes your clients already call, plu
 | `POST` | `/v1/ocr` | yes | yes | Mistral's OCR API: a document in, its pages as markdown out, priced per page |
 | `POST` | `/v1/responses/input_tokens` | yes | yes | OpenAI's count of a Responses request's input tokens |
 | `POST` | `/model/<id>/converse`, `/converse-stream`, `/invoke`, `/invoke-with-response-stream`, `/count-tokens` | yes | yes | The Bedrock runtime's own routes, for the AWS SDKs. See [Bedrock SDK](/providers/bedrock/#the-aws-sdks) |
+| `POST` | `/v1/completions` | yes | yes | OpenAI legacy completions. See [OpenAI](/providers/openai/) |
+| `GET`, `POST`, `DELETE` | `/v1/files`, `/v1/batches`, `/v1/messages/batches`, `/v1/fine_tuning/jobs` and their `/<id>` routes | yes | yes | Files, batches and fine-tuning jobs, kept to the caller who made them. See [Files, batches and realtime](/providers/batches-and-realtime/) |
+| `GET` | `/v1/realtime`, `/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent` | yes | yes | Realtime sessions over WebSocket, OpenAI's and Gemini's. See [Realtime sessions](/providers/batches-and-realtime/#realtime-sessions) |
+| `GET`, `POST`, `DELETE` | `/v1/videos`, `/v1/containers` and their `/<id>` routes | yes | yes | Video generation and code interpreter containers. See [Videos and containers](/providers/videos-and-containers/) |
+| `GET`, `POST` | `/v1/async/<route>`, `/v1/async/<route>/<id>` | yes | yes | Runs a request in the background and reads its result. See [OpenAI](/providers/openai/) |
+| any | `/passthrough/<provider>/<path>` | yes | yes | A provider's own API, for the paths a rule's `passthrough:` lists. See [Passthrough](/governance/policy/#passthrough) |
 | `POST` | `/v1/messages` | yes | yes | Anthropic messages (Claude Code) |
 | `POST` | `/v1/messages/count_tokens` | yes | yes | Anthropic token counting |
 | `GET` | `/v1/models` | yes | yes | The models the caller's rule allows |
@@ -37,7 +43,7 @@ Enterplace serves the OpenAI and Anthropic routes your clients already call, plu
 | `GET` | `/readyz` | no | no | Readiness: a request sent now would be served. See [Health, readiness and drain](/operations/operations/#health-readiness-and-drain) |
 | `HEAD` | `/api/hello` | no | no | Claude Code's startup probe. Answers 200 and reaches no provider |
 | `GET`, `POST` | `/console/...` | session | sign-ins and changes | The [admin console](/operations/console/) |
-| `GET`, `POST`, `PATCH`, `DELETE` | `/admin/keys`, `/admin/keys/<prefix>`, `/admin/keys/<prefix>/rotate`, `/admin/kills` | admin key | yes | The [admin API](/reference/admin-api/) |
+| `GET`, `POST`, `PUT`, `PATCH`, `DELETE` | `/admin/...` | admin key | yes | The [admin API](/reference/admin-api/): keys, kill switches, credentials, usage, teams, the policy and its parts |
 | `POST` | `/otlp/v1/metrics`, `/otlp/v1/logs` | watch token | as `watch` records | Enterplace Enterprise: the [watch mode](/integrations/claude-team/#the-receiver) receiver for Claude Code's own telemetry |
 | `GET` | `/metrics` | no | no | Prometheus metrics, only on the `--metrics` address |
 

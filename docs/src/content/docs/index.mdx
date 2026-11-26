@@ -67,10 +67,16 @@ It ships as one binary, or one container image. Policy, keys and the audit log a
 		Dollar budgets per organization, team, person, key, end customer, tag or model, reserved at admission so they cannot be overrun. Requests and tokens per minute, hour and day, with `Retry-After`.
 	</Card>
 	<Card title="Guardrails" icon="warning">
-		Built-in secret and personal data detectors, thirteen guardrail vendors, and your own services by webhook. Block, mask or record, on requests and answers.
+		Built-in secret and personal data detectors, nineteen guardrail vendors, and your own services by webhook. Block, mask or record, on requests and answers.
 	</Card>
 	<Card title="Kill switches" icon="error">
-		Stop a person, a team, a key or a model at once with `enterplace kill`. The person stopped sees who set it and why.
+		Stop a person, a team, a key or a model at once with `enterplace kill` or **Stop traffic** in the console. The person stopped sees who set it and why.
+	</Card>
+	<Card title="New callers" icon="approve-check">
+		Decide what happens the first time a key, person token or sign-in no admin has reviewed sends a request: let it through and list it, hold it until an admin allows it, or block it.
+	</Card>
+	<Card title="Coding agent controls" icon="laptop">
+		Allow or block `--dangerously-skip-permissions`, auto mode and browser use in Claude Code, for the whole organization or per rule.
 	</Card>
 </CardGrid>
 
@@ -96,7 +102,7 @@ It ships as one binary, or one container image. Policy, keys and the audit log a
 <CardGrid>
 	<LinkCard title="Deployment" description="Binary, container image and Linux tarballs. HTTPS with --tls-cert and --tls-key." href="/operations/deployment/" />
 	<LinkCard title="Kubernetes" description="The Helm chart, as a StatefulSet." href="/deploy/kubernetes/" />
-	<LinkCard title="Admin console" description="Audit log, people and keys, policy and spend, with OIDC single sign-on." href="/operations/console/" />
+	<LinkCard title="Admin console" description="Coding agents, apps and agents, MCP tools, guardrails, the audit log, usage and the policy, with single sign-on." href="/operations/console/" />
 	<LinkCard title="Observability" description="Prometheus metrics and audit log shipping with Vector, Fluent Bit or the OpenTelemetry Collector." href="/operations/observability/" />
 </CardGrid>
 

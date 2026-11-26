@@ -117,8 +117,8 @@ A token made with `--person` counts everything it sends under that name, whateve
 
 | Where | What |
 |---|---|
-| **Requests** (`/console/requests?source=watch`) | One row per model request Claude Code reported: person, team, model, tokens, estimated cost, latency. API errors and refusals are rows too |
-| **Analytics** (`/console/analytics`) | Rank by **Source** to compare watched and routed usage, or filter `source=watch` and rank by person, team or model |
+| **Requests** (`/console/app/#/requests?source=watch`) | One row per model request Claude Code reported: person, team, model, tokens, estimated cost, latency. API errors and refusals are rows too |
+| **Usage**, **Analytics** (`/console/app/#/usage`) | Rank by **Source** to compare watched and routed usage, or filter `source=watch` and rank by person, team or model |
 | [`/admin/usage`](/reference/admin-api/) | `?source=watch`, or `group_by=source` |
 | [`enterplace audit coverage`](/governance/coverage/) | Tool `claude-code (watch)` per person, beside the tools that reach Enterplace |
 | [Alerts](/operations/alerting/) | `budget` rules by amount and `unusual_spend` count watched cost |
@@ -136,7 +136,7 @@ Enterplace keeps numbers and names: person, team, session, model, tokens, estima
 
 ## One name per person
 
-On a team token the person is the email address Claude Code reports. Enterplace gives it the name that person's gateway traffic has, so both are one person on the Requests and Analytics pages, in `/admin/usage`, in coverage and in alerts:
+On a team token the person is the email address Claude Code reports. Enterplace gives it the name that person's gateway traffic has, so both are one person on the console's **Requests** and **Usage** pages, in `/admin/usage`, in coverage and in alerts:
 
 | The email is | The person is |
 |---|---|
@@ -196,7 +196,7 @@ If nothing arrives, run `claude --debug-file /tmp/claude-debug.log` and search t
 
 ## Limits
 
-- The console's **Watch** page shows the watched people; `summary.json`, the Requests and Analytics pages and coverage hold the rest.
+- The console's **Watch** page shows the watched people; `summary.json`, the **Requests** and **Usage** pages and coverage hold the rest.
 - No gRPC and no traces: see [the receiver](#the-receiver).
 - Metrics need `session.id` on each point, which Claude Code sends unless `OTEL_METRICS_INCLUDE_SESSION_ID=false`.
 - A token without `org` writes to the install's chain, also with `audit: { per_org: true }`.

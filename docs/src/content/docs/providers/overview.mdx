@@ -10,7 +10,7 @@ import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 A provider is a server Enterplace forwards to. Each entry under `providers:` names the API it speaks (`kind`), where it is (`url`), the variable that holds its key (`key_env`) and the exact models it serves.
 
-The shortest way to add one needs no YAML: in the console, **Start here** and **Provider credentials** take a provider key, seal it and write the entry. In a policy file, `preset: <id>` stands in for `kind` and `url` for the 120 providers of the [catalog](/reference/providers/): see [Presets](#presets).
+The shortest way to add one needs no YAML: in the console, **Settings**, **Models and providers**, **Add a provider** picks the provider from the catalog, takes its models as chips and its key in one field, stores the key encrypted under the master key and writes the entry. Every gateway sends requests to it within 2 seconds. In a policy file, `preset: <id>` stands in for `kind` and `url` for every provider of the [catalog](/reference/providers/): see [Presets](#presets).
 
 ## Example
 
@@ -167,7 +167,7 @@ Enterplace reads the file at start, and refuses to start while it is missing or 
 Do not name a provider key variable `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` if the same shell runs the clients. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be an Enterplace key.
 </Aside>
 
-To manage keys in the console and rotate them on every gateway at once, keep them in the store and name one with `credential:`. See [Provider credentials](/governance/provider-credentials/).
+To manage keys in the console (**Models and providers**, **Provider keys**) and rotate them on every gateway at once, keep them in the store and name one with `credential:`. See [Provider credentials](/governance/provider-credentials/).
 
 A rule may also let callers send their own provider key in `x-enterplace-provider-key`, with `caller_provider_key: allowed`. See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key).
 

@@ -32,7 +32,7 @@ Each record has an `event` field naming its kind, except request records:
 
 Usage, attempts and answer guardrails records share the `id` of the request they belong to. That ID is the decision ID in the `X-Enterplace-Decision` header and in every refusal message.
 
-An `admin` record's `action` is one of `list_keys`, `issue_key`, `revoke_key`, `revoke_own_key`, `self_issue_key`, `list_kills`, `set_kill`, `clear_kill`, or a console action such as `console_sign_in` and `console_sign_out`. Its `key` is the caller's key hash prefix.
+An `admin` record's `action` names what was done, such as `issue_key`, `revoke_key`, `self_issue_key`, `set_kill`, `clear_kill`, or a console action such as `console_sign_in` and `console_sign_out`. Every action is listed in [Audit records](/reference/audit-records/#admin). Its `key` is the caller's key hash prefix.
 
 **Never recorded:** prompt text, answer text, an Enterplace key, a provider key, the text a guardrail matched, or a webhook's `reason`. Strings that come from the caller (model, path) are cut to 200 characters.
 
@@ -189,11 +189,11 @@ With `per_org`, each organization's records go to a hash chain of its own, besid
 | `enterplace audit verify enterplace-audit.jsonl --org acme` | | Checked alone; `--expect-last` applies to it |
 | `enterplace audit repair` | `enterplace audit repair enterplace-audit.jsonl` | `enterplace audit repair enterplace-audit.jsonl.orgs/acme.jsonl` |
 | Checked at start | Yes | Yes, every chain on disk and of every listed organization: Enterplace does not start on one that does not hold |
-| Console audit page | People kept to no organization, by default; **Install** and one button per organization switch between them | People kept to the organization read it whole, and **Verify chain now** checks it |
+| Console **Audit log** | People kept to no organization, by default; **Install** and one button per organization switch between them | People kept to the organization read it whole, and **Verify chain now** checks it |
 | [Retention](/operations/retention/), [legal hold](/operations/retention/#legal-hold), [audit export](/operations/siem-export/), [alerts](/operations/alerting/) | A replica | A replica of its own (`<host>-<first hash>`): sealed, retired, held, exported and alerted on as the install's is; an organization's alerts are recorded in its chain |
 | [Segments in object storage](/deploy/cloudflare/) | Under `ENTERPLACE_AUDIT_SEGMENTS_URL` | Under `<that prefix>/orgs/acme`, fetched back on an empty disk |
 
-Spend replay at start and the console's request log and spend page read every chain. A chain is opened at start for each organization listed under `orgs:` and each one already on disk; an organization a reload adds gets its chain when the reload is used, before any of its requests, and its request log copy, export, retention, legal hold and segment shipping start at once. Turning `per_org` on or off needs a restart: records already written stay in the chain they are in.
+Spend replay at start and the console's **Requests** and **Usage** pages read every chain. A chain is opened at start for each organization listed under `orgs:` and each one already on disk; an organization a reload adds gets its chain when the reload is used, before any of its requests, and its request log copy, export, retention, legal hold and segment shipping start at once. Turning `per_org` on or off needs a restart: records already written stay in the chain they are in.
 
 ## Size
 

@@ -146,7 +146,7 @@ Hourly, daily and session request counts (`rph`, `rpd`, `session_requests`) are 
 
 ### Replicas
 
-Each replica writes a heartbeat to `enterplace_replicas` every 2 seconds. `GET /admin/replicas` (needs `see_records`) and the Gateways panel on the console's Policy page list every replica that wrote one in the last day, with its host, version, store schema, start time and last heartbeat. A replica is healthy while its last heartbeat is under 10 seconds old; one that stopped stays listed as silent until it has been gone for a day. With the policy kept in the store, each heartbeat also names the policy version the replica runs and a newer version it refused, with the reason; the console's Versions page counts them.
+Each replica writes a heartbeat to `enterplace_replicas` every 2 seconds. `GET /admin/replicas` (needs `see_records`) and the Gateways panels on the console's **Health** and **Policy file** pages list every replica that wrote one in the last day, with its host, version, store schema, start time and last heartbeat. A replica is healthy while its last heartbeat is under 10 seconds old; one that stopped stays listed as silent until it has been gone for a day. With the policy kept in the store, each heartbeat also names the policy version the replica runs and a newer version it refused, with the reason; the **Versions** tab of **Policy file** counts them.
 
 ```bash
 curl -s http://127.0.0.1:8080/admin/replicas -H "Authorization: Bearer $ENTERPLACE_ADMIN_KEY"

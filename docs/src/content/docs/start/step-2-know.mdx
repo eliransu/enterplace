@@ -21,15 +21,15 @@ enterplace key new maya.cohen --team payments
 
 The command prints the key once, with the lines coding agents and SDKs read (OpenAI-compatible tools, Gemini CLI, Claude Code). Send them to the person through your secret manager. They replace the shared key in their tool, and nothing else changes for them.
 
-When everyone has moved, revoke the shared key on the console's **People and workloads** page.
+When everyone has moved, revoke the shared key on the console's **Users** page.
 
 Nothing is blocked in this step either. Observe mode is still on.
 
 ## Check it worked
 
-- **Start here** (`/console/start`): with **Coding agents**, the step **Add a second person** turns done when a second person sends a request. After the checklist, the five-step strip marks Know done.
-- **Analytics** (`/console/analytics`): rank by person or team. Each name has its requests, tokens and cost.
-- **People and workloads** (`/console/people`): every key by name and team, with what it spent this month and today.
+- **Getting started** under Coding agents: the step **Add a second person** turns done when a second person sends a request. After the checklist, the five-step strip on the Overview marks Know done.
+- **Usage** (Activity, **Usage**, the **Analytics** tab): rank by person or team. Each name has its requests, tokens and cost.
+- **Users** (Coding agents, **Users**): every key by name and team, with what it spent this month and today. **Groups** shows each team with its people, rule and budget.
 - From the terminal, `enterplace audit coverage enterplace-audit.jsonl --keys enterplace.keys.yaml` lists each person and tool. A person with tool `-` and last seen `never` holds a key and has sent nothing.
 
 People on Claude subscriptions keep their Claude login and get a person token in place of a key: `enterplace key new <name> --team <team> --identity-only` prints one, and Claude Code sends it in `ANTHROPIC_CUSTOM_HEADERS`. See [Claude Code](/integrations/claude-code/#claude-subscriptions). With [watch mode](/integrations/claude-team/) they need nothing: they appear under the email address they signed in to Claude with.

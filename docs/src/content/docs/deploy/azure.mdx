@@ -230,7 +230,7 @@ The app's address comes with a managed certificate, so the first deploy needs no
 
 - **Backups.** The database keeps 7 days of automated backups with point-in-time restore. Back up the share with Azure Backup (in the portal: the storage account, **File shares**, `enterplace-audit`, **Backup**). Keep each revision's last hash outside the subscription.
 - **Monitoring.** An availability test on `$GATEWAY/healthz` in Application Insights, and alerts on the app's restarts and 5xx responses. For traces, store the collector's address in the vault and add it to the map: `provider_key_secrets = { OPENAI_PROVIDER_KEY = "openai-key", OTEL_EXPORTER_OTLP_ENDPOINT = "otel-endpoint" }`. The map sets any variable from a secret.
-- **Upgrades.** Take an on-demand backup of the database first (in the portal: the server, **Backup and restore**, **Backup now**), since a newer Enterplace may update the schema and an older one refuses a database a newer one has written. Then change `image` and apply. The new revision starts before the old one drains, so there is no gap.
+- **Upgrades.** Take an on-demand backup of the database first (in the portal: the server, **Backup and restore**, **Backup now**), since a newer Enterplace may update the schema and an older one refuses a database a newer one has written. Then change `image` and apply. The new revision starts before the old one drains, so there is no gap. The console's **Health** page shows when a newer signed release exists, with these steps for this deployment: see [Updates](/operations/updates/).
 - **Rollback.** Set `image` back and apply. If the previous version refuses the database because the new one changed the schema, restore the backup first.
 
 ### What to watch

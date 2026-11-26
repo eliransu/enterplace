@@ -24,7 +24,7 @@ A list of the AI tools and models in use and what each one costs, per key, from 
 
     It writes `enterplace.policy.yaml` in observe mode with one rule that allows everyone, makes an admin key, starts the gateway, and opens the dashboard with a link that signs you in once. In the dashboard, **Connect a model** takes a provider key (kept sealed) or the free demo model, and **Send your first request** shows the first request arrive. Provider keys already in the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) are picked up.
 
-2. Point the first tools at it. In the dashboard, **Start here** makes a key and shows the exact lines for each tool; the [coding tool guides](/integrations/coding-tools/) cover Codex, Claude Code, Cursor, Gemini CLI and the rest. Claude Code on a Claude subscription needs one line and no key: `export ANTHROPIC_BASE_URL=http://127.0.0.1:8080`.
+2. Point the first tools at it. In the dashboard, **Set up coding agents** on the Overview opens a checklist that makes a key and shows the exact lines for each tool; the [coding tool guides](/integrations/coding-tools/) cover Codex, Claude Code, Cursor, Gemini CLI and the rest. Claude Code on a Claude subscription needs one line and no key: `export ANTHROPIC_BASE_URL=http://127.0.0.1:8080`.
 
 </Steps>
 
@@ -32,10 +32,10 @@ A list of the AI tools and models in use and what each one costs, per key, from 
 
 In observe mode Enterplace forwards every request from a key it knows. A request with a missing, wrong, expired or revoked key, or for a model your providers do not list, is still refused.
 
-The dashboard link `enterplace start` printed opens the console (or sign in at `http://127.0.0.1:8080/console` with the admin key). The banner says nothing is blocked yet. On an empty install the console asks what you want to start with; pick **Coding agents** (or **Our own apps and agents**) and **Start here** gives you the checklist for this step: connect a model, send a first request, make a key for a person, paste the lines it shows, send one prompt. The step turns done by itself when the request arrives, and the first rows show on Start here.
+The dashboard link `enterplace start` printed opens the console (or sign in at `http://127.0.0.1:8080/console` with the admin key). The banner says nothing is blocked yet. The console opens on **Overview**; choose **Set up coding agents** (or **Set up apps and agents**) and its **Getting started** page gives you the checklist for this step: connect a model, send a first request, make a key for a person, paste the lines it shows, send one prompt. Each step turns done by itself when the gateway sees it happen, and the first requests show on the Overview card.
 
-- **Analytics** (`/console/analytics`): rank by coding agent, model or key to see requests, tokens and cost for each.
-- **Requests** (`/console/requests`): one row per request, with its model and cost. Filter by coding agent to see one tool.
+- **Usage** (Activity, **Usage**, the **Analytics** tab): rank by coding agent, model or key to see requests, tokens and cost for each.
+- **Requests** (Activity, **Requests**): one row per request, with its model and cost. Filter by coding agent to see one tool.
 
 <Aside type="note">
 Claude Code on Claude Pro, Max, Team or Enterprise seats goes through Enterplace on its own login, with no API key: `enterplace start` already wrote the `claude-subscriptions` provider for it. See [Claude Code](/integrations/claude-code/#claude-subscriptions). Where nothing may be routed, Enterplace Enterprise's [watch mode](/integrations/claude-team/) receives Claude Code's own telemetry instead, and those requests appear on the same pages with **Source** `watch`.

@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-The console's Requests page lists every request Enterplace decided, with its usage, cost and latency, and lets you filter it. Analytics charts the same rows over time and ranks them by any dimension. Both read the audit log, so each row carries proof that its record is the one the chain holds.
+The console's **Requests** page (Activity, **Requests**; the same list is **Logs** under Apps and agents) lists every request Enterplace decided, with its usage, cost and latency, and lets you filter it. **Analytics** (Activity, **Usage**) charts the same rows over time and ranks them by any dimension. Both read the audit log, so each row carries proof that its record is the one the chain holds.
 
 ## Where the rows come from
 
@@ -22,7 +22,7 @@ The index keeps each decision record as written, with its replica, record number
 
 ## Requests
 
-Open `/console/requests`. Filter by any of these. Every filter narrows the list, and a link to a filtered list can be shared.
+Open **Requests** (`/console/app/#/requests`; `/console/requests` redirects there). Filter by any of these. Every filter narrows the list, and a link to a filtered list can be shared.
 
 | Filter | Query field | Matches |
 |---|---|---|
@@ -37,13 +37,13 @@ Open `/console/requests`. Filter by any of these. Every filter narrows the list,
 | Cost | `min_cost`, `max_cost` | US dollars |
 | Latency | `min_ms`, `max_ms` | Milliseconds from the decision to the end of the answer |
 
-Each row's **Proof** column recomputes the SHA-256 of its decision record and compares it with the hash the chain holds. It also checks that the record's `prev` is the hash of the record before it. It says `Verified` when both hold, `Changed` when the record no longer hashes to its hash (it was edited after Enterplace wrote it), and `Unlinked` when its `prev` does not follow the record before it. For either of the last two, run `enterplace audit verify` on the gateway that wrote it. Open a row to see its facts and a link to its record on the Audit log page.
+Each row's proof recomputes the SHA-256 of its decision record and compares it with the hash the chain holds. It also checks that the record's `prev` is the hash of the record before it. It says `Verified` when both hold, `Changed` when the record no longer hashes to its hash (it was edited after Enterplace wrote it), and `Unlinked` when its `prev` does not follow the record before it. A row shows its proof beside its outcome only when it fails; for either of those, run `enterplace audit verify` on the gateway that wrote it. Open a row to see its facts in a side panel, with **Copy**, its **Proof** and **Open its audit record**.
 
 A row's detail has **Time by stage**: where the request's time went inside Enterplace, in the order it passed each stage (`auth`, `read`, `policy`, `guardrails`, `cache`, `audit`, `connect`, `first byte`, `stream`), then each guardrail call by name. The numbers are the usage record's `stages_ms` and `guardrail_ms`, in milliseconds. A request with no usage record (a refusal, a provider that never answered) has none. See [Time by stage](/operations/observability/#time-by-stage).
 
 ## Analytics
 
-Open `/console/analytics`. Pick a window (24 hours by the hour, 7 or 30 days by the day) and a dimension to rank by: provider, model, team, person, key, tag or coding agent. Any Requests filter also works here, such as `/console/analytics?team=payments`.
+Open **Usage** (`/console/app/#/usage`; `/console/analytics` redirects there, with its query). Pick a window (24 hours by the hour, 7 days, this month or 30 days by the day) and a dimension to rank by: provider, model, team, person, key, tag, coding agent, organization, customer, source, session or turn. **Split by** breaks each ranked value down by coding agent, model or person. Any Requests filter also works here, such as `/console/app/#/usage?team=payments`.
 
 The page shows totals (requests, refusals, errors, tokens, cost, and latency at p50, p95 and p99 by nearest rank), charts of each over time, and a ranking by the chosen dimension, most costly first. Each ranked value links to its requests.
 
@@ -75,7 +75,7 @@ How a body is kept:
 3. Without `store:` it is written to a file under `<audit log>.bodies/`, in one folder per day it expires on. With `store:` it goes to the `enterplace_bodies` table. An expired body is never shown. On file, passed days are deleted when a body is written, at most once an hour; in Postgres, every 2 seconds.
 4. The request's `usage` record says `"body":"captured"`, so the chain shows which requests had a body kept.
 
-Reading one: open the request on the Requests page and choose **Read the kept body**. Enterplace checks that you are among the viewers the rule named when the body was kept, and among its viewers now if the rule is still in the policy. Every attempt is an `admin` record with action `view_body` in the audit chain, written before the body is shown. A refusal has code `not_a_viewer`. A view that cannot be recorded is not shown.
+Reading one: open the request on **Requests** and choose **Read the kept body**. Enterplace checks that you are among the viewers the rule named when the body was kept, and among its viewers now if the rule is still in the policy. Every attempt is an `admin` record with action `view_body` in the audit chain, written before the body is shown. A refusal has code `not_a_viewer`. A view that cannot be recorded is not shown.
 
 <Aside type="caution">
 `enterplace serve` refuses to start, and a reload is rejected, when a rule has `capture:` and no master key is set: a body is never kept unsealed. Set `ENTERPLACE_MASTER_KEY` to 64 hex characters made with `openssl rand -hex 32`, the same on every gateway on one store, and restart. Turning capture on by reload needs the master key to have been set when Enterplace started.

@@ -40,7 +40,7 @@ The person comes from `x-enterplace-user`, which Claude Code sends from `ANTHROP
 
 Every request is named by default. `enterplace start` writes `identity: required` and makes a person token for whoever runs it, printed once with the Claude Code lines, so the first request already carries a name.
 
-A company can allow unnamed requests while it rolls out tokens: on the console's **Coding agents** page, or with `identity: optional` on the provider. The console switch (`PUT /console/api/policy/identity`) sets every passthrough provider at once, as a policy edit that is checked, audited with the admin's name and used within 2 seconds. Without `x-enterplace-user`, on `identity: optional`, the person is `unknown` and the team `unknown`, and each Claude Code session is told apart by a hash of its session ID. The console warns while unnamed requests are allowed.
+A company can allow unnamed requests while it rolls out tokens: on the console's **Coding agents**, **Getting started** page, or with `identity: optional` on the provider. The console switch (`PUT /console/api/policy/identity`) sets every passthrough provider at once, as a policy edit that is checked, audited with the admin's name and used within 2 seconds. Without `x-enterplace-user`, on `identity: optional`, the person is `unknown` and the team `unknown`, and each Claude Code session is told apart by a hash of its session ID. The console warns while unnamed requests are allowed.
 
 ## What applies
 
@@ -70,7 +70,7 @@ rules:
     budget_basis: api_equivalent
 ```
 
-The console's budget meters (Spend) and budget forecasts (Usage) count exactly what the gateway counts. Subscription traffic a budget leaves out is never in its meter: the meter's note says how much of it there was, as an estimate not counted against the budget.
+The console's budget meters (**Usage**, **Spend this month**) and budget forecasts (**Usage**, **Analytics**) count exactly what the gateway counts. Subscription traffic a budget leaves out is never in its meter: the meter's note says how much of it there was, as an estimate not counted against the budget.
 
 ## Limit tokens and requests
 
@@ -99,7 +99,6 @@ The login is taken off the request before anything reads it. It goes to the pass
 Each company should check that routing its plan's traffic through its own gateway fits Anthropic's terms for that plan: the consumer terms for Pro and Max, and the commercial agreement for Team and Enterprise. Enterplace does not change what Claude Code sends; it reads it on the way.
 </Aside>
 
-- Anthropic only for now. OpenAI's Codex with a ChatGPT login is planned on the same `auth: passthrough` field.
 - Binding a subscription to a person without a token (by its login, the first time it is seen after a console sign-in) is not offered: Claude Code renews its login token on its own, so a binding to one token would not last. Use person tokens, `enterplace login` or the device agent.
 - The `/passthrough/<provider>/...` route takes Enterplace keys only.
 

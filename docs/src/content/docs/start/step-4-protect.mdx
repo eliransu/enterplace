@@ -32,9 +32,10 @@ Until 15 December (UTC) it records what it finds and blocks nothing. From that d
 
 ## Check it worked
 
-- **Start here** (`/console/start`): **MCP tools** puts a server behind Enterplace, prints the address and header for any MCP client (with the `claude mcp add` command for Claude Code), and turns done on the first tool call and the first call that waits for approval.
-- **Requests** (`/console/requests`): filter by guardrail finding, such as `aws_access_key` or `database_url`, to see which requests held one.
-- **Audit log** (`/console/audit`): open a record to see its findings. During the trial each one says `shadow`.
+- **MCP tools** (Apps and agents, **MCP tools**): its checklist puts a server behind Enterplace, prints the address and header for any MCP client (with the `claude mcp add` command for Claude Code), and turns done on the first tool call and the first call that waits for approval.
+- **Requests** (Activity, **Requests**): filter by guardrail finding, such as `aws_access_key` or `database_url`, to see which requests held one.
+- **Guardrails** (Security, **Guardrails**): each guardrail and its trial date, with **Test**.
+- **Audit log** (Security, **Kill switches and audit**): open a record to see its findings. During the trial each one says `shadow`.
 
 If the findings are real secrets, let the date arrive. If the guardrail catches text it should leave alone, move the date and read [Guardrails](/governance/guardrails/) for what each detector matches.
 
@@ -99,7 +100,7 @@ rules:
     approval_timeout_seconds: 120
 ```
 
-A call to one of those two tools waits until an admin approves or denies it on the console's **MCP approvals** page. See [MCP gateway](/governance/mcp-gateway/).
+A call to one of those two tools waits until an admin approves or denies it on the console's **MCP tools** page, under **Approvals**. See [MCP gateway](/governance/mcp-gateway/).
 
 ### More guardrails
 

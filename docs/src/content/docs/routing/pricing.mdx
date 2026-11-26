@@ -11,7 +11,7 @@ Enterplace records the tokens and cost of every answer in a usage record. Prices
 
 ## How cost is recorded
 
-When an answer ends, Enterplace writes a usage record with the status, the tokens the provider reported, and the cost in US dollars. The record's `price_source` says where the price came from. Budgets, the console's Spend page and the dollars metric all read these records.
+When an answer ends, Enterplace writes a usage record with the status, the tokens the provider reported, and the cost in US dollars. The record's `price_source` says where the price came from. Budgets, the console's **Usage**, **Spend this month** page and the dollars metric all read these records.
 
 A model with no price still gets usage records, with the cost left unknown. A rule with a budget cannot reach it: `enterplace check` refuses the file.
 
@@ -74,6 +74,8 @@ prices:
 ```
 
 Prices are US dollars per million tokens, 0 or more. Prices change without a restart.
+
+In the console, **Settings**, **Models and providers**, **Models and prices** lists each model's price and where it came from. **Add a model** and **Price** write `prices:` (with the most output tokens per request as `max_output`) through the same checked save as every policy edit, also when the policy is kept in its file.
 
 | Field | Type | Default | Description |
 |---|---|---|---|

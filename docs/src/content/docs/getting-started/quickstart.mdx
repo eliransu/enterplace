@@ -74,7 +74,7 @@ Claude Code on your Claude subscription, with sarah on every request: paste thes
 
 The link is the sign-in: it works once, only from a browser on the same machine, for 10 minutes, and the sign-in is recorded in the audit log. On a terminal with a display, Enterplace opens it for you; `--no-open` skips that. Keep the admin key in your password manager: it signs in to the console too, and the command line and the admin API use it.
 
-**Claude subscriptions.** The policy also has a provider named `claude-subscriptions` with `auth: passthrough`: Claude Code on a Claude Pro, Max, Team or Enterprise login goes through Enterplace with no Anthropic key at all. Every request carries a person's name (`identity: required`), and the person token in the last two lines is yours (your user name on this machine, or `admin`), so your first `claude` request arrives named. A company can allow unnamed requests while it rolls out tokens, on the console's **Coding agents** page; they show as the person `unknown`. See [Subscriptions](/governance/subscriptions/).
+**Claude subscriptions.** The policy also has a provider named `claude-subscriptions` with `auth: passthrough`: Claude Code on a Claude Pro, Max, Team or Enterprise login goes through Enterplace with no Anthropic key at all. Every request carries a person's name (`identity: required`), and the person token in the last two lines is yours (your user name on this machine, or `admin`), so your first `claude` request arrives named. A company can allow unnamed requests while it rolls out tokens, on the console's **Getting started** page under Coding agents ("Every request needs a name"); they show as the person `unknown`. See [Subscriptions](/governance/subscriptions/).
 
 **Provider keys.** None is needed to start. A key in the environment is picked up (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or the `*_PROVIDER_KEY` form), so `OPENAI_API_KEY=sk-... enterplace start` works too. A key pasted in the dashboard's **Connect a model** is sealed with `enterplace-master.key` (AES-256-GCM) and kept in `enterplace-credentials.json`, which holds only sealed bytes: keep the master key with the policy, and out of version control. To send a provider's requests through a proxy, set `ENTERPLACE_OPENAI_BASE_URL` (or `ENTERPLACE_ANTHROPIC_BASE_URL`, `ENTERPLACE_GEMINI_BASE_URL`) before `enterplace start`.
 
@@ -84,7 +84,7 @@ The link is the sign-in: it works once, only from a browser on the same machine,
 
 ## The install script
 
-The script picks the binary for your machine (macOS or Linux, x86_64 or arm64) from the latest GitHub Release, checks its release signature and SHA256, and installs it to `~/.local/bin`. When that folder is not on your PATH it adds it in your shell's startup file (`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` on macOS, fish's `conf.d`, or `~/.profile`), once, and prints the one line that does it in the current terminal; `ENTERPLACE_NO_MODIFY_PATH=1` leaves the file alone. `ENTERPLACE_VERSION=edge` installs the build of the latest commit on main, `ENTERPLACE_VERSION=v0.1.0` a given release, and `ENTERPLACE_INSTALL_DIR=/usr/local/bin` another folder (with sudo when needed).
+The script picks the binary for your machine (macOS or Linux, x86_64 or arm64) from the latest GitHub Release, checks its release signature and SHA256, and installs it to `~/.local/bin`. When that folder is not on your PATH it adds it in your shell's startup file (`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` on macOS, fish's `conf.d`, or `~/.profile`), once, and prints the one line that does it in the current terminal; `ENTERPLACE_NO_MODIFY_PATH=1` leaves the file alone. `ENTERPLACE_VERSION=edge` installs the build of the latest commit on main, `ENTERPLACE_VERSION=v0.4.0` a given release, and `ENTERPLACE_INSTALL_DIR=/usr/local/bin` another folder (with sudo when needed).
 
 ## The Docker image
 
@@ -100,14 +100,16 @@ The admin key stays in the container's log until the container is removed. Copy 
 
 ## The dashboard
 
-The console opens on one question, **What do you want to start with?**, with five answers: coding agents, your own apps and agents, MCP tools, a spend limit for the team, or Claude Team seats you can only watch (Enterplace Enterprise). The answer picks a short checklist on **Start here**, the console's home. Every checklist starts the same way:
+The console opens on **Overview**, its home, with one card per use case: **Coding agents**, **Apps and agents** and **MCP tools**. On an empty install each card's **Set up** button opens that use case's checklist, on its Getting started page (or on **MCP tools**). **Other ways to start** offers two more: a spend limit for the team, or Claude Team seats you can only watch (Enterplace Enterprise). Every checklist but the last starts the same way:
 
 1. **Connect a model**: pick OpenAI, Anthropic or Google Gemini and paste its key, or choose **Try without a key** for the demo model.
 2. **Send your first request**: a ready-to-copy curl (with Python and Node tabs) holding the gateway's address and a key: `$ENTERPLACE_KEY`, or a key the step makes for it, shown once. The step turns done by itself when the request arrives, even if the provider refuses it: the request shows in Requests with the provider's answer.
 
-**Coding agents** first asks how your team pays for its coding agents. With **API keys**, any coding agent works: the checklist makes a key per person and shows the lines for Claude Code, Codex, Cursor, Gemini CLI or any OpenAI-compatible tool. With **Claude subscriptions (Pro, Max, Team, Enterprise)**, the default answer, Claude Code keeps its own login: there is no model to connect and no API key, since `enterplace start` already wrote the `claude-subscriptions` provider, and the checklist mints a free person token and shows the two lines for Claude Code (`ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS`). Every step has **Copy for your agent**, a ready prompt that has your coding agent do the step for you. See [Subscriptions](/governance/subscriptions/).
+**Coding agents** first asks how your team pays for its coding agents. With **API keys, any coding agent**, the default, any coding agent works: the checklist makes a key per person and shows the lines for Claude Code, Codex, Cursor, Gemini CLI or any OpenAI-compatible tool. With **Claude subscriptions, for Claude Code**, Claude Code keeps its own login: there is no model to connect and no API key, since `enterplace start` already wrote the `claude-subscriptions` provider, and the checklist mints a free person token and shows the two lines for Claude Code (`ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS`). Every step has **Copy for your agent**, a ready prompt that has your coding agent do the step for you. See [Subscriptions](/governance/subscriptions/).
 
-The steps that follow are the choice's own: a key per person, the lines for Codex, Claude Code, Cursor, Gemini CLI or an SDK, a budget, an MCP server. Each says what **turns it done** and what you **then see**, and Enterplace checks its own records for it. Once the checklist is done, Start here shows the five steps of a rollout (See, Know, Limit, Protect, Prove, the same as the [Start here](/start/why/) pages).
+The steps that follow are the choice's own: a key per person, the lines for Codex, Claude Code, Cursor, Gemini CLI or an SDK, a budget, an MCP server. Each says what **turns it done** and what you **then see**, and Enterplace checks its own records for it: the checklist ticks each step as the gateway sees it happen. Once the checklist is done, Overview shows the five steps of a rollout (See, Know, Limit, Protect, Prove, the same as the [Start here](/start/why/) pages).
+
+A key, person token or sign-in no admin has reviewed is let through and listed on **New and pending**, since `enterplace start` writes `new_callers: { mode: allow }`. See [New callers](/governance/new-callers/).
 
 ## Verify the audit log
 
@@ -135,7 +137,7 @@ mkdir enterplace && cd enterplace && curl -fsSLO https://raw.githubusercontent.c
 docker compose logs enterplace | grep ENTERPLACE_KEY
 ```
 
-The second line prints the admin key, once. The console is at `http://127.0.0.1:8080/console`, with the same **Start here** checklist and the free demo model. To write your own policy file, follow the [Docker Compose guide](/deploy/docker/); to run it in your cloud, use a [one-click deploy](/deploy/one-click/).
+The second line prints the admin key, once. The console is at `http://127.0.0.1:8080/console`, with the same Overview, checklists and free demo model. To write your own policy file, follow the [Docker Compose guide](/deploy/docker/); to run it in your cloud, use a [one-click deploy](/deploy/one-click/).
 
 ## From source
 

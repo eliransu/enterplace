@@ -1,6 +1,6 @@
 ---
 title: Admin console
-description: Read the audit log, issue and revoke keys, review the policy and watch spend in the admin console at /console, signed in by admin key or OIDC.
+description: Connect coding agents and apps, issue and revoke keys, review the policy and read the audit log in the admin console at /console, signed in by admin key or OIDC.
 sidebar:
   order: 3
 ---
@@ -35,7 +35,7 @@ A key that is not an admin's is refused and recorded with code `not_admin`. The 
 </TabItem>
 <TabItem label="Single sign-on">
 
-With `console.sso` in the policy, the sign-in page shows "Sign in with single sign-on". Enterplace runs the OpenID Connect authorization code flow with PKCE against your identity provider and takes the person's role from a claim in the ID token. Setup is in [Single sign-on](/governance/single-sign-on/).
+With `console.sso` in the policy, the sign-in page shows "Sign in with single sign-on". Enterplace runs the OpenID Connect authorization code flow with PKCE against your identity provider and takes the person's role from a claim in the ID token. Setup is in [Single sign-on](/governance/single-sign-on/). For SAML 2.0 sign-in, see [SAML](/governance/saml/).
 
 If `client_secret_env` names a variable that is not set, Enterplace starts with a warning and every single sign-on fails. Signing in with an admin key still works.
 
@@ -51,24 +51,38 @@ The browser gets a random session ID in the `enterplace_console` cookie, never t
 | Admin | An admin key, or single sign-on with a value from `admin_values` in the role claim | Everything: read every page, issue and revoke keys, including admin keys |
 | Read only | Single sign-on with a value from `read_only_values` | Read every page. Issuing or revoking a key is refused and recorded with code `read_only` |
 
-There is no default role: a person whose claim holds neither value is refused with `sso_role`.
+There is no default role: a person whose claim holds neither value is refused with `sso_role`. A [console role](/governance/policy/#console-roles) from `roles:` in the policy grants a narrower set of permissions, and can keep its holders to one organization or to some teams.
 
 ## Pages
 
-| Page | Path | Shows |
-|---|---|---|
-| Start here | `/console/start` | The console's home. On an empty install it asks what you want to start with, then shows a short checklist: connect a model (or the free demo model), send a first request, and the exact settings for each coding tool and SDK. Each step turns done by itself when Enterplace sees it happen |
-| Requests | `/console/requests` | One row per request with its person, model, tokens and cost, filtered by coding agent, model or key |
-| Analytics | `/console/analytics` | Requests, tokens and cost ranked by coding agent, model, key, person or team |
-| Provider credentials | `/console/credentials` | The provider keys pasted in the console, sealed with the master key: add, rotate and remove them. Never shown after saving |
-| Audit log | `/console/audit` | Every record, newest first, filtered by All, Blocked, Refused, Masked, Warned or Changes, and searchable by person, team, key or decision ID. Each record opens on a sheet that explains the decision: the rule, the limit or kill switch that refused it, guardrail findings, and the usage and cost of its answer. A banner shows every kill switch that is on. **Verify** runs the same check as `enterplace audit verify` |
-| People and workloads | `/console/people` | Every key by name, team and hash prefix, with admin flag, expiry, its own budget and what it spent this month and today. Issue, edit and revoke keys here |
-| Teams | `/console/app/#/teams` (`/console/teams` redirects there) | Each team, its people and workloads with their role (Admin or Member), the rule that decides for it and its budget |
-| Prices | `/console/app/#/prices` (`/console/models` redirects there) | Each model by provider, its price per million tokens and its aliases. Add a model and change a price when the policy is kept in the store |
-| Raw policy | `/console/app/#/policy/raw` (`/console/policy` redirects there) | The policy in force (the file, or the store's live version), with each problem `enterplace check` finds placed under its line. Edit (`#/policy/edit`), versions (`#/policy/versions`) and export when it is kept in the store: see [Editing the policy](/operations/console-editing/). With a store, a Gateways panel lists every replica with its version, schema and last heartbeat, healthy or silent (for roles with `see_records`) |
-| Spend | `/console/spend` | Spend this month (UTC) from the usage records, by model and person, against every budget in the policy |
+The console is an app at `/console/app/`. Its sidebar groups the pages by what you are doing: the two use cases first, then security, activity and the settings both use cases share. A sidebar entry with more than one page shows them as tabs. Every page has its own address after `#`, so a link or a bookmark opens it.
 
-`/console` redirects to Start here, or to the sign-in page without a session.
+| Sidebar | Page | Address | Shows |
+|---|---|---|---|
+| | Overview | `#/overview` | The console's home: one card per use case (Coding agents, Apps and agents, MCP tools) with what went through it today and what needs attention, and spend this month. On an empty install each card's "Set up ..." button opens that use case's checklist (on its Getting started page, or on MCP tools), which ticks each step done when the gateway sees it happen; later, each card links its next step. "Other ways to start" offers a spend limit for the team and watch mode. Once a checklist is done, the five steps of a rollout show here |
+| Coding agents | Getting started | `#/coding` | The checklist and settings to connect a coding agent, who uses which tool in the last 7 days, whether every request needs a name, and what coding agents may do ([coding agent controls](/governance/coding-agent-controls/)) |
+| Coding agents | Users | `#/people` | Every key by name, team and hash prefix: people, their person tokens and service keys, with admin flag, expiry, budget and spend this month and today. Issue, edit, rotate and revoke keys here, and stop traffic |
+| Coding agents | New and pending | `#/coding/new` | People no admin has reviewed, with Allow and Block: see [New callers](/governance/new-callers/) |
+| Coding agents | Groups | `#/teams` | Each team, its people and apps, the rule it falls under and its budget, with Set budget |
+| Coding agents | Policies, Rules and limits | `#/policy` | Rules, limits, guardrails and aliases, and whether the policy enforces or observes |
+| Apps and agents | Getting started | `#/apps` | The checklist to connect an app or agent, its service keys and spend this month per app |
+| Apps and agents | New and pending | `#/apps/new` | Every caller no admin has reviewed, and the models no provider serves, with Allow, Block and Add a provider |
+| Apps and agents | Policies, Rules and limits | `#/apps/policy` | The same rules and limits as under Coding agents |
+| Apps and agents | Logs | `#/apps/logs` | The request log |
+| Apps and agents | MCP tools | `#/mcp` | Tabs Servers, Tools, Approvals and Sessions: the MCP servers behind Enterplace, which tools each rule may call, the calls waiting for an admin, and MCP sessions |
+| Security | Guardrails | `#/guardrails` | Each guardrail, on for every request or only for the rules that name it, with Test, Try first, Block now and Enforce now |
+| Security | Kill switches and audit | `#/audit` | The Audit log: every record, newest first, filtered by All, Blocked, Refused, Masked, Warned or Changes, and searchable by person, team, decision ID or key hash. Each record opens in a side panel that explains the decision: the rule, the limit or kill switch that refused it, guardrail findings, and the usage and cost of its answer. A banner shows every kill switch that is on. **Verify** runs the same check as `enterplace audit verify` |
+| Activity | Requests | `#/requests` | One row per request with its person, model, tokens and cost, newest first. Each opens in a side panel with Copy |
+| Activity | Usage | `#/usage`, `#/usage/spend` | Tabs Analytics (requests, tokens and cost ranked by coding agent, model, key, person or team) and Spend this month (UTC, from the usage records, by model and person, against every budget in the policy) |
+| Settings | Models and providers | `#/providers`, `#/prices`, `#/credentials` | Tabs Providers (each provider, its models and its fallbacks, with Add a provider), Models and prices (each model, its price per million tokens and its aliases; add a model and change a price when the policy is kept in the store) and Provider keys (the provider keys pasted in the console, sealed with the master key: add, rotate and remove them. Never shown after saving) |
+| Settings | Policy file | `#/policy/raw`, `#/policy/versions` | The policy in force (the file, or the store's live version), with each problem `enterplace check` finds placed under its line, Export YAML, and with a store its Versions and the editor (`#/policy/edit`): see [Editing the policy](/operations/console-editing/). With a store, a Gateways panel lists every replica with its version and last heartbeat |
+| Settings | Health | `#/deployments` | The version each gateway runs and [Update](/operations/updates/), every gateway with its version and last heartbeat, the alias targets, and each provider with its last connection test and Test connection: see [Deployment health](/operations/deployment-health/) |
+
+Create flows (a key, a person token, a service key, a rule, an alias, an MCP server) offer "Copy for your agent": a prompt with the key or the change and the steps to use it, for a coding agent to follow. The rule, limit and kill switch forms pick teams, people, apps and tags from a searchable list; "Create" adds a new one, and a new person or app opens Issue a key in place.
+
+The enterprise edition adds server-rendered pages (Members, Alerts, Devices, SCIM, Audit export and Watch, as licensed) under **Tools** in the sidebar.
+
+`/console` opens the Overview, or the sign-in page without a session. The old server-rendered addresses (`/console/start`, `/console/people`, `/console/teams`, `/console/requests`, `/console/analytics`, `/console/spend`, `/console/audit`, `/console/credentials`, `/console/models`, `/console/policy`) redirect to their page in the app.
 
 ## Issue and revoke keys
 

@@ -23,33 +23,35 @@ Restart Enterplace once. The first gateway imports the file as version 1, and sa
 enterplace: the policy is kept in the store from now on: /etc/enterplace/enterplace.policy.yaml is version 1. Edit it in the console or with PUT /admin/policy.
 ```
 
-Without `policy_from: store` the policy stays in the file. The pages below show it and export it, and every change is refused with how to turn editing on. See [which one wins](/governance/policy/#which-one-wins).
+Without `policy_from: store` the policy stays in the file, and the console's form edits rewrite the file: see [A policy kept in its file](#a-policy-kept-in-its-file). See [which one wins](/governance/policy/#which-one-wins).
+
+Every save from the console (rules, limits, guardrails, prices, providers, MCP servers, the editor and **Put this back**) first opens **Check this change before it applies**: its diff against the version in force, what it removes, and a dry run of the last 24 hours. Nothing is saved until **Apply**.
 
 ## Models
 
-The Prices page (`/console/app/#/prices`, formerly `/console/models`) lists each model by provider with its price per million tokens (from the policy, or the built-in table) and the aliases that reach it.
+**Models and prices** (Settings, **Models and providers**, `#/prices`; `/console/models` redirects there) lists each model by provider with its price per million tokens (from the policy, or the built-in table) and the aliases that reach it.
 
 - **Add a model**: pick the provider, name the model, give its input and output price, and optionally other names callers may send for it. Each name becomes an alias of the model.
-- **Price**: change what a model costs, for budgets and the Spend page.
+- **Price**: change what a model costs, for budgets and **Spend this month** under **Usage**.
 
-Each form saves a new version. A form edit writes the policy without its comments; the editor keeps them. **Copy for your agent** on Prices (and on Providers) copies a task for a coding agent: the policy path, the YAML, `enterplace check` and how to verify; the provider task has you set the key variable yourself and never asks for the key.
+Each form saves a new version. A form edit writes the policy without its comments; the editor keeps them. **Copy for your agent** on Models and prices (and on Providers) copies a task for a coding agent: the policy path, the YAML, `enterplace check` and how to verify; the provider task has you set the key variable yourself and never asks for the key.
 
 ## Keys
 
-On `/console/people`, **Edit** beside a key changes what it may do: admin, expiry, its own budget, the models it may use (within its rule's) and its tokens per minute. The key itself does not change and is never shown again. **Issue a key** shows the new key once; **Revoke key** removes it. The last admin key keeps its admin flag, so someone can always sign in.
+On the **Users** page (`#/people`), **Edit** beside a key changes what it may do: admin, expiry, its own budget, the models it may use (within its rule's) and its tokens per minute. The key itself does not change and is never shown again. **Issue a key** shows the new key once; **Revoke key** removes it. The last admin key keeps its admin flag, so someone can always sign in.
 
 The same page rotates the key: **Rotate the key** makes a new key with the same settings and shows it once, and the old key keeps working for the grace you write (`24h` unless changed; `48h`, `30m`, `7d`, at most `90d`, or `0` to end it now). Requests made with the old key until then are recorded with `key_rotated`, so the request log shows who still uses it. It is the change `enterplace key rotate` and `POST /admin/keys/<prefix>/rotate` make, recorded as `rotate_key`. Only an admin of the whole install rotates an admin key or a key with a role. See [Rotate a key](/governance/keys/#rotate-a-key).
 
 ## Teams
 
-The Teams page (`/console/app/#/teams`) lists each team with its people and workloads, their role (Admin may sign in here and use the admin API, Member sends requests), the rule that decides for the team and its budget. Teams come from the keys. A binary that adds a members feature shows its own roles on its own pages.
+The **Groups** page (`#/teams`; `/console/teams` redirects there) lists each team with its people and apps, their role (Admin may sign in here and use the admin API, Member sends requests), the rule that decides for the team and its budget. Teams come from the keys. A binary that adds a members feature shows its own roles on its own pages.
 
 ## Edit the policy
 
-**Raw policy** (`/console/app/#/policy/raw`), then **Edit** (`#/policy/edit`, formerly `/console/policy/edit`), opens the YAML of the live version. Change anything, or load a YAML file to import it, add a note for the history, and:
+**Policy file** (Settings, **Policy file**, `#/policy/raw`), then **Edit** (`#/policy/edit`; `/console/policy/edit` redirects there), opens the YAML of the live version. Change anything, or load a YAML file to import it, add a note for the history, and:
 
 - **Dry run** checks the draft and replays the last hours of requests (24 by default, up to 720) against it.
-- **Save version** checks the draft and saves it. A draft `enterplace check` refuses comes back with every problem; nothing is saved.
+- **Save version** (**Save for approval** with approval on) checks the draft and saves it. A draft `enterplace check` refuses comes back with every problem; nothing is saved.
 
 A save starts from the live version. If someone saved another version meanwhile, the save is refused and the editor says so: open the live version and make the change again, so no change is overwritten.
 
@@ -83,7 +85,7 @@ With a [store](/operations/store/), a dry run on any gateway replays the request
 
 ## Versions and rollback
 
-**Raw policy**, then **Versions** (`#/policy/versions`, formerly `/console/policy/versions`), lists every version with its state (Live, Waiting for approval, Earlier, Rejected), who saved it and who approved it. Open one to see its diff from the version it was drafted on. **Roll back to this version** saves its text as a new version: the history keeps both, and with approval on it waits for a second admin like any change.
+The **Versions** tab of **Policy file** (`#/policy/versions`; `/console/policy/versions` redirects there) lists every version with its state (Live, Waiting for approval, Earlier, Rejected), who saved it and who approved it. Open one to see its diff from the version it was drafted on. **Roll back to this version** saves its text as a new version: the history keeps both, and with approval on it waits for a second admin like any change.
 
 Saved is not the same as in force. Each gateway reports in its heartbeat the version it runs and, when it refused a newer one, why (a provider key variable unset on that gateway, a guardrail credential missing). Versions shows under each version **In force on N of M gateways** (M counts the gateways with a heartbeat in the last 10 seconds) and, for a refused one, **Refused by** the gateway with its reason. A live version no gateway runs is tagged **Saved, in force nowhere**. After a save the console waits up to 5 seconds for the heartbeats and says `Saved; in force on N of M gateways`, or names the gateway that refused it and why.
 
@@ -102,7 +104,7 @@ Versions are numbered in the order the chain holds them, so retiring old audit s
 - Keep `policy_from: file` (the default). The file in git is the only source, CI runs `enterplace check` on it, and the console is read only for the policy. Keys are still edited in the console.
 - Use the store, and treat git as a record: export after each change, or import from CI with `PUT /admin/policy` and `If-Match`, so the store and the repository hold the same text.
 
-When the file and the live version differ, Enterplace prints it at every start and the Policy page shows a banner. They never disagree in silence.
+When the file and the live version differ, Enterplace prints it at every start and the Policy file page shows a banner. They never disagree in silence.
 
 ## What is recorded
 

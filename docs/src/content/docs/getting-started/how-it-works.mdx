@@ -39,7 +39,7 @@ Step 11 runs for every request, including those refused earlier: a refusal is re
 
 | Step | Refusal codes |
 |---|---|
-| 1. identify | `no_key`, `ambiguous_key`, `unknown_key`, `key_expired` |
+| 1. identify | `no_key`, `ambiguous_key`, `unknown_key`, `key_expired`, and with [`new_callers:`](/governance/new-callers/) `awaiting_approval` and `caller_blocked` |
 | 2. route | `unknown_route` |
 | 3. read body | `body_too_large`, `body_timeout`, `busy`, `unreadable_request` |
 | 4. decide | `no_rule`, `model_not_allowed`, `killed` |

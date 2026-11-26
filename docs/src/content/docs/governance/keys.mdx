@@ -48,7 +48,7 @@ enterplace key new ci.bot --team platform --quiet | vault kv put secret/enterpla
 </TabItem>
 <TabItem label="Console">
 
-Sign in to `/console` as an admin and open **People and workloads**. Fill in the name and team, and optionally an expiry, a budget and the admin flag. The console shows the key once and saves its hash to the keys file. Enterplace uses it within 2 seconds.
+Sign in to `/console` as an admin, open **Users** under **Coding agents** and press **Issue a key** (for an app or agent, **Make a service key** under **Apps and agents**, **Getting started**). Fill in the name and team, and optionally an expiry, a budget and the admin flag. The team is picked from a searchable list, where **Create team** starts a new one. The console shows the key once, with **Copy for your agent**, and saves its hash to the keys file. Enterplace uses it within 2 seconds.
 
 See [Admin console](/operations/console/).
 
@@ -77,10 +77,13 @@ A key is shown once. Hand it over through your secret manager or device manageme
 |---|---|---|---|
 | `--team <team>` | `team` | yes | Required. The team rules match on. |
 | `--admin` | none | yes | May sign in to the console and call the admin API. |
+| `--identity-only` | none | yes | A person token (`enterplace_u_...`) in place of a key: it names the person for [Claude subscription passthrough](/governance/subscriptions/) and reaches no model on its own. |
+| `--service` | none | yes | A service key, for an app or agent: the console lists it under **Apps and agents**. |
 | `--expires <date>` | `expires` | yes | UTC date (`2026-12-31`: refused from the start of that day) or time (`2026-12-31T18:00:00Z`). |
 | `--budget <usd>/<period>` | `budget` | yes | What this key alone may spend, for example `20/month`, `5/6h` or `100/month@America/New_York` (a time zone after `@`; the API takes `{"usd": 100, "per": "month", "tz": "America/New_York"}`). |
 | `--models <a,b>` | `models` | no | Narrows the rule's models for this key. |
 | `--tpm <n>` | `tpm` | no | Tokens per minute for this key, 1 to 1000000000. |
+| `--rpm <n>` | `rpm` | no | Requests per minute for this key, on top of its rule's, 1 to 1000000. |
 | `--parallel <n>` | `parallel` | no | Most requests this key may have in flight at once, 1 to 100000. |
 | `--org <org>` | `org` | no | The [organization](/governance/policy/#organizations) the key belongs to. An admin kept to one organization issues keys in it only. |
 | `--customer <name>` | `customer` | no | The [end customer](/governance/budgets-and-rate-limits/#end-customers-and-tags) every request with the key is for. |
@@ -295,7 +298,7 @@ ci.agent	platform	7c2e90aa	-	-	-	gpt-4o-mini,o3	200000
 </TabItem>
 <TabItem label="Console">
 
-The **People and workloads** page lists the same, with each key's last request.
+The **Users** page lists the same, with each key's last request.
 
 </TabItem>
 <TabItem label="Admin API">
@@ -321,7 +324,7 @@ Delete the entry from `enterplace.keys.yaml` and save. Enterplace stops acceptin
 </TabItem>
 <TabItem label="Console">
 
-Revoke the key on the **People and workloads** page. The console saves the file and Enterplace uses the change within 2 seconds.
+On the **Users** page, open the key's **Edit** and press **Revoke key**. The console saves the file and Enterplace uses the change within 2 seconds.
 
 </TabItem>
 <TabItem label="Admin API">
@@ -377,7 +380,7 @@ enterplace key prune --keys enterplace.keys.yaml
 
 1. Make the first admin key with `--admin`, on the machine that holds the keys file.
 
-2. Import the list: on People, **Import a list** takes pasted CSV or a file, one `name,team[,budget[,kind]]` per line (`kind` is `key` or `person` for a person token). Every line is checked first and the errors are shown per line; nothing is issued while one is wrong. Then the keys are shown once, with **Copy all** and a CSV download of name, team and key, and the import is one `import_keys` record in the audit log with the count. `enterplace key import people.csv` does the same on the gateway's machine ([CLI](/reference/cli/#key-import)), and **Copy for your agent** hands the task to a coding agent. Or turn on [self-service keys](/governance/single-sign-on/#developer-keys-with-enterplace-login).
+2. Import the list: on the console's **Users** page, **Import a list** takes pasted CSV or a file, one `name,team[,budget[,kind]]` per line (`kind` is `key` or `person` for a person token). Every line is checked first and the errors are shown per line; nothing is issued while one is wrong. Then the keys are shown once, with **Copy all** and a CSV download of name, team and key, and the import is one `import_keys` record in the audit log with the count. `enterplace key import people.csv` does the same on the gateway's machine ([CLI](/reference/cli/#key-import)), and **Copy for your agent** hands the task to a coding agent. Or turn on [self-service keys](/governance/single-sign-on/#developer-keys-with-enterplace-login).
 
 3. Give each workload (CI job, agent) its own key with `--expires` and `--budget`.
 

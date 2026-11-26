@@ -124,19 +124,28 @@ A key can carry its own `models:` list that narrows its rule further, never wide
 | `trusted_proxies` | list | `[]` | Address ranges of load balancers whose `X-Forwarded-For` names the client. See [Behind a load balancer](/governance/access-control/#behind-a-load-balancer). |
 | `cors` | map | off | `allowed_origins`: the browser origins that may call Enterplace's routes, or `"*"`. See [Browser pages (CORS)](/governance/access-control/#browser-pages-cors). |
 | `store` | map | none | `{ postgres_url_env: DATABASE_URL, policy_from: file, approval: false }`. The shared Postgres store. `policy_from: store` keeps this policy in the store as versions edited in the console and the admin API; see [Policy versions](#policy-versions-in-the-store). See [Store](/operations/store/). |
+| `teams` | list | `[]` | Teams, with the emails and identity provider values that put a person in each. See [Teams](/governance/teams/). |
+| `mcp` | list | `[]` | MCP servers the gateway serves at `/mcp`. See [MCP gateway](/governance/mcp-gateway/). |
+| `mcp_bundles` | list | `[]` | Virtual MCP servers made of tools from several servers. See [MCP gateway](/governance/mcp-gateway/#bundles-virtual-mcp-servers). |
+| `applications` | list | `[]` | Applications rules name in `applications:`, each with what it is for. See [Plugin events](/governance/plugin-events/#applications). |
+| `admin_listen` | string | none | The address the console, the admin API and `/metrics` are served on, apart from the model routes. See [Deployment](/operations/deployment/#an-admin-address-of-its-own). |
+| `tls` | map | none | TLS on the listener, and client certificates. See [Mutual TLS](/governance/mutual-tls/). |
+| `identity_headers` | map | none | Trust a proxy's identity headers in place of an Enterplace key. See [Identity from an authenticating proxy](/governance/auth-proxy/). |
+| `coding_agents` | map | none | What people may do in their coding agents, unless their rule says otherwise. See [Coding agent controls](/governance/coding-agent-controls/). |
+| `new_callers` | map | none | What happens to a caller no admin has reviewed (`allow`, `hold`, `block`), and the callers reviewed. See [New callers](/governance/new-callers/). |
 
 ### Providers
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | required | Letters, digits, `.`, `-`, `_` and `@`, up to 100 characters. Unique. Audit records name the provider by it. |
-| `kind` | string | required | `openai`, `anthropic`, `azure`, `bedrock`, `gemini`, `vertex` or `vertex_anthropic`. |
+| `kind` | string | required | `openai`, `anthropic`, `azure`, `bedrock`, `bedrock_converse`, `gemini`, `vertex`, `vertex_anthropic`, `vertex_openai`, `cohere`, `watsonx`, `sagemaker` or `replicate`. |
 | `url` | string | required | Base URL, `http://` or `https://`, no query, fragment or login. May carry the vendor's path, such as `https://api.groq.com/openai/v1`. Not used by `bedrock`. |
 | `key_env` | string | required | Name of the environment variable holding the provider key. Optional for an `openai` provider with `allow_private: true`. Not used by `bedrock`, which signs with the AWS credentials it finds. Optional for `vertex` and `vertex_anthropic`, which otherwise sign in to Google Cloud themselves. |
 | `key_file` | string | none | Instead of `key_env`: the path of a file holding the provider key. Read at start and again within 2 seconds of a change, without a restart. A relative path is read from where Enterplace runs. Not used by `bedrock`. |
 | `credential` | string | none | Instead of `key_env` or `key_file`: the name of a [provider credential](/governance/provider-credentials/) kept in the store, sealed under `ENTERPLACE_MASTER_KEY`. A rotation reaches every gateway within 2 seconds, without a restart. Needs `store:`. Not used by `bedrock`. |
 | `models` | list | required | Exact model names this provider serves. Not empty, no `"*"`. A model may be listed by one provider only, except that a passthrough provider and a keyed one may share it. |
-| `auth` | string | `key` | `passthrough`: each caller's own login (Claude Code's Claude subscription) is sent on unchanged and the provider takes no key. Kind `anthropic`. See [Subscriptions](/governance/subscriptions/). |
+| `auth` | string | `key` | `passthrough`: each caller's own login (Claude Code on a Claude subscription, Codex on a ChatGPT login) is sent on unchanged and the provider takes no key. Kind `anthropic` or `openai`. See [Subscriptions](/governance/subscriptions/). |
 | `identity` | string | `required` | With `auth: passthrough`: `optional` records a request without `x-enterplace-user` as the person `unknown`. See [Subscriptions](/governance/subscriptions/). |
 | `retries` | integer | `0` | 0 to 5. Retries after a connection failure, timeout, 429 or 5xx, before any byte reaches the caller. |
 | `fallback` | string | none | Another provider of the same API to try after the retries fail. |
@@ -183,6 +192,12 @@ Per-kind routes, headers and examples are in [Providers](/providers/overview/).
 | `shadow_until` | string | none | A UTC date or time, such as `2026-12-31` or `2026-12-31T18:00:00Z`. Until then what the rule would refuse (its models, `rate`, `parallel`, `regions` and budgets) is forwarded and recorded as `would_refuse`. See [Observe mode](#observe-mode). |
 | `budget_basis` | string | `billed` | `api_equivalent`: dollar budgets count [subscription passthrough](/governance/subscriptions/) traffic at its estimated API price. By default they do not count it. |
 | `caller_provider_key` | string | `refused` | Whether a caller may send their own provider key in `x-enterplace-provider-key`: `refused`, `allowed` (sent in place of Enterplace's, spend recorded as caller-paid and not counted against budgets) or `allowed_budgeted` (counted). See [A caller's own provider key](/governance/provider-credentials/#a-callers-own-provider-key). |
+| `applications` | list | `[]` | Applications from the top-level `applications:` a request under the rule may name. See [Plugin events](/governance/plugin-events/#applications). |
+| `tools`, `tool_action`, `prompts`, `resources` | list, string | `[]` | Function and MCP tools, prompts and resources the rule allows, and whether a tool it does not allow is refused (`block`) or taken out (`strip`). See [Tool permissions](/governance/tool-permissions/) and [MCP gateway](/governance/mcp-gateway/#tools-prompts-and-resources-in-a-rule). |
+| `approve_tools`, `approval_timeout_seconds` | list, integer | `[]` | MCP tools whose calls wait for an admin. See [Approvals](/governance/mcp-gateway/#approvals). |
+| `mcp_clients` | list | `[]` | The MCP client applications that may use the gateway under the rule. See [Client allowlist](/governance/mcp-gateway/#client-allowlist). |
+| `capture` | map | none | `{ to: console, days, viewers }`: keep request and answer bodies, sealed, for the console's **Requests** page. See [Request log](/operations/request-log/#bodies). |
+| `coding_agents` | map | none | Overrides the top-level `coding_agents:` for the rule's callers. See [Coding agent controls](/governance/coding-agent-controls/). |
 
 Every model a budgeted rule reaches must have a price, built in or under `prices:`. For `models: ["*"]` that is every model every provider serves. `enterplace check` refuses a file that breaks this.
 
@@ -220,7 +235,7 @@ What it still refuses, because forwarding would open the gateway:
 - a model no provider serves (`unknown_model`)
 - a [kill switch](/governance/kill-switches/): a stop button always works
 
-Spend and limits still count. A request a budget would refuse is charged to that budget's counter, and a request over `rpm`, `tpm` or `parallel` holds its tokens and its place as an enforced one does, so the numbers are real when you switch to enforce. `enterplace check` warns while observe mode is on, and the console's audit log shows "Observe mode: nothing is blocked". Remove the line, or write `mode: enforce`, and the next request after the [reload](#reloading) is enforced. In the console, every page shows a banner while observe mode is on; its **Turn on enforcement** opens the same confirmation as the Mode switch on Rules and limits, right where it is clicked.
+Spend and limits still count. A request a budget would refuse is charged to that budget's counter, and a request over `rpm`, `tpm` or `parallel` holds its tokens and its place as an enforced one does, so the numbers are real when you switch to enforce. `enterplace check` warns while observe mode is on. Remove the line, or write `mode: enforce`, and the next request after the [reload](#reloading) is enforced. In the console, every page shows a banner while observe mode is on; its **Turn on enforcement** opens the same confirmation as the Mode switch on **Rules and limits**, right where it is clicked.
 
 To try one feature while the rest is enforced, give it a `shadow_until` date instead: a rule, each budget, and each `limits:` entry take one, as guardrails do. Until that date it records what it would refuse; after it, it enforces. See [Budgets and rate limits](/governance/budgets-and-rate-limits/#trying-a-limit-first).
 
@@ -359,7 +374,7 @@ roles:
 
 | Permission | Lets a person |
 |---|---|
-| `see_keys` | See keys and who holds them (console People, `GET /admin/keys`). |
+| `see_keys` | See keys and who holds them (the console's **Users** page, `GET /admin/keys`). |
 | `issue_keys` | Issue keys (`POST /admin/keys`). A role may give a new key only a role whose permissions it holds itself. |
 | `revoke_keys` | Revoke keys. |
 | `kill` | Set and clear kill switches. |
@@ -473,7 +488,7 @@ store: { postgres_url_env: DATABASE_URL, policy_from: store, approval: true }
 One source decides, and Enterplace says so out loud when the other disagrees.
 
 - **`policy_from: file`** (the default): the file decides, as it always has. The console and the admin API show the policy and export it, and refuse every change with `policy_in_file`. A GitOps team keeps this setting: the file in git is the only way to change the policy, and the console cannot drift from it.
-- **`policy_from: store`**: the store's live version decides. The first gateway on an empty store imports the file as version 1. From then on the file is read only for its `store:` section, which says where the store is. When the file differs from the live version, Enterplace says so at every start and the console's Policy page shows a banner. To bring them together, export the live version (`GET /admin/policy`) into the file, or import the file as a new version (`PUT /admin/policy`).
+- **`policy_from: store`**: the store's live version decides. The first gateway on an empty store imports the file as version 1. From then on the file is read only for its `store:` section, which says where the store is. When the file differs from the live version, Enterplace says so at every start and the console's **Policy file** page (under **Settings**) shows a banner. To bring them together, export the live version (`GET /admin/policy`) into the file, or import the file as a new version (`PUT /admin/policy`).
 
 Switching from `store` back to `file` is a restart with the file as the source; switching to `store` again makes the store's live version decide, so import the file first if it changed meanwhile.
 

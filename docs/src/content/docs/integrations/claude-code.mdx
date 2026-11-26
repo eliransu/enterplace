@@ -49,7 +49,7 @@ Three ways to bring Claude Code under Enterplace, in order of preference:
 
 <Steps>
 
-1. **Turn on subscription passthrough.** `enterplace start` writes this provider, so a new install has it already. Otherwise use the console's **Start here**, **Coding agents** (one click), or add it to the policy:
+1. **Turn on subscription passthrough.** `enterplace start` writes this provider, so a new install has it already. Otherwise press **Turn on Claude subscriptions** on the console's **Coding agents**, **Getting started** page (one click), or add it to the policy:
 
     ```yaml title="enterplace.policy.yaml"
     version: 1
@@ -73,7 +73,7 @@ Three ways to bring Claude Code under Enterplace, in order of preference:
     <Tabs syncKey="keysource">
     <TabItem label="From the console">
 
-    **Start here**, **Coding agents**, **Point Claude Code at Enterplace**: enter a name and a team and press **Make person token**. The token is shown once, in the lines below.
+    **Coding agents**, **Getting started**: the step **Point Claude Code at Enterplace** has **Make my person token** for your own. For someone else, press **Hand out a person token**, enter a name and a team and press **Make person token**. The token is shown once, in the lines below, with **Copy for your agent**: a prompt that gives the person's Claude Code these exact settings.
 
     </TabItem>
     <TabItem label="Single sign-on">
@@ -119,7 +119,7 @@ Three ways to bring Claude Code under Enterplace, in order of preference:
 
     Leave `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` unset: with either set, Claude Code stops using the subscription. Sign in as usual with `/login` if Claude Code asks.
 
-4. **See it arrive.** The step on **Start here** turns done when the person's first request arrives. **Requests** shows it with the person, the model, tokens and the cost marked as an estimate.
+4. **See it arrive.** The step on **Getting started** turns done when the person's first request arrives. **Requests** shows it with the person, the model, tokens and the cost marked as an estimate.
 
 </Steps>
 
@@ -148,7 +148,7 @@ Every request is named by default (`identity: required`): a request without `x-e
 
 | Where | How |
 |---|---|
-| Console | The **Coding agents** page: allow unnamed requests. It sets every passthrough provider at once, saved and audited like any policy edit |
+| Console | **Coding agents**, **Getting started**: turn off **Every request needs a name** under **Names**. It sets every passthrough provider at once, saved and audited like any policy edit |
 | Policy | `identity: optional` on the passthrough provider |
 
 An unnamed request is recorded as the person `unknown` (team `unknown`), told apart by Claude Code's session ID, and the console warns while unnamed requests are allowed. A kill switch on the person `unknown` stops every unnamed request. Turn the requirement back on once everyone has a token.
@@ -205,7 +205,7 @@ When Claude Code runs on API keys, Enterplace holds the provider key and each de
 
     Keep the provider key in a variable of its own. Claude Code reads `ANTHROPIC_API_KEY` for its own key, which must be the Enterplace key.
 
-2. **Get an Enterplace key**: **People and workloads**, **Issue a key** in the console (or **Start here**, **Coding agents**, **API keys, any coding agent**), `enterplace login` on a gateway without subscription passthrough, or `enterplace key new maya.cohen --team payments --url https://enterplace.example.com`. See [Keys and identity](/governance/keys/).
+2. **Get an Enterplace key**: **Issue a key** on the console's **Users** page (or **Coding agents**, **Getting started**, **API keys, any coding agent**), `enterplace login` on a gateway without subscription passthrough, or `enterplace key new maya.cohen --team payments --url https://enterplace.example.com`. See [Keys and identity](/governance/keys/).
 
 3. **Point Claude Code at Enterplace.**
 
@@ -318,7 +318,7 @@ API Error: 403 Refused (model_not_allowed): team "interns" may not use model "cl
 
 Claude Code labels any 403 "Failed to authenticate". The message after that label is Enterplace's.
 
-- A model no provider serves is refused with 403 `unknown_model`, not 404. Claude Code replaces the text of a 404 with its own and resends a 400 several times; it shows a 403 as it is and sends it once.
+- A model no provider serves is refused with 403 `unknown_model`, not 404. Claude Code replaces the text of a 404 with its own and resends a 400 several times; it shows a 403 as it is and sends it once. The message names the console's **New and pending** page, where an admin serves the model with **Add a provider**. See [New callers](/governance/new-callers/).
 - Every refusal sets `x-should-retry: false`, except `busy`, `rate_limited` and the `upstream_*` codes, which set `x-should-retry: true`. Claude Code resends those on its own. `rate_limited` also sets `Retry-After`.
 - A guardrail refusal says where the finding is, in words and as a JSON pointer: `in message 3 (/messages/2/content/1/text)`. That is the third message of the conversation Claude Code sent, which may be an earlier turn, a file it read or a tool result. Remove the secret from that turn or file and send again. A new session starts without the earlier turns.
 

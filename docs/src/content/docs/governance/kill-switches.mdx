@@ -40,6 +40,11 @@ curl -X POST https://enterplace.example.com/admin/kills \
 Answers `201` with the switch and `"in_effect": true`. `GET /admin/kills` lists the switches that are on. See [Admin API](/reference/admin-api/).
 
 </TabItem>
+<TabItem label="Console">
+
+On the console's **Kill switches and audit** page (under **Security**) or the **Users** page, press **Stop traffic**. Pick a person, a team, a model, a key (the first 8 hex characters of its hash) or everyone, and give the reason. People and teams are picked from a searchable list, and a name no key and no request ever had is refused. Every gateway refuses the requests within 2 seconds, and the stop is recorded with your name.
+
+</TabItem>
 </Tabs>
 
 ## Clear a switch
@@ -63,6 +68,11 @@ curl -X DELETE https://enterplace.example.com/admin/kills \
 ```
 
 `404 no_such_switch` when no switch is on for that scope and value.
+
+</TabItem>
+<TabItem label="Console">
+
+Each switch that is on shows at the top of **Kill switches and audit**, with who set it, when and why. Press **Restore traffic** on it. **Copy for your agent** gives a coding agent the same change with `enterplace unkill`.
 
 </TabItem>
 </Tabs>
@@ -95,7 +105,7 @@ A stopped request is refused with `killed` (403), in the error shape their clien
 Refused: a kill switch stops traffic for person maya.cohen@example.com: "retrying the same ticket in a loop" (set by noa.bar at 2026-11-13T09:12:44.120Z). It stays stopped until an admin runs enterplace unkill. Ask noa.bar.
 ```
 
-While a switch is on, the console's Audit log shows a banner, and the record of each request it stopped names it.
+While a switch is on, the console's **Kill switches and audit** page shows it at the top, and the record of each request it stopped names it.
 
 Admin API calls are never stopped, so an admin can always turn a switch off, including `--all`. That holds for an admin a switch names too: stop a leaked admin key by [revoking it](/governance/keys/#revoke-a-key), not with a switch.
 

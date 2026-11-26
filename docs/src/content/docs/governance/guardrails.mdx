@@ -1,6 +1,6 @@
 ---
 title: Guardrails
-description: Check requests and answers for secrets, personal data, your own patterns and word lists, prompt injection and unsafe content with built-in detectors, the Gitleaks rules, fourteen vendors or your own webhook.
+description: Check requests and answers for secrets, personal data, your own patterns and word lists, prompt injection and unsafe content with built-in detectors, the Gitleaks rules, nineteen vendors or your own webhook.
 sidebar:
   order: 5
 ---
@@ -245,6 +245,8 @@ Add `shadow_until` to any guardrail, built-in, custom, vendor or webhook, to run
 ```
 
 Until that UTC date (or time, `2026-12-01T09:00:00Z`) the guardrail checks every request its rules give it and records what it finds with `action: shadow`, the kind and the count, and never blocks or masks. From that moment it acts as `action` says, with no reload. Count the `shadow` entries in the audit log to see what it would have stopped.
+
+On the console's **Guardrails** page (under **Security**), a new guardrail tries for 7 days by default: **Add, try until** saves it with `shadow_until` a week ahead, and **Block now** saves it to act at once. While a guardrail is trying, what it would block shows as Would block in the **Audit log**, and **Enforce now** ends its trial today, after a confirm. **Test** runs it over a sample prompt you type, which is not sent anywhere or kept, and the switch on each row runs it on every request, as `default_guardrails:` does.
 
 ## Backtest before enforcing
 

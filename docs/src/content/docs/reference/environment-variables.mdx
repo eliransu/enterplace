@@ -113,12 +113,25 @@ AWS and Google credentials are found as in the sections above.
 
 | Variable | Used by | Holds |
 |---|---|---|
-| `ENTERPLACE_ADMIN_KEY` | `enterplace kill`, `enterplace unkill` | An admin key. Without it, the key saved by `enterplace login` is used |
-| `ENTERPLACE_URL` | `enterplace kill`, `enterplace unkill` | The gateway, when `--url` is not given. Without either, the URL saved by `enterplace login` is used |
+| `ENTERPLACE_ADMIN_KEY` | `enterplace kill`, `unkill`, `key info`, `key update`, `key rotate`, `budget raise` | An admin key. Without it, the key saved by `enterplace login` is used, if it is an admin's |
+| `ENTERPLACE_URL` | the same | The gateway, when `--url` is not given. Without either, the URL saved by `enterplace login` is used |
+| `ENTERPLACE_KEY` | `enterplace budget status` | Your own key. Without it, the key saved by `enterplace login` is used |
 | `XDG_CONFIG_HOME` | `enterplace login`, `enterplace logout`, `enterplace kill`, `enterplace unkill` | The credentials folder: `$XDG_CONFIG_HOME/enterplace/` |
 | `HOME` | the same | When `XDG_CONFIG_HOME` is unset or empty, the credentials folder is `$HOME/.config/enterplace/` |
 
 `enterplace login` writes two files there, readable by you only: `credentials` (the key, gateway URL, name, team and expiry) and `env` (the client variables below).
+
+## Updates
+
+The console's **Health** page reads the release list and shows the exact update steps for this deployment. See [Updates](/operations/updates/).
+
+| Variable | Default | Holds |
+|---|---|---|
+| `ENTERPLACE_UPDATE_CHECK` | on | `off`: never read the release list |
+| `ENTERPLACE_RELEASE_FEED` | the GitHub releases API | A mirror of the GitHub releases API (`/repos/<owner>/<repo>/releases`) to read instead |
+| `ENTERPLACE_ALLOWED_SIGNERS` | none | An allowed_signers file with the key that signs the mirror's releases, as for `install.sh` |
+| `ENTERPLACE_DEPLOY_TARGET` | found by itself | `kubernetes`, `cloudflare`, `compose`, `ecs`, `cloud-run`, `container-apps` or `binary`, when the platform is not told apart by itself |
+| `ENTERPLACE_HELM_RELEASE`, `ENTERPLACE_HELM_NAMESPACE` | set by the Helm chart | The release and namespace in the `helm upgrade` that Health shows |
 
 ## Variables Enterplace prints for clients
 
@@ -131,6 +144,7 @@ AWS and Google credentials are found as in the sections above.
 | `OPENAI_BASE_URL` | The gateway URL with `/v1` | OpenAI SDKs |
 | `OPENAI_API_KEY` | The Enterplace key | OpenAI SDKs |
 | `ENTERPLACE_KEY` | The Enterplace key | Codex, through its `env_key` setting. Written by `enterplace login` only |
+| `ANTHROPIC_CUSTOM_HEADERS` | `x-enterplace-user: <person token>` | Claude Code on a Claude subscription. Printed by `enterplace key new --identity-only` and `enterplace start` with `ANTHROPIC_BASE_URL`, in place of `ANTHROPIC_API_KEY`. See [Subscriptions](/governance/subscriptions/) |
 
 See [Connect Claude Code](/integrations/claude-code/).
 

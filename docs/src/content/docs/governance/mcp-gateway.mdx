@@ -59,6 +59,8 @@ rules:
 
 The variables are read when Enterplace starts, and Enterplace does not start when one is unset.
 
+In the console, the **Servers** tab of **MCP tools** (under **Apps and agents**) adds a server with **Add a server**, edits or removes one, and sets which of its tools each rule allows with **Tools**. **Copy for your agent** hands the same change to a coding agent.
+
 Servers change without a restart, like the rest of the policy: within 2 seconds of a saved policy file, at once on `SIGHUP`, or after `PUT` and `DELETE /admin/mcp/<name>` when the policy is kept in the store. A server reached as before keeps the sessions Enterplace holds at it. A new server, or one whose address, transport, credential or price changed, is connected on its next call. A removed server serves nothing from the next request on, and a stdio server's process is stopped. A reload that names an unset variable, or a stdio command the gateway may not start, is rejected and the version in use stays, as for any policy that does not load. `/mcp` is served whenever Enterplace runs with a policy, so the first server can be added the same way.
 
 ### Tools, prompts and resources in a rule
@@ -221,7 +223,7 @@ A switch on a person, a team, a key or everyone stops their tool calls and tool 
 enterplace kill --model github.delete_repo --reason "deleting repositories is paused"
 ```
 
-The console's **MCP tools** page sets and clears the same switch with **Stop tool** and **Start tool**.
+The **Tools** tab of the console's **MCP tools** page sets and clears the same switch with **Stop tool** and **Start tool**.
 
 ## Each person's own credential
 
@@ -282,12 +284,12 @@ mcp:
 
 ## Sessions
 
-`GET /admin/mcp/sessions` (permission `see_keys`) and the console's **MCP sessions** page list:
+`GET /admin/mcp/sessions` (permission `see_keys`) and the **Sessions** tab of the console's **MCP tools** page list:
 
 - `sessions`: each MCP client connected to this gateway, with the start of its session id, the person and team, what the client called itself at `initialize` (`client`, `client_version`), its `user_agent`, the OAuth client it signed in through, the bundle, when it started and when it was last used;
 - `connections`: each person's own account at a server with `user_auth: headers` or `oauth`, as `<server>:<person>`.
 
-`DELETE /admin/mcp/sessions/<id>` (permission `revoke_keys`), or **End session** and **Disconnect** on the page, ends one. A request in an ended session is refused with `session_revoked` until the client connects again; a disconnected person signs in to the server again on their next call. Each is an admin record, `end_mcp_session`. A role kept to an organization or teams sees and ends only the sessions of its own, and no connections.
+`DELETE /admin/mcp/sessions/<id>` (permission `revoke_keys`), or **End session** and **Disconnect** on that tab, ends one. A request in an ended session is refused with `session_revoked` until the client connects again; a disconnected person signs in to the server again on their next call. Each is an admin record, `end_mcp_session`. A role kept to an organization or teams sees and ends only the sessions of its own, and no connections.
 
 <Aside type="note">
 Client sessions are kept by the gateway that opened them. Behind several gateways, each lists and ends its own. Connections are shared through the store.
@@ -324,7 +326,7 @@ What they found is on the decision record (`guardrails`) for the arguments and o
 
 ## Approvals
 
-A rule's `approve_tools` names tools whose calls wait for an admin. The call is held, open, until an admin approves or denies it on the console's **MCP approvals** page (which shows who asked, the rule and the arguments), or until `approval_timeout_seconds` pass. Approved, it runs and its decision record says `approved_by`; denied or timed out, it is refused with `approval_denied` or `approval_timeout`. Each approval and denial is an admin record in the audit log. With a store, any gateway's console can approve a call held on another.
+A rule's `approve_tools` names tools whose calls wait for an admin. The call is held, open, until an admin approves or denies it on the **Approvals** tab of the console's **MCP tools** page (which shows who asked, the rule and the arguments), or until `approval_timeout_seconds` pass. Approved, it runs and its decision record says `approved_by`; denied or timed out, it is refused with `approval_denied` or `approval_timeout`. Each approval and denial is an admin record in the audit log. With a store, any gateway's console can approve a call held on another.
 
 ```yaml
 mcp:
@@ -345,9 +347,9 @@ A tool's description and schema are instructions to the model, so a server that 
 
 - a new tool, or a tool whose hash changed, is recorded as an `mcp_tool_changed` record with the old and new hash;
 - with `tool_changes: record` the new version is served and pinned;
-- with `tool_changes: block` the tool is left out of `tools/list` and its calls are refused with `tool_changed` until an admin approves it on the console's **MCP tools** page.
+- with `tool_changes: block` the tool is left out of `tools/list` and its calls are refused with `tool_changed` until an admin presses **Approve change** on the **Tools** tab of the console's **MCP tools** page.
 
-The **MCP tools** page lists every tool seen, from which server, its pinned description, when it was first seen, who has called it (from the audit log), a held change with its new description, and the tool's kill switch.
+The **Tools** tab lists every tool seen, from which server, its pinned description, when it was first seen, who has called it (from the audit log), a held change with its new description, and the tool's kill switch.
 
 ## Upstream servers
 

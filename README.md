@@ -72,7 +72,9 @@ Full walkthrough: [Quickstart](https://docs.enterplace.dev/getting-started/quick
 - **[Self-service keys through SSO](https://docs.enterplace.dev/governance/single-sign-on/)**: `enterplace login` issues a developer an expiring key through your identity provider.
 - **[Policy as code](https://docs.enterplace.dev/governance/policy/)**: first-match rules by team, person or anyone. `enterplace check` rejects unknown fields with file, line and fix. Reloads in 2 seconds without a restart.
 - **[Budgets and rate limits](https://docs.enterplace.dev/governance/budgets-and-rate-limits/)**: dollars per organization, team, person, key, end customer, tag or model, reserved at admission. Requests and tokens per minute, hour and day, and requests in flight.
-- **[Guardrails](https://docs.enterplace.dev/governance/guardrails/)**: built-in secret and personal data detectors, thirteen guardrail vendors, and your own services by webhook. Block, mask or record.
+- **[Guardrails](https://docs.enterplace.dev/governance/guardrails/)**: built-in secret and personal data detectors, nineteen guardrail vendors, and your own services by webhook. Block, mask or record.
+- **[New callers](https://docs.enterplace.dev/governance/new-callers/)**: a key, person token or sign-in no admin has reviewed is let through and listed, held for approval or blocked, as the policy says. Allow and Block on the console's New and pending page work within 2 seconds.
+- **[Coding agent controls](https://docs.enterplace.dev/governance/coding-agent-controls/)**: allow or block skipping permissions, auto mode and browser use in coding agents, for the whole organization or per rule.
 - **[Kill switches](https://docs.enterplace.dev/governance/kill-switches/)**: stop a person, team, key or model at once.
 - **[Tamper-evident audit log](https://docs.enterplace.dev/governance/audit-log/)**: one hash-chained record per request, refusals included, verified with `enterplace audit verify`.
 
@@ -85,7 +87,7 @@ Full walkthrough: [Quickstart](https://docs.enterplace.dev/getting-started/quick
 
 ### Operations
 
-- **[Admin console](https://docs.enterplace.dev/operations/console/)** at `/console`: a Start here checklist for the first request, requests, analytics, people and keys, policy and spend, with OIDC or SAML sign-in and roles.
+- **[Admin console](https://docs.enterplace.dev/operations/console/)** at `/console`: an Overview by use case with a Getting started checklist for each, requests, usage and spend, users and keys, new callers to allow or block, policy with a dry run, and updates on Health, with OIDC or SAML sign-in and roles.
 - **[Prometheus metrics](https://docs.enterplace.dev/operations/observability/)** and audit log shipping with Vector, Fluent Bit or the OpenTelemetry Collector.
 - **[Container image and Kubernetes](https://docs.enterplace.dev/deploy/overview/)**: one non-root image built `FROM scratch` (`ghcr.io/eliransu/enterplace`), a Helm chart, Terraform for AWS, Google Cloud and Azure, Docker Compose and Cloudflare.
 - **[HTTPS](https://docs.enterplace.dev/operations/deployment/)** with `--tls-cert` and `--tls-key`.
@@ -118,7 +120,7 @@ scripts/           CI, release and example checks
 
 ## Status
 
-Enterplace is pre-1.0 (0.1.0, see [CHANGELOG.md](CHANGELOG.md)) and runs as one node on plain files, or as several replicas sharing a Postgres store. See [Project status](https://docs.enterplace.dev/getting-started/status/) for what is built, what is planned and what has been verified against which services.
+Enterplace is pre-1.0 (0.4.0, see [CHANGELOG.md](CHANGELOG.md)) and runs as one node on plain files, or as several replicas sharing a Postgres store. See [Project status](https://docs.enterplace.dev/getting-started/status/) for what is built, what is planned and what has been verified against which services.
 
 ## Contributing
 

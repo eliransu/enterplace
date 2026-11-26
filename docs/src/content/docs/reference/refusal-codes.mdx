@@ -162,7 +162,7 @@ A subscription request is never answered 401: Claude Code reads a 401 as its own
 
 **403.** The model is served only by a provider with `auth: passthrough`, which holds no key, and the request carries an Enterplace key in place of a login.
 
-**Fix:** in Claude Code, unset `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, keep your Claude login and send your person token in `x-enterplace-user`.
+**Fix:** in Claude Code, unset `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, keep your Claude login and send your person token in `x-enterplace-user`. An app with a service key has no login to send: an admin serves the model from a provider with its own key, with **Add a provider** on the console's **New and pending** page.
 
 ### login_not_accepted
 
@@ -180,7 +180,7 @@ A subscription request is never answered 401: Claude Code reads a 401 as its own
 
 **400.** `x-enterplace-user` arrived with a login, and no provider of this gateway has `auth: passthrough`.
 
-**Fix:** ask an admin to turn on Claude subscriptions (console, **Start here**, **Coding agents**), or send your Enterplace key as your only credential.
+**Fix:** ask an admin to turn on Claude subscriptions (console, **Coding agents**, **Getting started**), or send your Enterplace key as your only credential.
 
 ### killed
 
@@ -363,7 +363,7 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 
 **403.** The rule allows the model, but no provider lists it, or an alias has no deployment Enterplace can reach. It is 403, not 404, because Claude Code replaces the message of a 404 with its own and retries a 400.
 
-**Fix:** check the model name, or an admin adds it to a provider. See [Providers](/providers/overview/).
+**Fix:** check the model name, or an admin adds it to a provider. The console's **New and pending** page lists the model with **Add a provider**, and the message names that page. See [Providers](/providers/overview/).
 
 ### wrong_route
 
@@ -374,7 +374,7 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 - `count_tokens` for a `bedrock` or `vertex_anthropic` model, or a model on a provider with `accept_messages`.
 - A Responses, embeddings, images, audio, moderations or rerank request for a model on a provider not of kind `openai`.
 
-**Fix:** send chat requests for `openai`, `azure`, `gemini` and `vertex` models to `/v1/chat/completions`, messages requests for `anthropic`, `bedrock` and `vertex_anthropic` models to `/v1/messages`, and the other `/v1` routes to `openai` models only.
+**Fix:** send chat requests for `openai`, `azure`, `gemini` and `vertex` models to `/v1/chat/completions`, messages requests for `anthropic`, `bedrock` and `vertex_anthropic` models to `/v1/messages`, and the other `/v1` routes to `openai` models only. To serve the model on this route too, an admin adds a provider that takes it, with **Add a provider** on the console's **New and pending** page, which the message names.
 
 ### untranslatable
 

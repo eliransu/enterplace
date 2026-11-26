@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 Every key names a team, and rules, budgets and limits are written per team. The policy's `teams:` adds what a key cannot say: who owns a team, who is in it, and which identity provider groups put a person in it. `enterplace login` uses it to put each developer's key in the right team, and console sign-in records it.
 
@@ -71,6 +71,10 @@ A [console role](/governance/policy/#console-roles) with `teams:` keeps its hold
 
 Each refusal is recorded with `not_permitted` and names what the role is kept to.
 
+## In the console
+
+The console's **Groups** page (under **Coding agents**) lists each team with its owner, the people and apps in it and whether each is an admin, the rule it falls under, and its budget and limits. **Set budget** (or **Change budget**) opens a limit for that team on **Rules and limits**. A team is also picked, or made with **Create team**, from the searchable list in every key dialog and in the rule, limit and kill switch forms.
+
 ## The teams API
 
 `GET /admin/teams` lists every team, from `teams:` and from keys, with its owner, members, groups, metadata, whether the policy lists it (`in_policy`) and its keys. `GET /admin/teams/<name>` shows one. Reading needs `see_keys`; a role kept to teams sees its teams.
@@ -92,9 +96,7 @@ curl -s https://enterplace.example.com/admin/teams/web -X DELETE -H "Authorizati
 
 `PUT` replaces the team's fields with the body. The answer is the new version, as `PUT /admin/policy` answers ([Console editing](/operations/console-editing/)). A policy kept in the file is refused with `policy_in_file`: change `teams:` in the file.
 
-<Aside type="note">
-A form edit writes the policy without its comments, as the console's Models page does. Change teams in the policy editor to keep them.
-</Aside>
+A team change keeps the policy's comments where they were, as a console form edit does; a comment on something the change removes goes with it.
 
 ## Related
 

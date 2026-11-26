@@ -125,6 +125,8 @@ Each entry names one scope and sets any of `budget`, `rate` (`rpm`, `tpm`) and `
 
 Add `org: <org>` to any entry but `global` and `org` to keep it to one organization. Team, person, customer, tag and model counters are kept per organization, so team `payments` of `acme` and team `payments` of `globex` never share one.
 
+In the console, **Add a limit** on **Rules and limits** writes a `limits:` entry. Teams, people and tags are picked from a searchable list. A team no key names and no request came from is refused, since the limit would cap nobody, unless you pick **Create team** for a new team. **Set budget** on the **Groups** page opens the same form for that team. Each budget's meter is on **Usage**, **Spend this month**.
+
 ### Trying a limit first
 
 A rule, each budget of a rule or profile, and each `limits:` entry take `shadow_until`, a UTC date or time. Until then the limit counts as usual and records each request it would refuse as [`would_refuse`](/reference/audit-records/#would_refuse); the request is forwarded. After the date it enforces. Other limits keep enforcing meanwhile.
@@ -247,7 +249,6 @@ curl http://127.0.0.1:8080/v1/enterplace/me -H "Authorization: Bearer $ENTERPLAC
 
 `enterplace budget status` prints the same, and `--short` prints one line for a status line. See [the CLI](/reference/cli/#budget-status) and the [Claude Code status line](/integrations/claude-code/#budget-in-the-status-line).
 
-## How a budget is counted
 ## How a budget is counted
 
 <Steps>

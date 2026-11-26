@@ -40,7 +40,7 @@ Homebrew, stable releases only: `brew install eliransu/tap/enterplace`. The tarb
 
 ## start
 
-Step 1 in one command, with no provider key needed: writes a policy in observe mode with the demo model and any provider whose key is in the environment, makes an admin key and a master key, runs the gateway and prints the dashboard link that signs in once.
+Step 1 in one command, with no provider key needed: writes a policy in observe mode with the demo model, any provider whose key is in the environment, the `claude-subscriptions` provider (`identity: required`) and `new_callers: { mode: allow }`, makes an admin key, a person token for whoever runs it and a master key, runs the gateway and prints the dashboard link that signs in once.
 
 ```text
 enterplace start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--no-open] [--force] [--no-serve] [--container]
@@ -49,7 +49,7 @@ enterplace start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--no
 | Flag | Default | Description |
 |---|---|---|
 | `--dir <path>` | the current folder | Where `enterplace.policy.yaml`, `enterplace.keys.yaml`, `enterplace-master.key` and the audit log go. Made if missing |
-| `--providers <a,b>` | every provider with a key in the environment | `openai`, `anthropic` or `gemini`. Each needs its key set. Others: connect them in the dashboard, or use `enterplace init` |
+| `--providers <a,b>` | every provider with a key in the environment | `openai`, `anthropic` or `gemini`. Each needs its key set. Others: connect them in the dashboard (**Add a provider** on **Providers**), or use `enterplace init` |
 | `--listen <host:port>` | `127.0.0.1:8080` | Where the gateway listens. The dashboard link uses it |
 | `--no-open` | off | Prints the dashboard link without opening the browser. It is not opened anyway without a terminal or a display |
 | `--force` | off | Writes a new policy and admin key over the ones there. The master key is kept. Without it, `start` serves the policy it finds, with a new link and no new admin key |
@@ -58,7 +58,7 @@ enterplace start [--dir <path>] [--providers <a,b>] [--listen <host:port>] [--no
 
 Provider keys are read from `OPENAI_PROVIDER_KEY` or `OPENAI_API_KEY`, and the same for `ANTHROPIC` and `GEMINI` (the `_PROVIDER_KEY` form wins when both are set). The policy always reads `<PROVIDER>_PROVIDER_KEY`, so the tool lines can set `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to the Enterplace key in the same shell; a key found under `<PROVIDER>_API_KEY` is passed to the gateway `start` runs. The key itself is never written. `ENTERPLACE_OPENAI_BASE_URL` (and the same for `ANTHROPIC` and `GEMINI`) writes that provider's `url:`, for a proxy in front of it.
 
-`enterplace-master.key` (64 hex characters, mode 0600) is made once, unless `ENTERPLACE_MASTER_KEY` or `ENTERPLACE_MASTER_KEY_FILE` is set, and passed to the gateway as `ENTERPLACE_MASTER_KEY_FILE`. It seals the provider keys pasted in the dashboard (Start here, Connect a model, or Credentials), kept in `enterplace-credentials.json` beside the policy when there is no store.
+`enterplace-master.key` (64 hex characters, mode 0600) is made once, unless `ENTERPLACE_MASTER_KEY` or `ENTERPLACE_MASTER_KEY_FILE` is set, and passed to the gateway as `ENTERPLACE_MASTER_KEY_FILE`. It seals the provider keys pasted in the dashboard (the **Connect a model** step of a **Getting started** checklist, **Add a provider**, or **Provider keys**), kept in `enterplace-credentials.json` beside the policy when there is no store.
 
 The first lines the gateway prints:
 
@@ -72,9 +72,14 @@ The link signs you in once, from this machine, within 10 minutes. Opening it in 
 Admin key, shown once (Enterplace keeps only its hash). Use it for the command line and the API:
 
   export ENTERPLACE_KEY=enterplace_3f9c...
+
+Claude Code on your Claude subscription, with noa on every request: paste these two lines in your shell, then run claude. The person token is shown once.
+
+  export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+  export ANTHROPIC_CUSTOM_HEADERS="x-enterplace-user: enterplace_u_..."
 ```
 
-The link's code is random, kept only as its hash, works once, for 10 minutes, and only from a loopback address (any address with `--container`); its sign-in is recorded as `console_sign_in` with `via: start_link`. The settings for each coding tool are on Start here in the dashboard, built from this gateway's address.
+The link's code is random, kept only as its hash, works once, for 10 minutes, and only from a loopback address (any address with `--container`); its sign-in is recorded as `console_sign_in` with `via: start_link`. The person token is named by the OS user (`USER` or `USERNAME`), else `admin`, as the admin key is; a second start in the same folder makes no new key or token. In the dashboard, **Overview** shows one card per use case, and its **Set up** button opens that use case's **Getting started** checklist, with the settings for each coding tool and SDK built from this gateway's address.
 
 Exit `2` when a provider in `--providers` has no key or is not one `start` knows, or a file cannot be written.
 
@@ -153,6 +158,19 @@ enterplace store migrate [--policy <file>] [--keys <file>]
 
 It reads the same environment as `serve`: the variable `postgres_url_env` names, and `ENTERPLACE_MASTER_KEY` when you use one. From the image (Enterplace Enterprise), it also makes the tables of the features the license in `ENTERPLACE_LICENSE` unlocks. Running it twice changes nothing. Exit `0` when the schema is up to date, `2` otherwise. See [Migrations as a step of their own](/operations/store/#migrations-as-a-step-of-their-own).
 
+## store import
+
+Copies the keys of a keys file, and the kill switches beside it, into the store the policy's `store:` names. Keys already there are left as they are. The file is not changed.
+
+```text
+enterplace store import --keys <file> [--policy <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--keys <file>` | required | The keys file to copy |
+| `--policy <file>` | `enterplace.policy.yaml` | The policy whose `store:` names the store |
+
 ## diagnose
 
 Writes a support bundle: one `.tar.gz` to attach to a support request. It changes nothing (a store whose schema is behind is reported, not migrated) and holds no key, password or token.
@@ -205,6 +223,41 @@ enterplace.policy.yaml is valid: 2 rules, 1 key, 1 provider: openai (openai) at 
 
 Exit `0` when valid, `1` with every problem otherwise. Warnings that do not fail the check: a rule that names a model no provider serves, and a key whose expiry has passed.
 
+## explain
+
+Says why a request from a key for a model would be allowed or refused: the rules passed over, the rule that decides, and every limit that applies (rule, key, organization, team, person, customer, tag, model, global) with where it is written and what it overrides.
+
+```text
+enterplace explain <policy> --key <hash prefix or name> --model <model> [--customer <name>] [--tags <a,b>] [--keys <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<policy>` | required | The policy file |
+| `--key <hash prefix or name>` | required | The key, by its hash prefix or its name |
+| `--model <model>` | required | The model the request would ask for |
+| `--customer <name>` | none | The end customer the request would name |
+| `--tags <a,b>` | none | The tags the request would send |
+| `--keys <file>` | `enterplace.keys.yaml` beside the policy | The keys file |
+
+A running gateway adds what each budget has spent: `GET /admin/explain`.
+
+## init
+
+Writes a starter policy for one provider of the [catalog](/reference/providers/) and the models it serves: everyone may use them. It never writes over an existing file.
+
+```text
+enterplace init [--provider <id>] [--models <a,b>] [--out <policy file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--provider <id>` | `openai` | A catalog id, as `enterplace providers` lists them |
+| `--models <a,b>` | `gpt-4o-mini` for `openai` | The models the provider serves |
+| `--out <policy file>` | `enterplace.policy.yaml` | Where the policy is written |
+
+Then set the provider key it names and run `enterplace serve`, which prints a one-time link to make the first admin.
+
 ## key new
 
 Makes a key for a person or a workload. The key is printed once, with the lines that point coding agents and SDKs at Enterplace (OpenAI-compatible tools, Gemini CLI, Claude Code). Only its SHA-256 is saved.
@@ -243,6 +296,20 @@ enterplace key new maya.cohen --team payments --budget 20/month --expires 2026-1
 ```
 
 The entry is appended to the end of the file; nothing already there is rewritten. A running `enterplace serve` accepts the key within 2 seconds. If the name already has a key, both work until you remove the old entry.
+
+## key revoke
+
+Removes the key whose hash starts with the prefix: at least 8 hex characters, as `key list` shows it. A running Enterplace refuses it within 2 seconds.
+
+```text
+enterplace key revoke <hash prefix> [--keys <file>] [--policy <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<hash prefix>` | required | The start of the key's SHA-256 |
+| `--keys <file>` | `enterplace.keys.yaml` | The keys file |
+| `--policy <file>` | none | The policy with the `store:` section, when keys are kept in a store |
 
 ## key info
 
@@ -384,7 +451,7 @@ enterplace key import <people.csv> [--out <people-keys.csv>] [--keys <file>] [--
 enterplace key import people.csv --keys /var/lib/enterplace/enterplace.keys.yaml
 ```
 
-Hand each key over through your secret manager, then delete the file. The console's People page does the same with **Import a list**.
+Hand each key over through your secret manager, then delete the file. The console's **Users** page does the same with **Import a list**.
 
 ## key prune
 
@@ -401,6 +468,21 @@ enterplace key prune [--keys <file>]
 ```bash
 enterplace key prune --keys /var/lib/enterplace/enterplace.keys.yaml
 ```
+
+## guardrail test
+
+Runs a guardrail the policy defines (`secrets`, `pii`, `regex` or `keywords`; a rule need not use it yet) over examples before it goes live: how many requests it would hit, its kinds, up to 20 matched spans with all but their first and last two characters masked, and precision and recall when the examples carry `expect: true` or `false`.
+
+```text
+enterplace guardrail test <name> (--corpus <file.jsonl> | --since <7d>) [--policy <file>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `<name>` | required | The guardrail's name in the policy |
+| `--corpus <file.jsonl>` | none | One JSON object per line: `{"text": "..."}` or `{"body": {...}}` |
+| `--since <7d>` | none | Reads captured request bodies from that far back. The audit log holds no text, so without [capture](/operations/request-log/#bodies) it says so |
+| `--policy <file>` | `enterplace.policy.yaml` | The policy that defines the guardrail |
 
 ## audit verify
 
