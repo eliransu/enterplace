@@ -1,0 +1,41 @@
+name: homebrew
+# Pushes the Homebrew formula of a release that is already published, without rebuilding it: run by hand on a v* tag
+# (gh workflow run homebrew --ref vX.Y.Z). For when release.yml built and published the release but its homebrew job
+# failed, for example on an expired HOMEBREW_TAP_TOKEN. The files are checked against their signatures first.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  homebrew:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The release's signed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir dist
+          # image.yml adds the image's SBOM to the release; it is attested on the image, not in SHA256SUMS.
+          rm -f dist/sbom.cdx.json
+          python3 scripts/signing.py verify dist
+      - name: Render and push the formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          packaging/homebrew/render.sh dist "$TAG" > enterplace.rb
+          cat enterplace.rb
+          git clone -q "https://x-access-token:$HOMEBREW_TAP_TOKEN@github.com/eliransu/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp enterplace.rb tap/Formula/enterplace.rb
+          cd tap
+          git add Formula/enterplace.rb
+          if git diff --cached --quiet; then echo "the tap already has this formula"; exit 0; fi
+          git -c user.name="enterplace release" -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+            commit -qm "enterplace ${TAG#v}"
+          git push -q origin HEAD
+          echo "pushed Formula/enterplace.rb for ${TAG#v}: brew install eliransu/tap/enterplace"
