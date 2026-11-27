@@ -76,7 +76,7 @@ export function Providers({ me, query }: PageProps) {
   // Each save shows its diff and a dry run of the last 24 hours first, and applies only on Apply.
   const [change, checking] = useCheckedChange(apply);
   const { status, reload: retest } = useProviderStatus();
-  // `?model=openai/gpt-4o` (from New and pending) opens Add a provider with that model filled in.
+  // `?model=openai/gpt-4o` (from Access requests) opens Add a provider with that model filled in.
   const wanted = query.get("model") ?? "";
   const [adding, setAdding] = useState(!!wanted);
   const [editing, setEditing] = useState<Provider | null>(null);

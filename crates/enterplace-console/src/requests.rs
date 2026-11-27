@@ -278,6 +278,33 @@ async fn seen(console: &Console, admin: &Admin) -> Value {
     Value::Object(out)
 }
 
+/// The names of the keys that are service keys (`apps`), or of every other key, with `unknown` for a request no key
+/// named (`coding`). A name that is never a key's stands in for none, so an empty list matches nothing.
+fn callers(console: &Console, apps: bool) -> Vec<String> {
+    let config = console.config();
+    let entries = config::read_keys(&config.keys)
+        .ok()
+        .flatten()
+        .and_then(|text| config::key_entries(&config.keys, &text).ok())
+        .unwrap_or_default();
+    let mut names: Vec<String> = entries
+        .iter()
+        .filter(|e| {
+            (e.options.metadata.get("kind").map(String::as_str) == Some("workload")) == apps
+        })
+        .map(|e| e.name.clone())
+        .collect();
+    if !apps {
+        names.push("unknown".into());
+    }
+    if names.is_empty() {
+        names.push("\u{0}".into());
+    }
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
 async fn list(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> Response {
     answer(
         async {
@@ -294,6 +321,18 @@ async fn list(State(console): State<Console>, headers: HeaderMap, uri: Uri) -> R
             let more_open = asked.iter().any(|(k, _)| !up_front.contains(&k.as_str()));
             let fields = filters(&query);
             scoped(&admin, &mut query);
+            // Coding agents and Apps and agents each show their own callers' requests: people, or service keys.
+            match form.get("of") {
+                "" => {}
+                of @ ("coding" | "apps") => {
+                    query.within.push(("person".into(), callers(&console, of == "apps")));
+                }
+                other => {
+                    return Err(crate::api::bad(format!(
+                        "\"{other}\" is not a list of requests. Use of=coding for people's coding agents or of=apps for apps and agents."
+                    )));
+                }
+            }
             let values = seen(&console, &admin).await;
             let page_no: usize = form.get("page").parse().unwrap_or(1).max(1);
             query.offset = (page_no - 1) * PER_PAGE;

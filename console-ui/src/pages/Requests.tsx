@@ -73,10 +73,15 @@ const OUTCOMES: Pair[] = [
   ["error", "Errors"],
 ];
 
+/// The route this list is on: Requests for everyone, or a use case's Logs, which keeps its links on itself.
+const here = () => window.location.hash.slice(1).split("?")[0] || "/requests";
+/// Logs under Coding agents show people's requests; under Apps and agents, service keys'.
+const callers = () => (here().startsWith("/coding") ? "coding" : here().startsWith("/apps") ? "apps" : "");
+
 /// Moves the # route's query to `next`, so a filter, a page or an open request is a link that can be shared.
 function setQuery(next: URLSearchParams) {
   const kept = new URLSearchParams([...next].filter(([, v]) => v));
-  window.location.hash = `#/requests${kept.size ? `?${kept}` : ""}`;
+  window.location.hash = `#${here()}${kept.size ? `?${kept}` : ""}`;
 }
 
 /// The query with `name` set to `value` (or cleared), back on the first page unless the page itself changes.
@@ -103,12 +108,22 @@ export function Requests({ query }: PageProps) {
   const record = query.get("record") ?? "";
   const list = new URLSearchParams(query);
   list.delete("record");
+  if (callers()) list.set("of", callers());
   // Live: the list is read again every 5 seconds, unless a request's sheet is open over it.
   const { data, error, reload } = useData<Data>(`requests${list.size ? `?${list}` : ""}`, 5000, !!record);
 
   return (
     <>
-      <Head title="Requests" lead={data?.lead ?? "Every request, newest first. New ones appear as they arrive."} />
+      <Head
+        title={callers() ? "Logs" : "Requests"}
+        lead={
+          callers() === "coding"
+            ? "Requests from people's coding agents, newest first. New ones appear as they arrive."
+            : callers() === "apps"
+              ? "Requests from apps and agents with a service key, newest first. New ones appear as they arrive."
+              : (data?.lead ?? "Every request, newest first. New ones appear as they arrive.")
+        }
+      />
       {error ? (
         <Panel title="This did not load">
           <Problem text={error} retry={reload} />
@@ -248,7 +263,7 @@ function RowsTable({ data, query }: { data: Data; query: URLSearchParams }) {
   // A person, team, model or provider is a link to the same list narrowed to it.
   const narrow = (name: string, value: string) =>
     value ? (
-      <a href={`#/requests?${with_(query, name, value)}`} className="text-foreground">
+      <a href={`#${here()}?${with_(query, name, value)}`} className="text-foreground">
         {value}
       </a>
     ) : null;
@@ -274,7 +289,7 @@ function RowsTable({ data, query }: { data: Data; query: URLSearchParams }) {
             // The whole row opens its sheet; the time stays the link a keyboard reaches. A link inside opens itself.
             <TableRow key={r.id} className="cursor-pointer" onClick={(e) => (e.target as HTMLElement).closest("a") || setQuery(with_(query, "record", r.id))}>
               <TableCell>
-                <a href={`#/requests?${with_(query, "record", r.id)}`} aria-label={`Open request ${r.id}`} className="text-foreground">
+                <a href={`#${here()}?${with_(query, "record", r.id)}`} aria-label={`Open request ${r.id}`} className="text-foreground">
                   {r.time}
                 </a>
               </TableCell>

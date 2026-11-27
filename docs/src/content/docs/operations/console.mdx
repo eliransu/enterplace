@@ -55,21 +55,22 @@ There is no default role: a person whose claim holds neither value is refused wi
 
 ## Pages
 
-The console is an app at `/console/app/`. Its sidebar groups the pages by what you are doing: the two use cases first, then security, activity and the settings both use cases share. A sidebar entry with more than one page shows them as tabs. Every page has its own address after `#`, so a link or a bookmark opens it.
+The console is an app at `/console/app/`. Its sidebar groups the pages by what you are doing: the two use cases first, then MCP, security, activity and the settings both use cases share. A sidebar entry with more than one page shows them as tabs. Every page has its own address after `#`, so a link or a bookmark opens it.
 
 | Sidebar | Page | Address | Shows |
 |---|---|---|---|
 | | Overview | `#/overview` | The console's home: one card per use case (Coding agents, Apps and agents, MCP tools) with what went through it today and what needs attention, and spend this month. On an empty install each card's "Set up ..." button opens that use case's checklist (on its Getting started page, or on MCP tools), which ticks each step done when the gateway sees it happen; later, each card links its next step. "Other ways to start" offers a spend limit for the team and watch mode. Once a checklist is done, the five steps of a rollout show here |
 | Coding agents | Getting started | `#/coding` | The checklist and settings to connect a coding agent, who uses which tool in the last 7 days, whether every request needs a name, and what coding agents may do ([coding agent controls](/governance/coding-agent-controls/)) |
-| Coding agents | Users | `#/people` | Every key by name, team and hash prefix: people, their person tokens and service keys, with admin flag, expiry, budget and spend this month and today. Issue, edit, rotate and revoke keys here, and stop traffic |
-| Coding agents | New and pending | `#/coding/new` | People no admin has reviewed, with Allow and Block: see [New callers](/governance/new-callers/) |
+| Coding agents | Users | `#/people` | Every person's key by name, team and hash prefix: people and their person tokens (service keys are under Apps and agents), with admin flag, expiry, budget and spend this month and today. Issue, edit, rotate and revoke keys here, and stop traffic |
+| Coding agents | Access requests | `#/coding/new` | People no admin has reviewed, with Allow and Block: see [New callers](/governance/new-callers/) |
 | Coding agents | Groups | `#/teams` | Each team, its people and apps, the rule it falls under and its budget, with Set budget |
 | Coding agents | Policies, Rules and limits | `#/policy` | Rules, limits, guardrails and aliases, and whether the policy enforces or observes |
-| Apps and agents | Getting started | `#/apps` | The checklist to connect an app or agent, its service keys and spend this month per app |
-| Apps and agents | New and pending | `#/apps/new` | Every caller no admin has reviewed, and the models no provider serves, with Allow, Block and Add a provider |
+| Coding agents | Logs | `#/coding/logs` | The request log, people's requests only |
+| Apps and agents | Service keys | `#/apps` | Each app's or agent's service key, spend this month per app, and the checklist to connect one |
+| Apps and agents | Access requests | `#/apps/new` | Every caller no admin has reviewed, and the models no provider serves, with Allow, Block and Add a provider |
 | Apps and agents | Policies, Rules and limits | `#/apps/policy` | The same rules and limits as under Coding agents |
-| Apps and agents | Logs | `#/apps/logs` | The request log |
-| Apps and agents | MCP tools | `#/mcp` | Tabs Servers, Tools, Approvals and Sessions: the MCP servers behind Enterplace, which tools each rule may call, the calls waiting for an admin, and MCP sessions |
+| Apps and agents | Logs | `#/apps/logs` | The request log, service keys' requests only |
+| MCP | Servers and tools | `#/mcp` | Tabs Servers, Tools, Approvals and Sessions: the MCP servers behind Enterplace, which tools each rule may call, the calls waiting for an admin, and MCP sessions |
 | Security | Guardrails | `#/guardrails` | Each guardrail, on for every request or only for the rules that name it, with Test, Try first, Block now and Enforce now |
 | Security | Kill switches and audit | `#/audit` | The Audit log: every record, newest first, filtered by All, Blocked, Refused, Masked, Warned or Changes, and searchable by person, team, decision ID or key hash. Each record opens in a side panel that explains the decision: the rule, the limit or kill switch that refused it, guardrail findings, and the usage and cost of its answer. A banner shows every kill switch that is on. **Verify** runs the same check as `enterplace audit verify` |
 | Activity | Requests | `#/requests` | One row per request with its person, model, tokens and cost, newest first. Each opens in a side panel with Copy |

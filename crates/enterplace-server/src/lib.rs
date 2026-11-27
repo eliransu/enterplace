@@ -2485,7 +2485,7 @@ fn login_fits(provider: &Upstream, login: Option<&Login>, model: &str) -> Result
             StatusCode::FORBIDDEN,
             "login_needed",
             format!(
-                "Refused: model \"{model}\" is served by provider \"{}\", which sends each caller's own Claude or ChatGPT login and holds no key of Enterplace's, and this request carries only an Enterplace key. In Claude Code, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN, keep your normal Claude login, and send your person token with ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <token>\". In Codex, sign in with ChatGPT and set requires_openai_auth = true and http_headers = {{ \"x-enterplace-user\" = \"<token>\" }} on the Enterplace model provider. An app with a service key has no login to send: an Enterplace admin serves \"{model}\" from a provider with its own key, with Add a provider on the console's New and pending page ({}).",
+                "Refused: model \"{model}\" is served by provider \"{}\", which sends each caller's own Claude or ChatGPT login and holds no key of Enterplace's, and this request carries only an Enterplace key. In Claude Code, unset ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN, keep your normal Claude login, and send your person token with ANTHROPIC_CUSTOM_HEADERS=\"x-enterplace-user: <token>\". In Codex, sign in with ChatGPT and set requires_openai_auth = true and http_headers = {{ \"x-enterplace-user\" = \"<token>\" }} on the Enterplace model provider. An app with a service key has no login to send: an Enterplace admin serves \"{model}\" from a provider with its own key, with Add a provider on the console's Access requests page ({}).",
                 provider.name,
                 enterplace_core::policy::NEW_CALLERS_PAGE
             ),
@@ -3468,7 +3468,7 @@ fn new_caller(policy: &Policy, person: &Principal, seen: &mut Seen<'_>) -> Resul
     use enterplace_core::policy::{CallerVerdict, NEW_CALLERS_PAGE};
     let name = &person.name;
     let verdict = policy.caller_verdict(person);
-    // Held and blocked-by-mode callers are new as well: their refusals are what New and pending lists.
+    // Held and blocked-by-mode callers are new as well: their refusals are what Access requests lists.
     seen.new_caller = matches!(
         verdict,
         CallerVerdict::New | CallerVerdict::Held | CallerVerdict::NewBlocked
@@ -3479,19 +3479,19 @@ fn new_caller(policy: &Policy, person: &Principal, seen: &mut Seen<'_>) -> Resul
         CallerVerdict::Held => (
             "awaiting_approval",
             format!(
-                "Refused: \"{name}\" is a new caller, and this organization holds new callers until an admin approves them. An Enterplace admin approves it with Allow on the console's New and pending page ({NEW_CALLERS_PAGE}), and it works within 2 seconds. Nothing was sent to a provider."
+                "Refused: \"{name}\" is a new caller, and this organization holds new callers until an admin approves them. An Enterplace admin approves it with Allow on the console's Access requests page ({NEW_CALLERS_PAGE}), and it works within 2 seconds. Nothing was sent to a provider."
             ),
         ),
         CallerVerdict::NewBlocked => (
             "caller_blocked",
             format!(
-                "Refused: \"{name}\" is a new caller, and this organization blocks new callers by default. An Enterplace admin can let it in with Allow on the console's New and pending page ({NEW_CALLERS_PAGE}), and it works within 2 seconds. Nothing was sent to a provider."
+                "Refused: \"{name}\" is a new caller, and this organization blocks new callers by default. An Enterplace admin can let it in with Allow on the console's Access requests page ({NEW_CALLERS_PAGE}), and it works within 2 seconds. Nothing was sent to a provider."
             ),
         ),
         CallerVerdict::Blocked => (
             "caller_blocked",
             format!(
-                "Refused: an Enterplace admin blocked \"{name}\". If that is a mistake, an admin allows it again on the console's New and pending page ({NEW_CALLERS_PAGE}), and it works within 2 seconds. Nothing was sent to a provider."
+                "Refused: an Enterplace admin blocked \"{name}\". If that is a mistake, an admin allows it again on the console's Access requests page ({NEW_CALLERS_PAGE}), and it works within 2 seconds. Nothing was sent to a provider."
             ),
         ),
     };
@@ -4419,7 +4419,7 @@ fn unserved(model: &str) -> Refusal {
         StatusCode::FORBIDDEN,
         "unknown_model",
         format!(
-            "Refused: no provider of this Enterplace serves model \"{model}\". Check the model name, or ask an Enterplace admin to add it to a provider: the console's New and pending page ({}) lists it with Add a provider.",
+            "Refused: no provider of this Enterplace serves model \"{model}\". Check the model name, or ask an Enterplace admin to add it to a provider: the console's Access requests page ({}) lists it with Add a provider.",
             enterplace_core::policy::NEW_CALLERS_PAGE
         ),
     )
@@ -4450,7 +4450,7 @@ fn fits(provider: &Upstream, path: &str, model: &str) -> Result<Shape, Refusal> 
             StatusCode::BAD_REQUEST,
             "wrong_route",
             format!(
-                "Refused: model \"{model}\" is served by provider \"{}\" of kind {}, {what} To serve it on this route too, an Enterplace admin adds a provider that takes it, with Add a provider on the console's New and pending page ({}).",
+                "Refused: model \"{model}\" is served by provider \"{}\" of kind {}, {what} To serve it on this route too, an Enterplace admin adds a provider that takes it, with Add a provider on the console's Access requests page ({}).",
                 provider.name,
                 kind.word(),
                 enterplace_core::policy::NEW_CALLERS_PAGE

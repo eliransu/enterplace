@@ -1,4 +1,4 @@
-//! New and pending: the console lists the callers no admin has reviewed and the models no provider serves, from
+//! Access requests: the console lists the callers no admin has reviewed and the models no provider serves, from
 //! the request log, and Allow, Block and the mode change the policy's `new_callers:` like any other policy edit.
 
 use std::{path::PathBuf, sync::Arc};

@@ -154,7 +154,9 @@ export function People({ query }: PageProps) {
     }
   }, [query]);
 
-  const entries = data?.entries ?? [];
+  // Service keys belong to apps and agents, on their own page: Users lists people and their keys only.
+  const entries = (data?.entries ?? []).filter((e) => !isService(e));
+  const apps = (data?.entries ?? []).length - entries.length;
   const needle = q.trim().toLowerCase();
   const shown = useMemo(
     () =>
@@ -173,11 +175,8 @@ export function People({ query }: PageProps) {
   return (
     <>
       <Head
-        title="People"
-        lead={
-          data?.lead ??
-          "Everyone and everything with a key: people, their person tokens, and service keys."
-        }
+        title="Users"
+        lead="The people who use coding agents through Enterplace, each with a key or a person token."
         actions={
           <>
             {data?.may.restore ? (
@@ -224,7 +223,7 @@ export function People({ query }: PageProps) {
           {entries.length === 0 ? null : (
             <Panel
               title={count(entries.length, "key")}
-              note="A key reaches the models, and what it spends is its holder's. A person token reaches no model: it only names a person, beside their own Claude login. A service key is a key for an app or agent. An admin key also signs in to this console."
+              note={`A key reaches the models, and what it spends is its holder's. A person token reaches no model: it only names a person, beside their own Claude login. An admin key also signs in to this console.${apps ? ` Service keys of apps and agents are under Apps and agents, Service keys (${apps}).` : ""}`}
               actions={
                 <Input
                   type="search"
