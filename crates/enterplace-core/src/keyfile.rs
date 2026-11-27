@@ -594,13 +594,33 @@ pub fn update(
     if prefix.len() < 8 || !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("name the key by at least the first 8 hex characters of its hash, as `GET /admin/keys` lists it.".into());
     }
-    retried(|| update_once(keys, &prefix, change))
+    retried(|| update_once(keys, &prefix, change, None))
+}
+
+/// Moves the key whose hash is `sha256` to `team`, its other fields kept. Returns the entry before and after, or
+/// `Ok(None)` when no key has that hash. A store keeps a key's team fixed, so with one attached this is refused.
+pub fn move_team(
+    keys: &Path,
+    sha256: &str,
+    team: &str,
+) -> Result<Option<(config::KeyEntry, config::KeyEntry)>, String> {
+    if !config::valid_name(team) {
+        return Err(format!(
+            "\"{team}\" is not a team name: use letters, digits, dots, dashes, underscores and @ only. Nothing was changed."
+        ));
+    }
+    if crate::store::attached(keys).is_some() {
+        return Err("the keys are kept in the store, which cannot move a key to another team. Revoke the key and issue a new one in that team. Nothing was changed.".into());
+    }
+    let sha256 = sha256.to_ascii_lowercase();
+    retried(|| update_once(keys, &sha256, &|_| {}, Some(team)))
 }
 
 fn update_once(
     keys: &Path,
     prefix: &str,
     change: &dyn Fn(&mut config::KeyEntry),
+    team: Option<&str>,
 ) -> Result<Option<(config::KeyEntry, config::KeyEntry)>, String> {
     let store = crate::store::attached(keys);
     let seen = match &store {
@@ -633,7 +653,7 @@ fn update_once(
     change(&mut after);
     // Who the key is for and which key it is are not changed here: a new name is a new key.
     after.name.clone_from(&before.name);
-    after.team.clone_from(&before.team);
+    after.team = team.unwrap_or(&before.team).to_string();
     after.sha256.clone_from(&before.sha256);
     // The organization too: moving a key to another tenant is issuing it a new key there.
     after.org.clone_from(&before.org);

@@ -2110,6 +2110,16 @@ fn admin_story(record: &Value) -> Story {
                 )
             }
         }
+        "move_key" => {
+            let (from, to) = (
+                String::from(s(target, "team")),
+                String::from(s(target, "to")),
+            );
+            (
+                format!("moved {name}{hash} from group {from} to group {to}"),
+                format!("move {name}{hash} from group {from} to group {to}"),
+            )
+        }
         "rollback_policy" => {
             let to = target.get("version").and_then(Value::as_i64).unwrap_or(0);
             (

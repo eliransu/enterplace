@@ -3443,6 +3443,10 @@ async fn teams_list_each_team_with_its_people_rule_owner_and_budget() -> TestRes
         serde_json::json!({
             "name": "payments", "keys": "1 key", "owner": null,
             "people": [{ "name": "maya.cohen", "admin": false }],
+            "members": [{
+                "name": "maya.cohen", "sha256": teams[0]["members"][0]["sha256"],
+                "hash": teams[0]["members"][0]["hash"], "kind": "key", "admin": false,
+            }],
             "rule": "payments-team", "budget": "none",
         })
     );
