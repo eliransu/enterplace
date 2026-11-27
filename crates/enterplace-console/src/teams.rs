@@ -316,39 +316,39 @@ async fn refuse(console: &Console, admin: &Admin, action: &'static str) -> Fail 
     )
 }
 
-/// Moves one key to group `team`, recorded first. The message says where the person is now.
-async fn moved_key(
+/// Moves keys of group `from` to group `team` in one step (the keys file in one write, the store in one
+/// transaction), recorded first: all of them move, or none.
+async fn move_keys(
     console: &Console,
     admin: &Admin,
-    entry: &KeyEntry,
+    moving: &[&KeyEntry],
+    from: &str,
     team: &str,
-) -> Result<String, Fail> {
+) -> Result<(), Fail> {
+    let names: Vec<&str> = moving.iter().map(|e| e.name.as_str()).collect();
+    let mut target = json!({ "name": names.join(", "), "team": from, "to": team });
+    if let ([one], Value::Object(t)) = (moving, &mut target) {
+        t.insert("sha256_prefix".into(), one.sha256[..8].into());
+    }
     let act = Act {
         action: "move_key",
         by: Some((&admin.name, &admin.team)),
         key: None,
-        target: json!({ "name": entry.name, "team": entry.team, "to": team, "sha256_prefix": &entry.sha256[..8] }),
+        target,
     };
     if record(console, &act, None, None).await.is_err() {
         return Err(Fail(StatusCode::SERVICE_UNAVAILABLE, NOT_RECORDED.into()));
     }
-    let (keys, sha256, to) = (
-        console.config().keys.clone(),
-        entry.sha256.clone(),
-        team.to_string(),
-    );
-    let done = tokio::task::spawn_blocking(move || keyfile::move_team(&keys, &sha256, &to))
+    let keys = console.config().keys.clone();
+    let hashes: Vec<String> = moving.iter().map(|e| e.sha256.clone()).collect();
+    let to = team.to_string();
+    let done = tokio::task::spawn_blocking(move || keyfile::move_keys(&keys, &hashes, &to))
         .await
         .unwrap_or_else(|err| Err(format!("nothing was changed: {err}. Try again.")));
     let error = match done {
-        Ok(Some(_)) => {
-            return Ok(format!(
-                "{} is in group {team} now. Every gateway uses it within 2 seconds.",
-                entry.name
-            ));
-        }
-        Ok(None) => {
-            "The key is no longer there: someone revoked it. Nothing was changed.".to_string()
+        Ok(true) => return Ok(()),
+        Ok(false) => {
+            "A key is no longer there: someone revoked or rotated it. Nothing was changed. Reload the page and try again.".to_string()
         }
         Err(err) => sentence(&err),
     };
@@ -424,16 +424,17 @@ async fn move_key(State(console): State<Console>, headers: HeaderMap, bytes: Byt
                 ));
             }
             stopped(&console, &entry.team)?;
-            let message = moved_key(&console, &admin, entry, &team).await?;
-            Ok(ok(json!({ "message": message })))
+            move_keys(&console, &admin, &[entry], &entry.team, &team).await?;
+            Ok(ok(json!({
+                "message": format!("{} is in group {team} now. Every gateway uses it within 2 seconds.", entry.name),
+            })))
         }
         .await,
     )
 }
 
-/// Renames a group: every key in it moves, and every place the policy names it changes with it. A rename that could
-/// stop half way (keys kept in the store, where a key keeps its team, or a policy change there that may wait for a
-/// second admin) is refused.
+/// Renames a group: every place the policy names it changes with it, then every key in it moves in one step. A
+/// rename whose policy change would wait for a second admin's approval is refused before anything changes.
 async fn rename(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {
     answer(
         async {
@@ -463,14 +464,16 @@ async fn rename(State(console): State<Console>, headers: HeaderMap, bytes: Bytes
             let (text, base) = current(&console)?;
             let mut tree = versions::tree(&text).map_err(|e| bad(sentence(&e)))?;
             let named = !rename_in(&mut tree, &name, None).is_empty() || listed(&tree, &name);
-            if !keys.is_empty() && store::attached(&console.config().keys).is_some() {
+            // A policy change held for a second admin would leave the keys under the new name and the rules under the
+            // old one until it is approved: refused before anything changes.
+            let c = console.config();
+            if !keys.is_empty()
+                && named
+                && base.is_some()
+                && config::load(&c.policy, Some(&c.keys)).is_ok_and(|live| versions::approval_needed(&live))
+            {
                 return Err(bad(format!(
-                    "The keys are kept in the store, which cannot move a key to another group, so group {name} cannot be renamed here. Create group {to}, issue its people new keys in it, then revoke their old ones."
-                )));
-            }
-            if !keys.is_empty() && named && base.is_some() {
-                return Err(bad(format!(
-                    "The policy is kept in the store, where a change may wait for a second admin, so group {name} cannot be renamed in one step. Rename it in the policy first, then move its people into the new name here."
+                    "A policy change here waits for a second admin's approval, so group {name} cannot be renamed in one step: its people would move before the rules that name it. Rename {name} to {to} in the policy and have it approved, then move the people of {name} into {to} on this page."
                 )));
             }
             let note = format!("Rename group {name} to {to}");
@@ -506,15 +509,13 @@ async fn rename(State(console): State<Console>, headers: HeaderMap, bytes: Bytes
                     return Err(Fail(StatusCode::SERVICE_UNAVAILABLE, NOT_RECORDED.into()));
                 }
             }
-            // ponytail: one write per key, so a failure part way leaves some keys moved; the message says how many,
-            // and the rest move one by one on this page. One write for all if a group ever holds thousands of keys.
-            for (done, entry) in keys.iter().enumerate() {
-                if let Err(Fail(_, why)) = moved_key(&console, &admin, entry, &to).await {
-                    return Err(bad(format!(
-                        "Group {name} is renamed to {to} in the policy, and {done} of {} moved before one failed: {why} Move the rest into {to} on the Groups page.",
-                        enterplace_core::count(keys.len(), "key")
-                    )));
-                }
+            if !keys.is_empty()
+                && let Err(Fail(_, why)) = move_keys(&console, &admin, &keys, &name, &to).await
+            {
+                let done = if named { format!("Group {name} is renamed to {to} in the policy, but its keys did not move: ") } else { String::new() };
+                return Err(bad(format!(
+                    "{done}{why} Move the people of {name} into {to} on the Groups page."
+                )));
             }
             Ok(ok(json!({
                 "message": format!("Group {name} is now {to}. Every gateway uses it within 2 seconds."),

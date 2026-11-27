@@ -886,6 +886,73 @@ async fn with_postgres_down_known_keys_work_and_budgeted_requests_are_refused() 
     Ok(())
 }
 
+/// The team of each key in the store, as gateway `gw` reads it now.
+fn teams_seen(gw: &Governed) -> Result<Vec<(String, String)>, Error> {
+    let keys = &gw.loaded.keys_path;
+    let text = enterplace_core::store::attached(keys)
+        .ok_or("no store attached")?
+        .keys_text();
+    let entries = enterplace_core::config::key_entries(keys, &text).map_err(|p| p.join(" "))?;
+    let mut teams: Vec<(String, String)> = entries.into_iter().map(|e| (e.name, e.team)).collect();
+    teams.sort();
+    Ok(teams)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_moved_to_another_team_on_one_gateway_are_in_it_on_the_other() -> TestResult {
+    let Some(url) = database("moves").await? else {
+        return Ok(());
+    };
+    let port = provider().await?;
+    let (a_dir, b_dir) = (dir("moves-a")?, dir("moves-b")?);
+    let a = gateway(&a_dir, &url, port)?;
+    add_key(&a, "ops", "ops", ADMIN, true)?;
+    add_key(&a, "pat", "payments", PAT, false)?;
+    add_key(&a, "lee", "payments", LEE, false)?;
+    let b = gateway(&b_dir, &url, port)?;
+    let hash = |key: &str| enterplace_core::id::sha256_hex(key.as_bytes());
+    let pair = |name: &str, team: &str| (name.to_string(), team.to_string());
+
+    // A group renamed: both keys move in one step, and the other gateway reads them in the new team.
+    let moved = enterplace_core::keyfile::move_keys(
+        &a.loaded.keys_path,
+        &[hash(PAT), hash(LEE)],
+        "growth",
+    )?;
+    assert!(moved);
+    let start = Instant::now();
+    while teams_seen(&b)?
+        != [
+            pair("lee", "growth"),
+            pair("ops", "ops"),
+            pair("pat", "growth"),
+        ]
+    {
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "b never saw the move: {:?}",
+            teams_seen(&b)?
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // One key that is not there: none moves.
+    let moved = enterplace_core::keyfile::move_keys(
+        &a.loaded.keys_path,
+        &[hash(PAT), hash("enterplace_no_such_key")],
+        "web",
+    )?;
+    assert!(!moved);
+    assert_eq!(
+        teams_seen(&a)?,
+        [
+            pair("lee", "growth"),
+            pair("ops", "ops"),
+            pair("pat", "growth")
+        ]
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_key_changed_or_rotated_on_one_gateway_is_in_force_on_the_other_with_shared_spend()
 -> TestResult {

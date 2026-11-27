@@ -343,6 +343,20 @@ export class StoreCore {
     return { changed: true };
   }
 
+  // Moves the keys with these hashes to another team, their other fields kept. Every call runs in one transaction,
+  // and when one of the keys is gone none moves.
+  on_move_keys(b: any) {
+    const hashes: string[] = (b.sha256s ?? []).map(String);
+    const rows = hashes.map((h) => this.one("SELECT body FROM keys WHERE sha256 = ?", h));
+    if (rows.some((r) => !r)) return { moved: false };
+    rows.forEach((row, i) => {
+      const body = { ...JSON.parse(row!.body), team: String(b.team) };
+      this.run("UPDATE keys SET body = ? WHERE sha256 = ?", JSON.stringify(body), hashes[i]);
+    });
+    if (hashes.length) this.bump("keys");
+    return { moved: true };
+  }
+
   // Removes the one key whose hash starts with `prefix`. Several matching remove none.
   on_revoke(b: any) {
     const prefix = String(b.prefix);

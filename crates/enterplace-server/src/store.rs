@@ -2670,6 +2670,28 @@ impl Store for PgStore {
         })
     }
 
+    fn move_keys(&self, sha256s: &[String], team: &str) -> Result<bool, String> {
+        let (hashes, team) = (sha256s.to_vec(), team.to_string());
+        self.change("key", move |client| {
+            Box::pin(async move {
+                // One statement: every key moves, or, when one is gone, none does.
+                let row = client
+                    .query_one(
+                        "WITH present AS (SELECT count(*) AS n FROM enterplace_keys WHERE sha256 = ANY($1)), \
+                         changed AS (UPDATE enterplace_keys SET team = $2 WHERE sha256 = ANY($1) \
+                           AND (SELECT n FROM present) = cardinality($1) RETURNING 1), \
+                         bumped AS (UPDATE enterplace_versions SET version = version + 1 \
+                           WHERE name = 'keys' AND EXISTS (SELECT 1 FROM changed)) \
+                         SELECT (SELECT n FROM present) = cardinality($1)",
+                        &[&hashes, &team],
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+                row.try_get(0).map_err(|err| err.to_string())
+            })
+        })
+    }
+
     fn reachable(&self) -> Result<(), String> {
         if self.inner.down.load(Ordering::Relaxed) {
             return Err(format!(

@@ -594,33 +594,72 @@ pub fn update(
     if prefix.len() < 8 || !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("name the key by at least the first 8 hex characters of its hash, as `GET /admin/keys` lists it.".into());
     }
-    retried(|| update_once(keys, &prefix, change, None))
+    retried(|| update_once(keys, &prefix, change))
 }
 
-/// Moves the key whose hash is `sha256` to `team`, its other fields kept. Returns the entry before and after, or
-/// `Ok(None)` when no key has that hash. A store keeps a key's team fixed, so with one attached this is refused.
-pub fn move_team(
-    keys: &Path,
-    sha256: &str,
-    team: &str,
-) -> Result<Option<(config::KeyEntry, config::KeyEntry)>, String> {
+/// Moves the keys whose hashes are `sha256s` (whole hashes) to `team`, their other fields kept, all in one write:
+/// every one moves, or none does. `Ok(false)` when one of them is not there, and nothing moved. With a store
+/// attached, the store moves them in one step.
+pub fn move_keys(keys: &Path, sha256s: &[String], team: &str) -> Result<bool, String> {
     if !config::valid_name(team) {
         return Err(format!(
             "\"{team}\" is not a team name: use letters, digits, dots, dashes, underscores and @ only. Nothing was changed."
         ));
     }
-    if crate::store::attached(keys).is_some() {
-        return Err("the keys are kept in the store, which cannot move a key to another team. Revoke the key and issue a new one in that team. Nothing was changed.".into());
+    let mut hashes: Vec<String> = sha256s.iter().map(|h| h.to_ascii_lowercase()).collect();
+    hashes.sort_unstable();
+    hashes.dedup();
+    if hashes.is_empty() {
+        return Ok(true);
     }
-    let sha256 = sha256.to_ascii_lowercase();
-    retried(|| update_once(keys, &sha256, &|_| {}, Some(team)))
+    if let Some(store) = crate::store::attached(keys) {
+        return store.move_keys(&hashes, team);
+    }
+    retried(|| {
+        let seen = look(keys)?;
+        let Some(mut text) = seen.text.clone() else {
+            return Ok(false);
+        };
+        for hash in &hashes {
+            let entries = config::key_entries(keys, &text).map_err(|problems| {
+                format!(
+                    "{} has a problem, so nothing was changed. Fix it first:\n{}",
+                    keys.display(),
+                    problems.join("\n")
+                )
+            })?;
+            let Some(before) = entries.iter().find(|e| &e.sha256 == hash) else {
+                return Ok(false);
+            };
+            let mut after = before.clone();
+            after.team = team.to_string();
+            text = spliced(keys, &text, &entries, before, &after)?;
+        }
+        replace(keys, &seen, &text)?;
+        Ok(true)
+    })
+}
+
+fn attributes_of(e: &config::KeyEntry) -> Attributes {
+    Attributes {
+        admin: e.admin,
+        expires: e.expires.clone(),
+        budget: e.budget,
+        models: e.models.clone(),
+        tpm: e.tpm,
+        org: e.org.clone(),
+        customer: e.customer.clone(),
+        tags: e.tags.clone(),
+        parallel: e.parallel,
+        role: e.role.clone(),
+        options: e.options.clone(),
+    }
 }
 
 fn update_once(
     keys: &Path,
     prefix: &str,
     change: &dyn Fn(&mut config::KeyEntry),
-    team: Option<&str>,
 ) -> Result<Option<(config::KeyEntry, config::KeyEntry)>, String> {
     let store = crate::store::attached(keys);
     let seen = match &store {
@@ -653,24 +692,16 @@ fn update_once(
     change(&mut after);
     // Who the key is for and which key it is are not changed here: a new name is a new key.
     after.name.clone_from(&before.name);
-    after.team = team.unwrap_or(&before.team).to_string();
+    after.team.clone_from(&before.team);
     after.sha256.clone_from(&before.sha256);
     // The organization too: moving a key to another tenant is issuing it a new key there.
     after.org.clone_from(&before.org);
-    let attributes = |e: &config::KeyEntry| Attributes {
-        admin: e.admin,
-        expires: e.expires.clone(),
-        budget: e.budget,
-        models: e.models.clone(),
-        tpm: e.tpm,
-        org: e.org.clone(),
-        customer: e.customer.clone(),
-        tags: e.tags.clone(),
-        parallel: e.parallel,
-        role: e.role.clone(),
-        options: e.options.clone(),
-    };
-    let new_entry = entry_text(&after.name, &after.team, &after.sha256, &attributes(&after));
+    let new_entry = entry_text(
+        &after.name,
+        &after.team,
+        &after.sha256,
+        &attributes_of(&after),
+    );
     // The changed entry must load by itself exactly as meant, or nothing is written.
     let alone = format!("keys:\n{new_entry}");
     match config::key_entries(keys, &alone) {
@@ -696,6 +727,27 @@ fn update_once(
             false => Ok(None),
         };
     }
+    let rest = spliced(keys, text, &entries, before, &after)?;
+    replace(keys, &seen, &rest)?;
+    Ok(Some((before.clone(), after)))
+}
+
+/// `text` (whose entries are `entries`) with the entry `before` replaced by `after`, written as `enterplace key new`
+/// writes one. Only that entry's lines change, and the result must read back as the same file with exactly that one
+/// entry changed.
+fn spliced(
+    keys: &Path,
+    text: &str,
+    entries: &[config::KeyEntry],
+    before: &config::KeyEntry,
+    after: &config::KeyEntry,
+) -> Result<String, String> {
+    let new_entry = entry_text(
+        &after.name,
+        &after.team,
+        &after.sha256,
+        &attributes_of(after),
+    );
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let unclear = || {
         format!(
@@ -722,17 +774,15 @@ fn update_once(
         .map(|line| format!("{}{}", " ".repeat(depth), &line[2..]))
         .collect();
     let rest: String = lines[..start].concat() + &indented + &lines[end..].concat();
-    // Whatever the text looked like, the result must be the same file with exactly this one entry changed.
     let now = config::key_entries(keys, &rest).map_err(|_| unclear())?;
     let expected: Vec<&config::KeyEntry> = entries
         .iter()
-        .map(|e| if e.sha256 == after.sha256 { &after } else { e })
+        .map(|e| if e.sha256 == after.sha256 { after } else { e })
         .collect();
     if now.iter().collect::<Vec<_>>() != expected {
         return Err(unclear());
     }
-    replace(keys, &seen, &rest)?;
-    Ok(Some((before.clone(), after)))
+    Ok(rest)
 }
 
 /// Removes the one entry whose hash starts with `prefix`. `Ok(None)` when no entry has it.
@@ -1461,6 +1511,42 @@ mod tests {
         let refused = update(&path, "bbbbbbbb", &|e| e.options.rpm = Some(0));
         assert!(refused.is_err_and(|e| e.contains("rpm is") && e.contains("Nothing was changed")));
         assert_eq!(std::fs::read_to_string(&path)?, text);
+        Ok(())
+    }
+
+    #[test]
+    fn keys_move_to_another_team_all_in_one_write_or_none() -> TestResult {
+        let (a, b, c) = (
+            format!("aaaaaaaa{}", "0".repeat(56)),
+            format!("bbbbbbbb{}", "0".repeat(56)),
+            format!("cccccccc{}", "0".repeat(56)),
+        );
+        let path = keys_file(
+            "move",
+            &format!(
+                "# hand notes stay\nkeys:\n  - name: a\n    team: t\n    sha256: {a}\n    tpm: 100 # a note\n  - name: b\n    team: t\n    sha256: {b}\n  - name: c\n    team: u\n    sha256: {c}\n"
+            ),
+        )?;
+        assert!(move_keys(&path, &[a.clone(), b.clone()], "growth")?);
+        let text = std::fs::read_to_string(&path)?;
+        assert!(text.starts_with("# hand notes stay\n"), "{text}");
+        let teams = |text: &str| -> Result<Vec<(String, String)>, String> {
+            let entries = config::key_entries(&path, text).map_err(|e| e.join("\n"))?;
+            Ok(entries.into_iter().map(|e| (e.name, e.team)).collect())
+        };
+        let pair = |n: &str, t: &str| (n.to_string(), t.to_string());
+        assert_eq!(
+            teams(&text)?,
+            [pair("a", "growth"), pair("b", "growth"), pair("c", "u")]
+        );
+        // One hash not there: nothing is written.
+        assert!(!move_keys(
+            &path,
+            &[c.clone(), format!("dddddddd{}", "0".repeat(56))],
+            "growth"
+        )?);
+        assert_eq!(std::fs::read_to_string(&path)?, text);
+        assert!(move_keys(&path, &[c], "bad name").is_err());
         Ok(())
     }
 

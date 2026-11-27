@@ -435,6 +435,11 @@ pub trait Store: Credentials + Send + Sync + std::fmt::Debug {
     fn update_key(&self, _entry: &KeyEntry) -> Result<bool, String> {
         Err("this store cannot change a key in place. Revoke it and issue a new one.".into())
     }
+    /// Moves the keys with these whole hashes to `team`, their other fields kept, in one step: all of them or none.
+    /// `Ok(false)` when one of them is not there, and nothing moved. Blocks until the database answers.
+    fn move_keys(&self, _sha256s: &[String], _team: &str) -> Result<bool, String> {
+        Err("this store cannot move a key to another team. Revoke it and issue a new one in that team.".into())
+    }
     /// Whether the store can be reached now, or why not. Asked by `GET /readyz`, so it answers from memory.
     fn reachable(&self) -> Result<(), String> {
         Ok(())
