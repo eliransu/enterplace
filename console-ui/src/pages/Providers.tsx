@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useCheckedChange } from "@/components/policy-change";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,7 +40,7 @@ import { Copy } from "@/components/copy";
 import { ChipsInput } from "@/components/chips-input";
 import { api, part } from "@/lib/api";
 import type { PageProps } from "@/pages";
-import { useData } from "@/lib/use";
+import { goTo, useData } from "@/lib/use";
 import { useProviderStatus } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
@@ -79,6 +79,10 @@ export function Providers({ me, query }: PageProps) {
   // `?model=openai/gpt-4o` (from Access requests) opens Add a provider with that model filled in.
   const wanted = query.get("model") ?? "";
   const [adding, setAdding] = useState(!!wanted);
+  // A second link while the page is open changes only the query: it opens the dialog too.
+  useEffect(() => {
+    if (wanted) setAdding(true);
+  }, [wanted]);
   const [editing, setEditing] = useState<Provider | null>(null);
   const [testing, setTesting] = useState("");
   const may = !!me?.edit_policy;
@@ -225,7 +229,7 @@ export function Providers({ me, query }: PageProps) {
           model={wanted}
           onClose={() => {
             setAdding(false);
-            if (wanted) window.history.replaceState(null, "", "#/providers");
+            if (wanted) goTo("/providers");
           }}
           change={change}
         />

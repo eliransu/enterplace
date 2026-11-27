@@ -759,6 +759,10 @@ fn prompt(
     )
 }
 
+/// What every agent prompt says of a refusal: a gateway admin fixes it in the console, so the agent passes the
+/// refusal's steps on and waits, rather than changing the app around it.
+pub const REFUSED: &str = "If a call is refused, read the refusal's fix: tell me the exact gateway steps it names, word for word with the link, wait until I say they are done, then retry the same call. Do not change the app to work around it.";
+
 /// An agent prompt for a task outside Start here: the same parts, with a check of the task's own.
 pub fn task_prompt(
     base: &str,
@@ -780,7 +784,7 @@ pub fn task_prompt(
     }
     let _ = write!(
         out,
-        "\nVerify: {verify}\n\nDocs (Markdown, read it for anything not covered here): {}\n\nDo not print, log or commit any key or token other than the values above, and ask me before changing anything else.\n",
+        "\nVerify: {verify}\n\n{REFUSED}\n\nDocs (Markdown, read it for anything not covered here): {}\n\nDo not print, log or commit any key or token other than the values above, and ask me before changing anything else.\n",
         md(doc)
     );
     out

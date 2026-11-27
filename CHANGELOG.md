@@ -5,7 +5,7 @@ Every change to Enterplace that a user or operator can see, newest first. The fo
 The open source crates and the enterprise features in `enterprise/` (commercial license) share one version number and
 one repository. How a release is made: RELEASING.md.
 
-## [Unreleased]
+## [1.0.1] - 2026-11-27
 
 ### Added
 
@@ -14,13 +14,16 @@ one repository. How a release is made: RELEASING.md.
   a price.
 - The rule form sets whether callers may pay with their own provider key (`caller_provider_key`: refused, allowed, or
   allowed and counted in budgets), sent in `x-enterplace-provider-key` beside their Enterplace key.
-
-## [1.0.1] - 2026-11-27
-
-## [Unreleased]
-
-### Added
-
+- A refusal a gateway admin can fix now says how, with the values filled in: `fix: { steps, console, docs }` beside
+  the code, and the same steps at the end of the message. The console link opens the dialog that fixes it on this
+  gateway: Add a provider with the model filled in (`unknown_model`, `wrong_route`, `login_needed`), the rule with the
+  model added (`model_not_allowed`), Add a rule for the team (`no_rule`), Allow for the caller (`awaiting_approval`,
+  `caller_blocked`), the MCP server's Access for the team (`tool_not_allowed`, `mcp_access_denied`), and the limit
+  (`budget_exceeded`, `rate_limited`, `parallel_limited`, `key_budget_exceeded`). Existing fields are unchanged.
+- The refusal codes page has a "Fix on the gateway" list for each of those codes: the console page, the button, the
+  field and the value, then retry the call.
+- Every "Copy for your agent" prompt tells the agent what to do with a refusal: pass the gateway steps on to you word
+  for word with the link, wait until you say they are done, then retry the same call, without changing the app.
 - TypeSafe in the provider catalog: Jev decision models (`jev-latest`, `jev-preview`) with the key pasted in Add a
   provider. Jev's own API (`POST /v1/systemone`) is reached as sent through `/passthrough/typesafe/v1/systemone`.
 - The rule form sets the provider APIs a rule reaches as sent (`passthrough:`), one line per provider, so an endpoint

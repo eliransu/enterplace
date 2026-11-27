@@ -23,6 +23,9 @@ function taskPrompt(
     "",
     `Verify: ${verify}`,
     "",
+    // Same words as the server's REFUSED: the refusal carries the gateway's fix, which an admin applies.
+    "If a call is refused, read the refusal's fix: tell me the exact gateway steps it names, word for word with the link, wait until I say they are done, then retry the same call. Do not change the app to work around it.",
+    "",
     `Docs (Markdown, read it for anything not covered here): ${DOCS}${doc.replace(/\/$/, "")}.md`,
     "",
     "Do not print, log or commit any key or token other than the values above, and ask me before changing anything else.",

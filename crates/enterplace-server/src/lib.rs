@@ -40,6 +40,7 @@ mod cors;
 mod credentials;
 mod demo;
 mod events;
+mod fix;
 mod focus;
 mod govern;
 mod health;
@@ -1526,6 +1527,8 @@ struct Refusal {
     /// UX12-2: fields the decision record gains, naming what refused it: `limit: {kind, of, value}` for a rate or
     /// TPM limit, `key_models: true` for the key's own model list. The console reads them.
     record: Option<Box<serde_json::Value>>,
+    /// What a gateway admin does in the console to fix it (`fix.rs`), sent beside the code and in the message.
+    fix: Option<Box<serde_json::Value>>,
 }
 
 impl Refusal {
@@ -1537,6 +1540,7 @@ impl Refusal {
             retry: false,
             retry_after: None,
             record: None,
+            fix: None,
         }
     }
 
@@ -1544,7 +1548,7 @@ impl Refusal {
     /// routes, OpenAI's everywhere else. The decision ID is inside the message because most clients show only that.
     fn respond(self, decision: &str, anthropic: bool) -> Response {
         let message = self.shown(decision);
-        let body = if anthropic {
+        let mut body = if anthropic {
             serde_json::json!({
                 "type": "error",
                 "error": { "type": anthropic_type(self.code, self.status), "message": message },
@@ -1554,19 +1558,39 @@ impl Refusal {
         } else {
             serde_json::json!({ "error": { "message": message, "type": "enterplace_error", "code": self.code, "decision": decision } })
         };
+        if let Some(fix) = &self.fix {
+            // Anthropic's clients read `error` as theirs: the fix goes beside enterplace_code, as the code does.
+            let at = if anthropic {
+                &mut body
+            } else {
+                &mut body["error"]
+            };
+            at["fix"] = (**fix).clone();
+        }
         self.with_body(body)
     }
 
     fn shown(&self, decision: &str) -> String {
+        // The decision ID stays last: clients and people look for it there.
+        let fixed = match &self.fix {
+            Some(f) => format!(" {}", fix::sentence(f)),
+            None => String::new(),
+        };
         match self.message.strip_prefix("Refused: ") {
-            Some(rest) => format!("Refused ({}): {rest} Decision {decision}.", self.code),
-            None => format!("{} Decision {decision}.", self.message),
+            Some(rest) => format!(
+                "Refused ({}): {rest}{fixed} Decision {decision}.",
+                self.code
+            ),
+            None => format!("{}{fixed} Decision {decision}.", self.message),
         }
     }
 
     /// The response in Google's error shape, for Gemini CLI and Google's SDKs on the Gemini API's routes.
     fn respond_gemini(self, decision: &str) -> Response {
-        let body = gemini_error(self.status, self.code, &self.shown(decision), decision);
+        let mut body = gemini_error(self.status, self.code, &self.shown(decision), decision);
+        if let Some(fix) = &self.fix {
+            body["error"]["fix"] = (**fix).clone();
+        }
         self.with_body(body)
     }
 
@@ -5052,6 +5076,14 @@ async fn decide(
     let client = client_ip.map(|ip| ip.to_string());
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
+    let base = fix::origin(
+        request.headers(),
+        request.uri(),
+        request
+            .extensions()
+            .get::<axum::http::uri::Scheme>()
+            .is_some(),
+    );
     // Holds the person a JWT names, for as long as the record of this request needs it.
     let minted = std::sync::OnceLock::new();
     // The coding tool or SDK that sent it: the request log and the coverage report read it from the record.
@@ -5700,7 +5732,41 @@ async fn decide(
         }
         _ => state.metrics.stages(&seen.stages),
     }
+    if let Err(refusal) = &mut outcome {
+        with_fix(refusal, policy, &seen, &base);
+    }
     outcome
+}
+
+/// Puts on a refusal what a gateway admin does to fix it, with the model, caller and rule this request named.
+fn with_fix(refusal: &mut Refusal, policy: &Policy, seen: &Seen<'_>, base: &str) {
+    if refusal.fix.is_some() {
+        return;
+    }
+    let model = seen.model.as_deref().unwrap_or_default();
+    let (caller, team) = seen
+        .person
+        .map_or(("", ""), |p| (p.name.as_str(), p.team.as_str()));
+    // A rule that left the model out decided nothing, so it is not on `seen`: the policy names it again.
+    let refused_by = match (seen.rule, seen.person) {
+        (Some(rule), _) => Some(rule.name.clone()),
+        (None, Some(person)) => match policy.decide(person, model) {
+            Decision::ModelNotAllowed(rule) => Some(rule.name.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    let facts = fix::Facts {
+        base,
+        model,
+        caller,
+        team,
+        rule: refused_by.as_deref().unwrap_or_default(),
+        message: &refusal.message,
+        record: refusal.record.as_deref(),
+        ..fix::Facts::default()
+    };
+    refusal.fix = fix::fix(refusal.code, &facts).map(Box::new);
 }
 
 /// Applies the rule's cache, rate and budget to a request about to be recorded and sent (spend.rs). Returns the
