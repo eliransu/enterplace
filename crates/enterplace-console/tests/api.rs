@@ -2141,3 +2141,40 @@ async fn coding_agent_controls_are_set_for_the_organization_and_per_rule() -> Te
     assert_eq!(s.policy()?, before);
     Ok(())
 }
+
+#[tokio::test]
+async fn a_guardrail_key_is_pasted_not_named_and_never_lands_in_the_policy() -> TestResult {
+    let s = setup("guard-key")?;
+    let cookie = sign_in(&s, ADMIN_KEY).await?;
+    // No master key here: a pasted key cannot be sealed, and the refusal says how to get one.
+    let (status, refused) = call(
+        &s,
+        "POST",
+        "/console/api/policy/guardrails",
+        &cookie,
+        Some(json!({ "name": "fs", "type": "lasso", "key": "lasso-test-1234567890", "on_failure": "fail_open" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        error(&refused).contains("ENTERPLACE_MASTER_KEY"),
+        "{refused}"
+    );
+    assert_eq!(s.policy()?, POLICY);
+    assert!(!s.policy()?.contains("lasso-test"));
+    // With no key at all the check names both ways to give one.
+    let (status, refused) = call(
+        &s,
+        "POST",
+        "/console/api/policy/guardrails",
+        &cookie,
+        Some(json!({ "name": "fs", "type": "lasso", "on_failure": "fail_open" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        error(&refused).contains("Paste it in the console"),
+        "{refused}"
+    );
+    Ok(())
+}

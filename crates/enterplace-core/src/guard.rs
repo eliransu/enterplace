@@ -148,6 +148,9 @@ pub struct GuardrailFile {
     /// The environment variable that holds a vendor's API key.
     #[serde(default)]
     pub key_env: Option<String>,
+    /// In place of `key_env`: the vendor's API key kept sealed in the store, by its name. The console pastes it there.
+    #[serde(default)]
+    pub credential: Option<String>,
     /// openai_moderation and llama_guard: the model that checks.
     #[serde(default)]
     pub model: Option<String>,
@@ -253,6 +256,8 @@ pub struct Webhook {
     pub vendor: Vendor,
     /// The variable holding the vendor's API key, read like `headers_env`.
     pub key_env: Option<String>,
+    /// Or the name of the store credential that holds it.
+    pub credential: Option<String>,
 }
 
 /// Headers a credential may not use: Enterplace sets these itself, or they belong to the connection.
@@ -782,6 +787,7 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
     let kind = type_name(def.kind);
     let given = [
         ("key_env", def.key_env.is_some()),
+        ("credential", def.credential.is_some()),
         ("model", def.model.is_some()),
         ("prompt", def.prompt.is_some()),
         ("region", def.region.is_some()),
@@ -830,7 +836,10 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
         GuardType::Judge => &["key_env", "model", "rubric", "cache_seconds"],
         _ => &[],
     };
-    if let Some((field, _)) = given.iter().find(|(f, on)| *on && !takes.contains(f)) {
+    // A key is given one of two ways: where key_env applies, credential does too.
+    let takes_field =
+        |f: &str| takes.contains(&f) || (f == "credential" && takes.contains(&"key_env"));
+    if let Some((field, _)) = given.iter().find(|(f, on)| *on && !takes_field(f)) {
         let hint = if *field == "key_env" && def.kind == GuardType::BedrockGuardrail {
             " It signs with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN from Enterplace's environment."
         } else {
@@ -865,9 +874,24 @@ fn vendor(def: &GuardrailFile) -> Result<Vendor, String> {
             | GuardType::MistralModeration
             | GuardType::Judge
     );
-    if key_needed && def.key_env.is_none() {
+    if def.key_env.is_some() && def.credential.is_some() {
         return Err(format!(
-            "guardrail \"{name}\": a {kind} guardrail needs key_env, the name of the environment variable that holds its API key. Add it, for example key_env: GUARD_API_KEY."
+            "guardrail \"{name}\": it names both key_env and credential. Keep the one that holds its API key and remove the other."
+        ));
+    }
+    if let Some(cred) = &def.credential
+        && (cred.is_empty()
+            || !cred
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-@".contains(&b)))
+    {
+        return Err(format!(
+            "guardrail \"{name}\": credential is the name of a key kept in the store, for example guardrail-{name}: letters, digits, dots, dashes, underscores and @ only. The key itself never goes in this file."
+        ));
+    }
+    if key_needed && def.key_env.is_none() && def.credential.is_none() {
+        return Err(format!(
+            "guardrail \"{name}\": a {kind} guardrail needs its API key. Paste it in the console (Guardrails, edit {name}), or add key_env with the name of the environment variable that holds it, for example key_env: GUARD_API_KEY."
         ));
     }
     Ok(match def.kind {
@@ -1116,6 +1140,7 @@ fn webhook(def: &GuardrailFile) -> Result<Webhook, String> {
         headers_env,
         vendor,
         key_env: def.key_env.clone(),
+        credential: def.credential.clone(),
     })
 }
 
@@ -3222,6 +3247,7 @@ rules:
                 headers_env: Vec::new(),
                 vendor: Vendor::Contract,
                 key_env: None,
+                credential: None,
             })
         );
         assert_eq!(defined[2].action, Action::Block);
@@ -3385,10 +3411,26 @@ rules:
         let azure = hook_of(&parse(ok[4].0)?.map_err(|e| e.to_string())?).ok_or("not remote")?;
         assert_eq!(azure.vendor, Vendor::AzureContentSafety { threshold: 4 });
         assert_eq!(azure.key_env.as_deref(), Some("AZ"));
+        // A key pasted in the console is a store credential, named in place of key_env.
+        let lasso = hook_of(
+            &parse("name: fs\ntype: lasso\ncredential: guardrail-fs\non_failure: fail_open")?
+                .map_err(|e| e.to_string())?,
+        )
+        .ok_or("not remote")?;
+        assert_eq!(lasso.credential.as_deref(), Some("guardrail-fs"));
+        assert_eq!(lasso.key_env, None);
         let bad = [
             (
                 "name: m\ntype: openai_moderation\non_failure: fail_open",
-                "needs key_env",
+                "Paste it in the console",
+            ),
+            (
+                "name: m\ntype: lasso\nkey_env: K\ncredential: c\non_failure: fail_open",
+                "both key_env and credential",
+            ),
+            (
+                "name: m\ntype: presidio\nurl: http://127.0.0.1:5002\ncredential: c\non_failure: fail_open",
+                "credential does not apply",
             ),
             (
                 "name: m\ntype: openai_moderation\nkey_env: K\non_failure: fail_open\naction: mask",
@@ -3506,6 +3548,7 @@ rules:
                 headers_env: Vec::new(),
                 vendor: Vendor::Contract,
                 key_env: None,
+                credential: None,
             }),
             action,
         )

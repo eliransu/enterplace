@@ -160,6 +160,7 @@ fn bench_policy(events: Option<SocketAddr>) -> Policy {
                     headers_env: Vec::new(),
                     vendor: guard::Vendor::Contract,
                     key_env: None,
+                    credential: None,
                 },
                 mode: events::Mode::Observe,
                 history: false,

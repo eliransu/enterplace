@@ -95,6 +95,7 @@ impl Plugins {
                     headers_env: Vec::new(),
                     vendor: guard::Vendor::Contract,
                     key_env: None,
+                    credential: None,
                 },
                 mode: plugin.mode(),
                 history: plugin.history(),

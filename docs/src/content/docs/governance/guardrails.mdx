@@ -294,6 +294,7 @@ A backtest runs the `secrets`, `pii`, `regex` and `keywords` types. A vendor or 
 | `url` | string | per vendor | `https://`, or `http://` on `localhost`, `127.0.0.1` or `[::1]` only. |
 | `timeout_ms` | integer | `1000` | 1 to 30000. Covers every call the guardrail makes for one request. |
 | `key_env` | string | none | Environment variable holding the vendor's API key. |
+| `credential` | string | none | In place of `key_env`: the vendor's API key kept sealed in the store, by name. The console's guardrail form pastes the key and writes `credential: guardrail-<name>`; the key itself is never in the policy. Needs a master key, as [provider credentials](/governance/provider-credentials/) do. Wherever this page says `key_env` is required, `credential` does too. |
 | `headers_env` | map | none | Extra headers from environment variables, for a proxy in front of the vendor. |
 | `on` | list | `[request]` | `[request]`, `[answer]` or `[request, answer]`. |
 

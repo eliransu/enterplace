@@ -79,6 +79,7 @@ type Data = {
   guardrails: Guardrail[];
   aliases: Alias[];
   guard_agent: string;
+  sealing?: boolean;
   limit_agent: string;
   rule_agent: string;
   alias_agent: string;
@@ -551,7 +552,7 @@ export function PolicyBasics({ me, query, only }: PageProps & { only?: "guardrai
       ) : null}
       {data && rule ? <RuleForm rule={rule === "new" ? null : rule} guardrails={data.guardrails} tags={tagsOf(data)} onClose={() => setRule(null)} change={change} /> : null}
       {limit ? <LimitForm limit={limit === "new" ? null : limit} team={prefill} tags={data ? tagsOf(data) : []} onClose={closeLimit} change={change} /> : null}
-      {guard ? <GuardForm guard={guard === "new" ? null : guard} onClose={() => setGuard(null)} change={change} /> : null}
+      {guard ? <GuardForm guard={guard === "new" ? null : guard} sealing={!!data?.sealing} onClose={() => setGuard(null)} change={change} /> : null}
       {testing ? <GuardTest guard={testing} onClose={() => setTesting(null)} /> : null}
       {alias ? <AliasForm alias={alias === "new" ? null : alias} onClose={() => setAlias(null)} change={change} /> : null}
       {checking}
@@ -967,6 +968,7 @@ const FORM_KEYS = [
   "on",
   "url",
   "key_env",
+  "credential",
   "model",
   "timeout_ms",
   "on_failure",
@@ -977,10 +979,12 @@ const FORM_KEYS = [
 
 function GuardForm({
   guard,
+  sealing,
   onClose,
   change,
 }: {
   guard: Guardrail | null;
+  sealing: boolean;
   onClose: () => void;
   change: Change;
 }) {
@@ -1014,6 +1018,10 @@ function GuardForm({
     ),
     settings: other,
   });
+  // A pasted key by default, as for a provider; a variable only when asked for, or when no key can be kept here.
+  const [useEnv, setUseEnv] = useState(!sealing || !!e.key_env);
+  const [key, setKey] = useState("");
+  const kept = typeof e.credential === "string";
   const [refused, setRefused] = useState("");
   const set =
     (k: string) =>
@@ -1031,6 +1039,7 @@ function GuardForm({
       action,
       on,
       ...fields,
+      ...(useEnv ? {} : { key_env: "", key }),
       ...(now ? { shadow_until: "" } : {}),
       ...(guard ? {} : { every }),
     };
@@ -1180,18 +1189,52 @@ function GuardForm({
                   onChange={set("url")}
                 />
               </Field>
-              <Field
-                id="guard-key"
-                label="Environment variable with its key"
-                hint="The value never goes in the policy."
-              >
-                <Input
+              {useEnv ? (
+                <Field
                   id="guard-key"
-                  className="t-mono"
-                  value={fields.key_env}
-                  onChange={set("key_env")}
-                />
-              </Field>
+                  label="Environment variable that holds its API key"
+                  hint="For example GUARD_API_KEY. It must be set on every gateway."
+                >
+                  <Input
+                    id="guard-key"
+                    className="t-mono"
+                    value={fields.key_env}
+                    onChange={set("key_env")}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </Field>
+              ) : (
+                <Field
+                  id="guard-key"
+                  label="API key"
+                  hint={
+                    kept
+                      ? "A key is kept. Paste a new one to replace it, or leave this empty."
+                      : "Stored encrypted under the master key. It is in no record and no page."
+                  }
+                >
+                  <Input
+                    id="guard-key"
+                    type="password"
+                    className="t-mono"
+                    value={key}
+                    onChange={(ev) => setKey(ev.target.value)}
+                    autoComplete="off"
+                  />
+                </Field>
+              )}
+              {sealing ? (
+                <button
+                  type="button"
+                  className="t-small -mt-3 cursor-pointer justify-self-start border-0 bg-transparent p-0 pl-6 text-muted-foreground underline"
+                  onClick={() => setUseEnv(!useEnv)}
+                >
+                  {useEnv
+                    ? "Paste the key instead"
+                    : "The key is in an environment variable instead"}
+                </button>
+              ) : null}
               <Field id="guard-model" label="Model, for a model that checks">
                 <Input
                   id="guard-model"

@@ -2113,6 +2113,7 @@ mod tests {
                 headers_env: Vec::new(),
                 vendor: crate::vendors::Vendor::Contract,
                 key_env: None,
+                credential: None,
             },
             mode,
             history: false,
