@@ -7,6 +7,14 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Added
+
+- A router's model name is priced as the vendor's model: `anthropic/claude-opus-5.5` on OpenRouter costs what
+  `claude-opus-5-5` costs, from the built-in price list. A budgeted rule no longer refuses such a provider for want of
+  a price.
+- The rule form sets whether callers may pay with their own provider key (`caller_provider_key`: refused, allowed, or
+  allowed and counted in budgets), sent in `x-enterplace-provider-key` beside their Enterplace key.
+
 ## [1.0.1] - 2026-11-27
 
 ## [Unreleased]

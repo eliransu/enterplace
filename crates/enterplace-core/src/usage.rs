@@ -862,12 +862,32 @@ pub fn price_for(model: &str, overrides: &PriceOverrides) -> Option<Price> {
         // Looked up on every admitted request, so the table is built once.
         static BUILTIN: std::sync::LazyLock<Vec<BuiltinPrice>> =
             std::sync::LazyLock::new(builtin_prices);
-        BUILTIN
-            .iter()
-            .find(|entry| entry.model == model)
-            .map(|entry| entry.price.clone())
-            .or_else(|| litellm_prices().get(model).cloned())
+        let known = |name: &str| {
+            BUILTIN
+                .iter()
+                .find(|entry| entry.model == name)
+                .map(|entry| entry.price.clone())
+                .or_else(|| litellm_prices().get(name).cloned())
+        };
+        known(model).or_else(|| {
+            // A router's name, `anthropic/claude-opus-5.5` on OpenRouter, is the vendor's model at the vendor's list
+            // price: `claude-opus-5.5`, or `claude-opus-5-5` as Anthropic writes a version.
+            let (_, bare) = model.rsplit_once('/')?;
+            known(bare).or_else(|| known(&dashed_version(bare)))
+        })
     })
+}
+
+/// `claude-opus-5.5` as `claude-opus-5-5`: a dot between two digits becomes a dash.
+fn dashed_version(name: &str) -> String {
+    let b = name.as_bytes();
+    name.char_indices()
+        .map(|(i, c)| {
+            let digits =
+                i > 0 && i + 1 < b.len() && b[i - 1].is_ascii_digit() && b[i + 1].is_ascii_digit();
+            if c == '.' && digits { '-' } else { c }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -875,6 +895,27 @@ mod tests {
     use super::*;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn a_routers_model_name_is_priced_as_the_vendors_model() -> TestResult {
+        let none = PriceOverrides::default();
+        for (routed, vendor) in [
+            ("anthropic/claude-sonnet-5", "claude-sonnet-5"),
+            ("anthropic/claude-opus-5.5", "claude-opus-5-5"),
+            ("anthropic/claude-haiku-4.5", "claude-haiku-4-5"),
+            ("google/gemini-2.5-flash", "gemini-2.5-flash"),
+        ] {
+            let got = price_for(routed, &none).ok_or(routed)?;
+            let want = price_for(vendor, &none).ok_or(vendor)?;
+            assert!(
+                close(got.input, want.input) && close(got.output, want.output),
+                "{routed}"
+            );
+        }
+        assert!(price_for("nobody/no-such-model-9", &none).is_none());
+        assert_eq!(dashed_version("gemini-2.5-flash"), "gemini-2-5-flash");
+        Ok(())
+    }
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-12

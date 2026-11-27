@@ -1330,6 +1330,7 @@ async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Respo
                     "who": who,
                     "models": str_list(r.get("models")),
                     "guardrails": str_list(r.get("guardrails")),
+                    "caller_provider_key": r.get("caller_provider_key").and_then(Value::as_str).unwrap_or("refused"),
                     // As the form edits it: `provider: /path, /path`, one line each.
                     "passthrough": r.get("passthrough").and_then(Value::as_array).map(|list| {
                         list.iter()
@@ -1552,6 +1553,22 @@ fn rule_fields(rule: &mut Map<String, Value>, body: &Map<String, Value>) -> Resu
         rule.remove("guardrails");
     } else {
         rule.insert("guardrails".into(), strings(&guardrails));
+    }
+    // Whether callers may pay with their own provider key in x-enterplace-provider-key. Only a form that sends it
+    // changes it; refused is the default, so it is not written.
+    match body.get("caller_provider_key").and_then(Value::as_str) {
+        None => {}
+        Some("" | "refused") => {
+            rule.remove("caller_provider_key");
+        }
+        Some(mode @ ("allowed" | "allowed_budgeted")) => {
+            rule.insert("caller_provider_key".into(), mode.into());
+        }
+        Some(other) => {
+            return Err(format!(
+                "\"{other}\" is not a choice for callers' own provider keys. Pick refused, allowed or allowed_budgeted."
+            ));
+        }
     }
     // A provider's own API reached as sent, one line per provider: `typesafe: /v1/systemone, /v1/models`. Only a
     // form that sends the field changes it.

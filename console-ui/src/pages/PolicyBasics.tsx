@@ -58,6 +58,7 @@ type Rule = {
   models: string[];
   guardrails: string[];
   passthrough?: string;
+  caller_provider_key?: string;
 };
 type Entry = Record<string, unknown>;
 type Limit = { index: number; entry: Entry };
@@ -608,6 +609,7 @@ function RuleForm({
   const [models, setModels] = useState(rule?.models.join(", ") ?? "");
   const [guards, setGuards] = useState<string[]>(rule?.guardrails ?? []);
   const [native, setNative] = useState(rule?.passthrough ?? "");
+  const [ownKey, setOwnKey] = useState(rule?.caller_provider_key ?? "refused");
   const [refused, setRefused] = useState("");
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -617,6 +619,7 @@ function RuleForm({
       models: words(models),
       guardrails: guards,
       passthrough: native,
+      caller_provider_key: ownKey,
     };
     const answer = await change(() =>
       rule
@@ -692,6 +695,22 @@ function RuleForm({
               onChange={(e) => setModels(e.target.value)}
               required
             />
+          </Field>
+          <Field
+            id="rule-own-key"
+            label="Callers' own provider keys"
+            hint="A caller sends their key in the x-enterplace-provider-key header, beside their Enterplace key. It is sent to the provider in place of the gateway's and never logged."
+          >
+            <Select value={ownKey} onValueChange={setOwnKey}>
+              <SelectTrigger id="rule-own-key">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="refused">Refused: always the gateway's key</SelectItem>
+                <SelectItem value="allowed">Allowed, the caller pays, not counted in budgets</SelectItem>
+                <SelectItem value="allowed_budgeted">Allowed, and counted in budgets</SelectItem>
+              </SelectContent>
+            </Select>
           </Field>
           <Field
             id="rule-native"
