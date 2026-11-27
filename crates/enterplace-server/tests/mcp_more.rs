@@ -953,3 +953,192 @@ async fn sessions_are_listed_and_ended_and_a_rule_names_the_clients_that_may_con
     assert_eq!(ended(&dir)?, before + 2);
     Ok(())
 }
+
+const OMER: &str = "enterplace_omer_0123456789abcdef0123456789";
+
+/// One JSON-RPC message to `/mcp` with `key`: the answer.
+async fn rpc_as(app: &Router, key: &str, message: Value) -> Result<Value, Error> {
+    let auth = format!("Bearer {key}");
+    let headers = [
+        ("authorization", auth.as_str()),
+        ("content-type", "application/json"),
+        ("accept", "application/json"),
+    ];
+    let (_, _, body) = http(app, "POST", "/mcp", &headers, message.to_string()).await?;
+    Ok(serde_json::from_str(&body).unwrap_or(Value::Null))
+}
+
+/// The console's JSON API, signed in as the admin.
+struct ConsoleApi<'a> {
+    app: &'a Router,
+    cookie: String,
+}
+
+impl ConsoleApi<'_> {
+    async fn sign_in(app: &Router) -> Result<ConsoleApi<'_>, Error> {
+        let (_, headers, _) = http(
+            app,
+            "POST",
+            "/console/sign-in",
+            &[("content-type", "application/x-www-form-urlencoded")],
+            format!("key={ADMIN}"),
+        )
+        .await?;
+        let cookie = headers
+            .get(header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|c| c.split(';').next())
+            .ok_or("no console cookie")?
+            .to_string();
+        Ok(ConsoleApi { app, cookie })
+    }
+
+    async fn call(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<(StatusCode, Value), Error> {
+        let (status, _, text) = http(
+            self.app,
+            method,
+            path,
+            &[
+                ("cookie", self.cookie.as_str()),
+                ("content-type", "application/json"),
+            ],
+            body.map(|b| b.to_string()).unwrap_or_default(),
+        )
+        .await?;
+        Ok((status, serde_json::from_str(&text).unwrap_or(Value::Null)))
+    }
+}
+
+/// Three servers (`docs` with `search` switched off, `open`, and `gone`, which never answers), one rule that allows
+/// every tool to everyone, and keys for maya (payments), omer (support) and an admin.
+async fn catalog_setup(name: &str) -> Result<(PathBuf, String), Error> {
+    let (docs, _) = streamable("docs", None).await?;
+    let (open, _) = streamable("open", None).await?;
+    let dir = dir_for(name)?;
+    std::fs::write(
+        dir.join("enterplace.keys.yaml"),
+        format!(
+            "keys:\n{}{}{}    admin: true\n",
+            entry("maya.cohen", "payments", MAYA),
+            entry("omer.katz", "support", OMER),
+            entry("ops.admin", "ops", ADMIN)
+        ),
+    )?;
+    let servers = format!(
+        "mcp:
+  - name: docs
+    url: http://127.0.0.1:{docs}/mcp
+    allow_private: true
+    disabled_tools: [search]
+  - name: open
+    url: http://127.0.0.1:{open}/mcp
+    allow_private: true
+  - name: gone
+    url: http://127.0.0.1:1/mcp
+    allow_private: true
+rules:
+  - name: everyone
+    principals: {{ any: true }}
+    models: [model-a]
+    tools: ['*']
+"
+    );
+    write_policy(&dir, &servers)?;
+    Ok((dir, servers))
+}
+
+fn reloaded(gw: &Governed) -> Result<(), Error> {
+    match gw.reloader.check(Trigger::FileChange) {
+        Reload::Loaded => Ok(()),
+        _ => Err("the policy the console saved did not load".into()),
+    }
+}
+
+fn actions(dir: &Path) -> Result<Vec<String>, Error> {
+    Ok(records(dir)?
+        .iter()
+        .filter_map(|r| r["action"].as_str().map(String::from))
+        .collect())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_console_lists_a_servers_tools_and_a_tool_switched_off_is_refused_to_everyone()
+-> TestResult {
+    let (dir, servers) = catalog_setup("catalog").await?;
+    let bad = servers.replacen("disabled_tools: [search]", "disabled_tools: ['docs.*']", 1);
+    write_policy(&dir, &bad)?;
+    let Err(err) = governed(&dir, &[]) else {
+        return Err("loaded with a pattern in disabled_tools".into());
+    };
+    assert!(err.contains("disabled_tools"), "{err}");
+    write_policy(&dir, &servers)?;
+    let gw = governed(&dir, &[])?;
+
+    // A switched off tool is listed to no one and refused to everyone; the rest of the server is as before.
+    let answer = rpc_as(&gw.router, MAYA, list()).await?;
+    assert_eq!(
+        tools(&answer),
+        ["docs.echo", "open.echo", "open.search"],
+        "{answer}"
+    );
+    let answer = rpc_as(&gw.router, MAYA, call("docs.search")).await?;
+    assert_eq!(code(&answer), "tool_disabled", "{answer}");
+    let answer = rpc_as(&gw.router, OMER, call("docs.echo")).await?;
+    assert_eq!(text(&answer), "docs ran echo", "{answer}");
+
+    // Test lists the server's tools now, with their descriptions and which are switched off.
+    let console = ConsoleApi::sign_in(&gw.router).await?;
+    let (status, tested) = console
+        .call(
+            "POST",
+            "/console/api/mcp-catalog",
+            Some(json!({"server": "docs"})),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{tested}");
+    assert_eq!(
+        tested["tools"],
+        json!([
+            {"name": "echo", "description": "says it back", "enabled": true},
+            {"name": "search", "description": "looks it up", "enabled": false},
+        ]),
+        "{tested}"
+    );
+    let (status, catalog) = console
+        .call("GET", "/console/api/mcp-catalog", None)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    assert_eq!(catalog["servers"][0]["name"], "docs", "{catalog}");
+    assert_eq!(catalog["servers"][0]["tools"], tested["tools"], "{catalog}");
+
+    // Switched back on from the console: recorded, saved through the policy, and served after the reload.
+    let (status, answer) = console
+        .call(
+            "PUT",
+            "/console/api/mcp/docs/catalog",
+            Some(json!({"disabled": []})),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    reloaded(&gw)?;
+    let answer = rpc_as(&gw.router, MAYA, call("docs.search")).await?;
+    assert_eq!(text(&answer), "docs ran search", "{answer}");
+    let (status, answer) = console
+        .call(
+            "PUT",
+            "/console/api/mcp/docs/catalog",
+            Some(json!({"disabled": ["echo"]})),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    reloaded(&gw)?;
+    let answer = rpc_as(&gw.router, MAYA, call("docs.echo")).await?;
+    assert_eq!(code(&answer), "tool_disabled", "{answer}");
+    assert!(actions(&dir)?.iter().any(|a| a == "change_mcp_catalog"));
+    Ok(())
+}

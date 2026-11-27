@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useCheckedChange } from "@/components/policy-change";
 import { Copy } from "@/components/copy";
 import { Setup } from "./Setup";
@@ -7,6 +7,7 @@ import type { PageProps } from "@/pages";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
+import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -26,6 +27,7 @@ type Server = {
   auth_header: string;
   auth_env: string;
   access: Access[];
+  disabled_tools: string[];
 };
 type Change = (run: () => Promise<{ message: string }>) => Promise<string>;
 
@@ -42,9 +44,11 @@ export function McpServers({ me, query }: PageProps) {
   const [picked, setForm] = useState<Server | "new" | null>(null);
   // `?add=1` opens Add a server, so Overview's next step is a link.
   const form = picked ?? (query.get("add") === "1" && me?.edit_policy ? "new" : null);
-  const close = () => {
+  const close = (added?: string) => {
     setForm(null);
     if (query.get("add")) goTo("/mcp");
+    // A server just added: its tools, listed by Test as the dialog opens.
+    if (added) setTools({ name: added, transport: "", url: null, command: null, args: [], auth: "", auth_header: "", auth_env: "", access: [], disabled_tools: [] });
   };
   const [tools, setTools] = useState<Server | null>(null);
   const may = !!me?.edit_policy;
@@ -69,7 +73,7 @@ export function McpServers({ me, query }: PageProps) {
       {error ? <Problem text={error} retry={reload} /> : null}
       {!data && !error ? <Loading rows={3} /> : null}
       {data ? (
-      <Panel title={data.servers.length ? `${data.servers.length} ${data.servers.length === 1 ? "server" : "servers"}` : undefined} note="The tools each server lists, their changes and their stop switches are under Tools.">
+      <Panel title={data.servers.length ? `${data.servers.length} ${data.servers.length === 1 ? "server" : "servers"}` : undefined} note="Tools lists each server's tools with a switch each. Their changes and stop switches are under MCP, Tools.">
         {data.servers.length === 0 ? (
           <Empty title="No MCP servers yet" body="Add one with its URL, or the program the gateway starts for it. Agents then reach its tools through Enterplace, and each call is recorded under the person who made it.">
             {may ? <Button onClick={() => setForm("new")}>Add a server</Button> : null}
@@ -135,7 +139,7 @@ export function McpServers({ me, query }: PageProps) {
         <Setup query={query} base="/mcp" track="mcp" />
       </section>
       {form ? <ServerForm server={form === "new" ? null : form} onClose={close} change={change} /> : null}
-      {tools ? <ToolAccess server={tools} onClose={() => setTools(null)} change={change} /> : null}
+      {tools ? <ToolCatalog server={tools} onClose={() => setTools(null)} change={change} /> : null}
       {checking}
     </>
   );
@@ -146,7 +150,7 @@ function summary(a: Access) {
   return a.deny.length ? `${allow}, except ${a.deny.join(", ")}` : allow;
 }
 
-function ServerForm({ server, onClose, change }: { server: Server | null; onClose: () => void; change: Change }) {
+function ServerForm({ server, onClose, change }: { server: Server | null; onClose: (added?: string) => void; change: Change }) {
   const [name, setName] = useState(server?.name ?? "");
   const [transport, setTransport] = useState(server?.transport ?? "http");
   const [url, setUrl] = useState(server?.url ?? "");
@@ -161,13 +165,13 @@ function ServerForm({ server, onClose, change }: { server: Server | null; onClos
     const body = { name, transport, url, command, args: words(args), auth, auth_header: header, auth_env: env };
     const answer = await change(() => (server ? api.put(`mcp/${part(server.name)}`, body) : api.post("mcp", body)));
     if (answer) setRefused(answer);
-    else onClose();
+    else onClose(server ? undefined : name);
   };
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogTitle>{server ? `Edit ${server.name}` : "Add an MCP server"}</DialogTitle>
-        <DialogDescription>Agents see its tools as server.tool. No rule allows them until you say so under Tools.</DialogDescription>
+        <DialogDescription>Agents see its tools as server.tool. Its tools are listed once it is added, each with a switch.</DialogDescription>
         <Form className="grid gap-6" onSubmit={submit}>
           {server ? null : (
             <Field id="name" label="Name" hint="Letters, digits, - and _, no dot. For example github.">
@@ -226,7 +230,7 @@ function ServerForm({ server, onClose, change }: { server: Server | null; onClos
           ) : null}
           <Refusal text={refused} />
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="outline" onClick={() => onClose()}>
               Cancel
             </Button>
             <Button type="submit">{server ? "Save" : "Add server"}</Button>
@@ -237,14 +241,49 @@ function ServerForm({ server, onClose, change }: { server: Server | null; onClos
   );
 }
 
-function ToolAccess({ server, onClose, change }: { server: Server; onClose: () => void; change: Change }) {
-  const [rows, setRows] = useState(server.access.map((a) => ({ rule: a.rule, allow: a.allow.join(", "), deny: a.deny.join(", ") })));
-  const set = (i: number, key: "allow" | "deny", value: string) => setRows(rows.map((r, j) => (j === i ? { ...r, [key]: value } : r)));
+type Tool = { name: string; description: string; enabled: boolean };
+
+/// The server's tools with a switch each: off is listed to no one and refused to everyone. Test lists them now; with
+/// none known yet, it runs on open, so a server just added shows its tools.
+function ToolCatalog({ server, onClose, change }: { server: Server; onClose: () => void; change: Change }) {
+  const [tools, setTools] = useState<Tool[] | null>(null);
+  const [off, setOff] = useState(() => new Set(server.disabled_tools));
+  const [testing, setTesting] = useState(false);
   const [refused, setRefused] = useState("");
+  const test = async () => {
+    setTesting(true);
+    setRefused("");
+    try {
+      const done = (await api.post("mcp-catalog", { server: server.name })) as unknown as { tools: Tool[] };
+      setTools(done.tools);
+    } catch (e) {
+      setRefused((e as Error).message);
+      setTools((t) => t ?? []);
+    } finally {
+      setTesting(false);
+    }
+  };
+  useEffect(() => {
+    api
+      .get<{ servers: { name: string; tools: Tool[] }[] }>("mcp-catalog")
+      .then((c) => {
+        const known = c.servers.find((s) => s.name === server.name)?.tools ?? [];
+        if (known.length) setTools(known);
+        else void test();
+      })
+      .catch((e: Error) => setRefused(e.message));
+    // Once, on open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const flip = (name: string, on: boolean) => {
+    const next = new Set(off);
+    if (on) next.delete(name);
+    else next.add(name);
+    setOff(next);
+  };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const body = { rules: rows.map((r) => ({ rule: r.rule, allow: words(r.allow), deny: words(r.deny) })) };
-    const answer = await change(() => api.put(`mcp/${part(server.name)}/tools`, body));
+    const answer = await change(() => api.put(`mcp/${part(server.name)}/catalog`, { disabled: [...off].sort() }));
     if (answer) setRefused(answer);
     else onClose();
   };
@@ -252,21 +291,40 @@ function ToolAccess({ server, onClose, change }: { server: Server; onClose: () =
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-wide">
         <DialogTitle>Tools of {server.name}</DialogTitle>
-        <DialogDescription>For each rule: the tools it may call (* for all) and the ones it may never call, by the server's own tool names.</DialogDescription>
+        <DialogDescription>Switch a tool off and no one sees or calls it, whatever a rule or grant allows.</DialogDescription>
         <Form className="grid gap-6" onSubmit={submit}>
-          {rows.map((r, i) => (
-            <div key={r.rule} className="grid gap-4 md:grid-cols-[1fr_2fr_2fr] md:items-end">
-              <span className="t-mono min-h-11 content-center">{r.rule}</span>
-              <Field id={`allow-${i}`} label="Allow" hint="* for every tool.">
-                <Input id={`allow-${i}`} className="t-mono" value={r.allow} onChange={(e) => set(i, "allow", e.target.value)} />
-              </Field>
-              <Field id={`deny-${i}`} label="Deny" hint="For example delete_repo.">
-                <Input id={`deny-${i}`} className="t-mono" value={r.deny} onChange={(e) => set(i, "deny", e.target.value)} />
-              </Field>
-            </div>
-          ))}
+          {tools === null ? <Loading rows={2} /> : null}
+          {tools && tools.length === 0 && !testing ? <Empty title="No tools listed yet" body="Press Test to ask the server for its tools." /> : null}
+          {tools && tools.length ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Tool</TableHead>
+                  <TableHead>On</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {tools.map((t) => (
+                  <TableRow key={t.name}>
+                    <TableCell className="whitespace-normal">
+                      <label htmlFor={`tool-${t.name}`} className="t-mono">
+                        {t.name}
+                      </label>
+                      <span className="block text-muted-foreground">{t.description || "No description."}</span>
+                    </TableCell>
+                    <TableCell>
+                      <Switch id={`tool-${t.name}`} checked={!off.has(t.name)} onCheckedChange={(on) => flip(t.name, on)} />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : null}
           <Refusal text={refused} />
           <DialogFooter>
+            <Button type="button" variant="outline" disabled={testing} onClick={() => void test()}>
+              {testing ? "Testing" : "Test"}
+            </Button>
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>

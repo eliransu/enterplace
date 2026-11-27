@@ -50,6 +50,8 @@ pub(crate) struct ServerFile {
     oauth_scopes: Vec<String>,
     #[serde(default)]
     tool_changes: Option<String>,
+    #[serde(default)]
+    disabled_tools: Vec<String>,
 }
 
 /// How each person signs in to an upstream server themselves, so a call runs with their own credential.
@@ -140,6 +142,16 @@ pub struct Server {
     /// `None`: every call uses the server's shared credential from `headers_env`.
     pub user_auth: Option<UserAuth>,
     pub tool_changes: ToolChanges,
+    /// Tools switched off in the console's tool catalog, by the server's own names: listed to no one and refused to
+    /// everyone, whatever a rule allows.
+    pub disabled_tools: Vec<String>,
+}
+
+impl Server {
+    /// Whether the tool (the server's own name for it) is switched off.
+    pub fn tool_disabled(&self, tool: &str) -> bool {
+        self.disabled_tools.iter().any(|t| t == tool)
+    }
 }
 
 /// What a rule allows of the MCP gateway besides tools.
@@ -251,6 +263,14 @@ fn server_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// A tool as its server names it: not empty, no `*`, no white space. A dot is allowed: servers use them.
+fn own_tool_name(tool: &str) -> bool {
+    !tool.is_empty()
+        && tool.len() <= 128
+        && !tool.contains('*')
+        && !tool.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// Whether a rule's `tools:` list allows the tool a caller sees as `name` (`<server>.<tool>`).
@@ -413,6 +433,14 @@ pub(crate) fn servers(
                 at("transport")
             ));
         }
+        for tool in &entry.disabled_tools {
+            if !own_tool_name(tool) {
+                errors.push(format!(
+                    "{}: disabled_tools names \"{tool}\". Name each tool to switch off as the server lists it, for example delete_repo, with no server name and no *.",
+                    at("disabled_tools")
+                ));
+            }
+        }
         out.push(Server {
             name: entry.name.clone(),
             url,
@@ -423,6 +451,7 @@ pub(crate) fn servers(
             allow_private: entry.allow_private,
             user_auth,
             tool_changes,
+            disabled_tools: entry.disabled_tools.clone(),
         });
     }
     out

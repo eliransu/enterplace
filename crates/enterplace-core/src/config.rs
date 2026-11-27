@@ -200,6 +200,7 @@ const KNOWN: &[&str] = &[
     "oauth_client_secret_env",
     "oauth_scopes",
     "tool_changes",
+    "disabled_tools",
     "mcp_bundles",
     "teams",
     "store",
@@ -6242,6 +6243,7 @@ pub fn load_texts(
             policy: Policy::from_parts(principals(keys), rules)
                 .with_prices(parsed.prices)
                 .with_mcp_bundles(bundles)
+                .with_mcp_servers(mcp.clone())
                 .with_scope_limits(scope_limits)
                 .with_roles(roles)
                 .with_teams(teams)

@@ -42,6 +42,7 @@ pub(crate) fn routes() -> Router<Console> {
         .route("/api/mcp", get(mcp_list).post(mcp_add))
         .route("/api/mcp/{name}", put(mcp_edit).delete(mcp_remove))
         .route("/api/mcp/{name}/tools", put(mcp_tools))
+        .route("/api/mcp/{name}/catalog", put(mcp_catalog))
         .route("/api/policy", get(policy_get))
         .route("/api/policy/mode", put(mode_set))
         .route("/api/policy/identity", put(identity_set))
@@ -872,6 +873,7 @@ async fn mcp_list(State(console): State<Console>, headers: HeaderMap) -> Respons
                     "auth_env": env,
                     "allow_private": s.get("allow_private").and_then(Value::as_bool).unwrap_or(false),
                     "access": access,
+                    "disabled_tools": str_list(s.get("disabled_tools")),
                 })
             })
             .collect();
@@ -1100,6 +1102,44 @@ async fn mcp_tools(
         })
         .await
     }.await)
+}
+
+/// Sets which tools of this server are switched off for everyone: the toggles of the console's tool catalog.
+async fn mcp_catalog(
+    State(console): State<Console>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let body = body_of(&bytes)?;
+            let mut disabled = list(&body, "disabled");
+            disabled.sort();
+            disabled.dedup();
+            let target = json!({ "server": name, "disabled_tools": disabled });
+            let note = format!("Change which tools of MCP server {name} are switched off");
+            commit(
+                &console,
+                &admin,
+                "change_mcp_catalog",
+                note,
+                target,
+                |tree| {
+                    let server = entry(tree, "mcp", &name, "MCP server")?;
+                    if disabled.is_empty() {
+                        server.remove("disabled_tools");
+                    } else {
+                        server.insert("disabled_tools".into(), strings(&disabled));
+                    }
+                    Ok(())
+                },
+            )
+            .await
+        }
+        .await,
+    )
 }
 
 // ---------------------------------------------------------------- policy basics

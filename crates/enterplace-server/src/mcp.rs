@@ -44,7 +44,7 @@ use enterplace_core::{
     guard::{self, Guardrail},
     id,
     mcp::{Bundle, ToolChanges, Transport, UserAuth, tool_allowed},
-    policy::{Principal, Rule},
+    policy::{Policy, Principal, Rule},
 };
 use http_body_util::BodyExt;
 use serde_json::{Map, Value, json};
@@ -629,8 +629,21 @@ impl Item {
     }
 }
 
-/// Whether the rule (and the bundle, at `/mcp/<bundle>`) allows `name`, written `<server>.<name>`.
-fn allows(item: Item, rule: &Rule, bundle: Option<&Bundle>, name: &str) -> bool {
+/// Whether the tool a caller names `<server>.<tool>` is switched off in the console's tool catalog.
+fn disabled(policy: &Policy, name: &str) -> bool {
+    name.split_once('.').is_some_and(|(server, tool)| {
+        policy
+            .mcp_server(server)
+            .is_some_and(|s| s.tool_disabled(tool))
+    })
+}
+
+/// Whether the rule (and the bundle, at `/mcp/<bundle>`) allows `name`, written `<server>.<name>`. A tool switched
+/// off is allowed by nothing.
+fn allows(item: Item, rule: &Rule, bundle: Option<&Bundle>, name: &str, policy: &Policy) -> bool {
+    if item == Item::Tool && disabled(policy, name) {
+        return false;
+    }
     let in_bundle = match (item, bundle) {
         (_, None) => true,
         (Item::Tool, Some(bundle)) => tool_allowed(&bundle.tools, name),
@@ -902,11 +915,21 @@ async fn answer(
                 bundle.as_ref(),
                 &person,
                 asked.subject.as_deref(),
+                policy,
             )
             .await;
         return Ok(result(&call_id, json!({ item.key(): items })));
     };
-    if !allows(item, rule, bundle.as_ref(), &name) {
+    if item == Item::Tool && disabled(policy, &name) {
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "tool_disabled",
+            format!(
+                "Refused: tool \"{name}\" is switched off for everyone in this Enterplace's tool catalog. Ask an Enterplace admin to switch it on (MCP, Servers, Tools) if you need it."
+            ),
+        ));
+    }
+    if !allows(item, rule, bundle.as_ref(), &name, policy) {
         let noun = match item {
             Item::Tool => "tool",
             Item::Prompt => "prompt",
@@ -1271,6 +1294,7 @@ impl Mcp {
         bundle: Option<&Bundle>,
         person: &Principal,
         subject: Option<&str>,
+        policy: &Policy,
     ) -> Vec<Value> {
         let mut out = Vec::new();
         for server in self.servers().iter() {
@@ -1280,7 +1304,7 @@ impl Mcp {
                     // Without the person's credential the server cannot be asked. A tool that says how to connect
                     // takes the place of its tools, so the person learns where to sign in.
                     let name = format!("{}.connect", server.name);
-                    if item == Item::Tool && allows(Item::Tool, rule, bundle, &name) {
+                    if item == Item::Tool && allows(Item::Tool, rule, bundle, &name, policy) {
                         out.push(json!({
                             "name": name,
                             "description": format!("Connect your own account to MCP server {}. Its tools are listed once you have. Call this tool for the link.", server.name),
@@ -1304,7 +1328,7 @@ impl Mcp {
                     continue;
                 }
                 let check = format!("{}.{own}", server.name);
-                if allows(item, rule, bundle, &check) {
+                if allows(item, rule, bundle, &check, policy) {
                     let mut entry = entry.clone();
                     entry[item.field()] = item.shown(&server.name, own).into();
                     out.push(entry);
@@ -1314,8 +1338,27 @@ impl Mcp {
         out
     }
 
-    /// One server's whole list of one kind, every page.
+    /// One server's whole list of one kind, every page. A server that fails is left out, with a line on stderr.
     async fn list_server(&self, server: &Server, conn: &Conn, item: Item) -> Vec<Value> {
+        match self.list_checked(server, conn, item).await {
+            Ok(out) => out,
+            Err((out, why)) => {
+                eprintln!(
+                    "enterplace: MCP server \"{}\" {why}, so it is left out of the list",
+                    server.name
+                );
+                out
+            }
+        }
+    }
+
+    /// One server's whole list of one kind, or what it listed before it failed and why.
+    async fn list_checked(
+        &self,
+        server: &Server,
+        conn: &Conn,
+        item: Item,
+    ) -> Result<Vec<Value>, (Vec<Value>, String)> {
         let mut out = Vec::new();
         let mut cursor: Option<Value> = None;
         for _ in 0..MAX_PAGES {
@@ -1326,22 +1369,16 @@ impl Mcp {
             let page = match self.ask(server, conn, item.list_method(), params).await {
                 Ok(answer) if answer.get("result").is_some() => answer,
                 Ok(answer) => {
-                    eprintln!(
-                        "enterplace: MCP server \"{}\" refused {} ({}), so it is left out of the list",
-                        server.name,
-                        item.list_method(),
-                        answer["error"]
-                    );
-                    break;
+                    let why = format!("refused {} ({})", item.list_method(), answer["error"]);
+                    return Err((out, why));
                 }
                 Err(failure) => {
-                    eprintln!(
-                        "enterplace: MCP server \"{}\" gave no answer to {}: {}, so it is left out of the list",
-                        server.name,
+                    let why = format!(
+                        "gave no answer to {}: {}",
                         item.list_method(),
                         failure.detail
                     );
-                    break;
+                    return Err((out, why));
                 }
             };
             out.extend(
@@ -1359,7 +1396,7 @@ impl Mcp {
                 break;
             }
         }
-        out
+        Ok(out)
     }
 
     /// Runs the request-side guardrails on a tool call's arguments: every string in them, wherever it is.
