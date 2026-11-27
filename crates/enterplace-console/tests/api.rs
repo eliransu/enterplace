@@ -2221,3 +2221,46 @@ async fn a_rule_reaches_a_providers_own_api_set_from_the_form() -> TestResult {
     assert!(!s.policy()?.contains("/v1/systemone"));
     Ok(())
 }
+
+#[tokio::test]
+async fn a_rule_lets_callers_pay_with_their_own_provider_key_set_from_the_form() -> TestResult {
+    let s = setup("own-key")?;
+    let cookie = sign_in(&s, ADMIN_KEY).await?;
+    let put = |mode: &str| json!({ "who": { "kind": "any" }, "models": ["*"], "caller_provider_key": mode });
+    let (status, done) = call(
+        &s,
+        "PUT",
+        "/console/api/policy/rules/everyone",
+        &cookie,
+        Some(put("allowed")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(s.policy()?.contains("caller_provider_key: allowed"));
+    let (_, seen) = call(&s, "GET", "/console/api/policy", &cookie, None).await?;
+    assert!(
+        seen.to_string()
+            .contains("\"caller_provider_key\":\"allowed\""),
+        "{seen}"
+    );
+    let (status, refused) = call(
+        &s,
+        "PUT",
+        "/console/api/policy/rules/everyone",
+        &cookie,
+        Some(put("sometimes")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    let (status, done) = call(
+        &s,
+        "PUT",
+        "/console/api/policy/rules/everyone",
+        &cookie,
+        Some(put("refused")),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(!s.policy()?.contains("caller_provider_key"));
+    Ok(())
+}

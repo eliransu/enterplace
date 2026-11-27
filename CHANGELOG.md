@@ -7,6 +7,11 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Added
+
+- The rule form sets whether callers may pay with their own provider key (`caller_provider_key`: refused, allowed, or
+  allowed and counted in budgets), sent in `x-enterplace-provider-key` beside their Enterplace key.
+
 ## [1.0.1] - 2026-11-27
 
 ## [Unreleased]
