@@ -7,7 +7,9 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
-## [0.5.1] - 2026-11-27
+## [1.0.1] - 2026-11-27
+
+## [Unreleased]
 
 ### Added
 

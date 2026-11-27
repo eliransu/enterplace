@@ -2,8 +2,8 @@ apiVersion: v2
 name: enterplace
 description: Enterplace, the open source self-hosted AI gateway and MCP gateway. Each replica keeps its own audit chain on its own volume.
 type: application
-version: 0.5.1
-appVersion: "0.5.1"
+version: 1.0.1
+appVersion: "1.0.1"
 home: https://enterplace.dev
 icon: https://enterplace.dev/apple-touch-icon.png
 sources:
