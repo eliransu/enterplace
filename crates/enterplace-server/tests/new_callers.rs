@@ -242,7 +242,7 @@ async fn hold_refuses_a_new_caller_until_it_is_allowed_within_two_seconds() -> T
         .find(|r| r["person"] == "billing-bot")
         .ok_or("no record of billing-bot")?;
     assert_eq!(last_bot["code"], "awaiting_approval", "{last_bot}");
-    // Held is new too: the New and pending page and the new_caller alert find it by the flag.
+    // Held is new too: the Access requests page and the new_caller alert find it by the flag.
     assert_eq!(last_bot["new_caller"], true, "{last_bot}");
 
     s.write("new_callers:\n  mode: hold\n  allowed: [billing-bot]\n")?;

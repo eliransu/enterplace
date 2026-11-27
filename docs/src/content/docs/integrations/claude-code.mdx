@@ -318,7 +318,7 @@ API Error: 403 Refused (model_not_allowed): team "interns" may not use model "cl
 
 Claude Code labels any 403 "Failed to authenticate". The message after that label is Enterplace's.
 
-- A model no provider serves is refused with 403 `unknown_model`, not 404. Claude Code replaces the text of a 404 with its own and resends a 400 several times; it shows a 403 as it is and sends it once. The message names the console's **New and pending** page, where an admin serves the model with **Add a provider**. See [New callers](/governance/new-callers/).
+- A model no provider serves is refused with 403 `unknown_model`, not 404. Claude Code replaces the text of a 404 with its own and resends a 400 several times; it shows a 403 as it is and sends it once. The message names the console's **Access requests** page, where an admin serves the model with **Add a provider**. See [New callers](/governance/new-callers/).
 - Every refusal sets `x-should-retry: false`, except `busy`, `rate_limited` and the `upstream_*` codes, which set `x-should-retry: true`. Claude Code resends those on its own. `rate_limited` also sets `Retry-After`.
 - A guardrail refusal says where the finding is, in words and as a JSON pointer: `in message 3 (/messages/2/content/1/text)`. That is the third message of the conversation Claude Code sent, which may be an earlier turn, a file it read or a tool result. Remove the secret from that turn or file and send again. A new session starts without the earlier turns.
 

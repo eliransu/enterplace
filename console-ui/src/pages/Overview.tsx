@@ -143,7 +143,7 @@ export function Overview({ me, query }: PageProps) {
   const month = useData<Ranking>("analytics?by=team&window=month");
   const approvals = useData<{ calls?: unknown[] }>("mcp-approvals");
   const callers = useData<Callers>("callers");
-  // What waits on New and pending: people on the coding agents card, the rest and the models on the apps card.
+  // What waits on Access requests: people on the coding agents card, the rest and the models on the apps card.
   const peopleNew = waitingFor(callers.data, true);
   const appsNew = waitingFor(callers.data, false) - peopleNew;
 
@@ -207,7 +207,7 @@ export function Overview({ me, query }: PageProps) {
         ...(peopleNew ? [`${count(peopleNew, "new person", "new people")} to allow or block`] : []),
       ],
       next: peopleNew
-        ? { label: "Review new and pending", href: "#/coding/new" }
+        ? { label: "Review access requests", href: "#/coding/new" }
         : codingToday === 0
           ? { label: "Connect a coding agent", href: "#/coding" }
           : names
@@ -244,7 +244,7 @@ export function Overview({ me, query }: PageProps) {
         ? [`${count(appsNew, "new caller or model", "new callers and models")} to review`]
         : [],
       next: appsNew
-        ? { label: "Review new and pending", href: "#/apps/new" }
+        ? { label: "Review access requests", href: "#/apps/new" }
         : services.length === 0
           ? { label: "Make a service key", href: "#/apps?issue=1" }
           : appsToday === 0

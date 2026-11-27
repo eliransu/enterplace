@@ -65,7 +65,7 @@ export type Section = {
 
 const NewPeople = (props: PageProps) => createElement(NewCallers, { ...props, people: true });
 
-export const GROUPS = ["Coding agents", "Apps and agents", "Security", "Activity", "Settings"] as const;
+export const GROUPS = ["Coding agents", "Apps and agents", "MCP", "Security", "Activity", "Settings"] as const;
 
 // The two use cases each get their own group with what an admin does for them, so a coding agent admin and an app
 // admin each find their pages in one place. Rules and limits serve both: Apps and agents has its own route to them.
@@ -88,17 +88,17 @@ export const SECTIONS: Section[] = [
     tabs: [{ route: "/people", label: "Users", page: People }],
   },
   {
-    label: "New and pending",
-    icon: UserPlus,
-    group: "Coding agents",
-    badge: "coding",
-    tabs: [{ route: "/coding/new", label: "New and pending", page: NewPeople, policy: true }],
-  },
-  {
     label: "Groups",
     icon: Users,
     group: "Coding agents",
     tabs: [{ route: "/teams", label: "Groups", page: Teams }],
+  },
+  {
+    label: "Access requests",
+    icon: UserPlus,
+    group: "Coding agents",
+    badge: "coding",
+    tabs: [{ route: "/coding/new", label: "Access requests", page: NewPeople, policy: true }],
   },
   {
     label: "Policies",
@@ -114,17 +114,23 @@ export const SECTIONS: Section[] = [
     ],
   },
   {
-    label: "Getting started",
-    icon: Blocks,
-    group: "Apps and agents",
-    tabs: [{ route: "/apps", label: "Apps and agents", page: Apps }],
+    label: "Logs",
+    icon: ArrowLeftRight,
+    group: "Coding agents",
+    tabs: [{ route: "/coding/logs", label: "Logs", page: Requests }],
   },
   {
-    label: "New and pending",
+    label: "Service keys",
+    icon: Blocks,
+    group: "Apps and agents",
+    tabs: [{ route: "/apps", label: "Service keys", page: Apps }],
+  },
+  {
+    label: "Access requests",
     icon: UserPlus,
     group: "Apps and agents",
     badge: "apps",
-    tabs: [{ route: "/apps/new", label: "New and pending", page: NewCallers, policy: true }],
+    tabs: [{ route: "/apps/new", label: "Access requests", page: NewCallers, policy: true }],
   },
   {
     label: "Policies",
@@ -146,9 +152,9 @@ export const SECTIONS: Section[] = [
     tabs: [{ route: "/apps/logs", label: "Logs", page: Requests }],
   },
   {
-    label: "MCP tools",
+    label: "Servers and tools",
     icon: Server,
-    group: "Apps and agents",
+    group: "MCP",
     tabs: [
       { route: "/mcp", label: "Servers", page: McpServers, policy: true },
       { route: "/mcp/tools", label: "Tools", page: McpTools },

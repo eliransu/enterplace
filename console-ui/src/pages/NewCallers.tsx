@@ -101,7 +101,7 @@ export function waitingFor(data: Callers | null, people: boolean): number {
   return people ? callers : callers + data.models.length;
 }
 
-// New and pending: what reached the gateway that no admin has reviewed, with Allow and Block, and the models no
+// Access requests: what reached the gateway that no admin has reviewed, with Allow and Block, and the models no
 // provider serves with the step that fixes each. `people`: the Coding agents view, people only.
 export function NewCallers({ me, people }: PageProps & { people?: boolean }) {
   const { data, error, change: apply, reload } = useData<Callers>("callers");
@@ -124,7 +124,7 @@ export function NewCallers({ me, people }: PageProps & { people?: boolean }) {
   return (
     <>
       <Head
-        title="New and pending"
+        title="Access requests"
         lead={`Callers no admin has reviewed and models no provider serves, from the last ${data?.days ?? 30} days of requests. Allow or block each one: every gateway follows within 2 seconds.`}
       />
       {error ? <Problem text={error} retry={reload} /> : null}

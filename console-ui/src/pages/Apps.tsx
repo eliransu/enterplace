@@ -22,7 +22,7 @@ export function Apps({ query }: PageProps) {
   return (
     <>
       <Head
-        title="Apps and agents"
+        title="Service keys"
         lead="Internal apps, custom agents and cloud agents that call models through Enterplace, each with its own service key."
         actions={services.length ? make : null}
       />

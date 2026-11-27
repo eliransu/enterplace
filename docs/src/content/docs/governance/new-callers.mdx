@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-A new service key, a person who just signed in with single sign-on, an agent someone set up last night: each is a caller no admin has looked at yet. `new_callers:` in the policy decides what happens to them, and the console's **New and pending** page lists them with **Allow** and **Block**. A decision works on every gateway within 2 seconds, with no YAML to edit.
+A new service key, a person who just signed in with single sign-on, an agent someone set up last night: each is a caller no admin has looked at yet. `new_callers:` in the policy decides what happens to them, and the console's **Access requests** page lists them with **Allow** and **Block**. A decision works on every gateway within 2 seconds, with no YAML to edit.
 
 ## Choose what happens
 
@@ -32,7 +32,7 @@ A caller is known by its name: the name of its key, its person token or its sing
 
 ## Allow and block
 
-In the console, **Apps and agents**, **New and pending** (or **Coding agents**, **New and pending** for people) lists every caller of the last 30 days no admin has reviewed, newest first, with its team, kind (service key, person key, person token or sign-in), when it was first and last seen, and its last refusal. **Allow** and **Block** put the name on a list in the policy:
+In the console, **Apps and agents**, **Access requests** (or **Coding agents**, **Access requests** for people) lists every caller of the last 30 days no admin has reviewed, newest first, with its team, kind (service key, person key, person token or sign-in), when it was first and last seen, and its last refusal. **Allow** and **Block** put the name on a list in the policy:
 
 ```yaml
 new_callers:

@@ -1,4 +1,4 @@
-//! New and pending (`/console/app/#/apps/new`): the callers no admin has reviewed and the models no provider serves,
+//! Access requests (`/console/app/#/apps/new`): the callers no admin has reviewed and the models no provider serves,
 //! found in the request log, with what `new_callers:` in the policy does to them. Allow and Block put a caller's name
 //! on the policy's `allowed:` or `blocked:` list, a policy change like any other: recorded, checked and in force on
 //! every gateway within 2 seconds.

@@ -55,7 +55,7 @@ Each POST carries `webhook-id` (`alert_<id>`), `webhook-timestamp` (seconds) and
 | `guardrail_block` | `count` requests refused with `guardrail_blocked`, or answers a guardrail withheld, within `minutes` | count, minutes, group by | the group |
 | `kill_switch` | A kill switch is set (an `admin` record with action `set_kill`) | none | the record: once each |
 | `new_ip` | A key is used from an address it has not used before. A key's first addresses are learned, not alerted on | none | key and address: once each |
-| `new_caller` | A caller no admin has reviewed sends its first request, whether `new_callers:` lets it through, holds it or blocks it ([New callers](/governance/new-callers/)). The alert links to **New and pending**. A caller an admin blocked by name is not new | none | the caller: once each |
+| `new_caller` | A caller no admin has reviewed sends its first request, whether `new_callers:` lets it through, holds it or blocks it ([New callers](/governance/new-callers/)). The alert links to **Access requests**. A caller an admin blocked by name is not new | none | the caller: once each |
 | `after_hours` | A key is used outside working hours or on a weekend | hours, such as `08-19` or `08-19+0200` | key and day: once a day |
 | `unusual_spend` | A person's spend today is `factor` times their daily average of the last 14 days, and at least the amount | factor (3), amount in USD (5) | person and day: once a day |
 | `unusual_requests` | A scope's requests today are `factor` times its daily average of the last 14 days, and at least `count` | by (`team`, `key`, `provider`; default team), factor (3), count (100) | scope and day: once a day |

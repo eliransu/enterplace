@@ -311,7 +311,7 @@ One per admin API call and console action, allowed or refused, written before th
 | `issue_key`, `revoke_key`, `edit_key`, `rotate_key`, `import_keys` | The console's **Users** page: **Issue a key**, **Edit**, **Revoke key** and **Import a list** (one `import_keys` record with the count) |
 | `get_policy`, `propose_policy`, `list_policy_versions`, `show_policy_version`, `approve_policy`, `reject_policy`, `rollback_policy`, `dry_run_policy` | `/admin/policy`, and the console's **Policy file** and **Versions** (`rollback_policy` for **Put this back**) |
 | `add_rule`, `change_rule`, `remove_rule`, `add_limit`, `change_limit`, `remove_limit`, `add_guardrail`, `change_guardrail`, `remove_guardrail`, `set_guardrail`, `add_alias`, `change_alias`, `remove_alias`, `connect_provider`, `change_provider`, `remove_provider`, `add_mcp_server`, `change_mcp_server`, `remove_mcp_server`, `change_mcp_tools`, `set_mode`, `set_identity`, `set_coding_agents` | A policy change from a console form: **Rules and limits**, **Guardrails**, **Providers**, the **Servers** tab of **MCP tools**, and the switches on **Coding agents** |
-| `decide_new_caller`, `set_new_callers` | **New and pending**: **Allow** and **Block**, and a change of `new_callers` mode |
+| `decide_new_caller`, `set_new_callers` | **Access requests**: **Allow** and **Block**, and a change of `new_callers` mode |
 | `add_credential`, `rotate_credential`, `remove_credential` | `/admin/credentials` and the console's **Provider keys** |
 | `end_mcp_session` | `/admin/mcp/sessions` and the **Sessions** tab of **MCP tools** |
 | `export_audit`, `export_audit_csv` | The two downloads on the console's **Audit log** |
