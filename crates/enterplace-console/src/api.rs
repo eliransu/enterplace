@@ -207,7 +207,7 @@ fn strings(items: &[String]) -> Value {
     Value::Array(items.iter().map(|s| Value::String(s.clone())).collect())
 }
 
-fn name_ok(name: &str, what: &str, example: &str) -> Result<(), String> {
+pub(crate) fn name_ok(name: &str, what: &str, example: &str) -> Result<(), String> {
     if config::valid_name(name) {
         Ok(())
     } else {
@@ -235,7 +235,10 @@ fn read_tree(console: &Console) -> Result<Map<String, Value>, Fail> {
 }
 
 /// The list section `name`, made when the policy has none.
-fn section<'a>(map: &'a mut Map<String, Value>, name: &str) -> Result<&'a mut Vec<Value>, String> {
+pub(crate) fn section<'a>(
+    map: &'a mut Map<String, Value>,
+    name: &str,
+) -> Result<&'a mut Vec<Value>, String> {
     match map.entry(name).or_insert_with(|| Value::Array(Vec::new())) {
         Value::Array(list) => Ok(list),
         _ => Err(format!(
@@ -264,7 +267,7 @@ fn entry<'a>(
     })
 }
 
-fn remove_named(
+pub(crate) fn remove_named(
     map: &mut Map<String, Value>,
     list: &str,
     name: &str,

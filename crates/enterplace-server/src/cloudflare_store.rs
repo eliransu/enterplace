@@ -1073,6 +1073,15 @@ impl Store for CfStore {
         Ok(answer["changed"].as_bool().unwrap_or(false))
     }
 
+    fn move_keys(&self, sha256s: &[String], team: &str) -> Result<bool, String> {
+        let answer = self.change(
+            "key",
+            "move_keys",
+            json!({ "sha256s": sha256s, "team": team }),
+        )?;
+        Ok(answer["moved"].as_bool().unwrap_or(false))
+    }
+
     fn reachable(&self) -> Result<(), String> {
         if self.inner.down.load(Ordering::Relaxed) {
             return Err(
