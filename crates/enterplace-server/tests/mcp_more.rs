@@ -1269,3 +1269,72 @@ async fn a_server_is_granted_to_teams_people_and_apps_from_the_console_and_every
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_server_shows_whether_it_answered_when_its_tools_were_listed_and_its_last_error()
+-> TestResult {
+    let (dir, servers) = catalog_setup("health").await?;
+    write_policy(&dir, &servers)?;
+    let gw = governed(&dir, &[])?;
+    let console = ConsoleApi::sign_in(&gw.router).await?;
+    let health = |catalog: &Value, name: &str| {
+        catalog["servers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|s| s["name"] == name)
+            .map(|s| s["health"].clone())
+            .unwrap_or(Value::Null)
+    };
+    // Never asked yet: nothing is known.
+    let (_, catalog) = console
+        .call("GET", "/console/api/mcp-catalog", None)
+        .await?;
+    assert_eq!(health(&catalog, "docs"), Value::Null, "{catalog}");
+
+    // A caller's list asks every server: the one that answers is up, the one that does not is down, with why.
+    rpc_as(&gw.router, MAYA, list()).await?;
+    let (_, catalog) = console
+        .call("GET", "/console/api/mcp-catalog", None)
+        .await?;
+    let docs = health(&catalog, "docs");
+    assert_eq!(docs["status"], "up", "{catalog}");
+    assert_eq!(docs["tools"], 2, "{catalog}");
+    assert!(docs["listed_at"].is_string(), "{catalog}");
+    let gone = health(&catalog, "gone");
+    assert_eq!(gone["status"], "down", "{catalog}");
+    assert!(
+        gone["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("tools/list")),
+        "{catalog}"
+    );
+
+    // Test asks again now, and answers with the server's health whether or not it answered.
+    let (status, tested) = console
+        .call(
+            "POST",
+            "/console/api/mcp-catalog",
+            Some(json!({"server": "gone"})),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{tested}");
+    assert_eq!(tested["health"]["status"], "down", "{tested}");
+    assert!(
+        tested["health"]["error"]
+            .as_str()
+            .is_some_and(|e| !e.is_empty()),
+        "{tested}"
+    );
+    assert_eq!(tested["health"]["listed_at"], Value::Null, "{tested}");
+    let (_, tested) = console
+        .call(
+            "POST",
+            "/console/api/mcp-catalog",
+            Some(json!({"server": "docs"})),
+        )
+        .await?;
+    assert_eq!(tested["health"]["status"], "up", "{tested}");
+    assert_eq!(tested["health"]["error"], Value::Null, "{tested}");
+    Ok(())
+}

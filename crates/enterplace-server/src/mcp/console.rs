@@ -775,6 +775,13 @@ async fn catalog(
         async {
             let (mcp, admin) = open(&mcp, &console, &headers, None).await?;
             let pins = mcp.keep.list("pin").await.unwrap_or_default();
+            let health: BTreeMap<String, Value> = mcp
+                .keep
+                .list("health")
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
             let servers: Vec<Value> = mcp
                 .servers()
                 .iter()
@@ -789,7 +796,11 @@ async fn catalog(
                         })
                         .collect();
                     tools.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-                    json!({"name": server.name, "tools": tools})
+                    json!({
+                        "name": server.name,
+                        "tools": tools,
+                        "health": health.get(&server.name).cloned().unwrap_or(Value::Null),
+                    })
                 })
                 .collect();
             Ok(ok(
@@ -834,7 +845,9 @@ async fn catalog_test(
                 .audit(Some(&admin), "test_mcp_server", json!({"server": name}), None)
                 .await
                 .map_err(|_| unrecorded("test"))?;
-            match mcp.list_checked(server, &Conn::default(), Item::Tool).await {
+            let listed = mcp.list_checked(server, &Conn::default(), Item::Tool).await;
+            let health = mcp.note_health(server, &listed).await;
+            match listed {
                 Ok(listed) => {
                     mcp.observe(server, &listed).await;
                     let tools: Vec<Value> = listed
@@ -847,12 +860,15 @@ async fn catalog_test(
                     Ok(ok(json!({
                         "message": format!("{name} answered and lists {} tools.", tools.len()),
                         "tools": tools,
+                        "health": health,
                     })))
                 }
-                Err((_, why)) => Err(Fail(
-                    StatusCode::BAD_GATEWAY,
-                    format!("MCP server {name} {why}. Check its URL and that it is running, then press Test again."),
-                )),
+                // Answered, not refused: the test ran, and its finding is the server's health.
+                Err((_, why)) => Ok(ok(json!({
+                    "message": format!("MCP server {name} {why}. Check its URL and that it is running, then press Test again."),
+                    "tools": [],
+                    "health": health,
+                }))),
             }
         }
         .await,

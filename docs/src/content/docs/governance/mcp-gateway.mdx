@@ -69,6 +69,10 @@ Once a server is added, the gateway asks it for its tools (`tools/list`) with it
 
 Servers change without a restart, like the rest of the policy: within 2 seconds of a saved policy file, at once on `SIGHUP`, or after `PUT` and `DELETE /admin/mcp/<name>` when the policy is kept in the store. A server reached as before keeps the sessions Enterplace holds at it. A new server, or one whose address, transport, credential or price changed, is connected on its next call. A removed server serves nothing from the next request on, and a stdio server's process is stopped. A reload that names an unset variable, or a stdio command the gateway may not start, is rejected and the version in use stays, as for any policy that does not load. `/mcp` is served whenever Enterplace runs with a policy, so the first server can be added the same way.
 
+### Health
+
+Each server's row shows whether it answered its last tool list (**up** or **down**), when its tools were last listed and how many, and its last error. Every `tools/list` a caller makes through `/mcp` with the server's shared credential counts, written to the store at most once a minute while nothing changes, so every gateway and the console read the same; **Test** asks again now. A list made with one person's own credential (`user_auth`) says nothing of the server's health. `GET /console/api/mcp-catalog` returns each server's tools and health as JSON.
+
 ### Access by team, person or app
 
 A server with `access:` is used only by who is on its list; without it, each rule's `tools:` decides, as below.

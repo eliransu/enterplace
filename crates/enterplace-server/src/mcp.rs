@@ -74,6 +74,8 @@ const RESOURCE_SCHEME: &str = "enterplace://";
 const RELAY_FOR: Duration = Duration::from_secs(30 * 60);
 /// Most callers' sessions and relayed requests remembered at once.
 const MAX_REMEMBERED: usize = 10_000;
+/// How often a server that keeps answering the same has its health written again, for its last listed time.
+const HEALTH_EVERY: Duration = Duration::from_secs(60);
 /// How often a call waiting for approval looks again.
 const APPROVAL_POLL: Duration = Duration::from_millis(500);
 
@@ -237,6 +239,9 @@ pub(crate) struct Mcp {
     relayed: Mutex<HashMap<String, Relayed>>,
     /// One pinning at a time on this gateway, so one change is recorded once.
     pinning: tokio::sync::Mutex<()>,
+    /// Each server's health as this gateway last wrote it to the store: (up, when), so a list writes only a change
+    /// or every HEALTH_EVERY.
+    health: Mutex<HashMap<String, (bool, Instant)>>,
 }
 
 type Shared = Arc<Mcp>;
@@ -289,6 +294,7 @@ pub(crate) fn router(
         revoked: Mutex::default(),
         relayed: Mutex::default(),
         pinning: tokio::sync::Mutex::new(()),
+        health: Mutex::default(),
     });
     let router = Router::new()
         .route(
@@ -1402,7 +1408,18 @@ impl Mcp {
 
     /// One server's whole list of one kind, every page. A server that fails is left out, with a line on stderr.
     async fn list_server(&self, server: &Server, conn: &Conn, item: Item) -> Vec<Value> {
-        match self.list_checked(server, conn, item).await {
+        let listed = self.list_checked(server, conn, item).await;
+        // The shared credential's answer is the server's health; one person's credential says only theirs.
+        if item == Item::Tool && conn.key.is_empty() {
+            let up = listed.is_ok();
+            let due = lock(&self.health)
+                .get(&server.name)
+                .is_none_or(|(was, at)| *was != up || at.elapsed() >= HEALTH_EVERY);
+            if due {
+                self.note_health(server, &listed).await;
+            }
+        }
+        match listed {
             Ok(out) => out,
             Err((out, why)) => {
                 eprintln!(
@@ -1412,6 +1429,47 @@ impl Mcp {
                 out
             }
         }
+    }
+
+    /// Writes what one tool list says of the server's health to the store, where every gateway and the console read
+    /// it: up or down, when it last listed its tools and how many, and its last error.
+    async fn note_health(
+        &self,
+        server: &Server,
+        listed: &Result<Vec<Value>, (Vec<Value>, String)>,
+    ) -> Value {
+        let at = enterplace_core::audit::timestamp();
+        let mut health = self
+            .keep
+            .get("health", &server.name)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| json!({"listed_at": null, "tools": null, "last_error": null}));
+        health["checked_at"] = at.clone().into();
+        match listed {
+            Ok(tools) => {
+                health["status"] = "up".into();
+                health["listed_at"] = at.into();
+                health["tools"] = tools.len().into();
+                health["error"] = Value::Null;
+            }
+            Err((_, why)) => {
+                let why = format!("{} {why}", server.name);
+                health["status"] = "down".into();
+                health["error"] = why.clone().into();
+                health["last_error"] = why.into();
+                health["last_error_at"] = at.into();
+            }
+        }
+        if let Err(err) = self.keep.put("health", &server.name, health.clone()).await {
+            eprintln!(
+                "enterplace: the health of MCP server \"{}\" could not be written: {err}",
+                server.name
+            );
+        }
+        lock(&self.health).insert(server.name.clone(), (listed.is_ok(), Instant::now()));
+        health
     }
 
     /// One server's whole list of one kind, or what it listed before it failed and why.
