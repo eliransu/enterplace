@@ -7,6 +7,13 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Added
+
+- TypeSafe in the provider catalog: Jev decision models (`jev-latest`, `jev-preview`) with the key pasted in Add a
+  provider. Jev's own API (`POST /v1/systemone`) is reached as sent through `/passthrough/typesafe/v1/systemone`.
+- The rule form sets the provider APIs a rule reaches as sent (`passthrough:`), one line per provider, so an endpoint
+  Enterplace has no route of its own for is allowed from the console.
+
 ## [0.5.0] - 2026-11-27
 
 ### Added

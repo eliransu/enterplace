@@ -2178,3 +2178,46 @@ async fn a_guardrail_key_is_pasted_not_named_and_never_lands_in_the_policy() -> 
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_rule_reaches_a_providers_own_api_set_from_the_form() -> TestResult {
+    let s = setup("rule-native")?;
+    let cookie = sign_in(&s, ADMIN_KEY).await?;
+    let provider = s
+        .policy()?
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("- name: ").map(str::to_string))
+        .ok_or("no provider")?;
+    let (status, done) = call(
+        &s,
+        "PUT",
+        "/console/api/policy/rules/everyone",
+        &cookie,
+        Some(json!({ "who": { "kind": "any" }, "models": ["*"], "passthrough": format!("{provider}: /v1/systemone, /v1/models") })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let policy = s.policy()?;
+    assert!(
+        policy.contains("/v1/systemone") && policy.contains("/v1/models"),
+        "{policy}"
+    );
+    let (_, seen) = call(&s, "GET", "/console/api/policy", &cookie, None).await?;
+    assert!(
+        seen.to_string()
+            .contains(&format!("{provider}: /v1/systemone, /v1/models")),
+        "{seen}"
+    );
+    // Emptied, it is gone; a form that does not send it leaves it.
+    let (status, done) = call(
+        &s,
+        "PUT",
+        "/console/api/policy/rules/everyone",
+        &cookie,
+        Some(json!({ "who": { "kind": "any" }, "models": ["*"], "passthrough": "" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert!(!s.policy()?.contains("/v1/systemone"));
+    Ok(())
+}

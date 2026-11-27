@@ -57,6 +57,7 @@ type Rule = {
   who: { kind: string; value: string };
   models: string[];
   guardrails: string[];
+  passthrough?: string;
 };
 type Entry = Record<string, unknown>;
 type Limit = { index: number; entry: Entry };
@@ -606,6 +607,7 @@ function RuleForm({
   const [value, setValue] = useState(rule?.who.value ?? "");
   const [models, setModels] = useState(rule?.models.join(", ") ?? "");
   const [guards, setGuards] = useState<string[]>(rule?.guardrails ?? []);
+  const [native, setNative] = useState(rule?.passthrough ?? "");
   const [refused, setRefused] = useState("");
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -614,6 +616,7 @@ function RuleForm({
       who: { kind, value },
       models: words(models),
       guardrails: guards,
+      passthrough: native,
     };
     const answer = await change(() =>
       rule
@@ -688,6 +691,19 @@ function RuleForm({
               value={models}
               onChange={(e) => setModels(e.target.value)}
               required
+            />
+          </Field>
+          <Field
+            id="rule-native"
+            label="Provider APIs reached as sent, optional"
+            hint="For an endpoint Enterplace has no route of its own for, such as TypeSafe's /v1/systemone. One line per provider: provider: /path, /path. Callers send to /passthrough/<provider>/<path>."
+          >
+            <textarea
+              id="rule-native"
+              className="t-mono min-h-16 w-full rounded-box border border-input bg-background px-6 py-3 text-foreground hover:border-foreground"
+              value={native}
+              placeholder="typesafe: /v1/systemone, /v1/models"
+              onChange={(e) => setNative(e.target.value)}
             />
           </Field>
           {guardrails.length ? (

@@ -1330,6 +1330,17 @@ async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Respo
                     "who": who,
                     "models": str_list(r.get("models")),
                     "guardrails": str_list(r.get("guardrails")),
+                    // As the form edits it: `provider: /path, /path`, one line each.
+                    "passthrough": r.get("passthrough").and_then(Value::as_array).map(|list| {
+                        list.iter()
+                            .map(|e| format!(
+                                "{}: {}",
+                                e.get("provider").and_then(Value::as_str).unwrap_or_default(),
+                                str_list(e.get("paths")).join(", ")
+                            ))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    }).unwrap_or_default(),
                     "coding_agents": r.get("coding_agents").cloned().unwrap_or_else(|| json!({})),
                 })
             })
@@ -1541,6 +1552,27 @@ fn rule_fields(rule: &mut Map<String, Value>, body: &Map<String, Value>) -> Resu
         rule.remove("guardrails");
     } else {
         rule.insert("guardrails".into(), strings(&guardrails));
+    }
+    // A provider's own API reached as sent, one line per provider: `typesafe: /v1/systemone, /v1/models`. Only a
+    // form that sends the field changes it.
+    if body.contains_key("passthrough") {
+        let lines = pairs(text(body, "passthrough"), "provider: /path")?;
+        if lines.is_empty() {
+            rule.remove("passthrough");
+        } else {
+            let entries: Vec<Value> = lines
+                .into_iter()
+                .map(|(provider, paths)| {
+                    let paths: Vec<String> = paths
+                        .split(',')
+                        .map(|p| p.trim().to_string())
+                        .filter(|p| !p.is_empty())
+                        .collect();
+                    json!({ "provider": provider, "paths": paths })
+                })
+                .collect();
+            rule.insert("passthrough".into(), Value::Array(entries));
+        }
     }
     Ok(())
 }

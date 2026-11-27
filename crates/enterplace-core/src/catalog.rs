@@ -814,6 +814,12 @@ pub const PRESETS: &[Preset] = &[
         "https://github.com/triton-inference-server/server/blob/main/python/openai/README.md",
     ),
     hosted(
+        "typesafe",
+        "TypeSafe (Jev decision models, native API through passthrough)",
+        "https://api.typesafe.ai/v1",
+        "https://docs.typesafe.ai/api",
+    ),
+    hosted(
         "upstage",
         "Upstage",
         "https://api.upstage.ai/v1",
@@ -1375,6 +1381,7 @@ pub const DEFAULT_MODELS: &[(&str, &[&str])] = &[
             "openai/gpt-oss-120b",
         ],
     ),
+    ("typesafe", &["jev-latest", "jev-preview"]),
     ("upstage", &["solar-pro-4", "solar-mini-4"]),
     (
         "venice",
