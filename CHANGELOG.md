@@ -7,6 +7,8 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-27
+
 ### Added
 
 - TypeSafe in the provider catalog: Jev decision models (`jev-latest`, `jev-preview`) with the key pasted in Add a
