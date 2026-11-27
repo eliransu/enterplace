@@ -42,6 +42,15 @@ pub(crate) fn routes() -> Router<Console> {
         .route("/api/mcp", get(mcp_list).post(mcp_add))
         .route("/api/mcp/{name}", put(mcp_edit).delete(mcp_remove))
         .route("/api/mcp/{name}/tools", put(mcp_tools))
+        .route("/api/mcp/{name}/catalog", put(mcp_catalog))
+        .route(
+            "/api/mcp/{name}/access",
+            post(mcp_grant).delete(mcp_access_off),
+        )
+        .route(
+            "/api/mcp/{name}/access/{kind}/{who}",
+            axum::routing::delete(mcp_revoke),
+        )
         .route("/api/policy", get(policy_get))
         .route("/api/policy/mode", put(mode_set))
         .route("/api/policy/identity", put(identity_set))
@@ -875,6 +884,8 @@ async fn mcp_list(State(console): State<Console>, headers: HeaderMap) -> Respons
                     "auth_env": env,
                     "allow_private": s.get("allow_private").and_then(Value::as_bool).unwrap_or(false),
                     "access": access,
+                    "disabled_tools": str_list(s.get("disabled_tools")),
+                    "grants": grants_of(s),
                 })
             })
             .collect();
@@ -1103,6 +1114,177 @@ async fn mcp_tools(
         })
         .await
     }.await)
+}
+
+/// Sets which tools of this server are switched off for everyone: the toggles of the console's tool catalog.
+async fn mcp_catalog(
+    State(console): State<Console>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let body = body_of(&bytes)?;
+            let mut disabled = list(&body, "disabled");
+            disabled.sort();
+            disabled.dedup();
+            let target = json!({ "server": name, "disabled_tools": disabled });
+            let note = format!("Change which tools of MCP server {name} are switched off");
+            commit(
+                &console,
+                &admin,
+                "change_mcp_catalog",
+                note,
+                target,
+                |tree| {
+                    let server = entry(tree, "mcp", &name, "MCP server")?;
+                    if disabled.is_empty() {
+                        server.remove("disabled_tools");
+                    } else {
+                        server.insert("disabled_tools".into(), strings(&disabled));
+                    }
+                    Ok(())
+                },
+            )
+            .await
+        }
+        .await,
+    )
+}
+
+/// Who an access entry is for, as the policy writes it: team, person or app.
+const GRANT_KINDS: [&str; 3] = ["team", "person", "app"];
+
+/// A server's `access:` list as the console shows it, `null` when the server has none (the rules decide).
+fn grants_of(server: &Map<String, Value>) -> Value {
+    let Some(list) = server.get("access").and_then(Value::as_array) else {
+        return Value::Null;
+    };
+    list.iter()
+        .filter_map(Value::as_object)
+        .filter_map(|g| {
+            let kind = GRANT_KINDS.into_iter().find(|k| g.contains_key(*k))?;
+            Some(json!({
+                "kind": kind,
+                "name": g.get(kind).and_then(Value::as_str).unwrap_or(""),
+                "tools": str_list(g.get("tools")),
+            }))
+        })
+        .collect()
+}
+
+/// The `access:` list of a server in the tree, made when there is none yet.
+fn access_list<'a>(
+    tree: &'a mut Map<String, Value>,
+    name: &str,
+) -> Result<&'a mut Vec<Value>, String> {
+    let server = entry(tree, "mcp", name, "MCP server")?;
+    let list = server
+        .entry("access")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !list.is_array() {
+        *list = Value::Array(Vec::new());
+    }
+    list.as_array_mut().ok_or_else(|| {
+        "The server's access list could not be read. Fix it in the raw policy.".to_string()
+    })
+}
+
+/// Grants a team, person or app this server, or the tools named of it; replaces what it was granted before.
+async fn mcp_grant(
+    State(console): State<Console>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let body = body_of(&bytes)?;
+            let kind = text(&body, "kind").to_string();
+            let who = text(&body, "name").trim().to_string();
+            let tools = list(&body, "tools");
+            if !GRANT_KINDS.contains(&kind.as_str()) {
+                return Err(bad(
+                    "Grant access to a team, a person or an app: kind is team, person or app.",
+                ));
+            }
+            if who.is_empty() || !config::valid_name(&who) {
+                return Err(bad(format!(
+                    "Pick the {kind} to grant access to: letters, digits, '.', '-', '_' and '@'."
+                )));
+            }
+            let target = json!({ "server": name, "kind": kind, "name": who, "tools": tools });
+            let note = format!("Grant MCP server {name} to {kind} {who}");
+            commit(&console, &admin, "grant_mcp_access", note, target, |tree| {
+                let list = access_list(tree, &name)?;
+                list.retain(|g| g.get(kind.as_str()).and_then(Value::as_str) != Some(who.as_str()));
+                let mut grant = Map::new();
+                grant.insert(kind.clone(), who.clone().into());
+                if !tools.is_empty() {
+                    grant.insert("tools".into(), strings(&tools));
+                }
+                list.push(Value::Object(grant));
+                Ok(())
+            })
+            .await
+        }
+        .await,
+    )
+}
+
+/// Revokes what one team, person or app was granted of this server. The list stays, so who is left keeps access
+/// and no one else gains it.
+async fn mcp_revoke(
+    State(console): State<Console>,
+    Path((name, kind, who)): Path<(String, String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    answer(async {
+        let admin = signed_in(&console, &headers, true).await?;
+        let target = json!({ "server": name, "kind": kind, "name": who });
+        let note = format!("Revoke MCP server {name} from {kind} {who}");
+        commit(&console, &admin, "revoke_mcp_access", note, target, |tree| {
+            let list = access_list(tree, &name)?;
+            let before = list.len();
+            list.retain(|g| g.get(kind.as_str()).and_then(Value::as_str) != Some(who.as_str()));
+            if list.len() == before {
+                return Err(format!("{kind} {who} has no access to MCP server {name}: someone revoked it already. Reload the page."));
+            }
+            Ok(())
+        })
+        .await
+    }.await)
+}
+
+/// Removes the server's access list: each rule's tools decide who may use it again.
+async fn mcp_access_off(
+    State(console): State<Console>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    answer(
+        async {
+            let admin = signed_in(&console, &headers, true).await?;
+            let target = json!({ "server": name });
+            let note = format!("Let the rules decide who may use MCP server {name}");
+            commit(
+                &console,
+                &admin,
+                "remove_mcp_access",
+                note,
+                target,
+                |tree| {
+                    entry(tree, "mcp", &name, "MCP server")?.remove("access");
+                    Ok(())
+                },
+            )
+            .await
+        }
+        .await,
+    )
 }
 
 // ---------------------------------------------------------------- policy basics

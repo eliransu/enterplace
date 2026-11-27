@@ -263,6 +263,7 @@ pub(super) fn extension(mcp: Shared) -> enterplace_console::Extension {
             .route("/api/mcp-tools", get(tools).post(tools_change))
             .route("/api/mcp-approvals", get(approvals).post(approvals_change))
             .route("/api/mcp-sessions", get(sessions).post(sessions_change))
+            .route("/api/mcp-catalog", get(catalog).post(catalog_test))
             .layer(Extension(mcp));
     enterplace_console::Extension {
         nav: nav(),
@@ -301,14 +302,14 @@ fn no_servers(headers: &HeaderMap, uri: &Uri) -> Response {
     let base = enterplace_console::gateway_origin(headers, uri, &None);
     ok(json!({
         "empty": enterplace_console::empty_json(APPROVALS, &base),
-        "tools": [], "calls": [], "sessions": [], "connections": [],
+        "tools": [], "calls": [], "sessions": [], "connections": [], "servers": [],
     }))
 }
 
 /// Without MCP servers in the policy, the MCP pages say what fills them and open the Start here step for it.
 pub(crate) fn empty_extension() -> enterplace_console::Extension {
     let mut routes = moved();
-    for page in ["tools", "approvals", "sessions"] {
+    for page in ["tools", "approvals", "sessions", "catalog"] {
         routes = routes.route(
             &format!("/api/mcp-{page}"),
             get(
@@ -746,6 +747,128 @@ async fn sessions_change(
                     StatusCode::NOT_FOUND,
                     "That session is no longer open.".into(),
                 )),
+            }
+        }
+        .await,
+    )
+}
+
+/// A tool of the catalog: its name, its description, and whether the policy switched it off.
+fn catalogued(mcp: &Mcp, server: &str, name: &str, description: &str) -> Value {
+    let off = mcp
+        .app
+        .version()
+        .policy
+        .as_ref()
+        .and_then(|p| p.mcp_server(server))
+        .is_some_and(|s| s.tool_disabled(name));
+    json!({"name": name, "description": short(description), "enabled": !off})
+}
+
+/// Every server's tools as they were last listed (their pins), for the console's tool catalog.
+async fn catalog(
+    State(console): State<Console>,
+    Extension(mcp): Extension<Gateway>,
+    headers: HeaderMap,
+) -> Response {
+    answer(
+        async {
+            let (mcp, admin) = open(&mcp, &console, &headers, None).await?;
+            let pins = mcp.keep.list("pin").await.unwrap_or_default();
+            let health: BTreeMap<String, Value> = mcp
+                .keep
+                .list("health")
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let servers: Vec<Value> = mcp
+                .servers()
+                .iter()
+                .map(|server| {
+                    let prefix = format!("{}/", server.name);
+                    let mut tools: Vec<Value> = pins
+                        .iter()
+                        .filter_map(|(id, pin)| {
+                            let name = id.strip_prefix(&prefix)?;
+                            let description = pin["description"].as_str().unwrap_or_default();
+                            Some(catalogued(&mcp, &server.name, name, description))
+                        })
+                        .collect();
+                    tools.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+                    json!({
+                        "name": server.name,
+                        "tools": tools,
+                        "health": health.get(&server.name).cloned().unwrap_or(Value::Null),
+                    })
+                })
+                .collect();
+            Ok(ok(
+                json!({"servers": servers, "editable": !admin.read_only}),
+            ))
+        }
+        .await,
+    )
+}
+
+/// Test: lists one server's tools now, with the gateway's own credential, and pins what is new.
+async fn catalog_test(
+    State(console): State<Console>,
+    Extension(mcp): Extension<Gateway>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Response {
+    answer(
+        async {
+            let (mcp, admin) = open(
+                &mcp,
+                &console,
+                &headers,
+                Some("Your role may look but not test servers."),
+            )
+            .await?;
+            let body = body_of(&bytes)?;
+            let name = text(&body, "server");
+            let servers = mcp.servers();
+            let Some(server) = servers.iter().find(|s| s.name == name) else {
+                return Err(Fail(
+                    StatusCode::NOT_FOUND,
+                    format!("There is no MCP server named \"{name}\" in the policy in force. Reload the page; if you just added it, wait a few seconds for the gateway to load it."),
+                ));
+            };
+            if server.user_auth.is_some() {
+                return Err(bad(format!(
+                    "Each person signs in to {name} with their own account, so the gateway has no credential of its own to list its tools with. They show here once a person lists them through /mcp."
+                )));
+            }
+            console
+                .audit(Some(&admin), "test_mcp_server", json!({"server": name}), None)
+                .await
+                .map_err(|_| unrecorded("test"))?;
+            let listed = mcp.list_checked(server, &Conn::default(), Item::Tool).await;
+            let health = mcp.note_health(server, &listed).await;
+            match listed {
+                Ok(listed) => {
+                    mcp.observe(server, &listed).await;
+                    let tools: Vec<Value> = listed
+                        .iter()
+                        .filter_map(|t| {
+                            let own = t["name"].as_str()?;
+                            Some(catalogued(&mcp, name, own, t["description"].as_str().unwrap_or_default()))
+                        })
+                        .collect();
+                    Ok(ok(json!({
+                        "message": format!("{name} answered and lists {} tools.", tools.len()),
+                        "tools": tools,
+                        "health": health,
+                    })))
+                }
+                // Answered, not refused: the test ran, and its finding is the server's health.
+                Err((_, why)) => Ok(ok(json!({
+                    "message": format!("MCP server {name} {why}. Check its URL and that it is running, then press Test again."),
+                    "tools": [],
+                    "health": health,
+                }))),
             }
         }
         .await,

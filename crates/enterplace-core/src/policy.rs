@@ -1292,6 +1292,8 @@ pub struct Policy {
     prices: PriceOverrides,
     /// Virtual MCP servers, served at `/mcp/<name>`.
     bundles: Vec<crate::mcp::Bundle>,
+    /// The `mcp:` servers, for what the policy says of each beyond reaching it: tools switched off, who may use it.
+    mcp_servers: Vec<crate::mcp::Server>,
     /// The `limits:` list, in file order.
     limits: Vec<ScopeLimit>,
     /// The roles the policy defines beside the built-in ones.
@@ -1698,6 +1700,16 @@ impl Policy {
     pub fn with_mcp_bundles(mut self, bundles: Vec<crate::mcp::Bundle>) -> Self {
         self.bundles = bundles;
         self
+    }
+
+    pub fn with_mcp_servers(mut self, servers: Vec<crate::mcp::Server>) -> Self {
+        self.mcp_servers = servers;
+        self
+    }
+
+    /// The MCP server of the policy named `name`.
+    pub fn mcp_server(&self, name: &str) -> Option<&crate::mcp::Server> {
+        self.mcp_servers.iter().find(|s| s.name == name)
     }
 
     /// The virtual MCP server served at `/mcp/<name>`, if the policy names one.

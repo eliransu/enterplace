@@ -44,7 +44,7 @@ use enterplace_core::{
     guard::{self, Guardrail},
     id,
     mcp::{Bundle, ToolChanges, Transport, UserAuth, tool_allowed},
-    policy::{Principal, Rule},
+    policy::{Policy, Principal, Rule},
 };
 use http_body_util::BodyExt;
 use serde_json::{Map, Value, json};
@@ -74,6 +74,8 @@ const RESOURCE_SCHEME: &str = "enterplace://";
 const RELAY_FOR: Duration = Duration::from_secs(30 * 60);
 /// Most callers' sessions and relayed requests remembered at once.
 const MAX_REMEMBERED: usize = 10_000;
+/// How often a server that keeps answering the same has its health written again, for its last listed time.
+const HEALTH_EVERY: Duration = Duration::from_secs(60);
 /// How often a call waiting for approval looks again.
 const APPROVAL_POLL: Duration = Duration::from_millis(500);
 
@@ -237,6 +239,9 @@ pub(crate) struct Mcp {
     relayed: Mutex<HashMap<String, Relayed>>,
     /// One pinning at a time on this gateway, so one change is recorded once.
     pinning: tokio::sync::Mutex<()>,
+    /// Each server's health as this gateway last wrote it to the store: (up, when), so a list writes only a change
+    /// or every HEALTH_EVERY.
+    health: Mutex<HashMap<String, (bool, Instant)>>,
 }
 
 type Shared = Arc<Mcp>;
@@ -289,6 +294,7 @@ pub(crate) fn router(
         revoked: Mutex::default(),
         relayed: Mutex::default(),
         pinning: tokio::sync::Mutex::new(()),
+        health: Mutex::default(),
     });
     let router = Router::new()
         .route(
@@ -629,16 +635,61 @@ impl Item {
     }
 }
 
-/// Whether the rule (and the bundle, at `/mcp/<bundle>`) allows `name`, written `<server>.<name>`.
-fn allows(item: Item, rule: &Rule, bundle: Option<&Bundle>, name: &str) -> bool {
+/// Whether the tool a caller names `<server>.<tool>` is switched off in the console's tool catalog.
+fn disabled(policy: &Policy, name: &str) -> bool {
+    name.split_once('.').is_some_and(|(server, tool)| {
+        policy
+            .mcp_server(server)
+            .is_some_and(|s| s.tool_disabled(tool))
+    })
+}
+
+/// What the policy says of a tool beyond the caller's rule: switched off, and who its server is granted to.
+#[derive(Clone, Copy)]
+struct Gate<'a> {
+    policy: &'a Policy,
+    /// The caller, whose grants apply. `None` while observing (observe mode, a rule's shadow period): the rule
+    /// decides alone, and what a grant would refuse is recorded apart.
+    person: Option<&'a Principal>,
+}
+
+impl Gate<'_> {
+    /// `None` when the tool's server has no access list; otherwise whether the caller is granted the tool.
+    fn granted(&self, name: &str) -> Option<bool> {
+        let person = self.person?;
+        let (server, tool) = name.split_once('.')?;
+        self.policy
+            .mcp_server(server)?
+            .grants_tool(&person.team, &person.name, tool)
+    }
+}
+
+/// Whether the rule (and the bundle, at `/mcp/<bundle>`) allows `name`, written `<server>.<name>`. A tool switched
+/// off is allowed by nothing. On a server with an access list, its grants allow a tool in place of the rule's
+/// `tools:`, and the rule's `!` entries still deny.
+fn allows(item: Item, rule: &Rule, bundle: Option<&Bundle>, name: &str, gate: Gate) -> bool {
+    if item == Item::Tool && disabled(gate.policy, name) {
+        return false;
+    }
     let in_bundle = match (item, bundle) {
         (_, None) => true,
         (Item::Tool, Some(bundle)) => tool_allowed(&bundle.tools, name),
         // A bundle serves tools only.
         (_, Some(_)) => false,
     };
+    let by_rule = match (item, gate.granted(name)) {
+        (Item::Tool, Some(granted)) => {
+            granted
+                && !rule
+                    .tools
+                    .iter()
+                    .filter_map(|p| p.strip_prefix('!'))
+                    .any(|p| enterplace_core::mcp::pattern_matches(p, name))
+        }
+        _ => tool_allowed(item.patterns(rule), name),
+    };
     in_bundle
-        && tool_allowed(item.patterns(rule), name)
+        && by_rule
         && (item != Item::Tool || rule.mcp.narrow.iter().all(|l| tool_allowed(l, name)))
 }
 
@@ -895,6 +946,10 @@ async fn answer(
             "resources/list" => Item::Resource,
             _ => Item::Template,
         };
+        let gate = Gate {
+            policy,
+            person: listed.is_none().then_some(&person),
+        };
         let items = mcp
             .gather(
                 item,
@@ -902,11 +957,47 @@ async fn answer(
                 bundle.as_ref(),
                 &person,
                 asked.subject.as_deref(),
+                gate,
             )
             .await;
         return Ok(result(&call_id, json!({ item.key(): items })));
     };
-    if !allows(item, rule, bundle.as_ref(), &name) {
+    if item == Item::Tool && disabled(policy, &name) {
+        return Err(Refusal::new(
+            StatusCode::FORBIDDEN,
+            "tool_disabled",
+            format!(
+                "Refused: tool \"{name}\" is switched off for everyone in this Enterplace's tool catalog. Ask an Enterplace admin to switch it on (MCP, Servers, Tools) if you need it."
+            ),
+        ));
+    }
+    let caller = Gate {
+        policy,
+        person: Some(&person),
+    };
+    if item == Item::Tool && caller.granted(&name) == Some(false) {
+        let refusal = Refusal::new(
+            StatusCode::FORBIDDEN,
+            "mcp_access_denied",
+            format!(
+                "Refused: MCP server \"{}\" may be used only by the teams, people and apps an Enterplace admin granted it to, and \"{}\" of team \"{}\" is not granted tool \"{name}\". Ask an Enterplace admin to grant it to you or your team in the console (MCP, Servers, Access).",
+                asked.server.as_deref().unwrap_or_default(),
+                person.name,
+                person.team
+            ),
+        );
+        match shadow {
+            Some(by) => asked
+                .would_refuse
+                .push(crate::would_refuse_entry(refusal, by)),
+            None => return Err(refusal),
+        }
+    }
+    let gate = Gate {
+        policy,
+        person: shadow.is_none().then_some(&person),
+    };
+    if !allows(item, rule, bundle.as_ref(), &name, gate) {
         let noun = match item {
             Item::Tool => "tool",
             Item::Prompt => "prompt",
@@ -1271,6 +1362,7 @@ impl Mcp {
         bundle: Option<&Bundle>,
         person: &Principal,
         subject: Option<&str>,
+        gate: Gate<'_>,
     ) -> Vec<Value> {
         let mut out = Vec::new();
         for server in self.servers().iter() {
@@ -1280,7 +1372,7 @@ impl Mcp {
                     // Without the person's credential the server cannot be asked. A tool that says how to connect
                     // takes the place of its tools, so the person learns where to sign in.
                     let name = format!("{}.connect", server.name);
-                    if item == Item::Tool && allows(Item::Tool, rule, bundle, &name) {
+                    if item == Item::Tool && allows(Item::Tool, rule, bundle, &name, gate) {
                         out.push(json!({
                             "name": name,
                             "description": format!("Connect your own account to MCP server {}. Its tools are listed once you have. Call this tool for the link.", server.name),
@@ -1304,7 +1396,7 @@ impl Mcp {
                     continue;
                 }
                 let check = format!("{}.{own}", server.name);
-                if allows(item, rule, bundle, &check) {
+                if allows(item, rule, bundle, &check, gate) {
                     let mut entry = entry.clone();
                     entry[item.field()] = item.shown(&server.name, own).into();
                     out.push(entry);
@@ -1314,8 +1406,79 @@ impl Mcp {
         out
     }
 
-    /// One server's whole list of one kind, every page.
+    /// One server's whole list of one kind, every page. A server that fails is left out, with a line on stderr.
     async fn list_server(&self, server: &Server, conn: &Conn, item: Item) -> Vec<Value> {
+        let listed = self.list_checked(server, conn, item).await;
+        // The shared credential's answer is the server's health; one person's credential says only theirs.
+        if item == Item::Tool && conn.key.is_empty() {
+            let up = listed.is_ok();
+            let due = lock(&self.health)
+                .get(&server.name)
+                .is_none_or(|(was, at)| *was != up || at.elapsed() >= HEALTH_EVERY);
+            if due {
+                self.note_health(server, &listed).await;
+            }
+        }
+        match listed {
+            Ok(out) => out,
+            Err((out, why)) => {
+                eprintln!(
+                    "enterplace: MCP server \"{}\" {why}, so it is left out of the list",
+                    server.name
+                );
+                out
+            }
+        }
+    }
+
+    /// Writes what one tool list says of the server's health to the store, where every gateway and the console read
+    /// it: up or down, when it last listed its tools and how many, and its last error.
+    async fn note_health(
+        &self,
+        server: &Server,
+        listed: &Result<Vec<Value>, (Vec<Value>, String)>,
+    ) -> Value {
+        let at = enterplace_core::audit::timestamp();
+        let mut health = self
+            .keep
+            .get("health", &server.name)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| json!({"listed_at": null, "tools": null, "last_error": null}));
+        health["checked_at"] = at.clone().into();
+        match listed {
+            Ok(tools) => {
+                health["status"] = "up".into();
+                health["listed_at"] = at.into();
+                health["tools"] = tools.len().into();
+                health["error"] = Value::Null;
+            }
+            Err((_, why)) => {
+                let why = format!("{} {why}", server.name);
+                health["status"] = "down".into();
+                health["error"] = why.clone().into();
+                health["last_error"] = why.into();
+                health["last_error_at"] = at.into();
+            }
+        }
+        if let Err(err) = self.keep.put("health", &server.name, health.clone()).await {
+            eprintln!(
+                "enterplace: the health of MCP server \"{}\" could not be written: {err}",
+                server.name
+            );
+        }
+        lock(&self.health).insert(server.name.clone(), (listed.is_ok(), Instant::now()));
+        health
+    }
+
+    /// One server's whole list of one kind, or what it listed before it failed and why.
+    async fn list_checked(
+        &self,
+        server: &Server,
+        conn: &Conn,
+        item: Item,
+    ) -> Result<Vec<Value>, (Vec<Value>, String)> {
         let mut out = Vec::new();
         let mut cursor: Option<Value> = None;
         for _ in 0..MAX_PAGES {
@@ -1326,22 +1489,16 @@ impl Mcp {
             let page = match self.ask(server, conn, item.list_method(), params).await {
                 Ok(answer) if answer.get("result").is_some() => answer,
                 Ok(answer) => {
-                    eprintln!(
-                        "enterplace: MCP server \"{}\" refused {} ({}), so it is left out of the list",
-                        server.name,
-                        item.list_method(),
-                        answer["error"]
-                    );
-                    break;
+                    let why = format!("refused {} ({})", item.list_method(), answer["error"]);
+                    return Err((out, why));
                 }
                 Err(failure) => {
-                    eprintln!(
-                        "enterplace: MCP server \"{}\" gave no answer to {}: {}, so it is left out of the list",
-                        server.name,
+                    let why = format!(
+                        "gave no answer to {}: {}",
                         item.list_method(),
                         failure.detail
                     );
-                    break;
+                    return Err((out, why));
                 }
             };
             out.extend(
@@ -1359,7 +1516,7 @@ impl Mcp {
                 break;
             }
         }
-        out
+        Ok(out)
     }
 
     /// Runs the request-side guardrails on a tool call's arguments: every string in them, wherever it is.
