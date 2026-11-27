@@ -139,8 +139,11 @@ audit: {{ path: enterplace-audit.jsonl }}
 
         # The old address opens the app's Teams page.
         chrome.go(f"{base}/console/teams", f"{base}/console/app/#/teams")
-        chrome.wait("location.hash.startsWith('#/teams') && document.body.textContent.includes('maya.cohen')", "teams list the people")
+        chrome.wait("location.hash.startsWith('#/teams') && document.body.textContent.includes('payments')", "the Groups page lists the groups")
         chrome.shot(out / "teams.png")
+        chrome.go(f"{base}/console/app/#/teams?group=payments")
+        chrome.wait("document.body.textContent.includes('maya.cohen')", "a group lists its people")
+        chrome.shot(out / "team.png")
 
         chrome.go(f"{base}/console/app/#/people")
         chrome.wait("[...document.querySelectorAll('main button')].some(b => b.textContent === 'Edit')", "the People page")
