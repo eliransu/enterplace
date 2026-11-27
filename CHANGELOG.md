@@ -7,6 +7,32 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-27
+
+### Added
+
+- Guardrail API keys from the console: the guardrail form takes the vendor's key (Lasso, Lakera, OpenAI moderation and
+  the rest), seals it in the store under the master key as `guardrail-<name>`, and the policy names it with
+  `credential:`. No environment variable is needed; `key_env` still works.
+- Groups: create, rename and delete a group, and add or remove people, from the console. A rename moves the group's
+  keys and every policy entry that names it. Works with keys in the keys file, Postgres or the Cloudflare store
+  (`move_keys`, one step, all or none). Each change is an audit admin record.
+- MCP tool catalog: the gateway lists each server's tools, and the console switches each one on or off
+  (`disabled_tools:`, refused with `tool_disabled`).
+- MCP access by group, person or app: `access:` on an `mcp:` server, granted and revoked from the console. A server
+  without it follows the rules' `tools:` as before; with it, a caller outside the list is refused with
+  `mcp_access_denied`.
+- MCP server health: up or down, when its tools were last listed, the last error, and a Test button.
+
+### Changed
+
+- The console's New and pending is now Access requests.
+- Users lists people and their person tokens only; service keys have their own Service keys page under Apps and agents.
+- Coding agents has its own Logs page, and each Logs page shows only its own callers: people, or service keys
+  (`/console/api/requests?of=coding` or `of=apps`).
+- MCP has its own sidebar group.
+- Cloudflare: the Worker's store gains `move_keys`. Deploy the Worker of the same version with the image.
+
 ## [0.4.0] - 2026-11-26
 
 ### Added
