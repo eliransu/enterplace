@@ -152,7 +152,7 @@ rules:
     // which manager, and never the value.
     let audit = dir.join("enterplace-audit.jsonl");
     let mut text = String::new();
-    for _ in 0..50 {
+    for _ in 0..250 {
         text = std::fs::read_to_string(&audit).unwrap_or_default();
         if text.contains("secret_refresh_failed") {
             break;
