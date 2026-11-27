@@ -1211,6 +1211,8 @@ async fn policy_get(State(console): State<Console>, headers: HeaderMap) -> Respo
             "rules": rules,
             "limits": limits,
             "guardrails": guardrails,
+            // A guardrail's key can be pasted only where the store can seal it.
+            "sealing": store::credentials_for(&console.config().keys).is_some(),
             "aliases": aliases,
             "coding_agents": tree.get("coding_agents").cloned().unwrap_or_else(|| json!({})),
         })))
@@ -1769,6 +1771,18 @@ fn guard_fields(entry: &mut Map<String, Value>, body: &Map<String, Value>) -> Re
             entry.insert(key.into(), v.into());
         }
     }
+    // A key pasted in the form was sealed under this name; a variable named instead replaces it. Neither keeps
+    // the key it had.
+    match text(body, "credential") {
+        "" if !text(body, "key_env").is_empty() => {
+            entry.remove("credential");
+        }
+        "" => {}
+        sealed => {
+            entry.remove("key_env");
+            entry.insert("credential".into(), sealed.into());
+        }
+    }
     if let Some(ms) = number(body, "timeout_ms")? {
         entry.insert("timeout_ms".into(), as_written(ms));
     }
@@ -1823,11 +1837,32 @@ fn guard_fields(entry: &mut Map<String, Value>, body: &Map<String, Value>) -> Re
     Ok(())
 }
 
+/// A guardrail's key pasted in the form, sealed in the store as `guardrail-<name>`; the policy keeps only that name.
+async fn seal_guard_key(
+    console: &Console,
+    admin: &Admin,
+    name: &str,
+    body: &mut Map<String, Value>,
+) -> Result<(), Fail> {
+    let key = text(body, "key").trim().to_string();
+    body.remove("key");
+    if key.is_empty() {
+        return Ok(());
+    }
+    let credential = format!("guardrail-{name}");
+    let kind = text(body, "type").to_string();
+    seal(console, admin, &credential, &kind, &key).await?;
+    body.insert("credential".into(), credential.into());
+    Ok(())
+}
+
 async fn guard_add(State(console): State<Console>, headers: HeaderMap, bytes: Bytes) -> Response {
     answer(async {
         let admin = signed_in(&console, &headers, true).await?;
-        let body = body_of(&bytes)?;
+        let mut body = body_of(&bytes)?;
         let name = text(&body, "name").to_string();
+        name_ok(&name, "guardrail", "no-secrets").map_err(bad)?;
+        seal_guard_key(&console, &admin, &name, &mut body).await?;
         let note = format!("Add guardrail {name}");
         commit(&console, &admin, "add_guardrail", note, json!({ "guardrail": name }), |tree| {
             name_ok(&name, "guardrail", "no-secrets")?;
@@ -1860,7 +1895,8 @@ async fn guard_edit(
     answer(
         async {
             let admin = signed_in(&console, &headers, true).await?;
-            let body = body_of(&bytes)?;
+            let mut body = body_of(&bytes)?;
+            seal_guard_key(&console, &admin, &name, &mut body).await?;
             let note = format!("Change guardrail {name}");
             commit(
                 &console,

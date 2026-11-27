@@ -7303,6 +7303,34 @@ pub(crate) async fn ask(
     answer
 }
 
+/// A guardrail's API key pasted in the console, opened from the store. Kept a minute, so a vendor call does not read
+/// the store each time and a rotated key is used within a minute.
+async fn guard_credential(state: &AppState, name: &str) -> Result<String, String> {
+    static OPENED: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, (Instant, String)>>,
+    > = std::sync::LazyLock::new(std::sync::Mutex::default);
+    if let Ok(cache) = OPENED.lock()
+        && let Some((at, value)) = cache.get(name)
+        && at.elapsed() < Duration::from_secs(60)
+    {
+        return Ok(value.clone());
+    }
+    let store = state
+        .reloader
+        .as_ref()
+        .and_then(|r| enterplace_core::store::credentials_for(r.keys_path()))
+        .ok_or("its key is a store credential, and this gateway keeps none: set ENTERPLACE_MASTER_KEY, or name an environment variable with key_env")?;
+    let owned = name.to_string();
+    let value = tokio::task::spawn_blocking(move || store.credential_value(&owned))
+        .await
+        .map_err(|err| format!("the store could not be read: {err}"))??
+        .ok_or_else(|| format!("credential \"{name}\" is not in the store. Paste the key again in the console (Guardrails, edit the guardrail)"))?;
+    if let Ok(mut cache) = OPENED.lock() {
+        cache.insert(name.to_string(), (Instant::now(), value.clone()));
+    }
+    Ok(value)
+}
+
 async fn ask_service(
     state: &AppState,
     action: guard::Action,
@@ -7311,12 +7339,19 @@ async fn ask_service(
 ) -> Result<guard::WebhookAnswer, String> {
     // ponytail: credentials are read from the environment on each call. Start and reload refuse a policy whose
     // variables are unset, and a running process's environment does not change, so this is only a lookup.
-    let env = |variable: &str| enterplace_core::secrets::var(variable);
+    let sealed = match &hook.credential {
+        Some(name) => Some(guard_credential(state, name).await?),
+        None => None,
+    };
+    let env = |variable: &str| match (&hook.credential, &sealed) {
+        (Some(name), Some(value)) if name == variable => Some(value.clone()),
+        _ => enterplace_core::secrets::var(variable),
+    };
     let mut exchange = enterplace_core::vendors::Exchange::new(
         &hook.vendor,
         &hook.url,
         action,
-        hook.key_env.as_deref(),
+        hook.key_env.as_deref().or(hook.credential.as_deref()),
         &hook.headers_env,
         sent,
         &env,
