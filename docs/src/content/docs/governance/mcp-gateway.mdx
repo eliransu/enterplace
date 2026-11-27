@@ -56,6 +56,7 @@ rules:
 | `oauth_scopes` | no | With `user_auth: oauth`, the scopes Enterplace asks the server's authorization server for. |
 | `oauth_client_id`, `oauth_client_secret_env` | no | With `user_auth: oauth`, a client registered by hand. Without them Enterplace registers itself (dynamic client registration). The secret is read from the variable. |
 | `tool_changes` | no | `record` (the default) records a tool whose description or schema changed and serves it; `block` records it and holds it until an admin approves it. See [Tool pins](#tool-pins-and-changed-tools). |
+| `access` | no | Who may use the server: a list of grants, each `team:`, `person:` or `app:` (an app is a service key, by its name) with an optional `tools:` of the server's own tool names. See [Access by team, person or app](#access-by-team-person-or-app). |
 | `disabled_tools` | no | Tools switched off, by the server's own names, for example `[delete_repo]`: listed to no one and refused to everyone with `tool_disabled`, whatever a rule allows. The console's tool catalog sets it. |
 
 The variables are read when Enterplace starts, and Enterplace does not start when one is unset.
@@ -67,6 +68,32 @@ In the console, the MCP servers page adds a server with **Add a server**, edits 
 Once a server is added, the gateway asks it for its tools (`tools/list`) with its own credential, and **Tools** shows each one with its description and a switch. A tool switched off is saved in the server's `disabled_tools`, through the same checked save as every policy change (its diff and a dry run first, then Apply), and recorded as `change_mcp_catalog`. **Test** lists the tools again now; each test is recorded as `test_mcp_server`. A server with `user_auth` has no credential of its own, so its tools show once a person lists them through `/mcp`.
 
 Servers change without a restart, like the rest of the policy: within 2 seconds of a saved policy file, at once on `SIGHUP`, or after `PUT` and `DELETE /admin/mcp/<name>` when the policy is kept in the store. A server reached as before keeps the sessions Enterplace holds at it. A new server, or one whose address, transport, credential or price changed, is connected on its next call. A removed server serves nothing from the next request on, and a stdio server's process is stopped. A reload that names an unset variable, or a stdio command the gateway may not start, is rejected and the version in use stays, as for any policy that does not load. `/mcp` is served whenever Enterplace runs with a policy, so the first server can be added the same way.
+
+### Access by team, person or app
+
+A server with `access:` is used only by who is on its list; without it, each rule's `tools:` decides, as below.
+
+```yaml title="enterplace.policy.yaml"
+mcp:
+  - name: github
+    url: https://api.githubcopilot.com/mcp
+    headers_env: { Authorization: GITHUB_MCP_AUTHORIZATION }
+    access:
+      - team: payments
+      - person: maya.cohen
+        tools: [create_issue, list_issues]
+      - app: release-bot
+        tools: [create_release]
+```
+
+| Grant field | Meaning |
+|---|---|
+| `team`, `person` or `app` | Exactly one: the team, or the name on the key (a person's key or an app's service key). |
+| `tools` | The server's own tool names the grant allows. Left out, every tool of the server. |
+
+Once a server has `access:`, a rule's `tools:` no longer allows its tools, and a rule's `!<server>.<tool>` still denies one. The caller still needs a rule that names them, for its models, guardrails and approvals. A tool the caller is not granted is left out of `tools/list` and its call is refused with `mcp_access_denied`, naming the caller and the tool. An empty `access: []` lets no one use the server. A key's `mcp_tools`, the `x-enterplace-mcp-tools` header, bundles and switched off tools narrow a grant as they narrow a rule. In observe mode and a rule's shadow period, what a grant would refuse is recorded as `would_refuse`.
+
+In the console, **Access** on a server lists its grants, each with **Revoke**, and **Grant** picks a team, person or app from the ones there are and ticks the tools (none ticked grants every tool). **Let rules decide** removes the list. Each change goes through the checked save and is recorded as `grant_mcp_access`, `revoke_mcp_access` or `remove_mcp_access`.
 
 ### Tools, prompts and resources in a rule
 

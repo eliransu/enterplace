@@ -12,7 +12,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, Head, Panel, Problem, Refusal, Form, Loading, Cut } from "@/components/page";
-import { Remove } from "@/components/confirm";
+import { Confirm, Remove } from "@/components/confirm";
+import { EntityPicker, type Kind } from "@/components/team-picker";
+import { Checkbox } from "@/components/ui/checkbox";
 import { api, part } from "@/lib/api";
 import { useData, words } from "@/lib/use";
 
@@ -28,7 +30,10 @@ type Server = {
   auth_env: string;
   access: Access[];
   disabled_tools: string[];
+  /// The server's own access list; null while each rule's tools decide.
+  grants: Grant[] | null;
 };
+type Grant = { kind: "team" | "person" | "app"; name: string; tools: string[] };
 type Change = (run: () => Promise<{ message: string }>) => Promise<string>;
 
 const AUTH: Record<string, string> = {
@@ -48,15 +53,17 @@ export function McpServers({ me, query }: PageProps) {
     setForm(null);
     if (query.get("add")) goTo("/mcp");
     // A server just added: its tools, listed by Test as the dialog opens.
-    if (added) setTools({ name: added, transport: "", url: null, command: null, args: [], auth: "", auth_header: "", auth_env: "", access: [], disabled_tools: [] });
+    if (added) setTools({ name: added, transport: "", url: null, command: null, args: [], auth: "", auth_header: "", auth_env: "", access: [], disabled_tools: [], grants: null });
   };
   const [tools, setTools] = useState<Server | null>(null);
+  const [access, setAccess] = useState<string | null>(null);
+  const accessed = data?.servers.find((s) => s.name === access);
   const may = !!me?.edit_policy;
   return (
     <>
       <Head
         title="MCP servers"
-        lead="The MCP servers agents reach through Enterplace, and which tools each rule may call."
+        lead="The MCP servers agents reach through Enterplace, their tools, and who may use each."
         actions={
           data ? (
             <>
@@ -85,7 +92,7 @@ export function McpServers({ me, query }: PageProps) {
                 <TableHead>Server</TableHead>
                 <TableHead>Agents connect to</TableHead>
                 <TableHead>Sign-in</TableHead>
-                <TableHead>Tools allowed</TableHead>
+                <TableHead>Who may use it</TableHead>
                 <TableHead>Change</TableHead>
               </TableRow>
             </TableHeader>
@@ -105,16 +112,29 @@ export function McpServers({ me, query }: PageProps) {
                   </TableCell>
                   <TableCell>{s.auth === "header" ? `${s.auth_header} from ${s.auth_env}` : AUTH[s.auth] ?? s.auth}</TableCell>
                   <TableCell className="whitespace-normal">
-                    {s.access.map((a) => (
-                      <span key={a.rule} className="block">
-                        {a.rule}: {summary(a)}
-                      </span>
-                    ))}
+                    {s.grants === null ? (
+                      s.access.map((a) => (
+                        <span key={a.rule} className="block">
+                          rule {a.rule}: {summary(a)}
+                        </span>
+                      ))
+                    ) : s.grants.length === 0 ? (
+                      <span className="text-muted-foreground">No one: grant it under Access.</span>
+                    ) : (
+                      s.grants.map((g) => (
+                        <span key={`${g.kind}-${g.name}`} className="block">
+                          {g.kind} {g.name}: {g.tools.length ? g.tools.join(", ") : "every tool"}
+                        </span>
+                      ))
+                    )}
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-2">
                       <Button variant="outline" size="sm" disabled={!may} onClick={() => setTools(s)}>
                         Tools
+                      </Button>
+                      <Button variant="outline" size="sm" disabled={!may} onClick={() => setAccess(s.name)}>
+                        Access
                       </Button>
                       <Button variant="outline" size="sm" disabled={!may} onClick={() => setForm(s)}>
                         Edit
@@ -140,6 +160,7 @@ export function McpServers({ me, query }: PageProps) {
       </section>
       {form ? <ServerForm server={form === "new" ? null : form} onClose={close} change={change} /> : null}
       {tools ? <ToolCatalog server={tools} onClose={() => setTools(null)} change={change} /> : null}
+      {accessed ? <AccessDialog server={accessed} onClose={() => setAccess(null)} change={change} /> : null}
       {checking}
     </>
   );
@@ -329,6 +350,139 @@ function ToolCatalog({ server, onClose, change }: { server: Server; onClose: () 
               Cancel
             </Button>
             <Button type="submit">Save</Button>
+          </DialogFooter>
+        </Form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const KINDS: Record<Grant["kind"], string> = { team: "Team", person: "Person", app: "App" };
+
+/// Who may use one server: its grants, each revoked on its own, and a form to grant a team, person or app all of
+/// its tools or the ones ticked. The first grant makes the list the server's; until then each rule's tools decide.
+function AccessDialog({ server, onClose, change }: { server: Server; onClose: () => void; change: Change }) {
+  const [kind, setKind] = useState<Grant["kind"]>("team");
+  const [who, setWho] = useState("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [known, setKnown] = useState<string[]>([]);
+  const [refused, setRefused] = useState("");
+  useEffect(() => {
+    api
+      .get<{ servers: { name: string; tools: Tool[] }[] }>("mcp-catalog")
+      .then((c) => setKnown((c.servers.find((s) => s.name === server.name)?.tools ?? []).filter((t) => t.enabled).map((t) => t.name)))
+      .catch(() => setKnown([]));
+  }, [server.name]);
+  const tick = (tool: string, on: boolean) => {
+    const next = new Set(picked);
+    if (on) next.add(tool);
+    else next.delete(tool);
+    setPicked(next);
+  };
+  const grant = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const answer = await change(() => api.post(`mcp/${part(server.name)}/access`, { kind, name: who, tools: [...picked].sort() }));
+    setRefused(answer);
+    if (!answer) {
+      setWho("");
+      setPicked(new Set());
+    }
+  };
+  const grants = server.grants;
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-wide">
+        <DialogTitle>Who may use {server.name}</DialogTitle>
+        <DialogDescription>
+          {grants === null
+            ? `Each rule's tools decide who may use ${server.name} today. Grant it here and only the teams, people and apps listed may use it.`
+            : `Only the teams, people and apps listed may use ${server.name}, and only the tools named.`}
+        </DialogDescription>
+        {grants && grants.length ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Who</TableHead>
+                <TableHead>Tools</TableHead>
+                <TableHead>Change</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {grants.map((g) => (
+                <TableRow key={`${g.kind}-${g.name}`}>
+                  <TableCell>
+                    <span className="t-mono">{g.name}</span>
+                    <span className="block text-muted-foreground">{KINDS[g.kind]}</span>
+                  </TableCell>
+                  <TableCell className="whitespace-normal">{g.tools.length ? g.tools.join(", ") : "Every tool"}</TableCell>
+                  <TableCell>
+                    <Confirm
+                      label="Revoke"
+                      title={`Revoke ${server.name} from ${g.name}?`}
+                      detail={`${g.name}'s calls to ${server.name} are refused once the policy is in force.`}
+                      onConfirm={() => change(() => api.del(`mcp/${part(server.name)}/access/${g.kind}/${part(g.name)}`))}
+                    />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : grants ? (
+          <Empty title="No one may use it" body="Grant it to a team, a person or an app." />
+        ) : null}
+        <Form className="grid gap-6" onSubmit={grant}>
+          <div className="grid gap-4 md:grid-cols-[1fr_2fr] md:items-end">
+            <Field id="grant-kind" label="Grant to">
+              <Select
+                value={kind}
+                onValueChange={(v) => {
+                  setKind(v as Grant["kind"]);
+                  setWho("");
+                }}
+              >
+                <SelectTrigger id="grant-kind">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(KINDS).map(([k, v]) => (
+                    <SelectItem key={k} value={k}>
+                      {v}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field id="grant-who" label={KINDS[kind]}>
+              <EntityPicker key={kind} id="grant-who" kind={kind as Kind} value={who} onChange={(name) => setWho(name)} />
+            </Field>
+          </div>
+          {known.length ? (
+            <fieldset className="grid gap-2">
+              <legend className="t-sm mb-2">Tools, none ticked for every tool</legend>
+              {known.map((t) => (
+                <label key={t} className="flex items-center gap-2">
+                  <Checkbox checked={picked.has(t)} onCheckedChange={(on) => tick(t, on === true)} />
+                  <span className="t-mono">{t}</span>
+                </label>
+              ))}
+            </fieldset>
+          ) : null}
+          <Refusal text={refused} />
+          <DialogFooter>
+            {grants !== null ? (
+              <Confirm
+                label="Let rules decide"
+                title={`Let each rule's tools decide who may use ${server.name}?`}
+                detail="The grants above are removed. Whoever a rule's tools allow may use the server again."
+                onConfirm={() => change(() => api.del(`mcp/${part(server.name)}/access`))}
+              />
+            ) : null}
+            <Button type="button" variant="outline" onClick={onClose}>
+              Close
+            </Button>
+            <Button type="submit" disabled={!who}>
+              Grant
+            </Button>
           </DialogFooter>
         </Form>
       </DialogContent>

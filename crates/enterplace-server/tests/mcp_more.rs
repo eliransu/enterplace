@@ -1142,3 +1142,130 @@ async fn the_console_lists_a_servers_tools_and_a_tool_switched_off_is_refused_to
     assert!(actions(&dir)?.iter().any(|a| a == "change_mcp_catalog"));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_is_granted_to_teams_people_and_apps_from_the_console_and_everyone_else_is_refused()
+-> TestResult {
+    let (dir, servers) = catalog_setup("access").await?;
+    // A grant names one team, person or app, and tools by the server's own names.
+    for (bad, says) in [
+        ("    access:\n      - robot: x\n", "robot"),
+        (
+            "    access:\n      - team: a\n        person: b\n",
+            "exactly one",
+        ),
+        (
+            "    access:\n      - team: payments\n        tools: [docs.echo]\n",
+            "own name",
+        ),
+        (
+            "    access:\n      - team: payments\n      - team: payments\n",
+            "twice",
+        ),
+    ] {
+        write_policy(
+            &dir,
+            &servers.replacen("    disabled_tools: [search]\n", bad, 1),
+        )?;
+        let Err(err) = governed(&dir, &[]) else {
+            return Err(format!("loaded with {bad}").into());
+        };
+        assert!(err.contains(says), "{bad}: {err}");
+    }
+    write_policy(
+        &dir,
+        &servers.replacen("    disabled_tools: [search]\n", "", 1),
+    )?;
+    let gw = governed(&dir, &[])?;
+    let console = ConsoleApi::sign_in(&gw.router).await?;
+
+    // A grant to a team makes the access list the server's: the team may use it, everyone else is refused by name.
+    let (status, answer) = console
+        .call(
+            "POST",
+            "/console/api/mcp/docs/access",
+            Some(json!({"kind": "team", "name": "payments"})),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    reloaded(&gw)?;
+    let answer = rpc_as(&gw.router, MAYA, call("docs.search")).await?;
+    assert_eq!(text(&answer), "docs ran search", "{answer}");
+    let answer = rpc_as(&gw.router, OMER, call("docs.echo")).await?;
+    assert_eq!(code(&answer), "mcp_access_denied", "{answer}");
+    let answer = rpc_as(&gw.router, OMER, list()).await?;
+    assert_eq!(tools(&answer), ["open.echo", "open.search"], "{answer}");
+    // A server with no access list still follows the rules.
+    let answer = rpc_as(&gw.router, OMER, call("open.echo")).await?;
+    assert_eq!(text(&answer), "open ran echo", "{answer}");
+
+    // A person, or an app by its key's name, may be granted some of the tools only.
+    for grant in [
+        json!({"kind": "person", "name": "omer.katz", "tools": ["echo"]}),
+        json!({"kind": "app", "name": "ci-bot"}),
+    ] {
+        let (status, answer) = console
+            .call("POST", "/console/api/mcp/docs/access", Some(grant))
+            .await?;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+    }
+    reloaded(&gw)?;
+    let answer = rpc_as(&gw.router, OMER, list()).await?;
+    assert_eq!(
+        tools(&answer),
+        ["docs.echo", "open.echo", "open.search"],
+        "{answer}"
+    );
+    let answer = rpc_as(&gw.router, OMER, call("docs.echo")).await?;
+    assert_eq!(text(&answer), "docs ran echo", "{answer}");
+    let answer = rpc_as(&gw.router, OMER, call("docs.search")).await?;
+    assert_eq!(code(&answer), "mcp_access_denied", "{answer}");
+
+    // The console reads the grants back, and a revoke takes one away and leaves the rest.
+    let (_, page) = console.call("GET", "/console/api/mcp", None).await?;
+    let listed = page["servers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|s| s["name"] == "docs")
+        .ok_or("docs is not listed")?;
+    assert_eq!(
+        listed["grants"],
+        json!([
+            {"kind": "team", "name": "payments", "tools": []},
+            {"kind": "person", "name": "omer.katz", "tools": ["echo"]},
+            {"kind": "app", "name": "ci-bot", "tools": []},
+        ]),
+        "{page}"
+    );
+    let open = page["servers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|s| s["name"] == "open")
+        .ok_or("open is not listed")?;
+    assert_eq!(open["grants"], Value::Null, "{page}");
+    let (status, answer) = console
+        .call("DELETE", "/console/api/mcp/docs/access/team/payments", None)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    reloaded(&gw)?;
+    let answer = rpc_as(&gw.router, MAYA, call("docs.echo")).await?;
+    assert_eq!(code(&answer), "mcp_access_denied", "{answer}");
+    let answer = rpc_as(&gw.router, OMER, call("docs.echo")).await?;
+    assert_eq!(text(&answer), "docs ran echo", "{answer}");
+
+    // Handing the server back to the rules lets the rule's '*' allow it again.
+    let (status, answer) = console
+        .call("DELETE", "/console/api/mcp/docs/access", None)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    reloaded(&gw)?;
+    let answer = rpc_as(&gw.router, MAYA, call("docs.echo")).await?;
+    assert_eq!(text(&answer), "docs ran echo", "{answer}");
+    let done = actions(&dir)?;
+    for action in ["grant_mcp_access", "revoke_mcp_access", "remove_mcp_access"] {
+        assert!(done.iter().any(|a| a == action), "{action}: {done:?}");
+    }
+    Ok(())
+}

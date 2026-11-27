@@ -638,10 +638,31 @@ fn disabled(policy: &Policy, name: &str) -> bool {
     })
 }
 
+/// What the policy says of a tool beyond the caller's rule: switched off, and who its server is granted to.
+#[derive(Clone, Copy)]
+struct Gate<'a> {
+    policy: &'a Policy,
+    /// The caller, whose grants apply. `None` while observing (observe mode, a rule's shadow period): the rule
+    /// decides alone, and what a grant would refuse is recorded apart.
+    person: Option<&'a Principal>,
+}
+
+impl Gate<'_> {
+    /// `None` when the tool's server has no access list; otherwise whether the caller is granted the tool.
+    fn granted(&self, name: &str) -> Option<bool> {
+        let person = self.person?;
+        let (server, tool) = name.split_once('.')?;
+        self.policy
+            .mcp_server(server)?
+            .grants_tool(&person.team, &person.name, tool)
+    }
+}
+
 /// Whether the rule (and the bundle, at `/mcp/<bundle>`) allows `name`, written `<server>.<name>`. A tool switched
-/// off is allowed by nothing.
-fn allows(item: Item, rule: &Rule, bundle: Option<&Bundle>, name: &str, policy: &Policy) -> bool {
-    if item == Item::Tool && disabled(policy, name) {
+/// off is allowed by nothing. On a server with an access list, its grants allow a tool in place of the rule's
+/// `tools:`, and the rule's `!` entries still deny.
+fn allows(item: Item, rule: &Rule, bundle: Option<&Bundle>, name: &str, gate: Gate) -> bool {
+    if item == Item::Tool && disabled(gate.policy, name) {
         return false;
     }
     let in_bundle = match (item, bundle) {
@@ -650,8 +671,19 @@ fn allows(item: Item, rule: &Rule, bundle: Option<&Bundle>, name: &str, policy: 
         // A bundle serves tools only.
         (_, Some(_)) => false,
     };
+    let by_rule = match (item, gate.granted(name)) {
+        (Item::Tool, Some(granted)) => {
+            granted
+                && !rule
+                    .tools
+                    .iter()
+                    .filter_map(|p| p.strip_prefix('!'))
+                    .any(|p| enterplace_core::mcp::pattern_matches(p, name))
+        }
+        _ => tool_allowed(item.patterns(rule), name),
+    };
     in_bundle
-        && tool_allowed(item.patterns(rule), name)
+        && by_rule
         && (item != Item::Tool || rule.mcp.narrow.iter().all(|l| tool_allowed(l, name)))
 }
 
@@ -908,6 +940,10 @@ async fn answer(
             "resources/list" => Item::Resource,
             _ => Item::Template,
         };
+        let gate = Gate {
+            policy,
+            person: listed.is_none().then_some(&person),
+        };
         let items = mcp
             .gather(
                 item,
@@ -915,7 +951,7 @@ async fn answer(
                 bundle.as_ref(),
                 &person,
                 asked.subject.as_deref(),
-                policy,
+                gate,
             )
             .await;
         return Ok(result(&call_id, json!({ item.key(): items })));
@@ -929,7 +965,33 @@ async fn answer(
             ),
         ));
     }
-    if !allows(item, rule, bundle.as_ref(), &name, policy) {
+    let caller = Gate {
+        policy,
+        person: Some(&person),
+    };
+    if item == Item::Tool && caller.granted(&name) == Some(false) {
+        let refusal = Refusal::new(
+            StatusCode::FORBIDDEN,
+            "mcp_access_denied",
+            format!(
+                "Refused: MCP server \"{}\" may be used only by the teams, people and apps an Enterplace admin granted it to, and \"{}\" of team \"{}\" is not granted tool \"{name}\". Ask an Enterplace admin to grant it to you or your team in the console (MCP, Servers, Access).",
+                asked.server.as_deref().unwrap_or_default(),
+                person.name,
+                person.team
+            ),
+        );
+        match shadow {
+            Some(by) => asked
+                .would_refuse
+                .push(crate::would_refuse_entry(refusal, by)),
+            None => return Err(refusal),
+        }
+    }
+    let gate = Gate {
+        policy,
+        person: shadow.is_none().then_some(&person),
+    };
+    if !allows(item, rule, bundle.as_ref(), &name, gate) {
         let noun = match item {
             Item::Tool => "tool",
             Item::Prompt => "prompt",
@@ -1294,7 +1356,7 @@ impl Mcp {
         bundle: Option<&Bundle>,
         person: &Principal,
         subject: Option<&str>,
-        policy: &Policy,
+        gate: Gate<'_>,
     ) -> Vec<Value> {
         let mut out = Vec::new();
         for server in self.servers().iter() {
@@ -1304,7 +1366,7 @@ impl Mcp {
                     // Without the person's credential the server cannot be asked. A tool that says how to connect
                     // takes the place of its tools, so the person learns where to sign in.
                     let name = format!("{}.connect", server.name);
-                    if item == Item::Tool && allows(Item::Tool, rule, bundle, &name, policy) {
+                    if item == Item::Tool && allows(Item::Tool, rule, bundle, &name, gate) {
                         out.push(json!({
                             "name": name,
                             "description": format!("Connect your own account to MCP server {}. Its tools are listed once you have. Call this tool for the link.", server.name),
@@ -1328,7 +1390,7 @@ impl Mcp {
                     continue;
                 }
                 let check = format!("{}.{own}", server.name);
-                if allows(item, rule, bundle, &check, policy) {
+                if allows(item, rule, bundle, &check, gate) {
                     let mut entry = entry.clone();
                     entry[item.field()] = item.shown(&server.name, own).into();
                     out.push(entry);

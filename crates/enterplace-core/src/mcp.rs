@@ -52,6 +52,59 @@ pub(crate) struct ServerFile {
     tool_changes: Option<String>,
     #[serde(default)]
     disabled_tools: Vec<String>,
+    #[serde(default)]
+    access: Option<Vec<GrantFile>>,
+}
+
+/// One entry of a server's `access:` list: one team, person or app, and the tools granted (all when empty).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GrantFile {
+    #[serde(default)]
+    team: Option<String>,
+    #[serde(default)]
+    person: Option<String>,
+    #[serde(default)]
+    app: Option<String>,
+    #[serde(default)]
+    tools: Vec<String>,
+}
+
+/// Who a grant is for: a team, or one key's name (a person's, or an app's service key).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrantKind {
+    Team,
+    Person,
+    App,
+}
+
+impl GrantKind {
+    pub fn word(self) -> &'static str {
+        match self {
+            GrantKind::Team => "team",
+            GrantKind::Person => "person",
+            GrantKind::App => "app",
+        }
+    }
+}
+
+/// Access to one server granted to a team, person or app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Grant {
+    pub kind: GrantKind,
+    pub name: String,
+    /// The server's own tool names. Empty grants every tool of the server.
+    pub tools: Vec<String>,
+}
+
+impl Grant {
+    /// Whether the grant is for a caller of `team` whose key is named `name`.
+    pub fn covers(&self, team: &str, name: &str) -> bool {
+        match self.kind {
+            GrantKind::Team => self.name == team,
+            GrantKind::Person | GrantKind::App => self.name == name,
+        }
+    }
 }
 
 /// How each person signs in to an upstream server themselves, so a call runs with their own credential.
@@ -145,12 +198,26 @@ pub struct Server {
     /// Tools switched off in the console's tool catalog, by the server's own names: listed to no one and refused to
     /// everyone, whatever a rule allows.
     pub disabled_tools: Vec<String>,
+    /// Who may use the server, when the policy says so here. `None`: each rule's `tools:` decides, as before.
+    /// `Some`, even empty: only these grants do, and the rules' `tools:` no longer allow its tools (a rule's
+    /// `!<server>.<tool>` still denies one).
+    pub access: Option<Vec<Grant>>,
 }
 
 impl Server {
     /// Whether the tool (the server's own name for it) is switched off.
     pub fn tool_disabled(&self, tool: &str) -> bool {
         self.disabled_tools.iter().any(|t| t == tool)
+    }
+
+    /// `None` when the server has no access list. Otherwise whether a grant lets the caller of `team` whose key is
+    /// named `name` use `tool` (the server's own name for it).
+    pub fn grants_tool(&self, team: &str, name: &str, tool: &str) -> Option<bool> {
+        self.access.as_ref().map(|grants| {
+            grants.iter().any(|g| {
+                g.covers(team, name) && (g.tools.is_empty() || g.tools.iter().any(|t| t == tool))
+            })
+        })
     }
 }
 
@@ -433,13 +500,68 @@ pub(crate) fn servers(
                 at("transport")
             ));
         }
+        let own =
+            |tool: &str| own_tool_name(tool) && !tool.starts_with(&format!("{}.", entry.name));
         for tool in &entry.disabled_tools {
-            if !own_tool_name(tool) {
+            if !own(tool) {
                 errors.push(format!(
-                    "{}: disabled_tools names \"{tool}\". Name each tool to switch off as the server lists it, for example delete_repo, with no server name and no *.",
+                    "{}: disabled_tools names \"{tool}\". Name each tool to switch off by the server's own name for it, as the server lists it, for example delete_repo, with no server name and no *.",
                     at("disabled_tools")
                 ));
             }
+        }
+        let mut access = None;
+        if let Some(list) = &entry.access {
+            let mut grants: Vec<Grant> = Vec::new();
+            for grant in list {
+                let named = [
+                    (GrantKind::Team, &grant.team),
+                    (GrantKind::Person, &grant.person),
+                    (GrantKind::App, &grant.app),
+                ];
+                let mut given = named.iter().filter_map(|(kind, name)| {
+                    name.as_ref().map(|n| (*kind, n.trim().to_string()))
+                });
+                let (Some((kind, name)), None) = (given.next(), given.next()) else {
+                    errors.push(format!(
+                        "{}: each access entry names exactly one of team, person or app, for example - team: payments.",
+                        at("access")
+                    ));
+                    continue;
+                };
+                if name.is_empty() {
+                    errors.push(format!(
+                        "{}: an access entry names an empty {}. Write its name, for example - {}: payments.",
+                        at("access"),
+                        kind.word(),
+                        kind.word()
+                    ));
+                    continue;
+                }
+                for tool in &grant.tools {
+                    if !own(tool) {
+                        errors.push(format!(
+                            "{}: access for {} {name} names tool \"{tool}\". Name each tool by the server's own name for it, for example search, or leave tools out to grant every tool.",
+                            at("access"),
+                            kind.word()
+                        ));
+                    }
+                }
+                if grants.iter().any(|g| g.kind == kind && g.name == name) {
+                    errors.push(format!(
+                        "{}: access names {} {name} twice. Keep one entry and list every tool it may use there.",
+                        at("access"),
+                        kind.word()
+                    ));
+                    continue;
+                }
+                grants.push(Grant {
+                    kind,
+                    name,
+                    tools: grant.tools.clone(),
+                });
+            }
+            access = Some(grants);
         }
         out.push(Server {
             name: entry.name.clone(),
@@ -452,6 +574,7 @@ pub(crate) fn servers(
             user_auth,
             tool_changes,
             disabled_tools: entry.disabled_tools.clone(),
+            access,
         });
     }
     out

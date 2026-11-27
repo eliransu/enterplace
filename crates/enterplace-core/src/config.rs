@@ -201,6 +201,8 @@ const KNOWN: &[&str] = &[
     "oauth_scopes",
     "tool_changes",
     "disabled_tools",
+    "access",
+    "app",
     "mcp_bundles",
     "teams",
     "store",
