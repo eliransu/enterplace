@@ -152,9 +152,13 @@ rules:
     // which manager, and never the value.
     let audit = dir.join("enterplace-audit.jsonl");
     let mut text = String::new();
+    // Until the record reads whole: a read can land while the line is still being appended.
     for _ in 0..250 {
         text = std::fs::read_to_string(&audit).unwrap_or_default();
-        if text.contains("secret_refresh_failed") {
+        if text.lines().any(|l| {
+            serde_json::from_str::<serde_json::Value>(l)
+                .is_ok_and(|r| r["event"] == "secret_refresh_failed")
+        }) {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(40)).await;
