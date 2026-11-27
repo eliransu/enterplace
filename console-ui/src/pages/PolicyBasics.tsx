@@ -49,7 +49,7 @@ import { useCheckedChange } from "@/components/policy-change";
 import { Copy } from "@/components/copy";
 import { EntityPicker, type Kind } from "@/components/team-picker";
 import { api, part } from "@/lib/api";
-import { useData, words } from "@/lib/use";
+import { goTo, useData, words } from "@/lib/use";
 import type { PageProps } from "@/pages";
 
 type Rule = {
@@ -151,12 +151,16 @@ export function PolicyBasics({ me, query, only }: PageProps & { only?: "guardrai
   const [testing, setTesting] = useState<Guardrail | null>(null);
   const may = !!me?.edit_policy;
   // `?add=limit&team=payments` (from Overview, Spend and Teams) opens that team's limit, or Add a limit filled in
-  // for it; `?at=limits` scrolls to Limits. Once per visit, so a reload of the data does not reopen it.
+  // for it; `?at=limits` scrolls to Limits. A refusal's fix links here too: `?rule=narrow&model=gpt-4o` opens the
+  // rule with the model added, `?add=rule&team=payments` Add a rule for the team, `?add=alias&name=smart` Add an
+  // alias with its name. Once per link, so a reload of the data does not reopen it.
   const [prefill, setPrefill] = useState("");
-  const opened = useRef(false);
+  const [ruleModel, setRuleModel] = useState("");
+  const [aliasName, setAliasName] = useState("");
+  const opened = useRef("");
   useEffect(() => {
-    if (!data || opened.current) return;
-    opened.current = true;
+    if (!data || opened.current === query.toString()) return;
+    opened.current = query.toString();
     const add = query.get("add") === "limit";
     if (add && may) {
       const team = query.get("team") ?? "";
@@ -165,11 +169,28 @@ export function PolicyBasics({ me, query, only }: PageProps & { only?: "guardrai
       setLimit(own ?? "new");
     }
     if (add || query.get("at") === "limits") document.getElementById("limits")?.scrollIntoView();
+    if (!may) return;
+    const named = data.rules.find((r) => r.name === query.get("rule"));
+    if (named) {
+      setRuleModel(query.get("model") ?? "");
+      setRule(named);
+    } else if (query.get("add") === "rule") {
+      setPrefill(query.get("team") ?? "");
+      setRule("new");
+    } else if (query.get("add") === "alias") {
+      setAliasName(query.get("name") ?? "");
+      setAlias("new");
+    }
   }, [data, query, may]);
+  // Closing a dialog a link opened drops its query, so a reload does not open it again.
+  const unlink = () => {
+    if (query.get("add") || query.get("rule"))
+      goTo(window.location.hash.slice(1).split("?")[0]);
+  };
   const closeLimit = () => {
     setLimit(null);
     setPrefill("");
-    if (query.get("add")) window.history.replaceState(null, "", "#/policy");
+    unlink();
   };
   return (
     <>
@@ -551,11 +572,11 @@ export function PolicyBasics({ me, query, only }: PageProps & { only?: "guardrai
           )}
         </>
       ) : null}
-      {data && rule ? <RuleForm rule={rule === "new" ? null : rule} guardrails={data.guardrails} tags={tagsOf(data)} onClose={() => setRule(null)} change={change} /> : null}
+      {data && rule ? <RuleForm rule={rule === "new" ? null : rule} model={ruleModel} team={prefill} guardrails={data.guardrails} tags={tagsOf(data)} onClose={() => { setRule(null); setRuleModel(""); setPrefill(""); unlink(); }} change={change} /> : null}
       {limit ? <LimitForm limit={limit === "new" ? null : limit} team={prefill} tags={data ? tagsOf(data) : []} onClose={closeLimit} change={change} /> : null}
       {guard ? <GuardForm guard={guard === "new" ? null : guard} sealing={!!data?.sealing} onClose={() => setGuard(null)} change={change} /> : null}
       {testing ? <GuardTest guard={testing} onClose={() => setTesting(null)} /> : null}
-      {alias ? <AliasForm alias={alias === "new" ? null : alias} onClose={() => setAlias(null)} change={change} /> : null}
+      {alias ? <AliasForm alias={alias === "new" ? null : alias} name={aliasName} onClose={() => { setAlias(null); setAliasName(""); unlink(); }} change={change} /> : null}
       {checking}
     </>
   );
@@ -591,12 +612,18 @@ function tagsOf(data: Data): string[] {
 
 function RuleForm({
   rule,
+  model = "",
+  team = "",
   guardrails,
   tags,
   onClose,
   change,
 }: {
   rule: Rule | null;
+  /// A model a refusal asked for, added to the rule's models.
+  model?: string;
+  /// The team a new rule is for, from a refusal that found no rule.
+  team?: string;
   tags: string[];
   guardrails: Guardrail[];
   onClose: () => void;
@@ -604,8 +631,10 @@ function RuleForm({
 }) {
   const [name, setName] = useState(rule?.name ?? "");
   const [kind, setKind] = useState(rule?.who.kind ?? "team");
-  const [value, setValue] = useState(rule?.who.value ?? "");
-  const [models, setModels] = useState(rule?.models.join(", ") ?? "");
+  const [value, setValue] = useState(rule?.who.value ?? team);
+  const [models, setModels] = useState(
+    [...(rule?.models ?? []), ...(model && !rule?.models.includes(model) ? [model] : [])].join(", "),
+  );
   const [guards, setGuards] = useState<string[]>(rule?.guardrails ?? []);
   const [native, setNative] = useState(rule?.passthrough ?? "");
   const [refused, setRefused] = useState("");
@@ -1417,14 +1446,17 @@ function GuardTest({
 
 function AliasForm({
   alias,
+  name: asked = "",
   onClose,
   change,
 }: {
   alias: Alias | null;
+  /// The model a refusal asked for, as the new alias's name.
+  name?: string;
   onClose: () => void;
   change: Change;
 }) {
-  const [name, setName] = useState(alias?.name ?? "");
+  const [name, setName] = useState(alias?.name ?? asked);
   const [deployments, setDeployments] = useState(
     alias?.deployments.map((d) => `${d.provider}/${d.model}`).join(", ") ?? "",
   );

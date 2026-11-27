@@ -7,6 +7,19 @@ one repository. How a release is made: RELEASING.md.
 
 ## [Unreleased]
 
+### Added
+
+- A refusal a gateway admin can fix now says how, with the values filled in: `fix: { steps, console, docs }` beside
+  the code, and the same steps at the end of the message. The console link opens the dialog that fixes it on this
+  gateway: Add a provider with the model filled in (`unknown_model`, `wrong_route`, `login_needed`), the rule with the
+  model added (`model_not_allowed`), Add a rule for the team (`no_rule`), Allow for the caller (`awaiting_approval`,
+  `caller_blocked`), the MCP server's Access for the team (`tool_not_allowed`, `mcp_access_denied`), and the limit
+  (`budget_exceeded`, `rate_limited`, `parallel_limited`, `key_budget_exceeded`). Existing fields are unchanged.
+- The refusal codes page has a "Fix on the gateway" list for each of those codes: the console page, the button, the
+  field and the value, then retry the call.
+- Every "Copy for your agent" prompt tells the agent what to do with a refusal: pass the gateway steps on to you word
+  for word with the link, wait until you say they are done, then retry the same call, without changing the app.
+
 ## [1.0.1] - 2026-11-27
 
 ## [Unreleased]

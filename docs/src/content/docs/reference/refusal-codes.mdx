@@ -25,6 +25,14 @@ On `/v1/messages` and `/v1/messages/count_tokens` a refusal uses Anthropic's err
 {"error":{"message":"Refused (no_key): ... Decision 01M79...","type":"enterplace_error","code":"no_key","decision":"01M79..."}}
 ```
 
+A refusal a gateway admin can fix also carries `fix`: the console steps with the model, caller, rule or team filled in, the console link that opens the dialog that fixes it, and this page's section for the code. It is in `error.fix` in OpenAI's and Google's shapes, and beside `enterplace_code` in Anthropic's. The same steps end the message, before the decision ID, since most clients show only the message. Each code below that has one lists the same steps under **Fix on the gateway**.
+
+```json title="fix, OpenAI shape"
+{"error":{"message":"Refused (unknown_model): ... Fix on the gateway (an Enterplace admin does this in the console): 1. Open https://gw.example.com/console/app/#/providers?model=anthropic%2Fclaude-sonnet-5. 2. ... Decision 01M79...","type":"enterplace_error","code":"unknown_model","decision":"01M79...","fix":{"steps":["Open https://gw.example.com/console/app/#/providers?model=anthropic%2Fclaude-sonnet-5","Pick a provider that serves \"anthropic/claude-sonnet-5\" (OpenRouter serves vendor/model names like this one as they are), paste its key, and press Add provider. Every gateway follows within 2 seconds.","Then retry the same call, unchanged."],"console":"https://gw.example.com/console/app/#/providers?model=anthropic%2Fclaude-sonnet-5","docs":"https://docs.enterplace.dev/reference/refusal-codes/#unknown_model"}}}
+```
+
+The link uses the address the caller reached the gateway at. A gateway with its console on its own admin address (`admin_listen:`) serves the console there instead: open the same path on that address.
+
 | Header | On | Value |
 |---|---|---|
 | `X-Enterplace-Decision` | Every response | The decision ID |
@@ -75,11 +83,13 @@ Every refusal except `audit_unavailable` is written to the audit log with its co
 | [`max_tokens_needed`](#max_tokens_needed) | 400 | `invalid_request_error` |
 | [`no_rule`](#no_rule) | 403 | `permission_error` |
 | [`tool_not_allowed`](#tool_not_allowed) | 200 (MCP) | |
+| [`mcp_access_denied`](#mcp_access_denied) | 200 (MCP) | |
 | [`browser_not_allowed`](#browser_not_allowed) | 403 | `permission_error` |
 | [`unknown_tool`](#unknown_tool) | 200 (MCP) | |
 | [`mcp_client_not_allowed`](#mcp_client_not_allowed) | 200 (MCP) | |
 | [`session_revoked`](#session_revoked) | 200 (MCP) | |
 | [`model_not_allowed`](#model_not_allowed) | 403 | `permission_error` |
+| [`passthrough_not_allowed`](#passthrough_not_allowed) | 403 | `permission_error` |
 | [`caller_provider_key_not_allowed`](#caller_provider_key_not_allowed) | 403 | `invalid_request_error` |
 | [`caller_provider_key_unsupported`](#caller_provider_key_unsupported) | 400 | `invalid_request_error` |
 | [`caller_provider_key_invalid`](#caller_provider_key_invalid) | 400 | `invalid_request_error` |
@@ -164,6 +174,14 @@ A subscription request is never answered 401: Claude Code reads a 401 as its own
 
 **Fix:** in Claude Code, unset `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, keep your Claude login and send your person token in `x-enterplace-user`. An app with a service key has no login to send: an admin serves the model from a provider with its own key, with **Add a provider** on the console's **Access requests** page.
 
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in the refusal's `fix.console`, `https://<gateway>/console/app/#/providers?model=<model>`. It is **Settings**, **Models and providers**, **Providers**, with **Add a provider** open and the model filled in under **Models**.
+2. Under **Provider**, pick one that holds its own key for the model: Anthropic for a Claude model, OpenAI for a GPT model, or OpenRouter for either. The provider that serves it now takes only each person's own Claude or ChatGPT login, which an app's service key does not have.
+3. Paste the provider's key under **Provider key** and press **Add provider**.
+4. Press **Apply** on the change it shows.
+5. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
+
 ### login_not_accepted
 
 **403.** The request carries your own Claude login, and the model is served by a provider that uses Enterplace's key, or the route is `/passthrough`. A login is never swapped for Enterplace's key.
@@ -194,11 +212,23 @@ A subscription request is never answered 401: Claude Code reads a 401 as its own
 
 **Fix:** an admin presses **Allow** on the console's **Access requests** page (`/console/app/#/apps/new`), or adds the name under `new_callers.allowed` in the policy. It works within 2 seconds. See [New callers](/governance/new-callers/).
 
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in `fix.console`, `https://<gateway>/console/app/#/apps/new?allow=<caller>`. It is **Apps and agents**, **Access requests**, asking to allow the caller the refusal names.
+2. Press **Allow**.
+3. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
+
 ### caller_blocked
 
 **403.** The caller is on the policy's `new_callers.blocked` list, or it is new and `new_callers: { mode: block }` refuses new callers. Refused in every mode, observe included. Nothing was sent to a provider.
 
 **Fix:** if it should get through, an admin presses **Allow** on the console's **Access requests** page, and it works within 2 seconds. See [New callers](/governance/new-callers/).
+
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in `fix.console`, `https://<gateway>/console/app/#/apps/new?allow=<caller>`. It is **Apps and agents**, **Access requests**, asking to allow the caller the refusal names.
+2. Press **Allow**.
+3. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
 
 ### kills_unreadable
 
@@ -305,11 +335,38 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 
 **Fix:** an admin adds a rule. See [Policy file](/governance/policy/).
 
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in `fix.console`, `https://<gateway>/console/app/#/policy?add=rule&team=<team>`. It is **Apps and agents**, **Policies**, with **Add a rule** open for the caller's team.
+2. Give the rule a **Name**, list the models the team may use under **Models** (`*` for every one), and press **Add rule**.
+3. Press **Apply** on the change it shows.
+4. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
+
 ### tool_not_allowed
 
 **JSON-RPC error on `/mcp`.** The first rule that names the caller does not list the MCP tool. The message names the rule and the tools it allows.
 
 **Fix:** call an allowed tool, or ask an admin to add it to the rule's `tools:`. See [MCP gateway](/governance/mcp-gateway/).
+
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in `fix.console`, `https://<gateway>/console/app/#/mcp?access=<server>&team=<team>`. It is **MCP**, **Servers and tools**, with **Access** open for the server and the caller's team filled in.
+2. Tick the tool the refusal names, or leave every tool unticked to grant them all, and press **Grant**.
+3. Press **Apply** on the change it shows.
+4. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
+
+### mcp_access_denied
+
+**JSON-RPC error on `/mcp`.** The MCP server has its own access list (granted on its **Access** dialog), and it does not grant the tool to the caller or the caller's team. The message names the server, the caller and the tool.
+
+**Fix:** ask an admin to grant it.
+
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in `fix.console`, `https://<gateway>/console/app/#/mcp?access=<server>&team=<team>`. It is **MCP**, **Servers and tools**, with **Access** open for the server and the caller's team filled in.
+2. Tick the tool the refusal names, or leave every tool unticked to grant them all, and press **Grant**.
+3. Press **Apply** on the change it shows.
+4. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
 
 ### browser_not_allowed
 
@@ -341,6 +398,27 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 
 **Fix:** use an allowed model, or ask an admin to change the policy.
 
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in `fix.console`, `https://<gateway>/console/app/#/policy?rule=<rule>&model=<model>`. It is **Apps and agents**, **Policies**, with the rule the refusal names open and the model added under **Models**.
+2. Press **Save**, then **Apply** on the change it shows.
+3. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
+
+When the refusal names the key's own model list instead (`key_models: true` on the record), `fix.console` opens **Coding agents**, **Users**, filtered to the caller: press **Edit** on its key, add the model under **Models**, and press **Save**.
+
+### passthrough_not_allowed
+
+**403.** The request goes to a provider's own API as sent (`/passthrough/<provider>/<path>`), and the caller's rule does not list that provider and path under its `passthrough:`. The message names the rule and the path.
+
+**Fix:** ask an admin to add the path to the rule.
+
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in `fix.console`, `https://<gateway>/console/app/#/policy?rule=<rule>`. It is **Apps and agents**, **Policies**, with the rule the refusal names open.
+2. Under **Provider APIs reached as sent**, add the provider and path the refusal names, as `provider: /path`.
+3. Press **Save**, then **Apply** on the change it shows.
+4. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
+
 ### caller_provider_key_not_allowed
 
 **403.** The request carries `x-enterplace-provider-key`, and the caller's rule does not set `caller_provider_key: allowed`. The request is not forwarded, with that key or with Enterplace's.
@@ -365,6 +443,21 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 
 **Fix:** check the model name, or an admin adds it to a provider. The console's **Access requests** page lists the model with **Add a provider**, and the message names that page. See [Providers](/providers/overview/).
 
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in the refusal's `fix.console`, `https://<gateway>/console/app/#/providers?model=<model>`. It is **Settings**, **Models and providers**, **Providers**, with **Add a provider** open and the model filled in under **Models**.
+2. Under **Provider**, pick one that serves that name: OpenRouter serves `vendor/model` names such as `anthropic/claude-sonnet-5` as they are; Anthropic, OpenAI and Google serve their own model names.
+3. Paste the provider's key under **Provider key** and press **Add provider**.
+4. Press **Apply** on the change it shows.
+5. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
+
+Or send the name to a model the gateway already serves, when the name has no `/`:
+
+1. Open `https://<gateway>/console/app/#/policy?add=alias&name=<model>` (**Apps and agents**, **Policies**, with **Add an alias** open and the name filled in).
+2. Under **Sends to**, write the served model as `provider/model`, for example `demo/enterplace-demo`, and press **Add alias**.
+3. Press **Apply** on the change it shows.
+4. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
+
 ### wrong_route
 
 **400.** The model is served by a provider that speaks the other API. The message names the route to use and, where it applies, the provider setting that would allow it:
@@ -375,6 +468,14 @@ The issuer's key set could not be read and no copy was cached. Retry; check `jwk
 - A Responses, embeddings, images, audio, moderations or rerank request for a model on a provider not of kind `openai`.
 
 **Fix:** send chat requests for `openai`, `azure`, `gemini` and `vertex` models to `/v1/chat/completions`, messages requests for `anthropic`, `bedrock` and `vertex_anthropic` models to `/v1/messages`, and the other `/v1` routes to `openai` models only. To serve the model on this route too, an admin adds a provider that takes it, with **Add a provider** on the console's **Access requests** page, which the message names.
+
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in the refusal's `fix.console`, `https://<gateway>/console/app/#/providers?model=<model>`. It is **Settings**, **Models and providers**, **Providers**, with **Add a provider** open and the model filled in under **Models**.
+2. Under **Provider**, pick one that takes the route the call used: Anthropic for a Claude model on `/v1/messages`, OpenAI for `/v1/chat/completions`, or OpenRouter, which takes chat completions for both. A provider that takes only each person's own login (`auth: passthrough`) cannot serve a service key.
+3. Paste the provider's key under **Provider key** and press **Add provider**.
+4. Press **Apply** on the change it shows.
+5. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
 
 ### untranslatable
 
@@ -402,6 +503,15 @@ An [events guardrail](/governance/plugin-events/) refuses with this code too: 40
 
 **Fix:** remove what was found and send again. For a guardrail service that is down, try later or tell the admin. See [Guardrails](/governance/guardrails/).
 
+A refusal for something a guardrail found carries no `fix`: change the request. One from a `fail_closed` guardrail whose own service could not check the request does:
+
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in `fix.console`, `https://<gateway>/console/app/#/guardrails` (**Security**, **Guardrails**).
+2. Find the guardrail the refusal names and press **Test** to see whether its service answers. Fix the service it calls, or press **Edit** and let requests through while it is down.
+3. Press **Apply** on the change it shows.
+4. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
+
 ### session_ended
 
 **403.** An [events guardrail](/governance/plugin-events/#the-verdict)'s plugin ended this session (`session_action: end`), so every request of the session is refused for the guardrail's `session_end_seconds`. The message names the guardrail. The provider is not called.
@@ -422,6 +532,13 @@ An [events guardrail](/governance/plugin-events/) refuses with this code too: 40
 
 **Fix:** wait the seconds in `Retry-After`, or send a smaller `max_tokens`. See [Budgets and rate limits](/governance/budgets-and-rate-limits/).
 
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in `fix.console`. For a team's limit it is `https://<gateway>/console/app/#/policy?add=limit&team=<team>`, **Apps and agents**, **Policies**, with that team's limit open; otherwise it opens **Limits** on the same page.
+2. Raise the limit the refusal names and press **Save**.
+3. Press **Apply** on the change it shows.
+4. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
+
 ### batch_too_many_lines
 
 **400.** A batch file or message batch holds more lines than the rule's `batch: { max_lines }` allows. Checked at upload and again when the batch is created.
@@ -440,11 +557,24 @@ An [events guardrail](/governance/plugin-events/) refuses with this code too: 40
 
 **Fix:** wait for the period to end, send a smaller `max_tokens`, or ask an admin to raise the budget.
 
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in `fix.console`. For a team's limit it is `https://<gateway>/console/app/#/policy?add=limit&team=<team>`, **Apps and agents**, **Policies**, with that team's limit open; otherwise it opens **Limits** on the same page.
+2. Raise the limit the refusal names and press **Save**.
+3. Press **Apply** on the change it shows.
+4. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
+
 ### key_budget_exceeded
 
 **429.** The key has a `budget:` of its own, and its spend plus what its requests in flight reserved plus the most this request could cost would pass it. The message names the key by the first 8 hex characters of its hash.
 
 **Fix:** wait for the period to end, or ask an admin to raise the key's budget.
+
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in `fix.console`, `https://<gateway>/console/app/#/people?q=<caller>`. It is **Coding agents**, **Users**, filtered to the caller.
+2. Press **Edit** on its key, raise its **Budget**, and press **Save**.
+3. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
 
 ### session_budget_exceeded
 
@@ -475,6 +605,13 @@ An [events guardrail](/governance/plugin-events/) refuses with this code too: 40
 **429.** A `parallel:` limit of the rule, the key or a `limits:` scope already has that many requests in flight. `Retry-After: 1`.
 
 **Fix:** send it again when one of them has finished, or ask an admin to raise the limit.
+
+**Fix on the gateway** (an Enterplace admin, in the console):
+
+1. Open the link in `fix.console`. For a team's limit it is `https://<gateway>/console/app/#/policy?add=limit&team=<team>`, **Apps and agents**, **Policies**, with that team's limit open; otherwise it opens **Limits** on the same page.
+2. Raise the limit the refusal names and press **Save**.
+3. Press **Apply** on the change it shows.
+4. Retry the same call, unchanged. Every gateway follows a console change within 2 seconds.
 
 ### customer_not_allowed
 

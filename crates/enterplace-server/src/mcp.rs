@@ -523,9 +523,31 @@ fn result(id: &Value, result: Value) -> Response {
 /// A refusal as a JSON-RPC error. Before the message was read it goes with the refusal's HTTP status (a missing or
 /// unknown key); after, with 200, so the client shows its message as the answer to that call.
 fn refused(refusal: &Refusal, asked: &Asked, decision: &str) -> Response {
+    let tool = asked.item.as_ref().map_or("", |(_, name)| name.as_str());
+    let fix = crate::fix::fix(
+        refusal.code,
+        &crate::fix::Facts {
+            base: &asked.origin,
+            caller: asked.person.as_ref().map_or("", |p| p.name.as_str()),
+            team: asked.person.as_ref().map_or("", |p| p.team.as_str()),
+            rule: asked.rule.as_ref().map_or("", |r| r.name.as_str()),
+            server: asked.server.as_deref().unwrap_or_default(),
+            tool,
+            message: &refusal.message,
+            record: refusal.record.as_deref(),
+            ..crate::fix::Facts::default()
+        },
+    );
+    let fixed = fix
+        .as_ref()
+        .map(|f| format!(" {}", crate::fix::sentence(f)))
+        .unwrap_or_default();
     let message = match refusal.message.strip_prefix("Refused: ") {
-        Some(rest) => format!("Refused ({}): {rest} Decision {decision}.", refusal.code),
-        None => format!("{} Decision {decision}.", refusal.message),
+        Some(rest) => format!(
+            "Refused ({}): {rest}{fixed} Decision {decision}.",
+            refusal.code
+        ),
+        None => format!("{}{fixed} Decision {decision}.", refusal.message),
     };
     let code = match refusal.code {
         "unreadable_request" => -32600,
@@ -538,6 +560,9 @@ fn refused(refusal: &Refusal, asked: &Asked, decision: &str) -> Response {
         refusal.status
     };
     let mut data = json!({"enterplace_code": refusal.code, "decision": decision});
+    if let Some(fix) = fix {
+        data["fix"] = fix;
+    }
     if let Some(url) = &asked.connect {
         data["elicitations"] = json!([{
             "mode": "url",

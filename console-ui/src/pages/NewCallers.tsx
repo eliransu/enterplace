@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,7 +29,7 @@ import {
 import { Empty, Head, Loading, Panel, Problem } from "@/components/page";
 import { Busy, useCheckedChange } from "@/components/policy-change";
 import { api, part } from "@/lib/api";
-import { count, num, useData } from "@/lib/use";
+import { count, goTo, num, useData } from "@/lib/use";
 import type { PageProps } from "@/pages";
 
 export type Refusal = {
@@ -103,7 +103,7 @@ export function waitingFor(data: Callers | null, people: boolean): number {
 
 // Access requests: what reached the gateway that no admin has reviewed, with Allow and Block, and the models no
 // provider serves with the step that fixes each. `people`: the Coding agents view, people only.
-export function NewCallers({ me, people }: PageProps & { people?: boolean }) {
+export function NewCallers({ me, query, people }: PageProps & { people?: boolean }) {
   const { data, error, change: apply, reload } = useData<Callers>("callers");
   // A mode change shows its diff and a dry run of the last 24 hours first; Allow and Block apply at once.
   const [change, checking] = useCheckedChange(apply);
@@ -114,6 +114,14 @@ export function NewCallers({ me, people }: PageProps & { people?: boolean }) {
   const seen = callers.filter((c) => c.state === "new").map((c) => c.name);
   const decide = (name: string, decision: "allow" | "block") =>
     apply(() => api.post("callers", { name, decision }));
+  // `?allow=billing-bot`, from the fix of an awaiting_approval or caller_blocked refusal, asks to allow that caller.
+  const [allowing, setAllowing] = useState(query.get("allow") ?? "");
+  useEffect(() => setAllowing(query.get("allow") ?? ""), [query]);
+  const stopAllowing = () => {
+    setAllowing("");
+    if (query.get("allow"))
+      goTo(window.location.hash.slice(1).split("?")[0]);
+  };
   const setMode = (mode: Mode) =>
     change(() =>
       api.put("callers/mode", {
@@ -336,6 +344,30 @@ export function NewCallers({ me, people }: PageProps & { people?: boolean }) {
               )}
             </Panel>
           )}
+          <AlertDialog
+            open={!!allowing && may}
+            onOpenChange={(open) => !open && stopAllowing()}
+          >
+            <AlertDialogContent>
+              <AlertDialogTitle>Allow {allowing}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Its name goes on the policy's allowed list and its requests
+                are let through from now on. Every gateway follows within 2
+                seconds, and the change is recorded with your name.
+              </AlertDialogDescription>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => {
+                    decide(allowing, "allow");
+                    stopAllowing();
+                  }}
+                >
+                  Allow
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
           {checking}
         </>
       ) : null}

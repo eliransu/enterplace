@@ -117,7 +117,16 @@ export function McpServers({ me, query }: PageProps) {
     added.current = name ?? null;
   };
   const [tools, setTools] = useState<Server | null>(null);
-  const [access, setAccess] = useState<string | null>(null);
+  // `?access=github&team=payments`, from the fix of a tool_not_allowed or mcp_access_denied refusal, opens that
+  // server's Access with the team filled in.
+  const [access, setAccess] = useState<string | null>(query.get("access"));
+  useEffect(() => {
+    if (query.get("access")) setAccess(query.get("access"));
+  }, [query]);
+  const closeAccess = () => {
+    setAccess(null);
+    if (query.get("access")) goTo("/mcp");
+  };
   const accessed = data?.servers.find((s) => s.name === access);
   const may = !!me?.edit_policy;
   return (
@@ -287,10 +296,11 @@ export function McpServers({ me, query }: PageProps) {
           change={change}
         />
       ) : null}
-      {accessed ? (
+      {accessed && may ? (
         <AccessDialog
           server={accessed}
-          onClose={() => setAccess(null)}
+          team={query.get("team") ?? ""}
+          onClose={closeAccess}
           change={change}
         />
       ) : null}
@@ -684,15 +694,18 @@ const KINDS: Record<Grant["kind"], string> = {
 /// its tools or the ones ticked. The first grant makes the list the server's; until then each rule's tools decide.
 function AccessDialog({
   server,
+  team = "",
   onClose,
   change,
 }: {
   server: Server;
+  /// The team a refusal named, filled in to grant.
+  team?: string;
   onClose: () => void;
   change: Change;
 }) {
   const [kind, setKind] = useState<Grant["kind"]>("team");
-  const [who, setWho] = useState("");
+  const [who, setWho] = useState(team);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [known, setKnown] = useState<string[]>([]);
   const [refused, setRefused] = useState("");

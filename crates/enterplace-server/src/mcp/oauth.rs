@@ -56,24 +56,11 @@ pub(super) fn routes() -> Router<Shared> {
 
 /// This Enterplace as the caller reached it: the scheme (TLS here, or a proxy that says so) and the Host header.
 pub(super) fn origin(parts: &Parts) -> String {
-    let https = parts.extensions.get::<axum::http::uri::Scheme>().is_some()
-        || parts.uri.scheme_str() == Some("https")
-        || parts
-            .headers
-            .get("x-forwarded-proto")
-            .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"https"));
-    let host = parts
-        .headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        // Only what a host may hold: the origin goes into links and pages.
-        .filter(|h| {
-            !h.is_empty()
-                && h.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b".-:[]".contains(&b))
-        })
-        .unwrap_or("localhost");
-    format!("{}://{host}", if https { "https" } else { "http" })
+    crate::fix::origin(
+        &parts.headers,
+        &parts.uri,
+        parts.extensions.get::<axum::http::uri::Scheme>().is_some(),
+    )
 }
 
 fn sha(text: &str) -> String {
